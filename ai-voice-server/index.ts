@@ -4592,6 +4592,54 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
   if (phaseAfterSpeak === "ended") return;
 
   // 3. Redirect the call via Twilio REST API
+  // Capture booking context for the fallback in case agent doesn't answer
+  const exactTimeText = String((state as any).lastExactTimeText || "").trim();
+  const leadTimeZone = String(getLeadTimeZoneHintFromContext(ctx) || ctx.agentTimeZone || "America/Phoenix").trim();
+  const agentTimeZone = String(ctx.agentTimeZone || "America/Phoenix").trim();
+
+  let startTimeUtcForFallback = "";
+  try {
+    const agentTz = agentTimeZone;
+    const nowInAgentTz = new Date().toLocaleString("en-US", { timeZone: agentTz });
+    const todayStr = new Date(nowInAgentTz).toLocaleDateString("en-US", {
+      year: "numeric", month: "2-digit", day: "2-digit",
+    });
+    const parseSpokenTime = (raw: string, dateStr: string, tz: string): Date | null => {
+      try {
+        const t = raw.trim().toLowerCase();
+        const match = t.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+        if (!match) return null;
+        let hh = Number(match[1]);
+        const mm = Number(match[2] || "0");
+        const meridiem = (match[3] || "").toLowerCase();
+        if (meridiem === "pm" && hh !== 12) hh += 12;
+        if (meridiem === "am" && hh === 12) hh = 0;
+        if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+        const [mo, da, yr] = dateStr.split("/").map(Number);
+        if (!mo || !da || !yr) return null;
+        const localIso = `${yr}-${String(mo).padStart(2,"0")}-${String(da).padStart(2,"0")}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00`;
+        const approxUtc = new Date(localIso + "Z");
+        const tzParts = new Intl.DateTimeFormat("en-US", {
+          timeZone: tz, hour12: false,
+          year: "numeric", month: "2-digit", day: "2-digit",
+          hour: "2-digit", minute: "2-digit", second: "2-digit",
+        }).formatToParts(approxUtc);
+        const tzH = Number(tzParts.find(p => p.type === "hour")?.value || 0);
+        const tzM = Number(tzParts.find(p => p.type === "minute")?.value || 0);
+        const diffMinutes = (hh * 60 + mm) - (tzH * 60 + tzM);
+        const result = new Date(approxUtc.getTime() + diffMinutes * 60 * 1000);
+        if (isNaN(result.getTime())) return null;
+        return result;
+      } catch { return null; }
+    };
+    const startDate = parseSpokenTime(exactTimeText, todayStr, agentTz);
+    if (startDate && !isNaN(startDate.getTime())) {
+      startTimeUtcForFallback = startDate.toISOString();
+    }
+  } catch {
+    // leave startTimeUtcForFallback as ""
+  }
+
   try {
     const transferUrl = new URL(TRANSFER_TWIML_URL);
     transferUrl.searchParams.set("agentPhone", ctx.liveTransferPhone);
@@ -4599,6 +4647,14 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     transferUrl.searchParams.set("agentName", agentFirst);
     transferUrl.searchParams.set("scope", scope);
     transferUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+    transferUrl.searchParams.set("sessionId", ctx.sessionId || "");
+    transferUrl.searchParams.set("leadId", ctx.leadId || "");
+    transferUrl.searchParams.set("callSid", state.callSid || "");
+    transferUrl.searchParams.set("exactTimeText", exactTimeText);
+    transferUrl.searchParams.set("startTimeUtc", startTimeUtcForFallback);
+    transferUrl.searchParams.set("leadTimeZone", leadTimeZone);
+    transferUrl.searchParams.set("agentTimeZone", agentTimeZone);
+    transferUrl.searchParams.set("userEmail", ctx.userEmail || "");
 
     const twilioCallUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls/${state.callSid}.json`;
     const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");

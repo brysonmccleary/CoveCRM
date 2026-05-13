@@ -1,11 +1,10 @@
 // pages/facebook-leads/index.tsx
 // Facebook Lead Manager — generate and manage insurance leads from Facebook Ads
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import DashboardLayout from "@/components/DashboardLayout";
 import MetaConnectPanel from "@/components/MetaConnectPanel";
-import FBCampaignSheetsWizard from "@/components/FBCampaignSheetsWizard";
 import AdWizard from "@/components/FacebookAds/AdWizard";
 import AdPreviewCard from "@/components/FacebookAds/AdPreviewCard";
 import { GetServerSideProps } from "next";
@@ -40,6 +39,7 @@ interface FBCampaign {
   metaCampaignId?: string | null;
   metaAdsetId?: string | null;
   metaLastSyncedAt?: string | null;
+  licensedStates?: string[];
 }
 
 interface FBLeadEntryRow {
@@ -108,6 +108,14 @@ const LEAD_TYPE_LABEL: Record<string, string> = {
   mortgage_protection: "Mortgage Protection",
   veteran: "Veteran",
   trucker: "Trucker",
+};
+
+const CPL_BENCHMARKS: Record<string, number> = {
+  veteran: 18,
+  final_expense: 14,
+  mortgage_protection: 20,
+  trucker: 22,
+  iul: 25,
 };
 
 const ACTION_COLORS: Record<string, string> = {
@@ -1614,22 +1622,18 @@ function CampaignCard({
   campaign,
   onUpdate,
   onDelete,
-  onSetupGuide,
 }: {
   campaign: FBCampaign;
   onUpdate: () => void;
   onDelete: () => void;
-  onSetupGuide: (leadType: string) => void;
 }) {
-  const fileRef = useRef<HTMLInputElement>(null);
   const [optimizing, setOptimizing] = useState(false);
   const [optimizeResult, setOptimizeResult] = useState<OptimizeResult | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState("");
   const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [showSheetsWizard, setShowSheetsWizard] = useState(false);
+  const [showManage, setShowManage] = useState(false);
+  const [exportingCSV, setExportingCSV] = useState(false);
 
   // Update Stats inline form
   const [showStatsForm, setShowStatsForm] = useState(false);
@@ -1638,9 +1642,60 @@ function CampaignCard({
   const [statsClicks, setStatsClicks] = useState(String(campaign.totalClicks));
   const [savingStats, setSavingStats] = useState(false);
 
+  // Manage panel — budget
+  const [budgetInput, setBudgetInput] = useState(String(campaign.dailyBudget || 0));
+  const [savingBudget, setSavingBudget] = useState(false);
+  const [budgetSaved, setBudgetSaved] = useState(false);
+
+  // Manage panel — licensed states
+  const [editingStates, setEditingStates] = useState(false);
+  const [selectedStates, setSelectedStates] = useState<string[]>(campaign.licensedStates || []);
+  const [savingStates, setSavingStates] = useState(false);
+  const [statesSaved, setStatesSaved] = useState(false);
+
+  // Manage panel — duplicate
+  const [duplicating, setDuplicating] = useState(false);
+  const [duplicateMsg, setDuplicateMsg] = useState("");
+
   const daysSince = campaign.createdAt
     ? Math.floor((Date.now() - new Date(campaign.createdAt).getTime()) / 86400000)
     : 0;
+
+  const cplBenchmark = CPL_BENCHMARKS[campaign.leadType] ?? 20;
+  type AlertColor = "red" | "yellow" | "green";
+  let aiAlert: { color: AlertColor; message: string } | null = null;
+  if (campaign.totalSpend > 50 && campaign.totalLeads === 0) {
+    aiAlert = {
+      color: "red",
+      message: `🚨 No Leads After $${campaign.totalSpend.toFixed(0)} Spent — Your ad may have a targeting or creative issue. Pause and review your ad in Meta or use AI Optimize for recommendations.`,
+    };
+  } else if (campaign.cpl > 0 && campaign.cpl > cplBenchmark * 1.5) {
+    aiAlert = {
+      color: "red",
+      message: `⚠️ High CPL Alert — Your cost per lead ($${campaign.cpl.toFixed(2)}) is significantly above the $${cplBenchmark} benchmark for ${LEAD_TYPE_LABEL[campaign.leadType] ?? campaign.leadType} ads. Consider pausing and adjusting your creative or audience.`,
+    };
+  } else if (campaign.cpl > 0 && campaign.cpl > cplBenchmark) {
+    aiAlert = {
+      color: "yellow",
+      message: `📊 CPL Above Benchmark — Your cost per lead ($${campaign.cpl.toFixed(2)}) is above the $${cplBenchmark} target. Monitor closely and consider testing a new creative.`,
+    };
+  } else if (campaign.status === "setup" && daysSince > 3) {
+    aiAlert = {
+      color: "yellow",
+      message: `⏳ Campaign Not Activated — This campaign has been in setup for ${daysSince} days. Click Activate to start running ads.`,
+    };
+  } else if (campaign.status === "active" && (campaign.totalLeads ?? 0) > 5 && campaign.cpl > 0 && campaign.cpl <= cplBenchmark) {
+    aiAlert = {
+      color: "green",
+      message: `✅ Campaign Performing Well — Your CPL is on target. Keep the campaign running and avoid making changes during the learning phase.`,
+    };
+  }
+
+  const alertStyles: Record<AlertColor, React.CSSProperties> = {
+    red: { background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#fca5a5" },
+    yellow: { background: "rgba(234,179,8,0.1)", border: "1px solid rgba(234,179,8,0.3)", color: "#fde68a" },
+    green: { background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", color: "#6ee7b7" },
+  };
 
   const optimize = async () => {
     setOptimizing(true);
@@ -1688,25 +1743,23 @@ function CampaignCard({
     }
   };
 
-  const handleCSVUpload = async (file: File) => {
-    setUploading(true);
-    setUploadMsg("");
+  const exportCSV = async () => {
+    setExportingCSV(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch(`/api/facebook/import-leads-csv?campaignId=${campaign._id}`, {
-        method: "POST",
-        body: fd,
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setUploadMsg(`Imported ${data.imported} leads${data.failed > 0 ? `, ${data.failed} skipped` : ""}.`);
-        onUpdate();
-      } else {
-        setUploadMsg(data.error || "Upload failed.");
+      const res = await fetch(`/api/facebook/leads/export?campaignId=${campaign._id}`);
+      if (!res.ok) {
+        alert("Export failed. Please try again.");
+        return;
       }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${campaign.campaignName}-leads.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
     } finally {
-      setUploading(false);
+      setExportingCSV(false);
     }
   };
 
@@ -1728,6 +1781,57 @@ function CampaignCard({
     await fetch(`/api/facebook/campaigns/${campaign._id}`, { method: "DELETE" });
     setDeleting(false);
     onDelete();
+  };
+
+  const saveBudget = async () => {
+    setSavingBudget(true);
+    try {
+      await fetch(`/api/facebook/campaigns/${campaign._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dailyBudget: Number(budgetInput) }),
+      });
+      setBudgetSaved(true);
+      setTimeout(() => setBudgetSaved(false), 2000);
+      onUpdate();
+    } finally {
+      setSavingBudget(false);
+    }
+  };
+
+  const saveStates = async () => {
+    setSavingStates(true);
+    try {
+      await fetch(`/api/facebook/campaigns/${campaign._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ licensedStates: selectedStates }),
+      });
+      setStatesSaved(true);
+      setEditingStates(false);
+      setTimeout(() => setStatesSaved(false), 2000);
+      onUpdate();
+    } finally {
+      setSavingStates(false);
+    }
+  };
+
+  const duplicateCampaign = async () => {
+    setDuplicating(true);
+    setDuplicateMsg("");
+    try {
+      const res = await fetch(`/api/facebook/campaigns/${campaign._id}/duplicate`, { method: "POST" });
+      if (res.ok) {
+        setDuplicateMsg("Campaign duplicated! Refresh to see it.");
+        onUpdate();
+      } else {
+        setDuplicateMsg("Duplicate coming soon");
+      }
+    } catch {
+      setDuplicateMsg("Duplicate coming soon");
+    } finally {
+      setDuplicating(false);
+    }
   };
 
   const statusColors: Record<string, string> = {
@@ -1770,23 +1874,24 @@ function CampaignCard({
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <button
-              onClick={() => setShowSheetsWizard(true)}
-              className="bg-teal-700 hover:bg-teal-600 text-white text-xs px-3 py-1.5 rounded"
-            >
-              {campaign.writeLeadsToSheet ? "📊 Sheet Settings" : "📊 Connect Sheet"}
-            </button>
-            <button
-              onClick={() => onSetupGuide(campaign.leadType)}
-              className="bg-gray-700 hover:bg-gray-600 text-white text-xs px-3 py-1.5 rounded"
-            >
-              📋 Setup Guide
-            </button>
-            <button
               onClick={optimize}
               disabled={optimizing}
               className="bg-purple-700 hover:bg-purple-600 text-white text-xs px-3 py-1.5 rounded disabled:opacity-60"
             >
               {optimizing ? "Analyzing…" : "🤖 AI Optimize"}
+            </button>
+            <button
+              onClick={exportCSV}
+              disabled={exportingCSV}
+              className="bg-gray-700 hover:bg-gray-600 text-white text-xs px-3 py-1.5 rounded disabled:opacity-60"
+            >
+              {exportingCSV ? "Exporting…" : "📥 Export Leads (CSV)"}
+            </button>
+            <button
+              onClick={() => setShowManage((v) => !v)}
+              className="bg-gray-600 hover:bg-gray-500 text-white text-xs px-3 py-1.5 rounded"
+            >
+              ⚙️ Manage {showManage ? "▴" : "▾"}
             </button>
           </div>
         </div>
@@ -1820,6 +1925,13 @@ function CampaignCard({
             </div>
           ))}
         </div>
+
+        {/* Inline AI alert banner */}
+        {aiAlert && (
+          <div style={{ ...alertStyles[aiAlert.color], borderRadius: 8, padding: "10px 14px", fontSize: 13, lineHeight: "1.5" }}>
+            {aiAlert.message}
+          </div>
+        )}
 
         {/* Update Stats inline form */}
         {showStatsForm && (
@@ -1873,52 +1985,141 @@ function CampaignCard({
           </div>
         )}
 
-        {uploadMsg && (
-          <p className="text-xs text-green-400 bg-green-900/30 border border-green-800 rounded px-3 py-2">
-            {uploadMsg}
-          </p>
-        )}
-
         <div className="flex items-center gap-3 flex-wrap">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleCSVUpload(f);
-              e.target.value = "";
-            }}
-          />
           <button
             onClick={() => setShowStatsForm((v) => !v)}
             className="bg-gray-700 hover:bg-gray-600 text-white text-xs px-4 py-1.5 rounded"
           >
             📊 Update Stats
           </button>
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading}
-            className="bg-blue-700 hover:bg-blue-600 text-white text-xs px-4 py-1.5 rounded disabled:opacity-60"
-          >
-            {uploading ? "Importing…" : "📤 Import Leads (CSV)"}
-          </button>
-          <button
-            onClick={toggleStatus}
-            disabled={toggling}
-            className="bg-gray-700 hover:bg-gray-600 text-white text-xs px-4 py-1.5 rounded disabled:opacity-60"
-          >
-            {campaign.status === "active" ? "Pause" : "Activate"}
-          </button>
+          {campaign.status === "active" ? (
+            <button
+              onClick={toggleStatus}
+              disabled={toggling}
+              style={{ background: "#ef4444" }}
+              className="text-white text-xs px-4 py-1.5 rounded disabled:opacity-60"
+            >
+              {toggling ? "…" : "⏸ Pause Campaign"}
+            </button>
+          ) : (
+            <button
+              onClick={toggleStatus}
+              disabled={toggling}
+              style={{ background: "#16a34a" }}
+              className="text-white text-xs px-4 py-1.5 rounded disabled:opacity-60"
+            >
+              {toggling ? "…" : "▶ Activate Campaign"}
+            </button>
+          )}
           <button
             onClick={deleteCampaign}
             disabled={deleting}
-            className="text-red-400 hover:text-red-300 text-xs disabled:opacity-60"
+            style={{ background: "#374151" }}
+            className="text-white text-xs px-4 py-1.5 rounded disabled:opacity-60"
           >
-            {deleting ? "Deleting…" : "Delete"}
+            {deleting ? "Deleting…" : "🗑 Delete"}
           </button>
         </div>
+
+        {/* Manage Campaign expandable panel */}
+        {showManage && (
+          <div style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 14 }}>
+
+            {/* Sub-section A: Budget */}
+            <div style={{ paddingBottom: 14, marginBottom: 14, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <p style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Daily Budget</p>
+              <p style={{ color: "#94a3b8", fontSize: 12, marginBottom: 8 }}>
+                Current: <span style={{ color: "#fff", fontWeight: 600 }}>${campaign.dailyBudget ?? 0}/day</span>
+              </p>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="number"
+                  value={budgetInput}
+                  onChange={(e) => setBudgetInput(e.target.value)}
+                  placeholder="e.g. 25"
+                  style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", borderRadius: 6, padding: "6px 10px", width: 90, fontSize: 13 }}
+                />
+                <span style={{ color: "#94a3b8", fontSize: 12 }}>/day</span>
+                <button
+                  onClick={saveBudget}
+                  disabled={savingBudget}
+                  style={{ background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", opacity: savingBudget ? 0.6 : 1 }}
+                >
+                  {savingBudget ? "Saving…" : "Save Budget"}
+                </button>
+                {budgetSaved && <span style={{ color: "#6ee7b7", fontSize: 12 }}>Saved!</span>}
+              </div>
+            </div>
+
+            {/* Sub-section B: Licensed States */}
+            <div style={{ paddingBottom: 14, marginBottom: 14, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <p style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Licensed States</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {selectedStates.length === 0 ? (
+                  <span style={{ color: "#64748b", fontSize: 12 }}>No states selected</span>
+                ) : selectedStates.map((code) => {
+                  const name = US_STATES.find((s) => s.code === code)?.name || code;
+                  return (
+                    <span key={code} style={{ background: "rgba(99,102,241,0.2)", border: "1px solid rgba(99,102,241,0.4)", color: "#a5b4fc", borderRadius: 20, padding: "2px 8px", fontSize: 11 }}>
+                      {name}
+                    </span>
+                  );
+                })}
+              </div>
+              <button
+                onClick={() => setEditingStates((v) => !v)}
+                style={{ background: "#334155", color: "#fff", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, cursor: "pointer", marginBottom: editingStates ? 10 : 0 }}
+              >
+                {editingStates ? "Cancel" : "Edit States"}
+              </button>
+              {editingStates && (
+                <div>
+                  <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, background: "#1e293b", padding: "8px 10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}>
+                    {US_STATES.map((s) => (
+                      <label key={s.code} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: "#e2e8f0", fontSize: 12 }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedStates.includes(s.code)}
+                          onChange={(e) => {
+                            if (e.target.checked) setSelectedStates((prev) => [...prev, s.code]);
+                            else setSelectedStates((prev) => prev.filter((c) => c !== s.code));
+                          }}
+                          style={{ accentColor: "#6366f1" }}
+                        />
+                        {s.name}
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                    <button
+                      onClick={saveStates}
+                      disabled={savingStates}
+                      style={{ background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", opacity: savingStates ? 0.6 : 1 }}
+                    >
+                      {savingStates ? "Saving…" : "Save States"}
+                    </button>
+                    {statesSaved && <span style={{ color: "#6ee7b7", fontSize: 12 }}>Saved!</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Sub-section C: Duplicate */}
+            <div>
+              <p style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Duplicate Campaign</p>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <button
+                  onClick={duplicateCampaign}
+                  disabled={duplicating}
+                  style={{ background: "#334155", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", opacity: duplicating ? 0.6 : 1 }}
+                >
+                  {duplicating ? "Duplicating…" : "Duplicate"}
+                </button>
+                {duplicateMsg && <span style={{ color: duplicateMsg.includes("coming soon") ? "#94a3b8" : "#6ee7b7", fontSize: 12 }}>{duplicateMsg}</span>}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Optimize modal */}
@@ -1953,22 +2154,6 @@ function CampaignCard({
         </div>
       )}
 
-      {showSheetsWizard && (
-        <FBCampaignSheetsWizard
-          campaignId={campaign._id}
-          campaignName={campaign.campaignName}
-          leadType={campaign.leadType}
-          initialGoogleSheetUrl={campaign.googleSheetUrl || ""}
-          initialAppsScriptUrl={campaign.appsScriptUrl || ""}
-          writeLeadsToSheet={campaign.writeLeadsToSheet}
-          sheetHeaderValidationPassed={campaign.sheetHeaderValidationPassed}
-          onClose={() => setShowSheetsWizard(false)}
-          onSaved={() => {
-            setShowSheetsWizard(false);
-            onUpdate();
-          }}
-        />
-      )}
     </>
   );
 }
@@ -2122,21 +2307,6 @@ function HubMetricsRow({ campaigns }: { campaigns: FBCampaign[] }) {
   );
 }
 
-function AdvancedAdsSection({ children }: { children: React.ReactNode }) {
-  return (
-    <details className="rounded-xl border border-white/10 bg-[#0f172a] p-5">
-      <summary className="cursor-pointer text-sm font-semibold text-white">
-        Advanced campaign tools
-      </summary>
-      <div className="mt-4 space-y-4 border-t border-white/10 pt-4">
-        <p className="text-sm text-gray-400">
-          Sheet backup, raw lead feed, campaign health details, sync status, and deeper optimization tools live here so the main launch flow stays simple.
-        </p>
-        {children}
-      </div>
-    </details>
-  );
-}
 
 export default function FacebookLeadsPage() {
   const { status } = useSession();
@@ -2254,7 +2424,6 @@ export default function FacebookLeadsPage() {
                 campaign={campaign}
                 onUpdate={() => loadCampaigns()}
                 onDelete={() => loadCampaigns()}
-                onSetupGuide={() => {}}
               />
             ))
           )}
@@ -2264,9 +2433,13 @@ export default function FacebookLeadsPage() {
           <AIManagerWidget />
         </section>
 
-        <AdvancedAdsSection>
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-bold text-white">📋 Lead Feed</h2>
+            <p className="text-sm text-gray-400">All leads received via Meta webhook.</p>
+          </div>
           <LeadFeed />
-        </AdvancedAdsSection>
+        </section>
       </div>
     </DashboardLayout>
   );

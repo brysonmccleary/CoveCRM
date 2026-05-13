@@ -170,7 +170,7 @@ export default function AISettingsPanel() {
           {settings.liveTransferEnabled && (
             <SettingRow
               label="Transfer Phone"
-              description="Your phone number for live transfers (E.164 format, e.g. +14805551234)."
+              description="Your phone number for live transfers (E.164 format, e.g. +14805551234). If you don't answer within 25 seconds, the appointment is automatically booked."
             >
               <input
                 type="tel"

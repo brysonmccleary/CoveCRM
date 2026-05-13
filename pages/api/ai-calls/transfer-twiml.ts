@@ -7,7 +7,7 @@ const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { agentPhone, leadName, agentName, scope, key } = req.query as Record<string, string>;
+  const { agentPhone, leadName, agentName, scope, key, sessionId, leadId, callSid, exactTimeText, startTimeUtc, leadTimeZone, agentTimeZone, userEmail } = req.query as Record<string, string>;
 
   if (!key || key !== AI_DIALER_CRON_KEY) {
     return res.status(401).send("Unauthorized");
@@ -21,13 +21,25 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const digits = (agentPhone || "").replace(/\D/g, "");
   const e164 = digits.length === 10 ? `+1${digits}` : digits.startsWith("1") && digits.length === 11 ? `+${digits}` : agentPhone;
 
+  const agentFirst = (agentName || "our agent").split(" ")[0] || "our agent";
+
   const fallbackUrl = new URL("/api/ai-calls/transfer-fallback", COVECRM_BASE_URL);
   fallbackUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+  fallbackUrl.searchParams.set("sessionId", sessionId || "");
+  fallbackUrl.searchParams.set("leadId", leadId || "");
+  fallbackUrl.searchParams.set("callSid", callSid || "");
+  fallbackUrl.searchParams.set("exactTimeText", exactTimeText || "");
+  fallbackUrl.searchParams.set("startTimeUtc", startTimeUtc || "");
+  fallbackUrl.searchParams.set("leadTimeZone", leadTimeZone || "");
+  fallbackUrl.searchParams.set("agentTimeZone", agentTimeZone || "");
+  fallbackUrl.searchParams.set("userEmail", userEmail || "");
+  fallbackUrl.searchParams.set("agentName", agentName || "");
 
-  // TwiML: Dial the agent. On no-answer (timeout 25s / 4 rings), redirect to fallback.
+  // TwiML: Say hold message, then dial the agent. On no-answer (timeout 25s / 4 rings), redirect to fallback.
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Dial timeout="25" callerId="${process.env.TWILIO_PHONE_NUMBER || ""}" action="${fallbackUrl.toString()}" method="POST">
+  <Say voice="Polly.Joanna">Please hold for just a moment while I connect you with ${agentFirst}.</Say>
+  <Dial timeout="25" answerOnBridge="true" callerId="${process.env.TWILIO_PHONE_NUMBER || ""}" action="${fallbackUrl.toString()}" method="POST">
     <Number statusCallbackEvent="initiated ringing answered completed">${e164}</Number>
   </Dial>
 </Response>`;

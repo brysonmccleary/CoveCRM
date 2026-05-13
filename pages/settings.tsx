@@ -11,6 +11,7 @@ import A2PVerificationPanel from "@/components/settings/A2PVerificationPanel";
 import AffiliatePanel from "@/components/Admin/AffiliatePanel";
 import AffiliatesDashboard from "@/components/Admin/AffiliatesDashboard";
 import AffiliateCodeManager from "@/components/Admin/AffiliateCodeManager";
+import AISettingsPanel from "@/components/settings/AISettingsPanel";
 
 const sections = [
   {
@@ -19,7 +20,7 @@ const sections = [
     children: [
       { id: "profile", label: "Profile" },
       { id: "a2p", label: "A2P Registration" },
-      // AI Assistant tab removed for now
+      { id: "ai", label: "AI Settings" },
     ],
   },
   {
@@ -83,6 +84,8 @@ export default function SettingsPage() {
         return <ProfilePanel />;
       case "a2p":
         return <A2PVerificationPanel />;
+      case "ai":
+        return <AISettingsPanel />;
       case "referral":
         return <ReferralPanel />;
       case "settings":
