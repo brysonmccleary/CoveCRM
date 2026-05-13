@@ -1,12 +1,14 @@
 // components/MetaConnectPanel.tsx
 // Meta (Facebook) connection status panel — OAuth connect and asset display
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface MetaStatus {
   connected: boolean;
   pageName?: string;
   pageId?: string;
   adAccountId?: string;
+  hasPaymentMethod?: boolean;
+  leadAdsTermsAccepted?: boolean;
   tokenExpiresAt?: string | null;
   lastWebhookAt?: string | null;
   lastInsightSyncAt?: string | null;
@@ -63,6 +65,8 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
   const [savingAssets, setSavingAssets] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [selectedRecommendedName, setSelectedRecommendedName] = useState("");
+  const pageSelectorRef = useRef<HTMLDivElement>(null);
+  const adAccountSelectorRef = useRef<HTMLDivElement>(null);
 
   const recommendedNames = leadType ? PAGE_NAME_RECOMMENDATIONS[leadType] || [] : [];
   const selectedPageRecord = pages.find((p) => p.id === selectedPage) || null;
@@ -70,6 +74,50 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
     ? pages.find((p) => p.name.trim().toLowerCase() === selectedRecommendedName.trim().toLowerCase()) || null
     : null;
   const createPageUrl = "https://www.facebook.com/pages/create";
+  const setupSteps = status?.connected
+    ? [
+        {
+          title: "Connect Facebook Account",
+          helper: "Your Facebook account is connected to CoveCRM.",
+          complete: status.connected === true,
+        },
+        {
+          title: "Select a Facebook Page",
+          helper: "Choose the Facebook Page your ads will run from.",
+          complete: Boolean(String(status.pageId || "").trim()),
+          actionLabel: "Select Page →",
+          onAction: async () => {
+            if (!pages.length) await loadAssets();
+            setTimeout(() => pageSelectorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+          },
+        },
+        {
+          title: "Select an Ad Account",
+          helper: "Choose the ad account that will be billed for your campaigns.",
+          complete: Boolean(String(status.adAccountId || "").trim()),
+          actionLabel: "Select Ad Account →",
+          onAction: async () => {
+            if (!adAccounts.length) await loadAssets();
+            setTimeout(() => adAccountSelectorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+          },
+        },
+        {
+          title: "Add Payment Method",
+          helper: "Your ad account needs a valid payment method to run ads.",
+          complete: Boolean(String(status.adAccountId || "").trim()) && status.hasPaymentMethod === true,
+          actionLabel: "Add Payment Method →",
+          href: "https://business.facebook.com/billing",
+        },
+        {
+          title: "Accept Lead Ads Terms of Service",
+          helper: "Required by Meta to run lead generation ads.",
+          complete: status.leadAdsTermsAccepted === true,
+          actionLabel: "Accept Terms →",
+          href: "https://www.facebook.com/ads/leadgen/tos",
+        },
+      ]
+    : [];
+  const showSetupChecklist = Boolean(status?.connected) && setupSteps.some((step) => !step.complete);
 
   const fetchStatus = async () => {
     try {
@@ -82,6 +130,8 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
           pageId: data?.pageId || "",
           pageName: data?.pageName || "",
           adAccountId: data?.adAccountId || "",
+          hasPaymentMethod: false,
+          leadAdsTermsAccepted: false,
           tokenExpiresAt: data?.tokenExpiresAt || null,
           lastWebhookAt: data?.lastWebhookAt || null,
           lastInsightSyncAt: data?.lastSyncAt || null,
@@ -285,6 +335,91 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                   </div>
                 </div>
 
+
+
+                {showSetupChecklist && (
+                  <div
+                    style={{
+                      background: "#0f172a",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      borderRadius: 12,
+                      padding: 16,
+                    }}
+                  >
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                      {setupSteps.map((step) => (
+                        <div key={step.title} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                          <div
+                            style={{
+                              width: 22,
+                              height: 22,
+                              borderRadius: 999,
+                              background: step.complete ? "#10b981" : "transparent",
+                              border: `1px solid ${step.complete ? "#10b981" : "#6b7280"}`,
+                              color: step.complete ? "#ffffff" : "#6b7280",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontSize: 13,
+                              fontWeight: 700,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {step.complete ? "✓" : ""}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ color: "#ffffff", fontSize: 14, fontWeight: 500, lineHeight: 1.25 }}>
+                              {step.title}
+                            </div>
+                            <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.35, marginTop: 2 }}>
+                              {step.helper}
+                            </div>
+                          </div>
+                          {!step.complete && step.href && (
+                            <a
+                              href={step.href}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                background: "#0ea5e9",
+                                color: "#ffffff",
+                                border: "none",
+                                borderRadius: 7,
+                                padding: "6px 10px",
+                                fontSize: 12,
+                                fontWeight: 600,
+                                textDecoration: "none",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {step.actionLabel}
+                            </a>
+                          )}
+                          {!step.complete && step.onAction && (
+                            <button
+                              type="button"
+                              onClick={step.onAction}
+                              style={{
+                                background: "#0ea5e9",
+                                color: "#ffffff",
+                                border: "none",
+                                borderRadius: 7,
+                                padding: "6px 10px",
+                                fontSize: 12,
+                                fontWeight: 600,
+                                cursor: "pointer",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {step.actionLabel}
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-3 pt-2">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                     {["Choose Facebook Page", "Confirm Ad Account", "Generate Ads", "Launch Campaign"].map((label, index) => (
@@ -380,7 +515,7 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                     )}
 
                     {pages.length > 0 && (
-                      <div>
+                      <div ref={pageSelectorRef}>
                         <label className="text-xs text-gray-400 block mb-1">Facebook Page</label>
                         <select
                           value={selectedPage}
@@ -411,7 +546,7 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                     </div>
 
                     {adAccounts.length > 0 && (
-                      <div>
+                      <div ref={adAccountSelectorRef}>
                         <label className="text-xs text-gray-400 block mb-1">Ad Account</label>
                         <select
                           value={selectedAdAccount}
