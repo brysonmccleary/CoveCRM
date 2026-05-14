@@ -239,7 +239,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn("[sheets/webhook] invalid signature", { requestId, rawLen: rawBytes.length });
       }
       // Return 200 to prevent retry storms from old/invalid Apps Script installs.
-      return res.status(200).json({ ok: false, error: "Invalid signature" });
+      return res.status(403).json({ ok: false, error: "Invalid signature" });
     }
 
     let payload: any = {};
@@ -311,6 +311,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const lastName = pickRowValue(row, ["Last Name", "Last", "LName", "Surname", "lastname", "last_name", "last"]);
     const phoneRaw = pickRowValue(row, ["Phone", "Phone Number", "Mobile", "Cell", "Primary Phone", "phone", "phoneNumber", "phonenumber", "Phone 1", "Phone1", "phone1"]);
     const emailRaw = pickRowValue(row, ["Email", "Email Address", "E-mail", "E-mail Address", "email", "emailAddress", "email_address"]);
+    const phoneClean = phoneRaw && /\d{7,}/.test(phoneRaw)
+      ? phoneRaw
+      : undefined;
+
+    const emailClean = emailRaw && emailRaw.includes("@")
+      ? emailRaw
+      : undefined;
     const state = pickRowValue(row, ["State", "ST", "state"]);
     const age = pickRowValue(row, ["Age", "age"]);
     const notes = pickRowValue(row, ["Notes", "Note", "notes", "note"]);
@@ -318,9 +325,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const coverageAmount = pickRowValue(row, ["Coverage Amount", "Coverage", "coverage", "coverageamount"]);
     const leadTypeIn = pickRowValue(row, ["leadType", "Lead Type", "LeadType", "Type", "type"]);
 
-    const normalizedPhone = normalizePhone(phoneRaw);
+    const normalizedPhone = normalizePhone(phoneClean);
     const phoneLast10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
-    const emailLower = normalizeEmail(emailRaw);
+    const emailLower = normalizeEmail(emailClean);
 
     console.log("[sheets/webhook] extracted", {
       requestId,
@@ -429,7 +436,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       State: String(state || "").trim() || row.State || row["State"] || undefined,
       "First Name": String(firstName || "").trim() || row["First Name"] || row.FirstName || undefined,
       "Last Name": String(lastName || "").trim() || row["Last Name"] || row.LastName || undefined,
-      Phone: String(phoneRaw || "").trim() || row.Phone || row["Phone"] || undefined,
+      Phone: String(phoneClean || "").trim() || row.Phone || row["Phone"] || undefined,
       Email: emailLower || row.Email || row["Email"] || undefined,
 
       Notes: String(notes || "").trim() || row.Notes || row["Notes"] || undefined,
