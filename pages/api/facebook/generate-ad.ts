@@ -88,8 +88,14 @@ function hashString(value: string): number {
 }
 
 function visualVariantCount(leadType: string): number {
-  if (leadType === "iul") return 4;
-  return 5;
+  const counts: Record<string, number> = {
+    veteran: 8,
+    trucker: 8,
+    final_expense: 8,
+    mortgage_protection: 8,
+    iul: 8,
+  };
+  return counts[leadType] || 8;
 }
 
 function sanitizeCreativeText(value: string, leadType: string): string {
@@ -234,10 +240,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       userEmail,
       leadType,
       audienceSegment,
+      generationNonce,
+      String(index),
+      String(regenerationAttempt),
     ].join("|");
-    const visualVariantIndex =
-      (hashString(visualVariantBaseSeed) + regenerationAttempt + index) %
-      visualVariantCount(leadType);
+    const visualVariantIndex = Math.abs(hashString(visualVariantBaseSeed)) % visualVariantCount(leadType);
 
     return {
       leadType,

@@ -853,7 +853,6 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     familyName: "Benefit Unlock Long Copy",
     vendorStyleTag: "market_veteran",
     priority: 1,
-    disabled: true,
     format: "long_copy",
     visualDirection: "Patriotic but civilian, veteran-aged adult, bold text-heavy layout, strong identity hook",
     copyBlueprint: {
@@ -925,6 +924,148 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Do not use 'benefit unlock' framing that implies government entitlement.",
         "Use clean veteran-focused positioning without entitlement or official-status framing.",
         "Do not use military rank, insignia, or government seals in any format.",
+      ],
+    },
+  },
+
+  {
+    id: "vet_branch_selector",
+    leadType: "veteran",
+    archetype: "branch_selector",
+    familyName: "Branch Selector",
+    vendorStyleTag: "market_veteran_branch",
+    priority: 1,
+    format: "card",
+    visualDirection: "Bold patriotic branch-selector direct-response layout, civilian veteran imagery, branch-focused copy, no official insignia or seals",
+    copyBlueprint: {
+      headlinePool: [
+        "Army Veteran? Check Your Coverage Options",
+        "Navy Veteran? See What You Qualify For",
+        "Marines Veteran? Review Your Benefits",
+        "Air Force Veteran? Private Coverage Review",
+      ],
+      hookPool: [
+        "Your branch of service affects your coverage options. Review private plans designed for veterans like you — no medical exam required for most.",
+        "Veterans from every branch deserve the right coverage. See what private plans are available in your state with no exam required.",
+      ],
+      bulletPool: [
+        "Branch-focused private coverage review",
+        "No exam options may be available",
+        "Coverage for veterans and military families",
+        "Licensed review in your state",
+      ],
+      ctaPool: ["LEARN_MORE", "Review My Options →", "Check Coverage →"],
+      ageButtonPools: [
+        ["Army", "Navy", "Marines", "Air Force"],
+        ["Veteran", "Spouse", "Family", "Review"],
+      ],
+      approvedCoverageAmounts: [50000, 100000, 250000, 500000],
+    },
+    imagePromptPool: [
+      "Direct-response veteran branch selector ad creative background, patriotic navy red cream graphic layout, civilian veteran silhouette, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NO official insignia, NO military uniforms",
+      "Bold veteran insurance poster background, American flag texture, clean branch-selection graphic composition, veteran-aged civilian male, blank reserved overlay areas, no readable text inside image, no seals, no official logos",
+    ],
+    landingPageConfig: {
+      pageType: "veteran_branch_selector",
+      headlinePool: [
+        "Veterans — Select Your Branch",
+        "Coverage Options For Those Who Served",
+        "Private Veteran Coverage Review",
+      ],
+      subheadlinePool: [
+        "Review private coverage options in your state",
+        "No exam options may be available",
+        "Coverage for veterans and military families",
+      ],
+      buttonLabelsPool: [
+        ["Army", "Navy", "Marines", "Air Force"],
+        ["Veteran", "Spouse", "Family", "Review"],
+      ],
+      benefitBulletsPool: [
+        ["Private coverage review", "No exam options may be available", "Licensed state review"],
+        ["Coverage for those who served", "Fast review", "Family options available"],
+      ],
+      ctaStripPool: ["LEARN_MORE", "Review My Options →", "Check Coverage →"],
+      theme: { background: "#0a0f1a", accent: "#c0392b", styleTag: "veteran_branch_selector" },
+    },
+    compliance: {
+      noGovernmentImplication: true,
+      avoidGuaranteedClaims: true,
+      notes: [
+        "Do not use official branch marks, seals, uniforms, ranks, or government logos.",
+        "Keep branch references as audience selectors only.",
+        "Use private coverage review language.",
+      ],
+    },
+  },
+
+  {
+    id: "vet_spouse_security",
+    leadType: "veteran",
+    archetype: "spouse_security",
+    familyName: "Spouse Security",
+    vendorStyleTag: "market_veteran_family",
+    priority: 2,
+    format: "benefit_stack",
+    visualDirection: "Veteran family-security direct-response layout, patriotic but clean, spouse and family protection message without generic family stock photography",
+    copyBlueprint: {
+      headlinePool: [
+        "Protect Your Family After Your Service",
+        "Your Spouse Deserves Coverage Too",
+        "Don't Leave Your Family Unprotected",
+        "Veteran Family Protection — See Options",
+      ],
+      hookPool: [
+        "You protected your country. Now protect the people who waited for you. Private coverage options for veterans and their families — no exam required.",
+        "Your service meant sacrifice for your whole family. Make sure they're covered with private veteran life insurance options available in your state.",
+      ],
+      bulletPool: [
+        "Coverage options for veteran families",
+        "Spouse and family protection review",
+        "No exam options may be available",
+        "Locked-in rate options may be available",
+      ],
+      ctaPool: ["LEARN_MORE", "Review Family Options →", "Check My Options →"],
+      amountButtonPools: [
+        ["$50,000", "$100,000", "$250,000", "$500,000"],
+        ["Veteran", "Spouse", "Family", "Review"],
+      ],
+      approvedCoverageAmounts: [50000, 100000, 250000, 500000],
+    },
+    imagePromptPool: [
+      "Direct-response veteran family protection ad creative background, patriotic navy cream gold graphic layout, subtle home protection motif, veteran-aged civilian silhouette, blank reserved headline and CTA areas for app-rendered UI, no readable text inside image, NO kids, NO family stock-photo scene, no uniforms or official insignia",
+      "Veteran spouse security insurance ad background, premium patriotic poster composition, clean benefit panels and flag texture, blank reserved overlay areas, no readable text inside image, no logos, no government seals",
+    ],
+    landingPageConfig: {
+      pageType: "veteran_spouse_security",
+      headlinePool: [
+        "Veteran Family Protection",
+        "Protect The People You Love",
+        "Coverage Options For Veteran Families",
+      ],
+      subheadlinePool: [
+        "Private coverage options for veterans and families",
+        "Review options available in your state",
+        "No exam options may be available",
+      ],
+      buttonLabelsPool: [
+        ["$50,000", "$100,000", "$250,000", "$500,000"],
+        ["Veteran", "Spouse", "Family", "Review"],
+      ],
+      benefitBulletsPool: [
+        ["Family protection", "No exam options may be available", "Licensed review"],
+        ["Private coverage review", "Spouse options", "Fast review"],
+      ],
+      ctaStripPool: ["LEARN_MORE", "Review Family Options →", "Check My Options →"],
+      theme: { background: "#0a0f1a", accent: "#d4a017", styleTag: "veteran_spouse_security" },
+    },
+    compliance: {
+      noGovernmentImplication: true,
+      avoidGuaranteedClaims: true,
+      notes: [
+        "Do not imply government, VA, or military endorsement.",
+        "Avoid generic family stock-photo scenes and random children.",
+        "Use private coverage options and licensed review language.",
       ],
     },
   },
