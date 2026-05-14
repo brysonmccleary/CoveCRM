@@ -546,6 +546,7 @@ export default function LeadsPanel() {
           folderName,
           gid: parsed.gid || "",
           tabName: "",
+          reinstall: true,
         }),
       });
 
