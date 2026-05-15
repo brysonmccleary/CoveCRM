@@ -278,20 +278,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    const user = await User.findOne({
+    let user: any = await User.findOne({
       "googleSheets.syncedSheetsSimple": { $elemMatch: { connectionId: connectionId } },
     });
 
-    if (!user) return res.status(404).json({ error: "Connection not found" });
+    let gs: any = user?.googleSheets || {};
+    let synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
+    let match = synced.find((s: any) => String(s.connectionId || "") === connectionId);
 
-    const userEmail = String((user as any)?.email || "").trim().toLowerCase();
+    if (!user || !match) {
+      const fallbackUsers = await User.find({
+        "googleSheets.syncedSheetsSimple": { $elemMatch: { sheetId, gid } },
+      });
+      const candidates: Array<{ user: any; entry: any }> = [];
+
+      for (const fallbackUser of fallbackUsers as any[]) {
+        const fallbackGs: any = fallbackUser?.googleSheets || {};
+        const fallbackSynced = Array.isArray(fallbackGs.syncedSheetsSimple) ? fallbackGs.syncedSheetsSimple : [];
+        for (const entry of fallbackSynced) {
+          if (String(entry.sheetId || "") === sheetId && String(entry.gid || "") === gid) {
+            candidates.push({ user: fallbackUser, entry });
+          }
+        }
+      }
+
+      if (candidates.length !== 1) {
+        console.warn("[sheets/webhook] connection not found", {
+          requestId,
+          incomingConnectionId: connectionId,
+          sheetId,
+          gid,
+          candidateCount: candidates.length,
+        });
+        return res.status(404).json({ error: "Connection not found" });
+      }
+
+      user = candidates[0].user;
+      gs = user?.googleSheets || {};
+      synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
+      match = candidates[0].entry;
+    }
+
+    const userEmail = String(user?.email || "").trim().toLowerCase();
     if (!userEmail) return res.status(500).json({ error: "User missing email" });
 
-    const gs: any = (user as any).googleSheets || {};
-    const synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
-
-    const match = synced.find((s: any) => String(s.connectionId || "") === connectionId);
-    if (!match) return res.status(404).json({ error: "Connection mapping missing" });
+    const activeConnectionId = String(match.connectionId || "").trim();
+    if (activeConnectionId && activeConnectionId !== connectionId) {
+      console.log("[sheets/webhook] stale connectionId auto-healed", {
+        requestId,
+        incomingConnectionId: connectionId,
+        activeConnectionId,
+        sheetId,
+        gid,
+        userEmail,
+      });
+    }
 
     if (String(match.sheetId || "") !== sheetId) {
       return res.status(403).json({ error: "Sheet mismatch for connection" });
@@ -339,10 +380,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const externalId =
-      connectionId && rowNumber
-        ? `gs:${connectionId}:r${rowNumber}`
-        : connectionId && payload?.ts
-          ? `gs:${connectionId}:ts:${payload.ts}`
+      activeConnectionId && rowNumber
+        ? `gs:${activeConnectionId}:r${rowNumber}`
+        : activeConnectionId && payload?.ts
+          ? `gs:${activeConnectionId}:ts:${payload.ts}`
           : undefined;
 
     // ✅ Hard-dedupe by externalId across the whole account (prevents duplicates even if lead moved folders)
@@ -457,7 +498,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         tabName: payload.tabName || match.tabName || "",
         receivedAt: new Date(),
         ts: payload.ts || null,
-        connectionId,
+        connectionId: activeConnectionId,
         rowNumber: rowNumber || undefined,
       },
       rawRow: row,
