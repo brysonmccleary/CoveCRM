@@ -586,13 +586,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       String(existingEntry.connectionId || "").trim() &&
       String(existingEntry.tokenHash || "").trim();
 
-    const generatedToken = canReuseExistingSecret ? "" : crypto.randomBytes(32).toString("hex");
-    const connectionId = canReuseExistingSecret
-      ? String(existingEntry.connectionId || "")
-      : crypto.randomBytes(12).toString("hex");
-    const tokenHash = canReuseExistingSecret
-      ? String(existingEntry.tokenHash || "")
-      : sha256Hex(generatedToken);
+    let connectionId: string;
+    let token: string;
+    let tokenHash: string;
+
+    if (canReuseExistingSecret && existingEntry.token) {
+      // Reuse everything — Apps Script in Google Sheets keeps working
+      connectionId = String(existingEntry.connectionId);
+      token = String(existingEntry.token);
+      tokenHash = String(existingEntry.tokenHash);
+    } else {
+      // New connection or old entry missing stored token — generate fresh
+      connectionId = existingEntry
+        ? String(existingEntry.connectionId)
+        : crypto.randomBytes(12).toString("hex");
+      token = crypto.randomBytes(32).toString("hex");
+      tokenHash = sha256Hex(token);
+    }
 
     const entry = {
       ...(existingEntry || {}),
@@ -604,6 +614,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       lastEventAt: existingEntry?.lastEventAt ?? null,
 
       connectionId,
+      token,
       tokenHash,
       createdAt: existingEntry?.createdAt || new Date(),
       updatedAt: new Date(),
@@ -619,17 +630,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const webhookUrl = `${baseUrl}/api/sheets/webhook`;
     const backfillUrl = `${baseUrl}/api/sheets/backfill`;
 
-    const appsScript = generatedToken
-      ? buildAppsScript({
-          webhookUrl,
-          backfillUrl,
-          sheetId: normalizedSheetId,
-          gid: normalizedGid,
-          tabName: tabName || "",
-          connectionId,
-          token: generatedToken,
-        })
-      : "";
+    const appsScript = buildAppsScript({
+      webhookUrl,
+      backfillUrl,
+      sheetId: normalizedSheetId,
+      gid: normalizedGid,
+      tabName: tabName || "",
+      connectionId,
+      token,
+    });
 
     return res.status(200).json({
       ok: true,
