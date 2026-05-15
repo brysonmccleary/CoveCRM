@@ -1683,7 +1683,289 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
   },
+
+  ...buildAdditionalWinningAdFamilies(),
 ];
+
+function buildAdditionalWinningAdFamilies(): WinningAdFamily[] {
+  const subheadsFrom = (hooks: string[], fallback: string) => hooks.length ? hooks.slice(0, 3) : [fallback];
+  const ctasFor = (leadType: WinnerLeadType, archetype: string): string[] => {
+    if (leadType === "final_expense") {
+      if (archetype.includes("funeral_cost")) return ["See Funeral Cost Options →", "Estimate My Coverage →", "Compare Final Expense →"];
+      if (archetype.includes("senior_notice")) return ["Check Senior Options →", "Select My Age →", "See What Fits →"];
+      if (archetype.includes("burial")) return ["Plan Burial Costs →", "Compare Burial Coverage →", "Start Cost Review →"];
+      if (archetype.includes("price_table")) return ["Compare Amounts →", "View Coverage Table →", "Check Monthly Options →"];
+      if (archetype.includes("family_burden")) return ["Help Protect Family →", "Plan Ahead Today →", "Review Family Options →"];
+      return ["Check Final Expense →", "See Age-Based Options →", "Start Coverage Check →"];
+    }
+    if (leadType === "mortgage_protection") {
+      if (archetype.includes("price_table")) return ["Compare Mortgage Amounts →", "View Home Table →", "Check My Balance →"];
+      if (archetype.includes("homeowner_notice")) return ["Open Homeowner Review →", "Check My Home Options →", "Select Mortgage Balance →"];
+      if (archetype.includes("income_stopped")) return ["Stress-Test My Mortgage →", "Plan For Income Loss →", "Check Protection Options →"];
+      if (archetype.includes("living_benefits")) return ["Review Living Benefits →", "See Policy Features →", "Compare Flexible Options →"];
+      if (archetype.includes("with_without")) return ["Compare Both Paths →", "See The Difference →", "Review Coverage Gap →"];
+      if (archetype.includes("family_home")) return ["Protect The Family Home →", "Review Home Options →", "Check My Balance →"];
+      return ["Review Mortgage Options →", "Check My Home →", "Compare Coverage →"];
+    }
+    if (leadType === "veteran") {
+      if (archetype.includes("benefit_grid")) return ["Open Veteran Notice →", "Select My Age →", "View Benefit Cards →"];
+      if (archetype.includes("whole_life")) return ["Check Whole Life Options →", "Select Age Range →", "View Coverage Amounts →"];
+      if (archetype.includes("coverage_up_to")) return ["Check Amount Options →", "See Coverage Range →", "Start Amount Review →"];
+      if (archetype.includes("legacy")) return ["Protect My Legacy →", "Review Family Plan →", "See Legacy Options →"];
+      return ["View Veteran Options →", "Select My Age →", "Start Family Review →"];
+    }
+    if (leadType === "trucker") {
+      if (archetype.includes("rate_table")) return ["Compare Driver Rates →", "Open Rate Table →", "Select My Age →"];
+      if (archetype.includes("highway")) return ["View Road Options →", "Check Driver Coverage →", "Start CDL Review →"];
+      if (archetype.includes("truck_stop")) return ["Review Between Loads →", "Check Road Coverage →", "Start Driver Review →"];
+      return ["View Driver Options →", "Select My Age →", "Start Road Review →"];
+    }
+    if (archetype.includes("market_loss")) return ["Learn Downside Features →", "Review IUL Terms →", "Compare Protection Features →"];
+    if (archetype.includes("cash_access")) return ["Learn Access Rules →", "Review Cash Value Terms →", "Start IUL Education →"];
+    if (archetype.includes("triangle")) return ["Explore The IUL Triangle →", "Learn IUL Basics →", "Review Policy Fit →"];
+    if (archetype.includes("retirement")) return ["Review Retirement Fit →", "Learn Policy Tradeoffs →", "Start IUL Education →"];
+    return ["Learn About IUL →", "Review Policy Terms →", "Start IUL Education →"];
+  };
+
+  const fe = (id: string, familyName: string, archetype: string, styleTag: string, visualDirection: string, headlines: string[], hooks: string[], bullets: string[], buttons: string[][], theme: { background: string; accent: string; styleTag: string }, priority = 2): WinningAdFamily => ({
+    id,
+    leadType: "final_expense",
+    archetype,
+    familyName,
+    vendorStyleTag: styleTag,
+    priority,
+    format: "card",
+    visualDirection,
+    copyBlueprint: {
+      headlinePool: headlines,
+      hookPool: hooks,
+      bulletPool: bullets,
+      ctaPool: ctasFor("final_expense", archetype),
+      ageButtonPools: buttons,
+    },
+    imagePromptPool: [
+      `${visualDirection}, CSS-rendered mobile direct-response final expense creative, blank reserved areas for app-rendered text and buttons, no readable image text, no logos, private coverage positioning`,
+    ],
+    landingPageConfig: {
+      pageType: archetype,
+      headlinePool: headlines,
+      subheadlinePool: subheadsFrom(hooks, visualDirection),
+      buttonLabelsPool: buttons,
+      benefitBulletsPool: [bullets.slice(0, 3)],
+      ctaStripPool: ctasFor("final_expense", archetype),
+      theme,
+    },
+    compliance: {
+      avoidGuaranteedClaims: true,
+      avoidUnsupportedMedicalClaims: true,
+      notes: ["Avoid unsupported approval language.", "Keep burial cost language private-market and state-neutral.", "Keep final expense language respectful."],
+    },
+  });
+
+  const mp = (id: string, familyName: string, archetype: string, audienceSegment: AudienceSegment | undefined, styleTag: string, visualDirection: string, headlines: string[], hooks: string[], bullets: string[], buttons: string[][], theme: { background: string; accent: string; styleTag: string }, priority = 2): WinningAdFamily => ({
+    id,
+    leadType: "mortgage_protection",
+    audienceSegment,
+    archetype,
+    familyName,
+    vendorStyleTag: styleTag,
+    priority,
+    format: "card",
+    visualDirection,
+    copyBlueprint: {
+      headlinePool: headlines,
+      hookPool: hooks,
+      bulletPool: bullets,
+      ctaPool: ctasFor("mortgage_protection", archetype),
+      amountButtonPools: buttons,
+    },
+    imagePromptPool: [
+      `${visualDirection}, CSS-rendered mortgage protection ad creative, home protection card layout, blank reserved areas for app-rendered text and CTA buttons, no readable image text, no logos`,
+    ],
+    landingPageConfig: {
+      pageType: archetype,
+      headlinePool: headlines,
+      subheadlinePool: subheadsFrom(hooks, visualDirection),
+      buttonLabelsPool: buttons,
+      benefitBulletsPool: [bullets.slice(0, 3)],
+      ctaStripPool: ctasFor("mortgage_protection", archetype),
+      theme,
+    },
+    compliance: {
+      avoidGuaranteedClaims: true,
+      notes: ["Use private coverage framing.", "Avoid guaranteed qualification claims.", "Keep living benefits language policy-term dependent."],
+    },
+  });
+
+  const vt = (id: string, familyName: string, archetype: string, styleTag: string, visualDirection: string, headlines: string[], hooks: string[], bullets: string[], buttons: string[][], theme: { background: string; accent: string; styleTag: string }, priority = 2): WinningAdFamily => ({
+    id,
+    leadType: "veteran",
+    archetype,
+    familyName,
+    vendorStyleTag: styleTag,
+    priority,
+    format: "card",
+    visualDirection,
+    copyBlueprint: {
+      headlinePool: headlines,
+      hookPool: hooks,
+      bulletPool: bullets,
+      ctaPool: ctasFor("veteran", archetype),
+      ageButtonPools: buttons,
+      approvedCoverageAmounts: [40000, 50000, 75000, 100000],
+    },
+    imagePromptPool: [
+      `${visualDirection}, CSS-rendered private veteran coverage ad creative, patriotic red navy gold palette, no seals, no uniforms, no official insignia, blank reserved text and CTA areas`,
+    ],
+    landingPageConfig: {
+      pageType: archetype,
+      headlinePool: headlines,
+      subheadlinePool: subheadsFrom(hooks, visualDirection),
+      buttonLabelsPool: buttons,
+      benefitBulletsPool: [bullets.slice(0, 3)],
+      ctaStripPool: ctasFor("veteran", archetype),
+      theme,
+    },
+    compliance: {
+      noGovernmentImplication: true,
+      avoidGuaranteedClaims: true,
+      notes: ["Prefer private coverage framing.", "Do not use official seals, uniforms, or insignia.", "Keep veteran copy focused on family protection and available options."],
+    },
+  });
+
+  const tr = (id: string, familyName: string, archetype: string, styleTag: string, visualDirection: string, headlines: string[], hooks: string[], bullets: string[], buttons: string[][], theme: { background: string; accent: string; styleTag: string }, priority = 2): WinningAdFamily => ({
+    id,
+    leadType: "trucker",
+    archetype,
+    familyName,
+    vendorStyleTag: styleTag,
+    priority,
+    format: "card",
+    visualDirection,
+    copyBlueprint: {
+      headlinePool: headlines,
+      hookPool: hooks,
+      bulletPool: bullets,
+      ctaPool: ctasFor("trucker", archetype),
+      ageButtonPools: buttons,
+    },
+    imagePromptPool: [
+      `${visualDirection}, CSS-rendered truck driver direct-response creative, highway or truck stop layout, blank reserved text and CTA areas, no readable image text, no logos`,
+    ],
+    landingPageConfig: {
+      pageType: archetype,
+      headlinePool: headlines,
+      subheadlinePool: subheadsFrom(hooks, visualDirection),
+      buttonLabelsPool: buttons,
+      benefitBulletsPool: [bullets.slice(0, 3)],
+      ctaStripPool: ctasFor("trucker", archetype),
+      theme,
+    },
+    compliance: {
+      avoidGuaranteedClaims: true,
+      notes: ["Do not imply CDL drivers are universally denied elsewhere.", "Use options may be available language.", "Avoid guaranteed rate or approval claims."],
+    },
+  });
+
+  const iul = (id: string, familyName: string, archetype: string, audienceSegment: AudienceSegment | undefined, styleTag: string, visualDirection: string, headlines: string[], hooks: string[], bullets: string[], buttons: string[][], theme: { background: string; accent: string; styleTag: string }, priority = 2): WinningAdFamily => ({
+    id,
+    leadType: "iul",
+    audienceSegment,
+    archetype,
+    familyName,
+    vendorStyleTag: styleTag,
+    priority,
+    format: "benefit_stack",
+    visualDirection,
+    copyBlueprint: {
+      headlinePool: headlines,
+      hookPool: hooks,
+      bulletPool: bullets,
+      ctaPool: ctasFor("iul", archetype),
+      disclaimerPool: [
+        "IUL is life insurance, not an investment. Growth, loans, withdrawals, fees, caps, participation rates, and policy performance depend on contract terms.",
+        "No tax, legal, investment, or guaranteed income advice is provided. Review policy illustrations and costs with a licensed professional.",
+      ],
+      amountButtonPools: buttons,
+    },
+    imagePromptPool: [
+      `${visualDirection}, CSS-rendered IUL education ad creative, clean financial planning layout, blank reserved text and CTA areas, no readable image text, no logos`,
+    ],
+    landingPageConfig: {
+      pageType: archetype,
+      headlinePool: headlines,
+      subheadlinePool: [
+        ...subheadsFrom(hooks, visualDirection),
+        "Educational review only - no guaranteed returns, income, or tax outcomes.",
+        "Policy terms, caps, fees, loans, withdrawals, and lapse risk must be reviewed.",
+      ],
+      buttonLabelsPool: buttons,
+      benefitBulletsPool: [bullets.slice(0, 3)],
+      ctaStripPool: ctasFor("iul", archetype),
+      theme,
+    },
+    compliance: {
+      avoidGuaranteedClaims: true,
+      notes: ["Do not call IUL an investment account.", "No guaranteed income, return, or tax outcome claims.", "Mention caps, fees, loans, withdrawals, and policy terms when discussing cash value."],
+    },
+  });
+
+  const ageSenior = [["50-59", "60-69", "70-79", "80+"], ["45-54", "55-64", "65-74", "75-85"]];
+  const ageAdult = [["35-44", "45-54", "55-64", "65+"], ["30-44", "45-54", "55-64", "65+"]];
+  const mortgageAmounts = [["$150k", "$300k", "$500k", "$750k+"], ["Under $150k", "$150k-$300k", "$300k-$500k", "$500k+"]];
+  const iulButtons = [["Protection", "Growth Potential", "Access", "Legacy"], ["Retirement", "Family", "Cash Value", "Review"]];
+
+  return [
+    fe("fe_funeral_cost_reality_card", "Funeral Cost Reality Card", "funeral_cost_reality_card", "final_expense_reality", "Clean funeral cost reality layout with respectful price table and cream/gold panels", ["Funeral Costs Can Add Up Fast", "Help Prepare For Final Expenses"], ["A private final expense plan may help loved ones handle funeral and burial costs.", "Review simple coverage options designed for final expenses."], ["No medical exam options", "Monthly options may be available", "Designed for final expenses"], ageSenior, { background: "#f8f5f0", accent: "#a16207", styleTag: "fe_cost_table" }),
+    fe("fe_senior_notice_clean", "Senior Notice Clean Card", "senior_notice_clean_card", "final_expense_notice", "Senior notice layout, clean white card, blue/gold accents, age selector", ["Senior Coverage Notice", "Ages 50-85: Review Options"], ["Seniors can compare age-based final expense coverage options in a clean notice-style flow.", "Coverage options may be available without a medical exam."], ["Age-based coverage check", "No-exam options may be available", "State-specific plan review"], ageSenior, { background: "#ffffff", accent: "#1d4ed8", styleTag: "fe_senior_notice" }),
+    fe("fe_no_exam_white_card", "No Exam White Card", "no_exam_white_card", "final_expense_clean", "Mostly white no-exam card with bold black headline, gold CTA, compact benefit rows", ["No Medical Exam Options", "Final Expense Coverage Review"], ["If you want simple coverage, review options that may not require a medical exam.", "Compare private final expense options in your state."], ["No exam options", "Rates reviewed before applying", "Simple phone follow-up"], ageSenior, { background: "#ffffff", accent: "#111827", styleTag: "fe_no_exam_white" }),
+    fe("fe_private_burial_fund", "Private Burial Fund Style", "private_burial_fund_style", "final_expense_private_fund", "Private burial planning style, cream paper, structured benefit blocks", ["Private Burial Cost Options", "Help Set Aside Coverage For Burial Costs"], ["Private final expense coverage may help with burial and related costs.", "Review burial cost planning options available in your state."], ["Burial cost planning", "Service and plot cost help", "Family payout focus"], ageSenior, { background: "#f5f0e8", accent: "#8b4513", styleTag: "fe_private_burial" }),
+    fe("fe_coverage_price_table", "Coverage Price Table", "coverage_price_table", "final_expense_table", "Coverage amount price-table inspired card with tidy rows and high-trust blue accents", ["Compare Final Expense Options", "Review Coverage Amounts"], ["Compare coverage amount options before choosing a plan.", "A licensed professional can review available options and costs."], ["Coverage amount review", "Monthly options explained", "No-obligation call"], [["$5k", "$10k", "$15k", "$25k"], ["$10k", "$15k", "$20k", "$30k"]], { background: "#eef6ff", accent: "#2563eb", styleTag: "fe_price_table" }),
+    fe("fe_family_burden_respectful", "Respectful Family Burden", "family_burden_respectful", "final_expense_family", "Respectful family burden layout, warm home palette, clear CTA and dignified language", ["Help Protect Loved Ones From Final Costs", "Plan Ahead For The People You Love"], ["Final expense coverage can help reduce financial stress for loved ones.", "Planning ahead may help your family focus on each other instead of bills."], ["Help cover final costs", "Simple review", "Respectful planning"], ageSenior, { background: "#fff7ed", accent: "#c2410c", styleTag: "fe_family_warmth" }),
+    fe("fe_lock_rate_direct_response", "Lock Rate Direct Response", "lock_rate_direct_response", "final_expense_lock_rate", "Dark gold direct-response card with lock-rate language and age selector", ["Review Rates Before They Change", "Check Final Expense Options Today"], ["It may be worth reviewing final expense options while coverage may be affordable.", "Compare options before age or health changes."], ["Current age band check", "Rate class conversation", "Coverage before changes"], ageSenior, { background: "#111827", accent: "#d4a017", styleTag: "fe_lock_rate" }),
+    fe("fe_simple_phone_review", "Simple Phone Review", "simple_phone_review", "final_expense_phone_review", "Mobile-native message card style for final expense phone review", ["A Simple Final Expense Review", "See Options In A Short Call"], ["A licensed professional can walk through options in a simple phone review.", "No pressure, just a clear look at what may be available."], ["Short phone review", "No obligation", "State-specific options"], ageSenior, { background: "#f8fafc", accent: "#0f172a", styleTag: "fe_phone_review" }),
+
+    mp("mp_clean_navy_price_table", "Clean Navy Price Table", "clean_navy_price_table", "standard", "mortgage_price_table", "Clean navy and blue mortgage amount table with homeowner CTA", ["Mortgage Protection Options", "Compare Home Protection Amounts"], ["If the unexpected happened, mortgage protection may help your family stay in the home.", "Compare private coverage options by mortgage amount."], ["Mortgage balance review", "Family protection", "Living benefits may be available"], mortgageAmounts, { background: "#eaf4ff", accent: "#1d4ed8", styleTag: "mp_navy_table" }, 1),
+    mp("mp_homeowner_notice_layout", "Homeowner Notice Layout", "homeowner_notice_layout", "standard", "mortgage_notice", "Homeowner notice card with blue header, white table, and amount buttons", ["Homeowner Coverage Notice", "Protect Your Mortgage Balance"], ["Homeowners can check mortgage-balance protection options in a notice-style table.", "Select a balance range to see how coverage may be structured."], ["Mortgage balance ranges", "Homeowner notice format", "Amount-based comparison"], mortgageAmounts, { background: "#ffffff", accent: "#0f3b70", styleTag: "mp_homeowner_notice" }),
+    mp("mp_family_home_warmth", "Family Home Warmth", "family_home_warmth", "standard", "mortgage_family_home", "Warm family/home mortgage layout with soft cream background and benefit cards", ["Help Keep The Home In The Family", "Protection For The Place They Call Home"], ["Mortgage protection may help your family keep the home if income suddenly changes.", "Review options designed around your mortgage balance and family priorities."], ["Keep the home base", "Family payment support", "Balance-based planning"], mortgageAmounts, { background: "#fff7ed", accent: "#c2410c", styleTag: "mp_family_warmth" }),
+    mp("mp_income_stopped_tomorrow", "Income Stopped Tomorrow", "income_stopped_tomorrow", "standard", "mortgage_income_alert", "Income stopped tomorrow alert layout with strong contrast and decision buttons", ["If Income Stopped Tomorrow", "Could Your Family Keep The Home?"], ["A private mortgage protection policy may help cover the balance or payments, depending on terms.", "Review options before the unexpected happens."], ["Mortgage balance review", "Payment protection options", "Policy terms explained"], mortgageAmounts, { background: "#111827", accent: "#ef4444", styleTag: "mp_income_alert" }),
+    mp("mp_living_benefits_alert", "Living Benefits Alert", "living_benefits_alert", "standard", "mortgage_living_benefits", "Living benefits alert card with blue alert panel and compact checklist", ["Living Benefits May Be Available", "Mortgage Protection With Added Flexibility"], ["Some policies may include living benefits, subject to policy terms and eligibility.", "Review mortgage protection options beyond basic death benefit coverage."], ["Living benefits may be available", "Policy-term dependent", "Licensed explanation"], mortgageAmounts, { background: "#eff6ff", accent: "#2563eb", styleTag: "mp_living_benefits" }),
+    mp("mp_with_without_coverage", "With Without Coverage", "with_without_coverage", "standard", "mortgage_comparison", "Side-by-side with coverage and without coverage comparison card", ["With Coverage vs Without Coverage", "Compare Mortgage Protection Choices"], ["Compare what may happen with or without private mortgage protection in place.", "A licensed professional can review options for your home."], ["Side-by-side comparison", "Mortgage amount options", "No-obligation review"], mortgageAmounts, { background: "#f8fafc", accent: "#16a34a", styleTag: "mp_comparison" }),
+    mp("mp_veteran_family_home", "Veteran Family Home", "veteran_family_home", "veteran", "mortgage_veteran", "Veteran family and home mortgage protection layout with patriotic accents", ["Veteran Home Protection Review", "Mortgage Protection For Veterans"], ["Veterans can review private mortgage protection options for their family home.", "Review mortgage amount options built around veteran family protection."], ["Veteran homeowner review", "Family home protection", "Mortgage amount options"], mortgageAmounts, { background: "#f5f0e8", accent: "#8b1a1a", styleTag: "mp_veteran_home" }, 1),
+    mp("mp_veteran_living_benefits", "Veteran Living Benefits", "veteran_living_benefits", "veteran", "mortgage_veteran_living", "Veteran mortgage layout with living benefits bullets and navy/red panels", ["Veterans: Mortgage Protection Options", "Help Protect Your Family Home"], ["Private policies may include living benefits, subject to terms and eligibility.", "Veteran homeowners can compare mortgage balance options available in their state."], ["Living benefits may be available", "Policy terms apply", "Veteran homeowner focus"], mortgageAmounts, { background: "#0f172a", accent: "#d4a017", styleTag: "mp_veteran_living" }),
+    mp("mp_trucker_home_on_road", "Trucker Home On Road", "trucker_home_on_road", "trucker", "mortgage_trucker", "Trucker mortgage protection layout with highway/home split and amount cards", ["Truckers: Protect The Home Base", "Mortgage Protection For Life On The Road"], ["When you are on the road, mortgage protection may help protect the home base.", "CDL drivers can review private mortgage protection options."], ["Home base protection", "Mortgage amount review", "Driver-focused review"], mortgageAmounts, { background: "#07131f", accent: "#f59e0b", styleTag: "mp_trucker_home" }, 1),
+    mp("mp_trucker_income_gap", "Trucker Income Gap", "trucker_income_gap", "trucker", "mortgage_trucker_income", "Trucker income gap alert with dark highway palette and coverage cards", ["If The Miles Stopped", "Could The Mortgage Still Be Covered?"], ["Private mortgage protection may help families prepare for unexpected income gaps.", "Review options designed around your mortgage balance and driver income risk."], ["Income gap planning", "Home payment backup", "Driver schedule friendly"], mortgageAmounts, { background: "#1c1c1c", accent: "#ff6b35", styleTag: "mp_trucker_income" }),
+
+    vt("vet_benefit_grid_notice", "Veteran Benefit Grid Notice", "veteran_benefit_grid_notice", "veteran_grid", "Cream paper veteran benefit grid with red/navy/gold border, $40,000 hero number, four benefit cards, and age buttons", ["Veterans 50+ Notice", "$40,000 Coverage Options"], ["Veterans and families can review private coverage options that may help protect what matters.", "Review private life insurance options with a licensed professional."], ["Protect Home", "Support Loved Ones", "Prepare Ahead", "Protect Legacy"], ageSenior, { background: "#f5f0e8", accent: "#8b1a1a", styleTag: "vet_benefit_grid" }, 1),
+    vt("vet_whole_life_bold_white", "Veteran Whole Life Bold White", "veteran_whole_life_bold_white", "veteran_white_bold", "Mostly white veteran whole life card, huge navy headline, red/orange age buttons", ["Veterans Whole Life Options", "No 2 Year Waiting Period Options"], ["Veterans may qualify for private whole life coverage options up to $100,000.", "Review coverage options with no two-year waiting period on select policies, subject to eligibility."], ["Up to $100,000 options", "No 2-year wait on select plans", "Age-based whole life check"], ageSenior, { background: "#ffffff", accent: "#ea580c", styleTag: "vet_whole_life_white" }, 1),
+    vt("vet_coverage_up_to_100k", "Veteran Coverage Up To 100k", "veteran_coverage_up_to_100k", "veteran_amount_card", "Bold white/navy veteran amount card with coverage up to $100,000 language", ["Coverage Up To $100,000", "Veterans: Review Coverage Options"], ["Private coverage options may be available for veterans and spouses.", "A licensed professional can review amounts and eligibility."], ["Up to $100,000 options", "Age-based review", "Private coverage"], ageSenior, { background: "#f8fafc", accent: "#1d4ed8", styleTag: "vet_100k" }),
+    vt("vet_legacy_protection_cards", "Veteran Legacy Protection Cards", "veteran_legacy_cards", "veteran_legacy", "Patriotic card stack for protect home, loved ones, legacy, and planning ahead", ["Protect Your Legacy", "Coverage For Those Who Served"], ["Private life insurance can help veterans plan ahead for family needs.", "Review options that may help protect home, loved ones, and legacy."], ["Protect Home", "Loved Ones", "Plan Ahead", "Legacy"], ageSenior, { background: "#0f172a", accent: "#d4a017", styleTag: "vet_legacy_cards" }),
+    vt("vet_spouse_family_private", "Veteran Spouse Family Private", "veteran_spouse_family_private", "veteran_family_private", "Warm family-focused veteran private coverage layout with cream and navy panels", ["Veteran Family Coverage Review", "Private Options For Veterans And Spouses"], ["Veterans and spouses can review private coverage options for family protection.", "A licensed professional can explain what may be available."], ["Veteran", "Spouse", "Family", "Review"], ageSenior, { background: "#fff7ed", accent: "#0f3b70", styleTag: "vet_family_private" }),
+    vt("vet_fast_private_review", "Veteran Fast Private Review", "veteran_fast_private_review", "veteran_fast_review", "Fast coverage review mobile-native veteran card with red CTA and navy panels", ["Fast Veteran Coverage Review", "See What Options May Be Available"], ["A short coverage review can show options for your age and state.", "Licensed coverage review for veterans and families."], ["50-59", "60-69", "70-79", "80+"], ageSenior, { background: "#eaf4ff", accent: "#b91c1c", styleTag: "vet_fast_review" }),
+    vt("vet_notice_paper_border", "Veteran Notice Paper Border", "veteran_notice_paper_border", "veteran_notice_paper", "Cream paper notice with red navy gold patriotic border and clean coverage review framing", ["Veterans 50+ Coverage Notice", "Veteran Coverage Options"], ["Coverage review for veterans and families.", "Review options that may be available in your state."], ["Coverage for veterans", "Family protection focus", "Age 50+ notice"], ageSenior, { background: "#f5f0e8", accent: "#8b1a1a", styleTag: "vet_notice_paper" }),
+
+    tr("trk_blue_highway_clean", "Blue Highway Clean", "blue_highway_clean", "trucker_blue_highway", "Blue highway clean trucker coverage card with crisp white panels and age buttons", ["Truck Driver Coverage Options", "CDL Drivers: Review Options"], ["Drivers can review private coverage options built around life on the road.", "A licensed professional can review options for CDL drivers."], ["CDL-friendly review", "Family protection", "No-obligation options"], ageAdult, { background: "#eaf4ff", accent: "#1d4ed8", styleTag: "trk_blue_highway" }, 1),
+    tr("trk_sunset_highway_gold", "Sunset Highway Gold", "sunset_highway_gold", "trucker_sunset_gold", "Sunset highway gold trucker direct-response layout with warm CTA", ["Coverage For The Road Ahead", "Truckers: View Coverage Options"], ["When you drive for a living, it helps to know what private options may be available.", "Review simple coverage options for CDL drivers."], ["Road-ready review", "Family protection", "Options may be available"], ageAdult, { background: "#2c1810", accent: "#f59e0b", styleTag: "trk_sunset_gold" }),
+    tr("trk_dark_purple_sky", "Dark Purple Orange Sky", "dark_purple_orange_sky", "trucker_purple_orange", "Dark purple and orange sky trucker layout with high-contrast option buttons", ["Truckers: Check Your Options", "Private Coverage For CDL Drivers"], ["A private coverage review can help drivers compare options by age and state.", "See what may be available for your family protection goals."], ["Age-based options", "Licensed review", "No obligation"], ageAdult, { background: "#1a1a2e", accent: "#ff6b35", styleTag: "trk_purple_sky" }),
+    tr("trk_patriotic_rate_table", "Patriotic Trucker Rate Table", "patriotic_trucker_rate_table", "trucker_rate_table", "Patriotic trucker rate table with red navy white cards and view options CTA", ["CDL Driver Rate Review", "Truckers: Compare Coverage Options"], ["Compare private coverage options in a simple driver-focused review.", "Review age-based options with a licensed professional."], ["Rate review", "Private coverage", "Driver-focused"], ageAdult, { background: "#f8fafc", accent: "#b91c1c", styleTag: "trk_rate_table" }),
+    tr("trk_truck_stop_lifestyle", "Truck Stop Lifestyle", "truck_stop_lifestyle", "trucker_truck_stop", "Truck stop and highway lifestyle-inspired CSS card with rugged panels", ["Coverage Between Loads", "Protect The Family While You Drive"], ["Between loads and long hauls, your family protection still matters.", "CDL drivers can review private options on a simple call."], ["Built for drivers", "Family protection", "Simple review"], ageAdult, { background: "#111827", accent: "#f97316", styleTag: "trk_truck_stop" }),
+    tr("trk_view_options_age_card", "View Options Age Card", "view_options_age_card", "trucker_age_selector", "Clean trucker age selector with oversized view options CTA", ["Tap Your Age To View Options", "Truckers: Select Your Age"], ["Select your age range to start a private coverage review.", "Review options that may be available for CDL drivers."], ["Age range review", "Private options", "Licensed follow-up"], ageAdult, { background: "#ffffff", accent: "#0f3b70", styleTag: "trk_age_options" }),
+    tr("trk_family_home_base", "Trucker Family Home Base", "family_home_base", "trucker_home_base", "Home base protection layout for truckers with blue/orange split panels", ["Protect The Home Base", "Coverage For Drivers And Families"], ["Your home base matters while you are out on the road.", "Review coverage options designed around driver schedules and family goals."], ["Home base focus", "Family protection", "Driver review"], ageAdult, { background: "#f8fafc", accent: "#ea580c", styleTag: "trk_home_base" }),
+    tr("trk_black_gold_premium", "Black Gold Premium Trucker", "black_gold_premium_trucker", "trucker_black_gold", "Black and gold premium trucker layout with bold CTA and benefit blocks", ["Premium Coverage Review For Drivers", "Truckers: Review Private Options"], ["A licensed professional can review protection options for drivers and families.", "Compare private options without pressure."], ["Premium review", "Family protection", "Options explained"], ageAdult, { background: "#0a0a0a", accent: "#c9a84c", styleTag: "trk_black_gold" }),
+
+    iul("iul_clean_triangle_diagram", "Clean Triangle Diagram", "clean_triangle_diagram", "standard", "iul_ethos_clean", "Clean white ETHOS-style triangle diagram showing protection, growth potential, and access", ["IUL: Protection + Growth Potential", "Learn How IUL Can Work"], ["Indexed universal life can combine life insurance protection with cash value growth potential.", "Learn the moving parts before deciding if IUL may fit your goals."], ["Protection", "Growth Potential", "Flexible Access", "Legacy"], iulButtons, { background: "#ffffff", accent: "#2563eb", styleTag: "iul_triangle" }, 1),
+    iul("iul_market_loss_protection", "Market Loss Protection Education", "market_loss_protection_education", "standard", "iul_market_protection", "Clean diagram card for market loss protection subject to policy terms", ["Market Loss Protection Features", "IUL Downside Protection Education"], ["IUL policies may include downside protection features, subject to caps, fees, and policy terms.", "Learn how index-linked crediting works before choosing a policy."], ["No direct market investment", "Caps and limits apply", "Policy terms explained"], iulButtons, { background: "#eef6ff", accent: "#1d4ed8", styleTag: "iul_market_protection" }),
+    iul("iul_flexible_cash_access", "Flexible Cash Access Education", "flexible_cash_access_education", "standard", "iul_cash_access", "Clean white cash access card with simple three-part diagram and disclaimer area", ["Flexible Cash Access Education", "Cash Value Life Insurance Review"], ["Cash value may be accessed through loans or withdrawals, subject to policy terms and risks.", "A licensed professional can explain costs, limits, and tradeoffs."], ["Loans/withdrawals", "Policy terms apply", "Licensed review"], iulButtons, { background: "#f8fafc", accent: "#16a34a", styleTag: "iul_cash_access" }),
+    iul("iul_black_gold_retirement", "Black Gold Retirement", "black_gold_retirement", "standard", "iul_black_gold", "Black and gold premium IUL retirement education layout", ["Retirement Planning With IUL Education", "Learn About Cash Value Life Insurance"], ["IUL may be part of a broader retirement strategy for some families.", "Review benefits, limits, costs, and policy terms with a licensed professional."], ["Retirement", "Cash Value", "Protection", "Review"], iulButtons, { background: "#0a0a0a", accent: "#c9a84c", styleTag: "iul_black_gold" }),
+    iul("iul_wealth_growth_potential", "Wealth Growth Potential", "wealth_growth_potential", "standard", "iul_growth_potential", "Clean wealth growth potential card with upward CSS diagram and blue/green accents", ["Wealth Growth Potential", "Protection With Cash Value Potential"], ["IUL offers cash value growth potential tied to an index, subject to caps and policy terms.", "Learn how protection and cash value may work together."], ["Growth potential", "Downside features", "Terms explained"], iulButtons, { background: "#ffffff", accent: "#0f766e", styleTag: "iul_growth" }),
+    iul("iul_veteran_triangle_legacy", "Veteran Triangle Legacy", "veteran_triangle_legacy", "veteran", "iul_veteran_triangle", "Veteran IUL triangle diagram with patriotic accent and coverage review framing", ["Veterans: IUL Education", "IUL Review For Veterans"], ["Veterans can review private IUL education with a licensed professional.", "Learn protection, cash value potential, and policy terms for veteran family planning."], ["Protection", "Cash Value", "Legacy", "Review"], iulButtons, { background: "#f5f0e8", accent: "#8b1a1a", styleTag: "iul_vet_triangle" }, 1),
+    iul("iul_veteran_black_gold", "Veteran Black Gold IUL", "veteran_black_gold_iul", "veteran", "iul_veteran_gold", "Premium black/gold veteran IUL education card with private coverage framing", ["Veteran Legacy Planning Education", "Private IUL Options For Veterans"], ["IUL may help some veterans think through protection and legacy planning, subject to policy terms.", "Review private options with a licensed professional."], ["Legacy", "Protection", "Cash Value", "Learn"], iulButtons, { background: "#0a0a0a", accent: "#d4a017", styleTag: "iul_vet_gold" }),
+    iul("iul_trucker_blue_highway", "Trucker Blue Highway IUL", "trucker_blue_highway_iul", "trucker", "iul_trucker_blue", "Blue highway clean IUL card for CDL drivers with option buttons", ["Truckers: Learn About IUL", "Cash Value Education For Drivers"], ["Drivers can review protection and cash value life insurance education on their schedule.", "Learn how IUL works, including costs, caps, and policy terms."], ["Protection", "Cash Value", "Retirement", "Review"], iulButtons, { background: "#eaf4ff", accent: "#1d4ed8", styleTag: "iul_trucker_blue" }, 1),
+    iul("iul_trucker_sunset_gold", "Trucker Sunset Gold IUL", "trucker_sunset_gold_iul", "trucker", "iul_trucker_sunset", "Sunset highway gold IUL card for truckers with view options CTA", ["Future Planning For CDL Drivers", "Truckers: Review IUL Options"], ["If you drive for a living, it may be worth learning how IUL works.", "Review protection, cash value potential, and policy terms with a licensed professional."], ["Driver review", "Cash value", "Family protection", "Learn"], iulButtons, { background: "#2c1810", accent: "#f59e0b", styleTag: "iul_trucker_sunset" }),
+    iul("iul_trucker_premium_black_gold", "Trucker Premium Black Gold IUL", "trucker_premium_black_gold_iul", "trucker", "iul_trucker_gold", "Black/gold premium IUL retirement education layout for truckers", ["Premium IUL Education For Drivers", "Truckers: Retirement Strategy Review"], ["IUL may fit some long-term protection and planning goals, subject to policy terms.", "A licensed professional can explain caps, costs, loans, and policy risks."], ["Retirement", "Protection", "Cash Value", "Terms"], iulButtons, { background: "#0a0a0a", accent: "#c9a84c", styleTag: "iul_trucker_gold" }),
+    iul("iul_trucker_dark_purple_sky", "Trucker Dark Purple Sky IUL", "trucker_dark_purple_sky_iul", "trucker", "iul_trucker_purple", "Dark purple/orange sky IUL education card for truckers", ["IUL Options For The Road Ahead", "Cash Value Education For CDL Drivers"], ["Truckers can learn how protection and cash value potential may work together.", "Review policy terms and tradeoffs before deciding."], ["Road ahead", "Family", "Cash value", "Review"], iulButtons, { background: "#1a1a2e", accent: "#ff6b35", styleTag: "iul_trucker_purple" }),
+  ];
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER FUNCTIONS
