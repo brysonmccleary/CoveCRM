@@ -92,6 +92,7 @@ export interface IUser {
       // ✅ REQUIRED for multi-tenant isolation + auth
       connectionId?: string;
       tokenHash?: string;
+      token?: string;
 
       // kept as plain dates (subdocs here don't auto-timestamp)
       createdAt?: Date;
@@ -294,6 +295,7 @@ const SyncedSheetSimpleSchema = new Schema(
     // ✅ REQUIRED for webhook/backfill auth + isolation
     connectionId: { type: String, default: "" },
     tokenHash: { type: String, default: "" },
+    token: { type: String, default: "" },
 
     // stored explicitly by connect handler
     createdAt: { type: Date, default: null },
