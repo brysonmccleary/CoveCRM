@@ -1003,6 +1003,23 @@ export default function FacebookAdsPage() {
     }
   };
 
+  const handleDeleteCampaign = async (campaign: Campaign) => {
+    if (!confirm(
+      `Delete "${campaign.campaignName}"?
+
+This removes it from CoveCRM and archives it in Meta.`
+    )) return;
+    try {
+      const r = await fetch(`/api/facebook/campaigns/${campaign._id}`, {
+        method: "DELETE",
+      });
+      if (!r.ok) throw new Error("Delete failed");
+      setCampaigns((prev) => prev.filter((c) => c._id !== campaign._id));
+    } catch {
+      alert("Failed to delete campaign. Try again.");
+    }
+  };
+
   const executeCampaignAction = async (dryRun: boolean) => {
     if (!actionModal) return;
     setExecutingAction(dryRun ? "dry" : "real");
@@ -1808,6 +1825,18 @@ export default function FacebookAdsPage() {
                                   className="text-xs text-blue-300 hover:text-blue-200 border border-blue-500/20 px-2 py-1 rounded"
                                 >
                                   Edit Budget
+                                </button>
+                                <button
+                                  onClick={() => openActionModal(c, "DUPLICATE_TEST")}
+                                  className="text-xs text-purple-300 hover:text-purple-200 border border-purple-500/20 px-2 py-1 rounded"
+                                >
+                                  Duplicate
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteCampaign(c)}
+                                  className="text-xs text-red-400 hover:text-red-300 border border-red-500/20 px-2 py-1 rounded"
+                                >
+                                  Delete
                                 </button>
                                 <button
                                   onClick={() => handleActionHistoryToggle(c._id)}

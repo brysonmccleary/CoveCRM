@@ -93,6 +93,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === "DELETE") {
+    if ((campaign as any).metaCampaignId) {
+      try {
+        const user = await User.findOne({ email: session.user.email.toLowerCase() })
+          .select("metaSystemUserToken metaAccessToken")
+          .lean() as any;
+        const accessToken = String(user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
+        if (accessToken) {
+          await fetch(
+            `https://graph.facebook.com/v18.0/${(campaign as any).metaCampaignId}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                status: "DELETED",
+                access_token: accessToken,
+              }),
+            }
+          );
+        }
+      } catch (e) {
+        // Non-fatal — proceed with local delete
+        console.error("[campaign delete] Meta archive failed:", e);
+      }
+    }
     await campaign.deleteOne();
     return res.status(200).json({ ok: true });
   }

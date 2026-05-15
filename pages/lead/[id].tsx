@@ -5,6 +5,8 @@ import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
 import dynamic from "next/dynamic";
+import ChatThread from "@/components/messages/ChatThread";
+import { getSocket } from "@/lib/socketClient";
 
 
 import { useInlineLeadCall } from "@/lib/dial/useInlineLeadCall";
@@ -340,6 +342,7 @@ export default function LeadProfileDial() {
   const [histLoading, setHistLoading] = useState(false);
   const [callsLoading, setCallsLoading] = useState(false);
   const [generatingOverview, setGeneratingOverview] = useState(false);
+  const [showSmsPanel, setShowSmsPanel] = useState(false);
 
   const userHasAI = true;
 
@@ -1260,6 +1263,14 @@ export default function LeadProfileDial() {
 
             <button
               type="button"
+              onClick={() => setShowSmsPanel((v) => !v)}
+              className="text-sm bg-teal-600 hover:bg-teal-700 text-white px-3 py-1.5 rounded-md"
+            >
+              {showSmsPanel ? "Close Text" : "Text"}
+            </button>
+
+            <button
+              type="button"
               onClick={toggleMute}
               disabled={!callActive}
               className="text-sm bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-md disabled:opacity-40"
@@ -1300,6 +1311,22 @@ export default function LeadProfileDial() {
               Remove from Drip
             </button>
           </div>
+
+          {showSmsPanel && lead?._id && (
+            <div style={{
+              marginBottom: 24,
+              border: "1px solid #334155",
+              borderRadius: 8,
+              overflow: "hidden",
+              height: 480
+            }}>
+              <ChatThread
+                leadId={String(lead._id)}
+                socket={getSocket()}
+                mode="sms"
+              />
+            </div>
+          )}
 
 
           {/* Disposition */}

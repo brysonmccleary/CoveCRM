@@ -570,16 +570,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: copyParams.toString(),
       });
-      const copyJson = await copyResp.json();
+      const dupJson = await copyResp.json();
       if (!copyResp.ok) {
-        return res.status(500).json({ error: `Meta campaign duplicate failed: ${JSON.stringify(copyJson)}` });
+        return res.status(500).json({ error: `Meta campaign duplicate failed: ${JSON.stringify(dupJson)}` });
       }
-      metaResponse.duplicateCampaign = copyJson;
+      metaResponse.duplicateCampaign = dupJson;
 
-      const copiedCampaignId = extractCopyId(copyJson, "copied_campaign_id");
+      const copiedCampaignId = extractCopyId(dupJson, "copied_campaign_id");
       if (!copiedCampaignId) {
-        return res.status(500).json({ error: `Meta campaign duplicate failed: ${JSON.stringify(copyJson)}` });
+        return res.status(500).json({ error: `Meta campaign duplicate failed: ${JSON.stringify(dupJson)}` });
       }
+
+      await FBLeadCampaign.create({
+        ...campaign.toObject(),
+        _id: undefined,
+        __v: undefined,
+        metaCampaignId: copiedCampaignId,
+        metaAdsetId: null,
+        metaAdId: null,
+        metaFormId: null,
+        metaCreativeId: null,
+        campaignName: (campaign.campaignName || "Campaign") + " (Copy)",
+        status: "paused",
+        dailyBudget: Number(duplicateBudget) || campaign.dailyBudget,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
 
       if (shouldPauseOriginal) {
         const pauseParams = new URLSearchParams();
