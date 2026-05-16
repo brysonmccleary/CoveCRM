@@ -337,19 +337,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (String(match.sheetId || "") !== sheetId) {
+      console.warn("[sheets/webhook] auth fail sheet mismatch", {
+        requestId,
+        incomingConnectionId: connectionId,
+        activeConnectionId,
+        incomingSheetId: sheetId,
+        expectedSheetId: match.sheetId,
+        incomingGid: gid,
+        expectedGid: match.gid,
+      });
       return res.status(403).json({ error: "Sheet mismatch for connection" });
     }
 
     const tokenHash = String(match.tokenHash || "");
     const gotHash = sha256Hex(token);
+    const historyCount = Array.isArray(match.credentialHistory) ? match.credentialHistory.length : 0;
     const historyMatch = usedFallbackConnection
       ? (Array.isArray(match.credentialHistory) ? match.credentialHistory : []).find(
           (item: any) => String(item?.tokenHash || "") && String(item.tokenHash) === gotHash
         )
       : null;
 
-    if (!tokenHash && !historyMatch) return res.status(403).json({ error: "Connection token missing" });
-    if (gotHash !== tokenHash && !historyMatch) return res.status(403).json({ error: "Invalid token" });
+    if (!tokenHash && !historyMatch) {
+      console.warn("[sheets/webhook] auth fail missing tokenHash", {
+        requestId,
+        incomingConnectionId: connectionId,
+        activeConnectionId,
+        sheetId,
+        gid,
+        userEmail,
+      });
+      return res.status(403).json({ error: "Connection token missing" });
+    }
+    if (gotHash !== tokenHash && !historyMatch) {
+      console.warn("[sheets/webhook] auth fail invalid token", {
+        requestId,
+        incomingConnectionId: connectionId,
+        activeConnectionId,
+        sheetId,
+        gid,
+        userEmail,
+        gotHashPrefix: gotHash.slice(0, 12),
+        expectedHashPrefix: String(tokenHash || "").slice(0, 12),
+        historyCount,
+        usedFallbackConnection,
+      });
+      return res.status(403).json({ error: "Invalid token" });
+    }
 
     if (historyMatch) {
       console.log("[sheets/webhook] stale credential auto-healed", {
@@ -361,6 +395,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
       });
     }
+
+    console.log("[sheets/webhook] auth ok", {
+      requestId,
+      incomingConnectionId: connectionId,
+      activeConnectionId,
+      sheetId,
+      gid,
+      rowNumber,
+      userEmail,
+      usedFallbackConnection,
+      usedHistoryCredential: Boolean(historyMatch),
+    });
 
     const folderName = String(match.folderName || "").trim() || "Imported Leads";
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
