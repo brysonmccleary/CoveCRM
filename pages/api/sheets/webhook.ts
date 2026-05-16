@@ -444,6 +444,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ Hard-dedupe by externalId across the whole account (prevents duplicates even if lead moved folders)
     const finalConnectionId = activeConnectionId || connectionId;
     const externalId = finalConnectionId && rowNumber ? `gs:${finalConnectionId}:r${rowNumber}` : undefined;
+
+    // ✅ Import EVERYTHING: spread full row first, then overlay canonical fields
+    const leadDoc: any = {
+      ...row,
+
+      State: String(state || "").trim() || row.State || row["State"] || undefined,
+      "First Name": String(firstName || "").trim() || row["First Name"] || row.FirstName || undefined,
+      "Last Name": String(lastName || "").trim() || row["Last Name"] || row.LastName || undefined,
+      Phone: String(phoneClean || "").trim() || row.Phone || row["Phone"] || undefined,
+      Email: emailLower || row.Email || row["Email"] || undefined,
+
+      Notes: String(notes || "").trim() || row.Notes || row["Notes"] || undefined,
+      Age: String(age || "").trim() || row.Age || row["Age"] || undefined,
+      Beneficiary: String(beneficiary || "").trim() || row.Beneficiary || row["Beneficiary"] || undefined,
+      "Coverage Amount": String(coverageAmount || "").trim() || row["Coverage Amount"] || undefined,
+
+      normalizedPhone: normalizedPhone || undefined,
+      phoneLast10: phoneLast10 || undefined,
+      status: "New",
+      leadType: sanitizeLeadType(String(leadTypeIn || "")),
+
+      source: "google-sheets",
+      externalId: externalId,
+      sheetMeta: {
+        sheetId,
+        gid: payload.gid || "",
+        tabName: payload.tabName || match.tabName || "",
+        receivedAt: new Date(),
+        ts: payload.ts || null,
+        connectionId: activeConnectionId,
+        rowNumber: rowNumber || undefined,
+      },
+      rawRow: row,
+    };
+
     if (typeof externalId === "string" && externalId.trim()) {
       console.log("[sheets/webhook] dedupe externalId check", {
         requestId,
@@ -462,7 +497,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             $ne: "",
           },
         })
-        .select({ _id: 1, externalId: 1 })
+        .select({ _id: 1, externalId: 1, rawRow: 1 })
         .lean();
       if (existsByExternal) {
         console.log("[sheets/webhook] duplicate_externalId match", {
@@ -472,10 +507,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           matchedLeadExternalId: existsByExternal.externalId,
         });
 
-        console.log("[sheets/webhook] skip dedupe", {
+        const isNonEmpty = (value: any) =>
+          value !== null && value !== undefined && String(value).trim() !== "";
+        const updateSet: Record<string, any> = {};
+        const updatedKeys: string[] = [];
+        const blockedKeys = new Set(["_id", "id", "__v", "userEmail", "folderId", "rawRow", "sheetMeta"]);
+
+        for (const [key, value] of Object.entries(leadDoc)) {
+          if (blockedKeys.has(key)) continue;
+          if (key.includes(".") || key.startsWith("$")) continue;
+          if (key === "status" && String(value || "").trim() === "New") continue;
+          if (!isNonEmpty(value)) continue;
+          updateSet[key] = value;
+          updatedKeys.push(key);
+        }
+
+        const mergedRawRow = { ...((existsByExternal as any).rawRow || {}) };
+        for (const [key, value] of Object.entries(row || {})) {
+          if (!isNonEmpty(value)) continue;
+          mergedRawRow[key] = value;
+        }
+
+        updateSet.rawRow = mergedRawRow;
+        updateSet["sheetMeta.receivedAt"] = new Date();
+        updateSet["sheetMeta.ts"] = payload.ts || null;
+        updateSet["sheetMeta.rowNumber"] = rowNumber || undefined;
+        updateSet["sheetMeta.sheetId"] = sheetId;
+        updateSet["sheetMeta.gid"] = payload.gid || "";
+        updateSet["sheetMeta.tabName"] = payload.tabName || match.tabName || "";
+        updateSet["sheetMeta.connectionId"] = activeConnectionId;
+        updatedKeys.push("rawRow", "sheetMeta");
+
+        await (Lead as any).updateOne(
+          { _id: existsByExternal._id, userEmail },
+          { $set: updateSet }
+        );
+
+        console.log("[sheets/webhook] duplicate_externalId updated", {
           requestId,
-          reason: "duplicate_externalId",
           existingLeadId: String(existsByExternal._id),
+          updatedKeysCount: updatedKeys.length,
+          updatedKeys,
         });
 
         await touchFolderUpdatedAt(folder._id as any, userEmail);
@@ -487,7 +559,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (user as any).googleSheets = gs;
         await user.save();
 
-        return res.status(200).json({ ok: true, skipped: "duplicate_externalId" });
+        return res.status(200).json({ ok: true, updated: "duplicate_externalId" });
       }
     }
 
@@ -549,40 +621,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ ok: true, skipped: "duplicate_email" });
       }
     }
-    // ✅ Import EVERYTHING: spread full row first, then overlay canonical fields
-    const leadDoc: any = {
-      ...row,
-
-      State: String(state || "").trim() || row.State || row["State"] || undefined,
-      "First Name": String(firstName || "").trim() || row["First Name"] || row.FirstName || undefined,
-      "Last Name": String(lastName || "").trim() || row["Last Name"] || row.LastName || undefined,
-      Phone: String(phoneClean || "").trim() || row.Phone || row["Phone"] || undefined,
-      Email: emailLower || row.Email || row["Email"] || undefined,
-
-      Notes: String(notes || "").trim() || row.Notes || row["Notes"] || undefined,
-      Age: String(age || "").trim() || row.Age || row["Age"] || undefined,
-      Beneficiary: String(beneficiary || "").trim() || row.Beneficiary || row["Beneficiary"] || undefined,
-      "Coverage Amount": String(coverageAmount || "").trim() || row["Coverage Amount"] || undefined,
-
-      normalizedPhone: normalizedPhone || undefined,
-      phoneLast10: phoneLast10 || undefined,
-      status: "New",
-      leadType: sanitizeLeadType(String(leadTypeIn || "")),
-
-      source: "google-sheets",
-      externalId: externalId,
-      sheetMeta: {
-        sheetId,
-        gid: payload.gid || "",
-        tabName: payload.tabName || match.tabName || "",
-        receivedAt: new Date(),
-        ts: payload.ts || null,
-        connectionId: activeConnectionId,
-        rowNumber: rowNumber || undefined,
-      },
-      rawRow: row,
-    };
-
     console.log("[sheets/webhook] pre-insert leadDoc", {
       requestId,
       externalId,
