@@ -106,6 +106,37 @@ function pickRowValue(row: Record<string, any>, keys: string[]) {
   return "";
 }
 
+function normalizeUsPhoneToE164(raw: any): string {
+  const digits = String(raw || "").replace(/\D+/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return "";
+}
+
+function isRealisticAge(raw: any): boolean {
+  const s = String(raw ?? "").trim();
+  if (!/^\d{1,3}$/.test(s)) return false;
+  const n = Number(s);
+  return n >= 18 && n <= 99;
+}
+
+function recoverSinglePhoneFromRow(row: Record<string, any>) {
+  const candidates: Array<{ key: string; value: string; normalized: string }> = [];
+
+  for (const [key, value] of Object.entries(row || {})) {
+    if (value === undefined || value === null) continue;
+    const raw = String(value).trim();
+    if (!raw || isRealisticAge(raw)) continue;
+
+    const normalized = normalizeUsPhoneToE164(raw);
+    if (!normalized) continue;
+    candidates.push({ key, value: raw, normalized });
+  }
+
+  const unique = Array.from(new Map(candidates.map((c) => [c.normalized, c])).values());
+  return unique.length === 1 ? unique[0] : null;
+}
+
 function isHexSig(sig: string) {
   return /^[0-9a-f]{64}$/i.test(sig);
 }
@@ -415,21 +446,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const lastName = pickRowValue(row, ["Last Name", "Last", "LName", "Surname", "lastname", "last_name", "last"]);
     const phoneRaw = pickRowValue(row, ["Phone", "Phone Number", "Mobile", "Cell", "Primary Phone", "phone", "phoneNumber", "phonenumber", "Phone 1", "Phone1", "phone1"]);
     const emailRaw = pickRowValue(row, ["Email", "Email Address", "E-mail", "E-mail Address", "email", "emailAddress", "email_address"]);
-    const phoneClean = phoneRaw && /\d{7,}/.test(phoneRaw)
+    let phoneClean = phoneRaw && /\d{7,}/.test(phoneRaw)
       ? phoneRaw
       : undefined;
+    const recoveredPhone = phoneClean ? null : recoverSinglePhoneFromRow(row);
+    if (recoveredPhone) {
+      phoneClean = recoveredPhone.normalized;
+      console.log("[sheets/webhook] recovered phone from non-phone field", {
+        requestId,
+        sourceKey: recoveredPhone.key,
+        last4: recoveredPhone.normalized.slice(-4),
+      });
+    }
 
     const emailClean = emailRaw && emailRaw.includes("@")
       ? emailRaw
       : undefined;
     const state = pickRowValue(row, ["State", "ST", "state"]);
     const age = pickRowValue(row, ["Age", "age"]);
+    const ageFromRecoveredPhone = recoveredPhone && normalizeHeaderKey(recoveredPhone.key) === "age" && !isRealisticAge(age);
+    const safeAge = ageFromRecoveredPhone ? undefined : age;
     const notes = pickRowValue(row, ["Notes", "Note", "notes", "note"]);
     const beneficiary = pickRowValue(row, ["Beneficiary", "Beneficiary Name", "beneficiary"]);
     const coverageAmount = pickRowValue(row, ["Coverage Amount", "Coverage", "coverage", "coverageamount"]);
     const leadTypeIn = pickRowValue(row, ["leadType", "Lead Type", "LeadType", "Type", "type"]);
 
-    const normalizedPhone = normalizePhone(phoneClean);
+    const normalizedPhone = recoveredPhone ? recoveredPhone.normalized : normalizePhone(phoneClean);
     const phoneLast10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
     const emailLower = normalizeEmail(emailClean);
 
@@ -457,7 +499,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       Email: emailLower || row.Email || row["Email"] || undefined,
 
       Notes: String(notes || "").trim() || row.Notes || row["Notes"] || undefined,
-      Age: String(age || "").trim() || row.Age || row["Age"] || undefined,
+      Age: String(safeAge || "").trim() || undefined,
       Beneficiary: String(beneficiary || "").trim() || row.Beneficiary || row["Beneficiary"] || undefined,
       "Coverage Amount": String(coverageAmount || "").trim() || row["Coverage Amount"] || undefined,
 
