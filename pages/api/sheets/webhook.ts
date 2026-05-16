@@ -454,11 +454,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const existsByExternal = await (Lead as any)
         .findOne({
-          $and: [
-            { userEmail },
-            { externalId: String(externalId) },
-            { externalId: { $exists: true, $type: "string", $ne: "" } },
-          ],
+          userEmail,
+          externalId: {
+            $eq: String(externalId),
+            $exists: true,
+            $type: "string",
+            $ne: "",
+          },
         })
         .select({ _id: 1, externalId: 1 })
         .lean();
