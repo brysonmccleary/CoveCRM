@@ -11,12 +11,12 @@
 //   6.  Booked guard:    lead.appointmentTime set → skip (already has appointment)
 //   7.  Status guard:    terminal lead statuses → skip
 //   8.  Attempt guard:   aiFirstCallAttemptedAt already set → skip (hard one-call-max, no exceptions)
-//   9.  Folder:          folder.aiFirstCallEnabled must be true
+//   9.  Folder context:  loaded for script/metadata only; account toggle controls auto-call
 //  10.  Real-time:       if folder.aiRealTimeOnly, lead.realTimeEligible must be true
 //  11.  Age gate:        lead created before folder.aiEnabledAt → skip
 //  12.  Business hours:  aiSettings.businessHoursOnly → check timezone window (FAIL-SAFE)
 //  13.  Atomic lock:     atomically mark "pending" before delay — prevents race/duplicate
-//  14.  Delay:           folder.aiFirstCallDelayMinutes → aiSettings.newLeadCallDelayMinutes → 1
+//  14.  Delay:           AISettings.newLeadCallDelayMinutes; live Google Sheets rows fire immediately
 //  15.  Fire:            POST to voice server /trigger-call
 
 import Lead from "@/models/Lead";
@@ -132,8 +132,7 @@ export async function triggerAIFirstCall(
     // Guard 4 — Block bulk-import sourceTypes. Bulk imports (csv_import, manual_import,
     // doi_prospecting) must use AI Dial Session, not instant first-call.
     // All single-lead creation paths (facebook_lead, google_sheets_live, manual_live,
-    // landing_page, form_submission, api_live, etc.) are allowed through here —
-    // folder-level guards below (aiFirstCallEnabled, aiRealTimeOnly) control actual eligibility.
+    // landing_page, form_submission, api_live, etc.) are allowed through here.
     const BULK_ONLY_SOURCES = new Set(["csv_import", "manual_import", "doi_prospecting"]);
     if (BULK_ONLY_SOURCES.has(lead.sourceType)) {
       console.info(`[triggerAIFirstCall] Lead ${leadId} sourceType=${lead.sourceType} is a bulk-import source — use AI Dial Session instead`);
@@ -167,21 +166,18 @@ export async function triggerAIFirstCall(
       return;
     }
 
-    // Guard 9 — folder must have aiFirstCallEnabled
+    // Guard 9 — folder context is used for script/metadata, not as the main on/off gate.
+    // The visible Settings → AI & Automation New Lead Auto-Call toggle controls auto-calling.
     const folder = await Folder.findById(folderId).lean() as any;
-    if (!folder?.aiFirstCallEnabled) {
-      console.info(`[triggerAIFirstCall] Folder ${folderId} aiFirstCallEnabled=false — skipping`);
-      return;
-    }
 
     // Guard 10 — aiRealTimeOnly: if set, lead must have realTimeEligible=true
-    if (folder.aiRealTimeOnly && !lead.realTimeEligible) {
+    if (folder?.aiRealTimeOnly && !lead.realTimeEligible) {
       console.info(`[triggerAIFirstCall] Folder ${folderId} requires realTimeEligible leads — lead ${leadId} skipped`);
       return;
     }
 
     // Guard 11 — lead must be created AFTER aiEnabledAt (no retroactive blasting)
-    if (folder.aiEnabledAt) {
+    if (folder?.aiEnabledAt) {
       if (new Date(lead.createdAt) < new Date(folder.aiEnabledAt)) {
         console.info(`[triggerAIFirstCall] Lead ${leadId} predates aiEnabledAt — skipping`);
         return;
@@ -215,19 +211,17 @@ export async function triggerAIFirstCall(
       return;
     }
 
-    // Delay resolution: folder first, then aiSettings, then default 1
-    let delayMinutes: number;
-    if (typeof folder.aiFirstCallDelayMinutes === "number" && folder.aiFirstCallDelayMinutes >= 0) {
-      delayMinutes = folder.aiFirstCallDelayMinutes;
-    } else if (typeof aiSettings?.newLeadCallDelayMinutes === "number" && aiSettings.newLeadCallDelayMinutes >= 0) {
-      delayMinutes = aiSettings.newLeadCallDelayMinutes;
-    } else {
-      delayMinutes = 1;
-    }
+    const isRealtimeGoogleSheetsLead =
+      lead.sourceType === "google_sheets_live" && lead.realTimeEligible === true;
+    const delayMinutes = isRealtimeGoogleSheetsLead
+      ? 0
+      : typeof aiSettings?.newLeadCallDelayMinutes === "number" &&
+          aiSettings.newLeadCallDelayMinutes >= 0
+        ? aiSettings.newLeadCallDelayMinutes
+        : 5;
 
-    // FIX 3 — durable scheduling: instead of sleeping in-process (not durable across
-    // serverless cold starts / deploys), write the due time to Mongo and return.
-    // The cron job /api/cron/fire-due-ai-calls picks up due leads and fires them.
+    // Non-realtime leads respect the visible account-level delay. Live Google Sheets
+    // rows bypass delay and continue to the immediate fire path below.
     if (delayMinutes > 0) {
       const dueAt = new Date(Date.now() + delayMinutes * 60_000);
       await Lead.updateOne(
@@ -239,6 +233,9 @@ export async function triggerAIFirstCall(
     }
 
     // delayMinutes === 0 — fire immediately without sleeping
+    if (isRealtimeGoogleSheetsLead) {
+      console.info(`[triggerAIFirstCall] Live Google Sheets lead ${leadId} firing immediately`);
+    }
     const userDoc = await User.findOne({ email: lead.userEmail }).lean() as any;
     const userNumbers: any[] = Array.isArray(userDoc?.numbers) ? userDoc.numbers : [];
     const primaryNumber = userNumbers.find((n: any) =>
@@ -263,7 +260,7 @@ export async function triggerAIFirstCall(
         userEmail,
         leadId,
         leadPhone: lead.Phone,
-        scriptKey: (folder.aiScriptKey as string) || "default",
+        scriptKey: (folder?.aiScriptKey as string) || "default",
         fromNumber,
       }),
     });
