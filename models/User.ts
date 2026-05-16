@@ -93,6 +93,12 @@ export interface IUser {
       connectionId?: string;
       tokenHash?: string;
       token?: string;
+      credentialHistory?: {
+        connectionId?: string;
+        tokenHash?: string;
+        createdAt?: Date;
+        replacedAt?: Date;
+      }[];
 
       // kept as plain dates (subdocs here don't auto-timestamp)
       createdAt?: Date;
@@ -296,6 +302,17 @@ const SyncedSheetSimpleSchema = new Schema(
     connectionId: { type: String, default: "" },
     tokenHash: { type: String, default: "" },
     token: { type: String, default: "" },
+    credentialHistory: {
+      type: [
+        {
+          connectionId: { type: String, default: "" },
+          tokenHash: { type: String, default: "" },
+          createdAt: { type: Date, default: null },
+          replacedAt: { type: Date, default: null },
+        },
+      ],
+      default: [],
+    },
 
     // stored explicitly by connect handler
     createdAt: { type: Date, default: null },

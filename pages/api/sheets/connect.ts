@@ -604,6 +604,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tokenHash = sha256Hex(token);
     }
 
+    const credentialHistory = Array.isArray(existingEntry?.credentialHistory)
+      ? [...existingEntry.credentialHistory]
+      : [];
+    const previousConnectionId = String(existingEntry?.connectionId || "").trim();
+    const previousTokenHash = String(existingEntry?.tokenHash || "").trim();
+    const credentialsChanged =
+      existingEntry &&
+      previousConnectionId &&
+      previousTokenHash &&
+      (previousConnectionId !== connectionId || previousTokenHash !== tokenHash);
+
+    if (
+      credentialsChanged &&
+      !credentialHistory.some(
+        (item: any) =>
+          String(item?.connectionId || "") === previousConnectionId &&
+          String(item?.tokenHash || "") === previousTokenHash
+      )
+    ) {
+      credentialHistory.push({
+        connectionId: previousConnectionId,
+        tokenHash: previousTokenHash,
+        createdAt: existingEntry?.createdAt || null,
+        replacedAt: new Date(),
+      });
+    }
+
     const entry = {
       ...(existingEntry || {}),
       sheetId: normalizedSheetId,
@@ -616,6 +643,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       connectionId,
       token,
       tokenHash,
+      credentialHistory,
       createdAt: existingEntry?.createdAt || new Date(),
       updatedAt: new Date(),
     };

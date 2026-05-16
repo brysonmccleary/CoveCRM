@@ -282,6 +282,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       "googleSheets.syncedSheetsSimple": { $elemMatch: { connectionId: connectionId } },
     });
 
+    let usedFallbackConnection = false;
     let gs: any = user?.googleSheets || {};
     let synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
     let match = synced.find((s: any) => String(s.connectionId || "") === connectionId);
@@ -317,6 +318,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       gs = user?.googleSheets || {};
       synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
       match = candidates[0].entry;
+      usedFallbackConnection = true;
     }
 
     const userEmail = String(user?.email || "").trim().toLowerCase();
@@ -339,10 +341,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const tokenHash = String(match.tokenHash || "");
-    if (!tokenHash) return res.status(403).json({ error: "Connection token missing" });
-
     const gotHash = sha256Hex(token);
-    if (gotHash !== tokenHash) return res.status(403).json({ error: "Invalid token" });
+    const historyMatch = usedFallbackConnection
+      ? (Array.isArray(match.credentialHistory) ? match.credentialHistory : []).find(
+          (item: any) => String(item?.tokenHash || "") && String(item.tokenHash) === gotHash
+        )
+      : null;
+
+    if (!tokenHash && !historyMatch) return res.status(403).json({ error: "Connection token missing" });
+    if (gotHash !== tokenHash && !historyMatch) return res.status(403).json({ error: "Invalid token" });
+
+    if (historyMatch) {
+      console.log("[sheets/webhook] stale credential auto-healed", {
+        requestId,
+        incomingConnectionId: connectionId,
+        activeConnectionId,
+        sheetId,
+        gid,
+        userEmail,
+      });
+    }
 
     const folderName = String(match.folderName || "").trim() || "Imported Leads";
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
