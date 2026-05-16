@@ -613,7 +613,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       existingEntry &&
       previousConnectionId &&
       previousTokenHash &&
-      (previousConnectionId !== connectionId || previousTokenHash !== tokenHash);
+      previousTokenHash !== tokenHash;
 
     if (
       credentialsChanged &&
