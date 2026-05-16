@@ -7,6 +7,7 @@ import Folder from "@/models/Folder";
 import Lead, { createLeadsFromGoogleSheet, sanitizeLeadType } from "@/models/Lead";
 import { isSystemFolderName as isSystemFolder, isSystemish } from "@/lib/systemFolders";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 
 export const config = {
   api: { bodyParser: false },
@@ -464,6 +465,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       phoneLast10: phoneLast10 || undefined,
       status: "New",
       leadType: sanitizeLeadType(String(leadTypeIn || "")),
+      sourceType: "google_sheets_live",
+      realTimeEligible: true,
 
       source: "google-sheets",
       externalId: externalId,
@@ -703,6 +706,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         leadId: String(createdLead._id),
         source: "sheet-bulk",
         startMode: "now",
+      });
+
+      try {
+        console.log("[AI_FIRST_CALL][SHEETS_TRIGGER_ATTEMPT]", {
+          requestId,
+          leadId: String(createdLead._id),
+          folderId: String(folder._id),
+          userEmail,
+        });
+        await triggerAIFirstCall(
+          String(createdLead._id),
+          String(folder._id),
+          userEmail
+        );
+        const aiState = await (Lead as any)
+          .findById(createdLead._id)
+          .select({ aiFirstCallStatus: 1, aiFirstCallDueAt: 1, aiFirstCallAttemptedAt: 1 })
+          .lean();
+        if (aiState?.aiFirstCallStatus || aiState?.aiFirstCallDueAt || aiState?.aiFirstCallAttemptedAt) {
+          console.log("[AI_FIRST_CALL][SHEETS_TRIGGER_RESULT]", {
+            requestId,
+            leadId: String(createdLead._id),
+            status: aiState.aiFirstCallStatus || null,
+            dueAt: aiState.aiFirstCallDueAt || null,
+          });
+        } else {
+          console.log("[AI_FIRST_CALL][SHEETS_TRIGGER_SKIPPED]", {
+            requestId,
+            leadId: String(createdLead._id),
+            reason: "not_scheduled_after_helper_gates",
+          });
+        }
+      } catch (aiErr: any) {
+        console.warn("[AI_FIRST_CALL][SHEETS_TRIGGER_SKIPPED]", {
+          requestId,
+          leadId: String(createdLead._id),
+          error: aiErr?.message || String(aiErr),
+        });
+      }
+    } else {
+      console.log("[AI_FIRST_CALL][SHEETS_TRIGGER_SKIPPED]", {
+        requestId,
+        reason: "created_lead_not_found",
       });
     }
 

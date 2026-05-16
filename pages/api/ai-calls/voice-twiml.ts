@@ -60,6 +60,9 @@ export default async function handler(
   } catch {
     // It's fine if this fails; Twilio does not rely on it.
   }
+  if (!userEmail && req.query.userEmail) {
+    userEmail = String(req.query.userEmail).toLowerCase();
+  }
 
   // If the AI voice stream URL is missing, don't break the call,
   // just play a friendly message and hang up.
