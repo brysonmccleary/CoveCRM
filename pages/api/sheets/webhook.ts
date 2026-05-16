@@ -444,7 +444,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ Hard-dedupe by externalId across the whole account (prevents duplicates even if lead moved folders)
     const finalConnectionId = activeConnectionId || connectionId;
     const externalId = finalConnectionId && rowNumber ? `gs:${finalConnectionId}:r${rowNumber}` : undefined;
-    if (externalId) {
+    if (typeof externalId === "string" && externalId.trim()) {
       console.log("[sheets/webhook] dedupe externalId check", {
         requestId,
         externalId,
@@ -453,7 +453,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       const existsByExternal = await (Lead as any)
-        .findOne({ userEmail, externalId })
+        .findOne({
+          $and: [
+            { userEmail },
+            { externalId: String(externalId) },
+            { externalId: { $exists: true, $type: "string", $ne: "" } },
+          ],
+        })
         .select({ _id: 1, externalId: 1 })
         .lean();
       if (existsByExternal) {
