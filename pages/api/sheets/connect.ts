@@ -436,7 +436,7 @@ function _sendRowIfChanged(sheet, rowNumber) {
     if (!lastCol || lastCol < 1) return false;
 
     const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    const values = sheet.getRange(rowNumber, 1, 1, lastCol).getValues()[0];
+    const values = sheet.getRange(rowNumber, 1, 1, lastCol).getDisplayValues()[0];
 
     const rowObj = {};
     let hasAnyValue = false;
@@ -446,7 +446,12 @@ function _sendRowIfChanged(sheet, rowNumber) {
       if (!key) continue;
       const v = values[i];
       if (v !== null && v !== undefined && String(v).trim() !== "") hasAnyValue = true;
-      rowObj[key] = v;
+      const existing = rowObj[key];
+      const existingEmpty = existing === null || existing === undefined || String(existing).trim() === "";
+      const incomingEmpty = v === null || v === undefined || String(v).trim() === "";
+      if (!(key in rowObj) || (existingEmpty && !incomingEmpty)) {
+        rowObj[key] = v;
+      }
     }
     if (rowObj["Phone 1"] && !rowObj.phone) rowObj.phone = rowObj["Phone 1"];
 
