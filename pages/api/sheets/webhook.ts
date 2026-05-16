@@ -352,11 +352,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const tokenHash = String(match.tokenHash || "");
     const gotHash = sha256Hex(token);
     const historyCount = Array.isArray(match.credentialHistory) ? match.credentialHistory.length : 0;
-    const historyMatch = usedFallbackConnection
-      ? (Array.isArray(match.credentialHistory) ? match.credentialHistory : []).find(
-          (item: any) => String(item?.tokenHash || "") && String(item.tokenHash) === gotHash
-        )
-      : null;
+    const historyMatch = (Array.isArray(match.credentialHistory) ? match.credentialHistory : []).find(
+      (item: any) => String(item?.tokenHash || "") && String(item.tokenHash) === gotHash
+    );
 
     if (!tokenHash && !historyMatch) {
       console.warn("[sheets/webhook] auth fail missing tokenHash", {

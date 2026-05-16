@@ -594,15 +594,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Reuse everything — Apps Script in Google Sheets keeps working
       connectionId = String(existingEntry.connectionId);
       token = String(existingEntry.token);
-      tokenHash = String(existingEntry.tokenHash);
     } else {
       // New connection or old entry missing stored token — generate fresh
       connectionId = existingEntry
         ? String(existingEntry.connectionId)
         : crypto.randomBytes(12).toString("hex");
       token = crypto.randomBytes(32).toString("hex");
-      tokenHash = sha256Hex(token);
     }
+    const computedTokenHash = sha256Hex(token);
+    tokenHash = computedTokenHash;
 
     const credentialHistory = Array.isArray(existingEntry?.credentialHistory)
       ? [...existingEntry.credentialHistory]
@@ -613,7 +613,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       existingEntry &&
       previousConnectionId &&
       previousTokenHash &&
-      previousTokenHash !== tokenHash;
+      previousTokenHash !== computedTokenHash;
 
     if (
       credentialsChanged &&
