@@ -246,14 +246,16 @@ export default function DialSession() {
   const activeCallSidRef = useRef<string | null>(null);
   const activeConferenceRef = useRef<string | null>(null);
   const placingCallRef = useRef<boolean>(false);
+  const activeDialLeadIdRef = useRef<string | null>(null);
   const joinedRef = useRef<boolean>(false);
 
   const dispositionBusyRef = useRef<boolean>(false);
 
-  const dialAttemptsRef = useRef<number>(0);
+  const leadAttemptCountsRef = useRef<Record<string, number>>({});
 
   const callStartAtRef = useRef<number>(0);
   const hasConnectedRef = useRef<boolean>(false);
+  const terminalHandledRef = useRef<boolean>(false);
 
   // NEW: call outcome + logging guard
   const callOutcomeRef = useRef<{ status: string; source?: string } | null>(null);
@@ -347,6 +349,13 @@ export default function DialSession() {
   };
   const clearStatusPoll = () => { if (statusPollRef.current) { clearInterval(statusPollRef.current); statusPollRef.current = null; } };
   const killAllTimers = () => { clearWatchdog(); clearAdvanceTimers(); clearStatusPoll(); };
+  const getLeadId = (leadLike?: Lead | null) => String((leadLike as any)?.id || (leadLike as any)?._id || "").trim();
+  const currentLeadId = () => getLeadId(leadQueue[currentLeadIndex] ?? lead);
+  const getAttemptCount = (leadId: string) => Number(leadAttemptCountsRef.current[leadId] || 0);
+  const didCurrentCallConnect = () => {
+    const statusLabel = String(callOutcomeRef.current?.status || "").toLowerCase();
+    return hasConnectedRef.current || statusLabel === "connected" || statusLabel === "completed";
+  };
 
   // NEW: central call logging helper (per lead, per call)
   const logCallOutcome = async (opts?: { statusOverride?: string; reason?: string }) => {
@@ -435,23 +444,36 @@ export default function DialSession() {
     }
   };
 
+  const handleTerminalCall = async (opts: { status: string; reason: string; hangup?: boolean }) => {
+    // One terminal owner per call attempt: poller, socket, watchdog, and SDK events can race.
+    if (terminalHandledRef.current || sessionEndedRef.current) return;
+    terminalHandledRef.current = true;
+
+    callOutcomeRef.current = { status: opts.status, source: opts.reason };
+    setStatus(opts.status);
+    await applyRingbackDesired(false);
+    killAllTimers();
+
+    if (opts.hangup) await hangupActiveCall(opts.reason);
+    else activeCallSidRef.current = null;
+
+    await leaveIfJoined(opts.reason);
+    placingCallRef.current = false;
+    activeDialLeadIdRef.current = null;
+    setCallActive(false);
+    await logCallOutcome({ statusOverride: opts.status, reason: opts.reason });
+
+    scheduleAdvance();
+  };
+
   const scheduleWatchdog = () => {
     clearWatchdog();
     callWatchdogRef.current = setTimeout(async () => {
       if (advanceScheduledRef.current || sessionEndedRef.current) return;
-      setStatus("No answer (timeout)");
-      setRingbackDesired(false);
-      stopRingback();
-      // mark no-answer outcome for logging
-      callOutcomeRef.current = { status: "No Answer", source: "watchdog-timeout" };
-      await hangupActiveCall("watchdog-timeout");
-      await leaveIfJoined("watchdog-timeout");
-      await logCallOutcome({ statusOverride: "No Answer", reason: "watchdog-timeout" });
-      advanceScheduledRef.current = true;
-      scheduleAdvance();
+      await handleTerminalCall({ status: "No Answer", reason: "watchdog-timeout", hangup: true });
     }, 27000);
   };
-  const scheduleAdvance = () => {
+  function scheduleAdvance() {
     if (advanceScheduledRef.current) return;
     advanceScheduledRef.current = true;
 
@@ -462,16 +484,21 @@ export default function DialSession() {
 
       if (sessionEndedRef.current) return;
 
-      if (dialAttemptsRef.current === 0) {
-        dialAttemptsRef.current = 1;
+      const leadId = currentLeadId();
+      const shouldRetry =
+        !!leadId &&
+        !didCurrentCallConnect() &&
+        getAttemptCount(leadId) < 2;
+
+      if (shouldRetry) {
+        terminalHandledRef.current = false;
         setReadyToCall(true);
         return;
       }
 
-      dialAttemptsRef.current = 0;
       disconnectAndNext();
     }, DIAL_DELAY_MS);
-  };
+  }
   const scheduleNextLead = () => {
     if (nextLeadTimeoutRef.current) clearTimeout(nextLeadTimeoutRef.current);
     nextLeadTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) nextLead(); }, DIAL_DELAY_MS);
@@ -652,6 +679,7 @@ export default function DialSession() {
           const j = await fetchJson<Json>(`/api/get-lead?id=${singleLeadIdParam}`);
           if (j?.lead?._id) {
             const formatted = { id: j.lead._id, ...j.lead };
+            leadAttemptCountsRef.current = {};
             setLeadQueue([formatted]);
             setCurrentLeadIndex(0);
             setSessionStarted(true);
@@ -672,6 +700,7 @@ export default function DialSession() {
           } catch { return null; }
         }));
         const valid = (fetched.filter(Boolean) as Lead[]).sort(compareDialPriority);
+        leadAttemptCountsRef.current = {};
 
         // starting index (local startIndex > server pointer fallback)
         let start = 0;
@@ -883,9 +912,8 @@ export default function DialSession() {
         return;
       }
 
-      placingCallRef.current = true;
       setReadyToCall(false);
-      callLead(leadQueue[currentLeadIndex]).finally(() => { placingCallRef.current = false; });
+      callLead(leadQueue[currentLeadIndex]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inboundMode, numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex, callActive]);
@@ -940,25 +968,19 @@ export default function DialSession() {
           await applyRingbackDesired(false);
           clearWatchdog();
           hasConnectedRef.current = true;
+          callOutcomeRef.current = { status: "Connected", source: "poll-in-progress" };
           setStatus("Connected");
           return;
         }
 
         // terminal states: stop all audio/timers
         if (isTerminalStatus(s)) {
-          await applyRingbackDesired(false);
-          clearWatchdog();
           const label =
             s === "completed" ? "Completed" :
             s === "busy"      ? "Busy" :
             s === "no-answer" ? "No Answer" :
             s === "failed"    ? "Failed" : "Ended";
-
-          // store outcome for logging; actual log happens on disconnect/end
-          callOutcomeRef.current = { status: label, source: `poll-${s}` };
-
-          setStatus(label);
-          clearStatusPoll();
+          await handleTerminalCall({ status: label, reason: `poll-${s}`, hangup: false });
           return;
         }
       } catch {
@@ -969,17 +991,11 @@ export default function DialSession() {
 
   // Centralized "Disconnected now" path
   const markDisconnected = async (reason: string) => {
-    await applyRingbackDesired(false);
-    killAllTimers();
-    await hangupActiveCall(reason);
-    await leaveIfJoined(reason);
-    setCallActive(false);
-    await logCallOutcome({ reason });
-    setStatus("Disconnected");
-    if (!advanceScheduledRef.current && !sessionEndedRef.current) {
-      advanceScheduledRef.current = true;
-      scheduleAdvance();
-    }
+    await handleTerminalCall({
+      status: hasConnectedRef.current ? "Completed" : "No Answer",
+      reason,
+      hangup: true,
+    });
   };
 
   // 🔻🔻🔻 TINY, ISOLATED INBOUND HOOK (supports ?conf= or ?conference=) 🔻🔻🔻
@@ -1037,7 +1053,15 @@ export default function DialSession() {
 
   const callLead = async (leadToCall: Lead) => {
     if (sessionEndedRef.current) return;
-    if (!leadToCall?.id) { setStatus("Missing lead id"); return; }
+    const leadId = getLeadId(leadToCall);
+    if (!leadId) { setStatus("Missing lead id"); return; }
+    if (placingCallRef.current || activeCallSidRef.current) return;
+
+    const attemptsSoFar = getAttemptCount(leadId);
+    if (attemptsSoFar >= 2) {
+      scheduleNextLead();
+      return;
+    }
 
     // ✅ REMOVED the global gate (isCallAllowed). We rely only on per-lead quiet hours.
     // Strong per-lead quiet-hours gate
@@ -1050,10 +1074,14 @@ export default function DialSession() {
 
     try {
       advanceScheduledRef.current = false;
+      terminalHandledRef.current = false;
+      placingCallRef.current = true;
+      activeDialLeadIdRef.current = leadId;
       joinedRef.current = false;
       hasConnectedRef.current = false;
       callOutcomeRef.current = null;
       callLoggedRef.current = false;
+      leadAttemptCountsRef.current[leadId] = attemptsSoFar + 1;
 
       setStatus("Dialing…");
       setCallActive(true);
@@ -1065,7 +1093,8 @@ export default function DialSession() {
 
       callStartAtRef.current = Date.now();
 
-      const { callSid, conferenceName } = await startOutboundCall(leadToCall.id);
+      const { callSid, conferenceName } = await startOutboundCall(leadId);
+      placingCallRef.current = false;
 
       if (sessionEndedRef.current) {
         activeCallSidRef.current = callSid;
@@ -1124,6 +1153,8 @@ export default function DialSession() {
       setHistory((prev) => [{ kind: "text", text: `📞 Call started (${new Date().toLocaleTimeString()})` }, ...prev]);
     } catch (err: any) {
       console.error(err);
+      placingCallRef.current = false;
+      activeDialLeadIdRef.current = null;
       setStatus(err?.message || "Call failed");
       await applyRingbackDesired(false);
       killAllTimers();
@@ -1209,6 +1240,9 @@ export default function DialSession() {
       setStatus(`Saving disposition: ${label}…`);
       await applyRingbackDesired(false);
       killAllTimers();
+      terminalHandledRef.current = true;
+      placingCallRef.current = false;
+      activeDialLeadIdRef.current = null;
 
       const reasonKey = `disposition-${label.replace(/\s+/g, "-").toLowerCase()}`;
 
@@ -1245,7 +1279,6 @@ export default function DialSession() {
 
   /** flow controls **/
   const nextLead = () => {
-    dialAttemptsRef.current = 0;
     if (sessionEndedRef.current) return;
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
@@ -1262,6 +1295,8 @@ export default function DialSession() {
     killAllTimers();
     hangupActiveCall("advance-next");
     leaveIfJoined("advance-next");
+    placingCallRef.current = false;
+    activeDialLeadIdRef.current = null;
     setCallActive(false);
     scheduleNextLead();
   };
@@ -1278,6 +1313,8 @@ export default function DialSession() {
       killAllTimers();
       hangupActiveCall("pause");
       leaveIfJoined("pause");
+      placingCallRef.current = false;
+      activeDialLeadIdRef.current = null;
       setStatus("Paused");
     } else {
       // Ensure unlock so ringback starts instantly on resume
@@ -1297,6 +1334,7 @@ export default function DialSession() {
     applyRingbackDesired(false);
     killAllTimers();
     placingCallRef.current = false;
+    activeDialLeadIdRef.current = null;
     setReadyToCall(false);
     setCallActive(false);
     hangupActiveCall("end-session");
@@ -1388,34 +1426,22 @@ export default function DialSession() {
               await applyRingbackDesired(false);
               clearWatchdog();
               hasConnectedRef.current = true;
+              callOutcomeRef.current = { status: "Connected", source: "socket-answered" };
             }
 
             if (s === "no-answer" || s === "busy" || s === "failed") {
               if (s === "no-answer" && tooEarly()) return;
-              await applyRingbackDesired(false);
-              clearWatchdog();
-
               const label = s === "no-answer" ? "No Answer" : s === "busy" ? "Busy" : "Failed";
-              callOutcomeRef.current = { status: label, source: `socket-${s}` };
-
-              await hangupActiveCall(`status-${s}`);
-              await leaveIfJoined(`status-${s}`);
-              await logCallOutcome({ statusOverride: label, reason: `socket-${s}` });
-
-              if (!advanceScheduledRef.current && !sessionEndedRef.current) {
-                advanceScheduledRef.current = true;
-                setStatus(label);
-                scheduleAdvance();
-              }
+              await handleTerminalCall({ status: label, reason: `socket-${s}`, hangup: true });
             }
 
             // Completed/canceled => show Disconnected immediately.
             if (s === "completed" || s === "canceled") {
-              callOutcomeRef.current = {
+              await handleTerminalCall({
                 status: s === "completed" ? "Completed" : "Ended",
-                source: `socket-${s}`,
-              };
-              await markDisconnected(`socket-${s}`);
+                reason: `socket-${s}`,
+                hangup: false,
+              });
             }
           } catch {}
         });
