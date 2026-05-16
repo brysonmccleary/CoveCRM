@@ -583,6 +583,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       rawRow: row,
     };
 
+    console.log("[sheets/webhook] pre-insert leadDoc", {
+      requestId,
+      externalId,
+      leadDocFirstName: leadDoc["First Name"],
+      leadDocLastName: leadDoc["Last Name"],
+      leadDocPhone: maskPhone(String(leadDoc.Phone || leadDoc.phone || "")),
+      leadDocEmail: maskEmail(String(leadDoc.Email || leadDoc.email || "")),
+      leadDocNormalizedPhone: maskPhone(String(leadDoc.normalizedPhone || "")),
+      leadDocPhoneLast10: leadDoc.phoneLast10 ? "***" + String(leadDoc.phoneLast10).slice(-4) : "",
+      rawRowPhone: maskPhone(String(row.Phone || row["Phone"] || "")),
+      rawRowEmail: maskEmail(String(row.Email || row["Email"] || "")),
+      rawRowAge: row.Age || row["Age"],
+    });
+
     await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id as any);
     await touchFolderUpdatedAt(folder._id as any, userEmail);
 
