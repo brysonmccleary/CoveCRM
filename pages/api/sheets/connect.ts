@@ -575,30 +575,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const normalizedSheetId = String(effectiveSheetId);
     const normalizedGid = String(gid || "");
-    const shouldRotate = rotate === true || reinstall === true;
     const idx = gs.syncedSheetsSimple.findIndex(
       (s: any) => String(s.sheetId || "") === normalizedSheetId && String(s.gid || "") === normalizedGid
     );
     const existingEntry = idx >= 0 ? gs.syncedSheetsSimple[idx] : null;
-    const canReuseExistingSecret =
-      existingEntry &&
-      !shouldRotate &&
-      String(existingEntry.connectionId || "").trim() &&
-      String(existingEntry.tokenHash || "").trim();
+    const existingToken = String(existingEntry?.token || "").trim();
+    const canReuseExistingSecret = Boolean(existingEntry && existingToken);
 
     let connectionId: string;
     let token: string;
     let tokenHash: string;
 
-    if (canReuseExistingSecret && existingEntry.token) {
-      // Reuse everything — Apps Script in Google Sheets keeps working
-      connectionId = String(existingEntry.connectionId);
-      token = String(existingEntry.token);
+    // Do not rotate Google Sheets tokens on reconnect. Installed Apps Scripts are out-of-band clients and cannot be updated automatically.
+    if (existingEntry && existingToken) {
+      connectionId = String(existingEntry.connectionId || "").trim() || crypto.randomBytes(12).toString("hex");
+      token = existingToken;
+    } else if (existingEntry) {
+      connectionId = String(existingEntry.connectionId || "").trim() || crypto.randomBytes(12).toString("hex");
+      token = crypto.randomBytes(32).toString("hex");
     } else {
-      // New connection or old entry missing stored token — generate fresh
-      connectionId = existingEntry
-        ? String(existingEntry.connectionId)
-        : crypto.randomBytes(12).toString("hex");
+      connectionId = crypto.randomBytes(12).toString("hex");
       token = crypto.randomBytes(32).toString("hex");
     }
     const computedTokenHash = sha256Hex(token);
