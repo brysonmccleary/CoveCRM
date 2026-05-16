@@ -69,6 +69,21 @@ const LeadSchema = new Schema(
     // Original import row (preserve custom CSV/Sheet columns)
     rawRow: { type: Schema.Types.Mixed },
 
+    // External import identity (Google Sheets/webhooks)
+    source: { type: String, default: "" },
+    externalId: { type: String, default: "", index: true },
+    sheetMeta: {
+      type: {
+        sheetId: { type: String, default: "" },
+        gid: { type: String, default: "" },
+        tabName: { type: String, default: "" },
+        receivedAt: { type: Date, default: null },
+        ts: { type: Schema.Types.Mixed, default: null },
+        connectionId: { type: String, default: "" },
+        rowNumber: { type: Number, default: null },
+      },
+      default: {},
+    },
 
     // Lead type used by AI
     leadType: {
