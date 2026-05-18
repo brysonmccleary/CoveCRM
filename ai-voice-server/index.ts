@@ -4511,11 +4511,8 @@ async function assertRealtimeModelAccessible() {
       body: JSON.stringify({
         model,
         modalities: ["audio", "text"],
-        audio: {
-          output: {
-            format: OPENAI_REALTIME_AUDIO_FORMAT,
-          },
-        },
+        input_audio_format: OPENAI_REALTIME_AUDIO_FORMAT,
+        output_audio_format: OPENAI_REALTIME_AUDIO_FORMAT,
         // Keep this minimal — we only want to validate access + model name.
       }),
     });
