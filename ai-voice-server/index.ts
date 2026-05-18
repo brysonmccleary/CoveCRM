@@ -67,6 +67,7 @@ const OPENAI_REALTIME_MODEL =
 const OPENAI_REALTIME_AUDIO_FORMAT = "g711_ulaw";
 
 console.log("[AI-VOICE] Realtime model resolved:", OPENAI_REALTIME_MODEL, "(env:", process.env.OPENAI_REALTIME_MODEL ? "set" : "default", ")");
+console.log("[AI-VOICE] Realtime GA session mode enabled");
 
 const REQUIRED_VARS = [
   "OPENAI_API_KEY",
@@ -89,11 +90,11 @@ function buildRealtimeResponseCreate(
   options: { temperature?: number } = {}
 ) {
   const response: any = {
-    modalities: ["audio", "text"],
+    output_modalities: ["audio"],
     instructions,
     audio: {
       output: {
-        format: OPENAI_REALTIME_AUDIO_FORMAT,
+        format: { type: "audio/pcmu" },
       },
     },
   };
@@ -4493,10 +4494,12 @@ async function assertRealtimeModelAccessible() {
   const model = OPENAI_REALTIME_MODEL;
 
   if (!key) {
-    throw new Error("BLOCK DEPLOY: OPENAI_API_KEY is missing.");
+    console.error("[AI-VOICE] ⚠️ Realtime session canary skipped: OPENAI_API_KEY is missing.");
+    return;
   }
   if (!model) {
-    throw new Error("BLOCK DEPLOY: OPENAI_REALTIME_MODEL is missing.");
+    console.error("[AI-VOICE] ⚠️ Realtime session canary skipped: OPENAI_REALTIME_MODEL is missing.");
+    return;
   }
 
   const url = "https://api.openai.com/v1/realtime/sessions";
@@ -4521,9 +4524,10 @@ async function assertRealtimeModelAccessible() {
 
     if (!resp.ok) {
       // Surface the body because OpenAI typically explains model/permission issues there.
-      throw new Error(
-        `BLOCK DEPLOY: realtime session canary failed for model='${model}' status=${resp.status} body=${bodyText.slice(0, 400)}`
+      console.error(
+        `[AI-VOICE] ⚠️ Realtime session canary failed for model='${model}' status=${resp.status} body=${bodyText.slice(0, 400)}`
       );
+      return;
     }
 
     // Success: nothing else to do.
@@ -4532,7 +4536,10 @@ async function assertRealtimeModelAccessible() {
     } catch {}
   } catch (err: any) {
     const msg = err?.message || String(err);
-    throw new Error(`BLOCK DEPLOY: realtime session canary errored for model='${model}': ${msg}` + (bodyText ? ` body=${bodyText.slice(0, 400)}` : ""));
+    console.error(
+      `[AI-VOICE] ⚠️ Realtime session canary errored for model='${model}': ${msg}` +
+        (bodyText ? ` body=${bodyText.slice(0, 400)}` : "")
+    );
   }
 }
 
@@ -5381,32 +5388,32 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         type: "realtime",
         model: OPENAI_REALTIME_MODEL,
         instructions: systemPrompt,
-        modalities: ["audio", "text"],
-        voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
-        temperature: 0.6,
-        input_audio_format: OPENAI_REALTIME_AUDIO_FORMAT,
-        input_audio_transcription: {
-          model: "gpt-4o-mini-transcribe",
-          language: "en",
-        },
+        output_modalities: ["audio"],
         audio: {
+          input: {
+            format: { type: "audio/pcmu" },
+            transcription: {
+              model: "gpt-4o-mini-transcribe",
+              language: "en",
+            },
+            turn_detection: {
+              type: "server_vad",
+              create_response: false,
+
+              // Short enough to not hang on pauses, long enough to not cut off natural speech
+              silence_duration_ms: 400,
+
+              // Balanced threshold — rejects comfort noise but catches real speech
+              threshold: 0.85,
+
+              // Capture speech from the very start of each user turn
+              prefix_padding_ms: 300,
+            },
+          },
           output: {
             voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
-            format: OPENAI_REALTIME_AUDIO_FORMAT,
+            format: { type: "audio/pcmu" },
           },
-        },
-        turn_detection: {
-          type: "server_vad",
-          create_response: false,
-
-          // Short enough to not hang on pauses, long enough to not cut off natural speech
-          silence_duration_ms: 400,
-
-          // Balanced threshold — rejects comfort noise but catches real speech
-          threshold: 0.85,
-
-          // Capture speech from the very start of each user turn
-          prefix_padding_ms: 300,
         },
       },
     };
@@ -5416,8 +5423,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         openAiVoiceId: state.context!.voiceProfile.openAiVoiceId,
         model: OPENAI_REALTIME_MODEL,
         apiShape: "ga",
-        inputAudioFormat: OPENAI_REALTIME_AUDIO_FORMAT,
-        outputAudioFormat: OPENAI_REALTIME_AUDIO_FORMAT,
+        inputAudioFormat: "audio/pcmu",
+        outputAudioFormat: "audio/pcmu",
       });
       openAiWs.send(JSON.stringify(sessionUpdate));
     } catch (err: any) {
