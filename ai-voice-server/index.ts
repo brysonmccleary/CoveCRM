@@ -4509,7 +4509,6 @@ async function assertRealtimeModelAccessible() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        type: "realtime",
         model,
         modalities: ["audio", "text"],
         audio: {
