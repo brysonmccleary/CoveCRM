@@ -62,6 +62,11 @@ function normalizePhone(raw: any): string {
   return s.replace(/\D+/g, "");
 }
 
+function normalizeGid(value: any) {
+  const raw = String(value || "").trim();
+  return raw || "0";
+}
+
 function normalizeEmail(raw: any): string {
   const s = String(raw || "").trim();
   if (!s) return "";
@@ -240,6 +245,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const connectionId = String(payload.connectionId || "").trim();
     const sheetId = String(payload.sheetId || "").trim();
+    const gid = normalizeGid(payload.gid);
     const runId = String(payload.runId || "").trim() || null;
     const rows = Array.isArray(payload.rows) ? payload.rows : [];
 
@@ -248,28 +254,75 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    const user = await User.findOne({
+    let user: any = await User.findOne({
       "googleSheets.syncedSheetsSimple": { $elemMatch: { connectionId: connectionId } },
     });
-    if (!user) return res.status(404).json({ error: "Connection not found" });
+    let usedFallbackConnection = false;
+    let gs: any = user?.googleSheets || {};
+    let synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
+    let match = synced.find((s: any) => String(s.connectionId || "") === connectionId);
+
+    if (!user || !match) {
+      const fallbackUsers = await User.find({
+        "googleSheets.syncedSheetsSimple": { $elemMatch: { sheetId } },
+      });
+      const candidates: Array<{ user: any; entry: any }> = [];
+
+      for (const fallbackUser of fallbackUsers as any[]) {
+        const fallbackGs: any = fallbackUser?.googleSheets || {};
+        const fallbackSynced = Array.isArray(fallbackGs.syncedSheetsSimple) ? fallbackGs.syncedSheetsSimple : [];
+        for (const entry of fallbackSynced) {
+          if (String(entry.sheetId || "") === sheetId && normalizeGid(entry.gid) === gid) {
+            candidates.push({ user: fallbackUser, entry });
+          }
+        }
+      }
+
+      if (candidates.length !== 1) {
+        return res.status(404).json({ error: "Connection not found" });
+      }
+
+      user = candidates[0].user;
+      gs = user?.googleSheets || {};
+      synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
+      match = candidates[0].entry;
+      usedFallbackConnection = true;
+    }
 
     const userEmail = String((user as any)?.email || "").trim().toLowerCase();
     if (!userEmail) return res.status(500).json({ error: "User missing email" });
-
-    const gs: any = (user as any).googleSheets || {};
-    const synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
-    const match = synced.find((s: any) => String(s.connectionId || "") === connectionId);
-    if (!match) return res.status(404).json({ error: "Connection mapping missing" });
+    const activeConnectionId = String(match.connectionId || "").trim();
 
     if (String(match.sheetId || "") !== sheetId) {
       return res.status(403).json({ error: "Sheet mismatch for connection" });
     }
 
     const tokenHash = String(match.tokenHash || "");
-    if (!tokenHash) return res.status(403).json({ error: "Connection token missing" });
-
     const gotHash = sha256Hex(token);
-    if (gotHash !== tokenHash) return res.status(403).json({ error: "Invalid token" });
+    const historyMatch = (Array.isArray(match.credentialHistory) ? match.credentialHistory : []).find(
+      (item: any) => String(item?.tokenHash || "") && String(item.tokenHash) === gotHash
+    );
+    if (!tokenHash && !historyMatch) return res.status(403).json({ error: "Connection token missing" });
+    if (gotHash !== tokenHash && !historyMatch) {
+      console.warn("[sheets/backfill] stale auth rejected unknown token", {
+        incomingConnectionId: connectionId,
+        activeConnectionId,
+        sheetId,
+        gid,
+        userEmail,
+        usedFallbackConnection,
+      });
+      return res.status(403).json({ error: "Invalid token" });
+    }
+    if (historyMatch) {
+      console.log("[sheets/backfill] stale auth accepted via credentialHistory", {
+        incomingConnectionId: connectionId,
+        activeConnectionId,
+        sheetId,
+        gid,
+        userEmail,
+      });
+    }
 
     const folderName = String(match.folderName || "").trim() || "Imported Leads";
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
@@ -311,11 +364,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } else if (emailLower) {
         emails.push(emailLower);
       }
+      const finalConnectionId = activeConnectionId || connectionId;
       const externalId =
-        connectionId && rowNumber
-          ? `gs:${connectionId}:r${rowNumber}`
-          : connectionId && payload?.ts
-            ? `gs:${connectionId}:ts:${payload.ts}`
+        finalConnectionId && rowNumber
+          ? `gs:${finalConnectionId}:r${rowNumber}`
+          : finalConnectionId && payload?.ts
+            ? `gs:${finalConnectionId}:ts:${payload.ts}`
             : undefined;
 
       const leadDoc: any = {
@@ -342,7 +396,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           tabName: payload.tabName || match.tabName || "",
           receivedAt: new Date(),
           ts: payload.ts || null,
-          connectionId,
+          connectionId: finalConnectionId,
           backfillRunId: runId,
           backfillRowNumber: rowNumber,
         },
@@ -445,7 +499,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .find({
         userEmail,
         folderId: folder._id,
-        "sheetMeta.connectionId": connectionId,
+        "sheetMeta.connectionId": activeConnectionId || connectionId,
         "sheetMeta.backfillRunId": runId,
         "sheetMeta.backfillRowNumber": { $in: intendedRowNumbers },
       })

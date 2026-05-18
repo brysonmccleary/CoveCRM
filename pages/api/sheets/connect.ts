@@ -32,6 +32,11 @@ function sha256Hex(input: string) {
   return crypto.createHash("sha256").update(input).digest("hex");
 }
 
+function normalizeGid(value: any) {
+  const raw = String(value || "").trim();
+  return raw || "0";
+}
+
 function buildAppsScript(params: {
   webhookUrl: string;
   backfillUrl: string;
@@ -579,24 +584,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const normalizedSheetId = String(effectiveSheetId);
-    const normalizedGid = String(gid || "");
+    const normalizedGid = normalizeGid(gid);
     const idx = gs.syncedSheetsSimple.findIndex(
-      (s: any) => String(s.sheetId || "") === normalizedSheetId && String(s.gid || "") === normalizedGid
+      (s: any) =>
+        String(s.sheetId || "") === normalizedSheetId &&
+        normalizeGid(s.gid) === normalizedGid
     );
     const existingEntry = idx >= 0 ? gs.syncedSheetsSimple[idx] : null;
     const existingToken = String(existingEntry?.token || "").trim();
     const canReuseExistingSecret = Boolean(existingEntry && existingToken);
+    const shouldRotate = (rotate === true || reinstall === true) && Boolean(existingEntry);
 
     let connectionId: string;
     let token: string;
     let tokenHash: string;
 
     // Do not rotate Google Sheets tokens on reconnect. Installed Apps Scripts are out-of-band clients and cannot be updated automatically.
-    if (existingEntry && existingToken) {
+    if (existingEntry && existingToken && !shouldRotate) {
       connectionId = String(existingEntry.connectionId || "").trim() || crypto.randomBytes(12).toString("hex");
       token = existingToken;
     } else if (existingEntry) {
-      connectionId = String(existingEntry.connectionId || "").trim() || crypto.randomBytes(12).toString("hex");
+      connectionId = shouldRotate
+        ? crypto.randomBytes(12).toString("hex")
+        : String(existingEntry.connectionId || "").trim() || crypto.randomBytes(12).toString("hex");
       token = crypto.randomBytes(32).toString("hex");
     } else {
       connectionId = crypto.randomBytes(12).toString("hex");
@@ -614,7 +624,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       existingEntry &&
       previousConnectionId &&
       previousTokenHash &&
-      previousTokenHash !== computedTokenHash;
+      (previousConnectionId !== connectionId || previousTokenHash !== computedTokenHash);
 
     if (
       credentialsChanged &&
@@ -674,8 +684,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       webhookUrl,
       backfillUrl,
       appsScript,
-      existingInstallPreserved: Boolean(canReuseExistingSecret),
-      rotated: !canReuseExistingSecret,
+      existingInstallPreserved: Boolean(canReuseExistingSecret && !shouldRotate),
+      rotated: !canReuseExistingSecret || shouldRotate,
       sheet: {
         sheetId: normalizedSheetId,
         folderName: cleanFolderName,

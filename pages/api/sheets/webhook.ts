@@ -63,6 +63,11 @@ function normalizePhone(raw: any): string {
   return s.replace(/\D+/g, "");
 }
 
+function normalizeGid(value: any) {
+  const raw = String(value || "").trim();
+  return raw || "0";
+}
+
 function normalizeEmail(raw: any): string {
   const s = String(raw || "").trim();
   if (!s) return "";
@@ -248,6 +253,124 @@ function maskEmail(e: string) {
   return `${s.slice(0, 1)}***${s.slice(at)}`;
 }
 
+function hasUsablePhone(lead: any) {
+  const candidates = [
+    lead?.Phone,
+    lead?.phone,
+    lead?.normalizedPhone,
+    lead?.phoneLast10,
+  ];
+  return candidates.some((value) => String(value || "").replace(/\D+/g, "").length >= 10);
+}
+
+function canTriggerAfterPhoneAdded(lead: any) {
+  if (lead?.sourceType !== "google_sheets_live") return false;
+  if (lead?.realTimeEligible !== true) return false;
+  if (lead?.aiFirstCallAttemptedAt) return false;
+
+  const status = String(lead?.aiFirstCallStatus || "").trim().toLowerCase();
+  const activeOrCompleted = new Set([
+    "pending",
+    "scheduled",
+    "triggered",
+    "queued",
+    "calling",
+    "in_progress",
+    "completed",
+  ]);
+  return !activeOrCompleted.has(status);
+}
+
+function isNonEmpty(value: any) {
+  return value !== null && value !== undefined && String(value).trim() !== "";
+}
+
+function buildSafeLeadUpdateSet(leadDoc: Record<string, any>, row: Record<string, any>, payload: any, match: any, sheetId: string, activeConnectionId: string, rowNumber: number) {
+  const updateSet: Record<string, any> = {};
+  const blockedKeys = new Set(["_id", "id", "__v", "userEmail", "folderId", "rawRow", "sheetMeta"]);
+
+  for (const [key, value] of Object.entries(leadDoc)) {
+    if (blockedKeys.has(key)) continue;
+    if (key.includes(".") || key.startsWith("$")) continue;
+    if (key === "status" && String(value || "").trim() === "New") continue;
+    if (!isNonEmpty(value)) continue;
+    updateSet[key] = value;
+  }
+
+  updateSet.rawRow = Object.fromEntries(
+    Object.entries(row || {}).filter(([, value]) => isNonEmpty(value))
+  );
+  updateSet["sheetMeta.receivedAt"] = new Date();
+  updateSet["sheetMeta.ts"] = payload.ts || null;
+  updateSet["sheetMeta.rowNumber"] = rowNumber || undefined;
+  updateSet["sheetMeta.sheetId"] = sheetId;
+  updateSet["sheetMeta.gid"] = payload.gid || "";
+  updateSet["sheetMeta.tabName"] = payload.tabName || match.tabName || "";
+  updateSet["sheetMeta.connectionId"] = activeConnectionId;
+
+  return updateSet;
+}
+
+async function triggerSheetsAIOnce(args: {
+  requestId: string;
+  leadId: string;
+  folderId: string;
+  userEmail: string;
+  reason: string;
+}) {
+  try {
+    console.log("[AI_FIRST_CALL][SHEETS_TRIGGER_ATTEMPT]", {
+      requestId: args.requestId,
+      leadId: args.leadId,
+      folderId: args.folderId,
+      userEmail: args.userEmail,
+      reason: args.reason,
+    });
+    await triggerAIFirstCall(args.leadId, args.folderId, args.userEmail);
+    const aiState = await (Lead as any)
+      .findById(args.leadId)
+      .select({ aiFirstCallStatus: 1, aiFirstCallDueAt: 1, aiFirstCallAttemptedAt: 1 })
+      .lean();
+    if (aiState?.aiFirstCallStatus || aiState?.aiFirstCallDueAt || aiState?.aiFirstCallAttemptedAt) {
+      console.log("[AI_FIRST_CALL][SHEETS_TRIGGER_RESULT]", {
+        requestId: args.requestId,
+        leadId: args.leadId,
+        status: aiState.aiFirstCallStatus || null,
+        dueAt: aiState.aiFirstCallDueAt || null,
+        reason: args.reason,
+      });
+    } else {
+      console.log("[AI_FIRST_CALL][SHEETS_TRIGGER_SKIPPED]", {
+        requestId: args.requestId,
+        leadId: args.leadId,
+        reason: "not_scheduled_after_helper_gates",
+        triggerReason: args.reason,
+      });
+    }
+  } catch (aiErr: any) {
+    console.warn("[AI_FIRST_CALL][SHEETS_TRIGGER_SKIPPED]", {
+      requestId: args.requestId,
+      leadId: args.leadId,
+      error: aiErr?.message || String(aiErr),
+      triggerReason: args.reason,
+    });
+  }
+}
+
+async function persistConnectionTouch(args: {
+  user: any;
+  gs: any;
+  synced: any[];
+  match: any;
+}) {
+  args.match.lastSyncedAt = new Date();
+  args.match.lastEventAt = new Date();
+  args.match.updatedAt = new Date();
+  args.gs.syncedSheetsSimple = args.synced;
+  args.user.googleSheets = args.gs;
+  await args.user.save();
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const startedAt = Date.now();
   const requestId = `sh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -283,7 +406,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const connectionId = String(payload.connectionId || "").trim();
     const sheetId = String(payload.sheetId || "").trim();
-    const gid = String(payload.gid || "").trim();
+    const gid = normalizeGid(payload.gid);
     const tabName = String(payload.tabName || "").trim();
     const ts = payload.ts || null;
     const rowNumber = Number(payload.rowNumber || 0) || 0;
@@ -321,7 +444,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!user || !match) {
       const fallbackUsers = await User.find({
-        "googleSheets.syncedSheetsSimple": { $elemMatch: { sheetId, gid } },
+        "googleSheets.syncedSheetsSimple": { $elemMatch: { sheetId } },
       });
       const candidates: Array<{ user: any; entry: any }> = [];
 
@@ -329,7 +452,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const fallbackGs: any = fallbackUser?.googleSheets || {};
         const fallbackSynced = Array.isArray(fallbackGs.syncedSheetsSimple) ? fallbackGs.syncedSheetsSimple : [];
         for (const entry of fallbackSynced) {
-          if (String(entry.sheetId || "") === sheetId && String(entry.gid || "") === gid) {
+          if (String(entry.sheetId || "") === sheetId && normalizeGid(entry.gid) === gid) {
             candidates.push({ user: fallbackUser, entry });
           }
         }
@@ -400,7 +523,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: "Connection token missing" });
     }
     if (gotHash !== tokenHash && !historyMatch) {
-      console.warn("[sheets/webhook] auth fail invalid token", {
+      console.warn("[sheets/webhook] stale auth rejected unknown token", {
         requestId,
         incomingConnectionId: connectionId,
         activeConnectionId,
@@ -415,18 +538,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: "Invalid token" });
     }
 
-    if (historyMatch) {
-      console.log("[sheets/webhook] stale credential auto-healed", {
-        requestId,
-        incomingConnectionId: connectionId,
-        activeConnectionId,
-        sheetId,
-        gid,
-        userEmail,
-      });
-    }
-
-    console.log("[sheets/webhook] auth ok", {
+    const authLog = {
       requestId,
       incomingConnectionId: connectionId,
       activeConnectionId,
@@ -436,7 +548,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       userEmail,
       usedFallbackConnection,
       usedHistoryCredential: Boolean(historyMatch),
-    });
+      authMode: historyMatch ? "history" : "active",
+    };
+    if (historyMatch) {
+      console.log("[sheets/webhook] stale auth accepted via credentialHistory", authLog);
+    } else {
+      console.log("[sheets/webhook] fresh auth ok", authLog);
+    }
 
     const folderName = String(match.folderName || "").trim() || "Imported Leads";
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
@@ -542,7 +660,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             $ne: "",
           },
         })
-        .select({ _id: 1, externalId: 1, rawRow: 1 })
+        .select({
+          _id: 1,
+          externalId: 1,
+          rawRow: 1,
+          Phone: 1,
+          phone: 1,
+          normalizedPhone: 1,
+          phoneLast10: 1,
+          sourceType: 1,
+          realTimeEligible: 1,
+          aiFirstCallAttemptedAt: 1,
+          aiFirstCallStatus: 1,
+        })
         .lean();
       if (existsByExternal) {
         console.log("[sheets/webhook] duplicate_externalId match", {
@@ -583,26 +713,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         updateSet["sheetMeta.connectionId"] = activeConnectionId;
         updatedKeys.push("rawRow", "sheetMeta");
 
+        const hadPhoneBefore = hasUsablePhone(existsByExternal);
+
         await (Lead as any).updateOne(
           { _id: existsByExternal._id, userEmail },
           { $set: updateSet }
         );
+
+        const updatedLead = await (Lead as any)
+          .findById(existsByExternal._id)
+          .select({
+            _id: 1,
+            Phone: 1,
+            phone: 1,
+            normalizedPhone: 1,
+            phoneLast10: 1,
+            sourceType: 1,
+            realTimeEligible: 1,
+            aiFirstCallAttemptedAt: 1,
+            aiFirstCallStatus: 1,
+          })
+          .lean();
+        const phoneAdded = !hadPhoneBefore && hasUsablePhone(updatedLead);
 
         console.log("[sheets/webhook] duplicate_externalId updated", {
           requestId,
           existingLeadId: String(existsByExternal._id),
           updatedKeysCount: updatedKeys.length,
           updatedKeys,
+          phoneAdded,
         });
 
         await touchFolderUpdatedAt(folder._id as any, userEmail);
 
-        match.lastSyncedAt = new Date();
-        match.lastEventAt = new Date();
-        match.updatedAt = new Date();
-        gs.syncedSheetsSimple = synced;
-        (user as any).googleSheets = gs;
-        await user.save();
+        await persistConnectionTouch({ user, gs, synced, match });
+
+        if (phoneAdded && canTriggerAfterPhoneAdded(updatedLead)) {
+          console.log("[sheets/webhook] duplicate externalId phone-added trigger attempt", {
+            requestId,
+            leadId: String(existsByExternal._id),
+            phone: maskPhone(String(updatedLead?.Phone || updatedLead?.phone || updatedLead?.normalizedPhone || "")),
+          });
+          await triggerSheetsAIOnce({
+            requestId,
+            leadId: String(existsByExternal._id),
+            folderId: String(folder._id),
+            userEmail,
+            reason: "duplicate_externalId_phone_added",
+          });
+        }
 
         return res.status(200).json({ ok: true, updated: "duplicate_externalId" });
       }
@@ -680,7 +839,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       rawRowAge: row.Age || row["Age"],
     });
 
-    await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id as any);
+    try {
+      await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id as any);
+    } catch (insertErr: any) {
+      if (insertErr?.code !== 11000 || !externalId) {
+        throw insertErr;
+      }
+
+      const updateSet = buildSafeLeadUpdateSet(
+        leadDoc,
+        row,
+        payload,
+        match,
+        sheetId,
+        activeConnectionId,
+        rowNumber
+      );
+      const racedLead = await (Lead as any)
+        .findOneAndUpdate(
+          { userEmail, externalId },
+          { $set: updateSet },
+          { new: true }
+        )
+        .select({ _id: 1 })
+        .lean();
+
+      console.log("[sheets/webhook] duplicate_externalId raced insert updated", {
+        requestId,
+        externalId,
+        existingLeadId: racedLead?._id ? String(racedLead._id) : null,
+      });
+
+      await touchFolderUpdatedAt(folder._id as any, userEmail);
+      await persistConnectionTouch({ user, gs, synced, match });
+      return res.status(200).json({ ok: true, updated: "duplicate_externalId_race" });
+    }
     await touchFolderUpdatedAt(folder._id as any, userEmail);
 
     // ✅ best-effort: confirm created lead id
@@ -691,7 +884,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail,
           folderId: folder._id,
           "sheetMeta.ts": ts,
-          "sheetMeta.connectionId": connectionId,
+          "sheetMeta.connectionId": finalConnectionId,
         })
         .sort({ createdAt: -1 })
         .select({ _id: 1 })
@@ -703,7 +896,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .findOne({
           userEmail,
           folderId: folder._id,
-          "sheetMeta.connectionId": connectionId,
+          "sheetMeta.connectionId": finalConnectionId,
           "sheetMeta.rowNumber": rowNumber,
         })
         .sort({ createdAt: -1 })

@@ -45,6 +45,26 @@ const TERMINAL_STATUSES = new Set([
   "dnc",
 ]);
 
+const ACTIVE_OR_COMPLETED_AI_STATUSES = new Set([
+  "pending",
+  "scheduled",
+  "triggered",
+  "queued",
+  "calling",
+  "in_progress",
+  "completed",
+]);
+
+function digitsOnly(value: any): string {
+  return String(value || "").replace(/\D+/g, "");
+}
+
+function maskPhone(value: any): string {
+  const digits = digitsOnly(value);
+  if (!digits) return "";
+  return `${"*".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
+}
+
 
 /**
  * Returns true if current time is within business hours.
@@ -164,6 +184,48 @@ export async function triggerAIFirstCall(
     if (lead.aiFirstCallAttemptedAt) {
       console.info(`[triggerAIFirstCall] Lead ${leadId} already claimed (status=${lead.aiFirstCallStatus}) — one-call-max enforced, skipping`);
       return;
+    }
+
+    const normalizedPhone = digitsOnly(lead.normalizedPhone || lead.Phone || lead.phone);
+    const phoneLast10 = String(lead.phoneLast10 || normalizedPhone.slice(-10) || "").trim();
+    const phoneOr: any[] = [];
+    if (normalizedPhone) {
+      phoneOr.push({ normalizedPhone });
+      if (phoneLast10) {
+        phoneOr.push({ Phone: { $regex: `${phoneLast10}$` } });
+        phoneOr.push({ phone: { $regex: `${phoneLast10}$` } });
+      }
+    }
+    if (phoneLast10) phoneOr.push({ phoneLast10 });
+
+    if (phoneOr.length) {
+      const priorAttempt = await (Lead as any)
+        .findOne({
+          _id: { $ne: lead._id },
+          userEmail,
+          $or: phoneOr,
+          $and: [
+            {
+              $or: [
+                { aiFirstCallAttemptedAt: { $ne: null } },
+                { aiFirstCallStatus: { $in: Array.from(ACTIVE_OR_COMPLETED_AI_STATUSES) } },
+              ],
+            },
+          ],
+        })
+        .select({ _id: 1, aiFirstCallStatus: 1, aiFirstCallAttemptedAt: 1 })
+        .lean();
+
+      if (priorAttempt) {
+        console.info("[triggerAIFirstCall] duplicate phone/account guard — skipping", {
+          leadId,
+          existingLeadId: String(priorAttempt._id),
+          userEmail,
+          phone: maskPhone(normalizedPhone || phoneLast10),
+          existingStatus: priorAttempt.aiFirstCallStatus || null,
+        });
+        return;
+      }
     }
 
     // Guard 9 — folder context is used for script/metadata, not as the main on/off gate.

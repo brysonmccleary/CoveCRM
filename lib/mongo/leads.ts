@@ -166,6 +166,16 @@ LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" }
 LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
 LeadSchema.index({ userEmail: 1, isAIEngaged: 1, updatedAt: -1 }, { name: "lead_ai_engaged_idx" });
 LeadSchema.index({ aiFirstCallStatus: 1, aiFirstCallDueAt: 1 }, { name: "lead_ai_first_call_due_idx", sparse: true });
+LeadSchema.index(
+  { userEmail: 1, externalId: 1 },
+  {
+    name: "lead_user_external_id_unique",
+    unique: true,
+    partialFilterExpression: {
+      externalId: { $type: "string", $ne: "" },
+    },
+  }
+);
 
 // Meta lead dedup — sparse unique so null/empty doesn't conflict
 LeadSchema.index(
