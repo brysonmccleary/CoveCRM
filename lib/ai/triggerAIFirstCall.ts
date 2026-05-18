@@ -65,6 +65,48 @@ function maskPhone(value: any): string {
   return `${"*".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
 }
 
+function isOwnedVoiceCapableNumber(number: any): boolean {
+  if (!number?.phoneNumber) return false;
+  const status = String(number?.status || "").toLowerCase();
+  if (["inactive", "released", "deleted", "canceled", "cancelled"].includes(status)) {
+    return false;
+  }
+  return number?.capabilities?.voice === true;
+}
+
+function numberMatchesDefaultId(number: any, defaultNumberId: string): boolean {
+  if (!defaultNumberId) return false;
+  return String(number?._id || "") === defaultNumberId || String(number?.sid || "") === defaultNumberId;
+}
+
+function getAiFirstCallFromNumberSelection(userDoc: any): {
+  fromNumber: string;
+  source: "primary" | "fallback" | "none";
+} {
+  const userNumbers: any[] = Array.isArray(userDoc?.numbers) ? userDoc.numbers : [];
+  const voiceCapableNumbers = userNumbers.filter(isOwnedVoiceCapableNumber);
+  const defaultNumberId = String(userDoc?.defaultSmsNumberId || "").trim();
+
+  if (defaultNumberId) {
+    const primaryNumber = userNumbers.find((number: any) =>
+      numberMatchesDefaultId(number, defaultNumberId)
+    );
+    if (primaryNumber?.phoneNumber && isOwnedVoiceCapableNumber(primaryNumber)) {
+      return { fromNumber: primaryNumber.phoneNumber, source: "primary" };
+    }
+    if (primaryNumber?.phoneNumber) {
+      return { fromNumber: "", source: "none" };
+    }
+  }
+
+  const fallbackNumber = voiceCapableNumbers.find((number: any) => number?.phoneNumber);
+  if (fallbackNumber?.phoneNumber) {
+    return { fromNumber: fallbackNumber.phoneNumber, source: "fallback" };
+  }
+
+  return { fromNumber: "", source: "none" };
+}
+
 
 /**
  * Returns true if current time is within business hours.
@@ -298,19 +340,23 @@ export async function triggerAIFirstCall(
     if (isRealtimeGoogleSheetsLead) {
       console.info(`[triggerAIFirstCall] Live Google Sheets lead ${leadId} firing immediately`);
     }
-    const userDoc = await User.findOne({ email: lead.userEmail }).lean() as any;
-    const userNumbers: any[] = Array.isArray(userDoc?.numbers) ? userDoc.numbers : [];
-    const primaryNumber = userNumbers.find((n: any) =>
-      n?.capabilities?.voice === true &&
-      !["inactive","released","deleted","canceled","cancelled"].includes(String(n?.status || "").toLowerCase())
-    );
-    const fromNumber = primaryNumber?.phoneNumber || "";
+    const userDoc = await User.findOne({ email: lead.userEmail })
+      .select("numbers defaultSmsNumberId")
+      .lean() as any;
+    const fromNumberSelection = getAiFirstCallFromNumberSelection(userDoc);
+    const fromNumber = fromNumberSelection.fromNumber;
 
     if (!fromNumber) {
       await Lead.updateOne({ _id: lead._id }, { $set: { aiFirstCallStatus: "failed" } });
       console.warn(`[triggerAIFirstCall] No voice-capable number for user ${lead.userEmail} — aborting`);
       return;
     }
+
+    console.info("[triggerAIFirstCall] selected AI First Call caller ID", {
+      userEmail: lead.userEmail,
+      source: fromNumberSelection.source,
+      fromNumber: maskPhone(fromNumber),
+    });
 
     const resp = await fetch(`${AI_VOICE_SERVER_URL}/trigger-call`, {
       method: "POST",

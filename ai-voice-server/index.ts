@@ -64,6 +64,7 @@ const AI_DIALER_VENDOR_COST_PER_MIN_USD = Number(
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_REALTIME_MODEL =
   process.env.OPENAI_REALTIME_MODEL || "gpt-realtime-mini";
+const OPENAI_REALTIME_AUDIO_FORMAT = "g711_ulaw";
 
 console.log("[AI-VOICE] Realtime model resolved:", OPENAI_REALTIME_MODEL, "(env:", process.env.OPENAI_REALTIME_MODEL ? "set" : "default", ")");
 
@@ -82,6 +83,30 @@ for (const v of REQUIRED_VARS) {
 }
 console.log("[AI-VOICE] Model:", OPENAI_REALTIME_MODEL);
 console.log("[AI-VOICE] CoveCRM base:", COVECRM_BASE_URL);
+
+function buildRealtimeResponseCreate(
+  instructions: string,
+  options: { temperature?: number } = {}
+) {
+  const response: any = {
+    modalities: ["audio", "text"],
+    instructions,
+    audio: {
+      output: {
+        format: OPENAI_REALTIME_AUDIO_FORMAT,
+      },
+    },
+  };
+
+  if (typeof options.temperature === "number") {
+    response.temperature = options.temperature;
+  }
+
+  return {
+    type: "response.create",
+    response,
+  };
+}
 
 // Endpoints
 const BOOK_APPOINTMENT_URL = new URL(
@@ -976,10 +1001,7 @@ async function replayPendingCommittedTurn(
           state.lastObjectionKind = greetingObjOrQ;
           state.objectionRepeatCount = 0;
 
-          state.openAiWs.send(JSON.stringify({
-            type: "response.create",
-            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: rebuttalInstr },
-          }));
+          state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(rebuttalInstr, { temperature: 0.6 })));
 
           // Re-arm stepper so next reply answers Step 1
           state.awaitingUserAnswer = true;
@@ -1019,10 +1041,7 @@ async function replayPendingCommittedTurn(
         state.lastResponseCreateAtMs = Date.now();
 
         state.openAiWs.send(
-          JSON.stringify({
-            type: "response.create",
-            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: retryInstr },
-          })
+          JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
         );
 
         state.awaitingUserAnswer = true;
@@ -1062,10 +1081,7 @@ async function replayPendingCommittedTurn(
       state.lastResponseCreateAtMs = Date.now();
 
       state.openAiWs.send(
-        JSON.stringify({
-          type: "response.create",
-          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
-        })
+        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
       );
 
       // ✅ Do NOT advance out of greeting yet.
@@ -1151,10 +1167,7 @@ async function replayPendingCommittedTurn(
       state.lastResponseCreateAtMs = Date.now();
 
       state.openAiWs.send(
-        JSON.stringify({
-          type: "response.create",
-          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
-        })
+        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
       );
 
       // ✅ Keep stepper alignment: rebuttals end with a booking question.
@@ -1297,10 +1310,7 @@ async function replayPendingCommittedTurn(
       state.lastPromptLine = repromptLine;
       state.lastResponseCreateAtMs = Date.now();
 
-      state.openAiWs.send(JSON.stringify({
-        type: "response.create",
-        response: { modalities: ["audio", "text"], instructions: instr },
-      }));
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
 
       state.phase = "in_call";
       return;
@@ -1430,10 +1440,7 @@ async function replayPendingCommittedTurn(
     state.lastPromptLine = lineToSay;
     state.lastResponseCreateAtMs = Date.now();
 
-    state.openAiWs.send(JSON.stringify({
-      type: "response.create",
-      response: { modalities: ["audio", "text"], instructions: perTurnInstr },
-    }));
+    state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(perTurnInstr)));
 
     // advance logic (mirror normal path)
     if (canAdvance) {
@@ -4502,8 +4509,14 @@ async function assertRealtimeModelAccessible() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        type: "realtime",
         model,
         modalities: ["audio", "text"],
+        audio: {
+          output: {
+            format: OPENAI_REALTIME_AUDIO_FORMAT,
+          },
+        },
         // Keep this minimal — we only want to validate access + model name.
       }),
     });
@@ -4573,13 +4586,9 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
       setAiSpeaking(state, true, "live-transfer speak");
       setResponseInFlight(state, true, "live-transfer speak");
       state.outboundOpenAiDone = false;
-      state.openAiWs.send(JSON.stringify({
-        type: "response.create",
-        response: {
-          modalities: ["audio", "text"],
-          instructions: `Say EXACTLY this sentence and nothing else: "${transferLine}" Then stop completely.`,
-        },
-      }));
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(
+        `Say EXACTLY this sentence and nothing else: "${transferLine}" Then stop completely.`
+      )));
     }
   } catch (err: any) {
     console.warn("[AI-VOICE][LIVE-TRANSFER] Failed to send transfer line:", err?.message);
@@ -5293,7 +5302,6 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
   const openAiWs = new WebSocket(url, {
     headers: {
       Authorization: `Bearer ${OPENAI_API_KEY}`,
-      "OpenAI-Beta": "realtime=v1",
     },
   });
 
@@ -5374,15 +5382,22 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     const sessionUpdate = {
       type: "session.update",
       session: {
+        type: "realtime",
+        model: OPENAI_REALTIME_MODEL,
         instructions: systemPrompt,
         modalities: ["audio", "text"],
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
         temperature: 0.6,
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
+        input_audio_format: OPENAI_REALTIME_AUDIO_FORMAT,
         input_audio_transcription: {
           model: "gpt-4o-mini-transcribe",
           language: "en",
+        },
+        audio: {
+          output: {
+            voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
+            format: OPENAI_REALTIME_AUDIO_FORMAT,
+          },
         },
         turn_detection: {
           type: "server_vad",
@@ -5404,6 +5419,9 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       console.log("[AI-VOICE] Sending session.update with voice:", {
         openAiVoiceId: state.context!.voiceProfile.openAiVoiceId,
         model: OPENAI_REALTIME_MODEL,
+        apiShape: "ga",
+        inputAudioFormat: OPENAI_REALTIME_AUDIO_FORMAT,
+        outputAudioFormat: OPENAI_REALTIME_AUDIO_FORMAT,
       });
       openAiWs.send(JSON.stringify(sessionUpdate));
     } catch (err: any) {
@@ -5420,7 +5438,16 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       const event = JSON.parse(text);
 
       if (event?.type === "error") {
-        console.error("[AI-VOICE] OpenAI ERROR event:", event);
+        console.error("[AI-VOICE] OpenAI session setup/stream ERROR event:", {
+          callSid: state.callSid,
+          streamSid: state.streamSid,
+          code: event?.error?.code || event?.code || null,
+          message: event?.error?.message || event?.message || null,
+          event,
+        });
+        if (event?.error?.code === "beta_api_shape_disabled") {
+          console.error("[AI-VOICE] OpenAI Realtime GA setup failed: beta API shape disabled. Check session.update/response.create payloads and remove beta headers.");
+        }
       } else if (event?.type) {
         console.log("[AI-VOICE] OpenAI event:", event.type);
       }
@@ -5905,14 +5932,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         liveState.lastResponseCreateAtMs = Date.now();
 
         liveState.openAiWs.send(
-          JSON.stringify({
-            type: "response.create",
-            response: {
-              modalities: ["audio", "text"],
-
-              instructions: greetingInstr,
-            },
-          })
+          JSON.stringify(buildRealtimeResponseCreate(greetingInstr))
         );
 
       })();
@@ -6356,10 +6376,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.lastResponseCreateAtMs = Date.now();
 
         state.openAiWs.send(
-          JSON.stringify({
-            type: "response.create",
-            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: retryInstr },
-          })
+          JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
         );
 
         // ✅ Arm awaitingUserAnswer so audio keeps flowing to OpenAI after retry plays.
@@ -6428,10 +6445,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastResponseCreateAtMs = Date.now();
 
       state.openAiWs.send(
-        JSON.stringify({
-          type: "response.create",
-          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
-        })
+        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
       );
 
       // ✅ Do NOT advance out of greeting yet.
@@ -6529,10 +6543,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
 
       state.openAiWs.send(
-        JSON.stringify({
-          type: "response.create",
-          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
-        })
+        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
       );
 
 
@@ -6710,10 +6721,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           state.lastPromptLine = useFreeResponse ? repromptLine : repromptLine;
           state.lastResponseCreateAtMs = Date.now();
 
-          if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify({
-            type: "response.create",
-            response: { modalities: ["audio", "text"], temperature: 0.75, instructions: instr },
-          }));
+          if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.75 })));
 
         } catch (e) {
           try { console.log("[AI-VOICE] Error sending reprompt/free response.create:", String(e)); } catch {}
@@ -6858,10 +6866,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             state.lastPromptLine = repromptLine;
             state.lastResponseCreateAtMs = Date.now();
 
-            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify({
-              type: "response.create",
-              response: { modalities: ["audio", "text"], temperature: 0.75, instructions: freeInstr },
-            }));
+            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(freeInstr, { temperature: 0.75 })));
           } catch (e) {
             try { console.log("[AI-VOICE] open_question off-topic free-response error:", String(e)); } catch {}
           }
@@ -6980,14 +6985,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     state.lastResponseCreateAtMs = Date.now();
 
     state.openAiWs.send(
-      JSON.stringify({
-        type: "response.create",
-        response: {
-          modalities: ["audio", "text"],
-
-          instructions: perTurnInstr,
-        },
-      })
+      JSON.stringify(buildRealtimeResponseCreate(perTurnInstr))
     );
 
     // ✅ Patch 3: only advance when we have a real transcript answer for this step
