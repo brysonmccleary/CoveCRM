@@ -99,10 +99,6 @@ function buildRealtimeResponseCreate(
     },
   };
 
-  if (typeof options.temperature === "number") {
-    response.temperature = options.temperature;
-  }
-
   return {
     type: "response.create",
     response,
@@ -857,6 +853,7 @@ async function replayPendingCommittedTurn(
   reason: string
 ) {
   try {
+    if (state.phase === "ended") return;
     const pending = state.pendingCommittedTurn;
     if (!pending) return;
 
@@ -5388,7 +5385,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         type: "realtime",
         model: OPENAI_REALTIME_MODEL,
         instructions: systemPrompt,
-        output_modalities: ["audio"],
+        modalities: ["audio"],
         audio: {
           input: {
             format: { type: "audio/pcmu" },
@@ -5814,13 +5811,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         try {
           const existing = String(state.context?.answeredBy || "").trim();
           if (!existing) {
-            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #1");
-            await sleep(500);
-            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #2");
-            await sleep(500);
+            // Parallel initial polls — no serial sleeps between them
+            await Promise.all([
+              refreshAnsweredByFromCoveCRM(state, "pre-greeting #1"),
+              refreshAnsweredByFromCoveCRM(state, "pre-greeting #2"),
+            ]);
+            await sleep(400);
             await refreshAnsweredByFromCoveCRM(state, "pre-greeting #3");
-            await sleep(500);
-            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #4");
           }
         } catch {}
 
@@ -5838,15 +5835,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           return;
         }
 
-        // ✅ If AMD hasn't resolved yet (empty/unknown), wait up to 3 more seconds
-        // Twilio AMD can take 3-5s to resolve — we cannot greet into a voicemail
+        // ✅ If AMD hasn't resolved yet (empty/unknown), wait up to ~1.6s more before greeting
+        // Reduced from 6x500ms — proceed and greet if still unknown after loop
         if (!answeredByNow || answeredByNow === "unknown") {
-          console.log("[AI-VOICE] AMD not resolved yet — waiting up to 3s before greeting", {
+          console.log("[AI-VOICE] AMD not resolved yet — waiting up to 1.6s before greeting", {
             callSid: state.callSid,
             answeredByNow,
           });
-          for (let i = 0; i < 6; i++) {
-            await sleep(500);
+          for (let i = 0; i < 4; i++) {
+            await sleep(400);
             await refreshAnsweredByFromCoveCRM(state, `amd-wait-${i}`);
             const latest = String(state.context?.answeredBy || "").toLowerCase();
             if (isVoicemailAnsweredBy(latest)) {
@@ -6608,6 +6605,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     // ✅ Patch 3: if we can't confidently speak yet, treat it as low-signal and wait/reprompt later.
     if (!canSpeak) {
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
+      state.awaitingUserAnswer = true;
       return;
     }
 
