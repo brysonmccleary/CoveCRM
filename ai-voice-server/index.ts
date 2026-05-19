@@ -4871,7 +4871,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
 
 let _mulawToPcm16Lut: Int16Array | null = null;
 
-function isLikelySilenceOrComfortNoiseMulawBase64(payloadB64: string): boolean {
+function isLikelySilenceMulawBase64(payloadB64: string): boolean {
   try {
     if (!payloadB64) return true;
     const buf = Buffer.from(payloadB64, "base64");
@@ -4879,19 +4879,11 @@ function isLikelySilenceOrComfortNoiseMulawBase64(payloadB64: string): boolean {
 
     // Fast path: true digital silence frames are often all/mostly 0xFF (sometimes 0x7F).
     let silenceBytes = 0;
-    const byteCounts = new Uint16Array(256);
     for (let i = 0; i < buf.length; i++) {
       const b = buf[i];
       if (b === 0xff || b === 0x7f) silenceBytes++;
-      byteCounts[b]++;
     }
-    if (silenceBytes / buf.length >= 0.90) return true;
-
-    let dominantByteCount = 0;
-    for (let i = 0; i < byteCounts.length; i++) {
-      if (byteCounts[i] > dominantByteCount) dominantByteCount = byteCounts[i];
-    }
-    const dominantByteRatio = dominantByteCount / buf.length;
+    if (silenceBytes / buf.length >= 0.95) return true;
 
     // Build μ-law decode LUT once (cheap + avoids per-sample math each frame)
     if (!_mulawToPcm16Lut) {
@@ -4911,47 +4903,25 @@ function isLikelySilenceOrComfortNoiseMulawBase64(payloadB64: string): boolean {
 
     const lut = _mulawToPcm16Lut!;
     let sumAbs = 0;
-    let sumSquares = 0;
     let quiet = 0;
-    let peakAbs = 0;
-    let minSample = Infinity;
-    let maxSample = -Infinity;
 
-    // Treat as silence if energy is very low for most samples.
-    // This avoids false "speech" from Twilio comfort-noise during AI playback.
     for (let i = 0; i < buf.length; i++) {
       const v = lut[buf[i]];
       const a = v < 0 ? -v : v;
       sumAbs += a;
-      sumSquares += v * v;
-      if (a > peakAbs) peakAbs = a;
-      if (v < minSample) minSample = v;
-      if (v > maxSample) maxSample = v;
       if (a < 600) quiet++;
     }
 
     const avgAbs = sumAbs / buf.length;
-    const rms = Math.sqrt(sumSquares / buf.length);
     const quietRatio = quiet / buf.length;
-    const sampleRange = maxSample - minSample;
 
-    // Flat/near-flat comfort noise can avoid exact 0xFF silence while still carrying no speech.
-    if (dominantByteRatio >= 0.85 && avgAbs < 1800 && rms < 2200) return true;
-    if (sampleRange < 1200 && avgAbs < 1400 && rms < 1800) return true;
-    if (peakAbs < 1800 && rms < 1200) return true;
-
-    // Tuned to be conservative: classify comfort-noise as silence, but keep real speech as non-silence.
-    return (avgAbs < 1200 && rms < 1600 && quietRatio >= 0.82) ||
-      (avgAbs < 1500 && rms < 1900 && quietRatio >= 0.95);
+    // Basic silence only. Avoid aggressive comfort-noise heuristics that starve soft speech.
+    return avgAbs < 900 && quietRatio >= 0.85;
   } catch {
     // COST SAFETY: if silence detection fails on a frame, treat it as silence.
     // Otherwise we can end up streaming continuous "non-silence" to OpenAI and costs explode.
     return true;
   }
-}
-
-function isLikelySilenceMulawBase64(payloadB64: string): boolean {
-  return isLikelySilenceOrComfortNoiseMulawBase64(payloadB64);
 }
 
 function recordInboundForwardMeter(
@@ -5181,12 +5151,8 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       return; // we already appended the ring buffer including this frame
     }
 
-    // Normal path: forward inbound audio to OpenAI
-    // ✅ COST CUT: throttle silence frames so we don't burn tokens 24/7, but keep VAD working.
-    // We still send *some* silence (~1 frame / 200ms) so server_vad can detect end-of-speech and commit turns.
-            // ✅ LISTENING-ONLY: reduce OpenAI audio input cost.
-    // We only forward inbound audio to OpenAI when we are actually listening for the user.
-    // (Barge-in detection is local; we don't need to stream inbound audio while the AI is talking.)
+    // Normal path: forward only during a simple speech window.
+    // Outside that window, drop idle inbound audio completely.
     const isListening =
       !state.waitingForResponse &&
       !(state as any).responseInFlight &&
@@ -5210,38 +5176,37 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     const nowMs = Date.now();
     const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
     const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
-    const isInboundSpeechLike = !isLikelySilenceOrComfortNoiseMulawBase64(payload);
+    const isInboundSilence = isLikelySilenceMulawBase64(payload);
+    const isInboundSpeechLike = !isInboundSilence;
 
-    // "Actually speaking" means: OpenAI recently detected speech and has not emitted a matching stop.
-    const activeSpeechWindow =
+    if (isInboundSpeechLike) {
+      (state as any).lastLocalSpeechActivityAtMs = nowMs;
+    }
+    const lastLocalSpeechAt = Number((state as any).lastLocalSpeechActivityAtMs || 0);
+
+    const openAiSpeechWindow =
       startedAt > 0 &&
       (nowMs - startedAt) <= 3500 &&
       (stopAt <= 0 || stopAt < startedAt);
+    const localSpeechWindow =
+      lastLocalSpeechAt > 0 &&
+      (nowMs - lastLocalSpeechAt) <= 900;
     const trailingSpeechWindow =
       stopAt > 0 &&
       stopAt >= startedAt &&
       (nowMs - stopAt) <= 1200;
+    const activeSpeechWindow = openAiSpeechWindow || localSpeechWindow;
 
     // Safety reset: if OpenAI never sends speech_stopped, do NOT let userSpeechInProgress stay true forever.
     try {
-      if (state.userSpeechInProgress && !activeSpeechWindow && startedAt > 0 && (nowMs - startedAt) > 3500) {
+      if (state.userSpeechInProgress && !openAiSpeechWindow && startedAt > 0 && (nowMs - startedAt) > 3500) {
         state.userSpeechInProgress = false;
       }
     } catch {}
 
-    if (!isInboundSpeechLike) {
-      if (!activeSpeechWindow && !trailingSpeechWindow) {
-        recordInboundForwardMeter(state, "droppedIdleSilence", false, activeSpeechWindow, trailingSpeechWindow);
-        return;
-      }
-
-      const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
-      const minSilenceGapMs = activeSpeechWindow ? 100 : 200;
-      if (nowMs - lastMs < minSilenceGapMs) {
-        recordInboundForwardMeter(state, "droppedIdleSilence", false, activeSpeechWindow, trailingSpeechWindow);
-        return;
-      }
-      (state as any).lastSilenceSentAtMs = nowMs;
+    if (!activeSpeechWindow && !trailingSpeechWindow) {
+      recordInboundForwardMeter(state, "droppedIdleSilence", isInboundSpeechLike, activeSpeechWindow, trailingSpeechWindow);
+      return;
     }
 
     recordInboundForwardMeter(state, "appended", isInboundSpeechLike, activeSpeechWindow, trailingSpeechWindow);
@@ -5858,18 +5823,19 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.initialGreetingQueued = true;
 
       (async () => {
-        try {
-          const existing = String(state.context?.answeredBy || "").trim();
-          if (!existing) {
-            // Parallel initial polls — no serial sleeps between them
-            await Promise.all([
-              refreshAnsweredByFromCoveCRM(state, "pre-greeting #1"),
-              refreshAnsweredByFromCoveCRM(state, "pre-greeting #2"),
-            ]);
-            await sleep(400);
-            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #3");
-          }
-        } catch {}
+        const existing = String(state.context?.answeredBy || "").trim();
+        const amdChecks = existing
+          ? Promise.resolve()
+          : (async () => {
+              await Promise.all([
+                refreshAnsweredByFromCoveCRM(state, "pre-greeting #1"),
+                refreshAnsweredByFromCoveCRM(state, "pre-greeting #2"),
+              ]);
+              await sleep(200);
+              await refreshAnsweredByFromCoveCRM(state, "pre-greeting #3");
+            })().catch(() => {});
+
+        await Promise.race([amdChecks, sleep(700)]);
 
         const answeredByNow = String(
           state.context?.answeredBy || ""
@@ -5885,33 +5851,11 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           return;
         }
 
-        // ✅ If AMD hasn't resolved yet (empty/unknown), wait briefly before greeting.
-        // Proceed if still unknown after the bounded loop; preserve voicemail suppression.
         if (!answeredByNow || answeredByNow === "unknown") {
-          console.log("[AI-VOICE] AMD not resolved yet — waiting up to 600ms before greeting", {
+          console.log("[AI-VOICE] AMD unresolved after bounded pre-greeting check — proceeding", {
             callSid: state.callSid,
             answeredByNow,
           });
-          for (let i = 0; i < 2; i++) {
-            await sleep(300);
-            await refreshAnsweredByFromCoveCRM(state, `amd-wait-${i}`);
-            const latest = String(state.context?.answeredBy || "").toLowerCase();
-            if (isVoicemailAnsweredBy(latest)) {
-              console.log("[AI-VOICE] Voicemail detected during AMD wait — suppressing", {
-                callSid: state.callSid,
-                answeredBy: latest,
-              });
-              state.voicemailSkipArmed = true;
-              safelyCloseOpenAi(state, "voicemail detected AMD wait");
-              return;
-            }
-            if (latest === "human") {
-              console.log("[AI-VOICE] Human confirmed during AMD wait — proceeding", {
-                callSid: state.callSid,
-              });
-              break;
-            }
-          }
         }
 
         const liveState = calls.get(twilioWs);
@@ -5927,13 +5871,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         // ✅ FIX: If the caller is already speaking (very common right at connect),
         // do NOT fire the greeting yet. Wait briefly for speech to stop so we don't talk over them.
         try {
-          for (let i = 0; i < 3; i++) {
+          for (let i = 0; i < 2; i++) {
             const startedAt = Number((liveState as any).lastUserSpeechStartedAtMs || 0);
             const stopAt = Number((liveState as any).lastUserSpeechStoppedAtMs || 0);
             const now = Date.now();
             const userSpeaking = startedAt > 0 && (stopAt <= 0 || stopAt < startedAt) && (now - startedAt) <= 5000;
             if (!userSpeaking) break;
-            await sleep(150);
+            await sleep(100);
           }
         } catch {}
 
