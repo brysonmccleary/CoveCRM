@@ -4871,7 +4871,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
 
 let _mulawToPcm16Lut: Int16Array | null = null;
 
-function isLikelySilenceMulawBase64(payloadB64: string): boolean {
+function isLikelySilenceOrComfortNoiseMulawBase64(payloadB64: string): boolean {
   try {
     if (!payloadB64) return true;
     const buf = Buffer.from(payloadB64, "base64");
@@ -4879,11 +4879,19 @@ function isLikelySilenceMulawBase64(payloadB64: string): boolean {
 
     // Fast path: true digital silence frames are often all/mostly 0xFF (sometimes 0x7F).
     let silenceBytes = 0;
+    const byteCounts = new Uint16Array(256);
     for (let i = 0; i < buf.length; i++) {
       const b = buf[i];
       if (b === 0xff || b === 0x7f) silenceBytes++;
+      byteCounts[b]++;
     }
-    if (silenceBytes / buf.length >= 0.95) return true;
+    if (silenceBytes / buf.length >= 0.90) return true;
+
+    let dominantByteCount = 0;
+    for (let i = 0; i < byteCounts.length; i++) {
+      if (byteCounts[i] > dominantByteCount) dominantByteCount = byteCounts[i];
+    }
+    const dominantByteRatio = dominantByteCount / buf.length;
 
     // Build μ-law decode LUT once (cheap + avoids per-sample math each frame)
     if (!_mulawToPcm16Lut) {
@@ -4903,7 +4911,11 @@ function isLikelySilenceMulawBase64(payloadB64: string): boolean {
 
     const lut = _mulawToPcm16Lut!;
     let sumAbs = 0;
+    let sumSquares = 0;
     let quiet = 0;
+    let peakAbs = 0;
+    let minSample = Infinity;
+    let maxSample = -Infinity;
 
     // Treat as silence if energy is very low for most samples.
     // This avoids false "speech" from Twilio comfort-noise during AI playback.
@@ -4911,19 +4923,81 @@ function isLikelySilenceMulawBase64(payloadB64: string): boolean {
       const v = lut[buf[i]];
       const a = v < 0 ? -v : v;
       sumAbs += a;
+      sumSquares += v * v;
+      if (a > peakAbs) peakAbs = a;
+      if (v < minSample) minSample = v;
+      if (v > maxSample) maxSample = v;
       if (a < 600) quiet++;
     }
 
     const avgAbs = sumAbs / buf.length;
+    const rms = Math.sqrt(sumSquares / buf.length);
     const quietRatio = quiet / buf.length;
+    const sampleRange = maxSample - minSample;
+
+    // Flat/near-flat comfort noise can avoid exact 0xFF silence while still carrying no speech.
+    if (dominantByteRatio >= 0.85 && avgAbs < 1800 && rms < 2200) return true;
+    if (sampleRange < 1200 && avgAbs < 1400 && rms < 1800) return true;
+    if (peakAbs < 1800 && rms < 1200) return true;
 
     // Tuned to be conservative: classify comfort-noise as silence, but keep real speech as non-silence.
-    return avgAbs < 900 && quietRatio >= 0.85;
+    return (avgAbs < 1200 && rms < 1600 && quietRatio >= 0.82) ||
+      (avgAbs < 1800 && rms < 2200 && quietRatio >= 0.92);
   } catch {
     // COST SAFETY: if silence detection fails on a frame, treat it as silence.
     // Otherwise we can end up streaming continuous "non-silence" to OpenAI and costs explode.
     return true;
   }
+}
+
+function isLikelySilenceMulawBase64(payloadB64: string): boolean {
+  return isLikelySilenceOrComfortNoiseMulawBase64(payloadB64);
+}
+
+function recordInboundForwardMeter(
+  state: CallState,
+  kind: "appended" | "droppedIdleSilence",
+  isSpeechLike: boolean
+) {
+  try {
+    if (kind === "appended") {
+      (state as any)._dbgFwdAppendedFrames = Number((state as any)._dbgFwdAppendedFrames || 0) + 1;
+    } else {
+      (state as any)._dbgFwdDroppedIdleSilence = Number((state as any)._dbgFwdDroppedIdleSilence || 0) + 1;
+    }
+    if (isSpeechLike) {
+      (state as any)._dbgFwdSpeechLike = Number((state as any)._dbgFwdSpeechLike || 0) + 1;
+    } else {
+      (state as any)._dbgFwdSilenceLike = Number((state as any)._dbgFwdSilenceLike || 0) + 1;
+    }
+
+    const now = Date.now();
+    const last = Number((state as any)._dbgFwdLogAtMs || 0);
+    if (last <= 0) (state as any)._dbgFwdLogAtMs = now;
+    if (now - Number((state as any)._dbgFwdLogAtMs || 0) >= 2000) {
+      const appended = Number((state as any)._dbgFwdAppendedFrames || 0);
+      const dropped = Number((state as any)._dbgFwdDroppedIdleSilence || 0);
+      const speechLike = Number((state as any)._dbgFwdSpeechLike || 0);
+      const silenceLike = Number((state as any)._dbgFwdSilenceLike || 0);
+      console.log("[AI-VOICE][FWD-METER]", {
+        callSid: state.callSid,
+        phase: state.phase,
+        awaitingUserAnswer: !!state.awaitingUserAnswer,
+        inFlight: !!(state as any).responseInFlight,
+        waiting: !!state.waitingForResponse,
+        aiSpeaking: !!state.aiSpeaking,
+        appendedFrames2s: appended,
+        droppedIdleSilence2s: dropped,
+        speechLike2s: speechLike,
+        silenceLike2s: silenceLike,
+      });
+      (state as any)._dbgFwdAppendedFrames = 0;
+      (state as any)._dbgFwdDroppedIdleSilence = 0;
+      (state as any)._dbgFwdSpeechLike = 0;
+      (state as any)._dbgFwdSilenceLike = 0;
+      (state as any)._dbgFwdLogAtMs = now;
+    }
+  } catch {}
 }
 
 
@@ -5119,111 +5193,43 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       return;
     }
 
-    const isSilenceToSend = isLikelySilenceMulawBase64(payload);
-    if (isSilenceToSend) {
-      // ✅ COST CUT: Do NOT stream continuous idle silence.
-      // Only allow sparse silence for ~1.2s after user speech so server_vad can finalize.
-      // If user is actively speaking, do NOT throttle silence.
+    const nowMs = Date.now();
+    const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
+    const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
+    const isInboundSpeechLike = !isLikelySilenceOrComfortNoiseMulawBase64(payload);
 
-      const nowMs = Date.now();
-      const listenEnabledAt = Number((state as any).lastListenEnabledAtMs || 0);
-      const warmupUntil = Number((state as any).listenWarmupUntilMs || 0);
+    // "Actually speaking" means: we saw speech start very recently AND have not seen a stop after it.
+    const speechIsActuallyActive =
+      startedAt > 0 &&
+      (nowMs - startedAt) <= 2500 &&
+      (stopAt <= 0 || stopAt < startedAt);
 
-      // ✅ Critical: during warmup, DO NOT throttle inbound frames.
-      // We need full-rate audio briefly so OpenAI server_vad can detect the user's first words.
-      // Otherwise we create a catch-22 (we don't know it's speech until VAD, but VAD needs frames).
-      const inWarmup = warmupUntil > 0 && nowMs <= warmupUntil;
-
-      const allowInitialSilence = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 1200;
-
-      // ✅ HARD COST LOCK:
-      // Only stream inbound audio to OpenAI when we EXPECT the user to speak.
-      // This prevents "listening 24/7" which causes the $12/hr spike.
-      // Only stream silence to OpenAI when ACTIVELY expecting user reply
-      // awaitingUserAnswer must be true OR we are in greeting phase OR in warmup
-      // This prevents continuous silence streaming during script transitions
-      const expectingUserSpeech =
-        (state.phase === "awaiting_greeting_reply" && !!state.debugLoggedResponseCreateGreeting) ||
-        (state.phase === "in_call" && !!state.awaitingUserAnswer) ||
-        inWarmup;
-
-      if (!expectingUserSpeech) {
-        return;
-      }
-
-      // ✅ If we're in the brief re-entry window AND not warming up, throttle SILENCE frames only.
-      // This is bounded and prevents cost spikes, while warmup preserves VAD reliability.
-      const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
-      const shouldDropSilenceFrame = !inWarmup && allowInitialSilence && (nowMs - lastMs) < 250;
-
-      if (shouldDropSilenceFrame) {
-        return;
-      }
-
-      if (!inWarmup && allowInitialSilence) {
-        (state as any).lastSilenceSentAtMs = nowMs;
-      } else {
-
-      const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
-      const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
-
-      // "Actually speaking" means: we saw speech start very recently AND we have NOT seen a stop after it.
-      // This avoids getting stuck in userSpeechInProgress=true forever due to comfort-noise / missing stop events.
-      const speechIsActuallyActive =
-        startedAt > 0 &&
-        (nowMs - startedAt) <= 2500 &&
-        (stopAt <= 0 || stopAt < startedAt);
-
-      // Safety reset: if OpenAI never sends speech_stopped, do NOT let userSpeechInProgress stay true forever.
-      try {
-        if (state.userSpeechInProgress && !speechIsActuallyActive && startedAt > 0 && (nowMs - startedAt) > 2500) {
-          state.userSpeechInProgress = false;
-        }
-      } catch {}
-
-      if (!speechIsActuallyActive) {
-        const recentlySpoke =
-          (stopAt > 0 && (nowMs - stopAt) <= 1200) ||
-          (startedAt > 0 && (nowMs - startedAt) <= 1200);
-
-        if (!recentlySpoke) {
-          return;
-        }
-        const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
-        if (nowMs - lastMs < 400) {
-          return;
-        }
-        (state as any).lastSilenceSentAtMs = nowMs;
-      }
-
-      }
-    }
-    // 🔎 DEBUG METER (low-noise): count inbound frames forwarded to OpenAI + how many are silence.
+    // Safety reset: if OpenAI never sends speech_stopped, do NOT let userSpeechInProgress stay true forever.
     try {
-      (state as any)._dbgFwdFrames = Number((state as any)._dbgFwdFrames || 0) + 1;
-      const _isSil = isLikelySilenceMulawBase64(payload);
-      if (_isSil) (state as any)._dbgFwdSilence = Number((state as any)._dbgFwdSilence || 0) + 1;
-      const _now = Date.now();
-      const _last = Number((state as any)._dbgFwdLogAtMs || 0);
-      if (_last <= 0) (state as any)._dbgFwdLogAtMs = _now;
-      if (_now - Number((state as any)._dbgFwdLogAtMs || 0) >= 2000) {
-        const f = Number((state as any)._dbgFwdFrames || 0);
-        const sil = Number((state as any)._dbgFwdSilence || 0);
-        console.log("[AI-VOICE][FWD-METER]", {
-          callSid: state.callSid,
-          phase: state.phase,
-          awaitingUserAnswer: !!state.awaitingUserAnswer,
-          inFlight: !!(state as any).responseInFlight,
-          waiting: !!state.waitingForResponse,
-          aiSpeaking: !!state.aiSpeaking,
-          frames2s: f,
-          silence2s: sil,
-        });
-        (state as any)._dbgFwdFrames = 0;
-        (state as any)._dbgFwdSilence = 0;
-        (state as any)._dbgFwdLogAtMs = _now;
+      if (state.userSpeechInProgress && !speechIsActuallyActive && startedAt > 0 && (nowMs - startedAt) > 2500) {
+        state.userSpeechInProgress = false;
       }
     } catch {}
+
+    if (!isInboundSpeechLike) {
+      const recentlySpoke =
+        (stopAt > 0 && (nowMs - stopAt) <= 1200) ||
+        (startedAt > 0 && (nowMs - startedAt) <= 1200);
+
+      if (!recentlySpoke) {
+        recordInboundForwardMeter(state, "droppedIdleSilence", false);
+        return;
+      }
+
+      const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
+      if (nowMs - lastMs < 400) {
+        recordInboundForwardMeter(state, "droppedIdleSilence", false);
+        return;
+      }
+      (state as any).lastSilenceSentAtMs = nowMs;
+    }
+
+    recordInboundForwardMeter(state, "appended", isInboundSpeechLike);
 
     state.openAiWs.send(
       JSON.stringify({
