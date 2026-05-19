@@ -4942,7 +4942,7 @@ function isLikelySilenceOrComfortNoiseMulawBase64(payloadB64: string): boolean {
 
     // Tuned to be conservative: classify comfort-noise as silence, but keep real speech as non-silence.
     return (avgAbs < 1200 && rms < 1600 && quietRatio >= 0.82) ||
-      (avgAbs < 1800 && rms < 2200 && quietRatio >= 0.92);
+      (avgAbs < 1500 && rms < 1900 && quietRatio >= 0.95);
   } catch {
     // COST SAFETY: if silence detection fails on a frame, treat it as silence.
     // Otherwise we can end up streaming continuous "non-silence" to OpenAI and costs explode.
@@ -4957,7 +4957,9 @@ function isLikelySilenceMulawBase64(payloadB64: string): boolean {
 function recordInboundForwardMeter(
   state: CallState,
   kind: "appended" | "droppedIdleSilence",
-  isSpeechLike: boolean
+  isSpeechLike: boolean,
+  activeSpeechWindow = false,
+  trailingSpeechWindow = false
 ) {
   try {
     if (kind === "appended") {
@@ -4970,6 +4972,12 @@ function recordInboundForwardMeter(
     } else {
       (state as any)._dbgFwdSilenceLike = Number((state as any)._dbgFwdSilenceLike || 0) + 1;
     }
+    if (activeSpeechWindow) {
+      (state as any)._dbgFwdActiveSpeechWindow = Number((state as any)._dbgFwdActiveSpeechWindow || 0) + 1;
+    }
+    if (trailingSpeechWindow) {
+      (state as any)._dbgFwdTrailingSpeechWindow = Number((state as any)._dbgFwdTrailingSpeechWindow || 0) + 1;
+    }
 
     const now = Date.now();
     const last = Number((state as any)._dbgFwdLogAtMs || 0);
@@ -4979,6 +4987,8 @@ function recordInboundForwardMeter(
       const dropped = Number((state as any)._dbgFwdDroppedIdleSilence || 0);
       const speechLike = Number((state as any)._dbgFwdSpeechLike || 0);
       const silenceLike = Number((state as any)._dbgFwdSilenceLike || 0);
+      const activeWindow = Number((state as any)._dbgFwdActiveSpeechWindow || 0) > 0;
+      const trailingWindow = Number((state as any)._dbgFwdTrailingSpeechWindow || 0) > 0;
       console.log("[AI-VOICE][FWD-METER]", {
         callSid: state.callSid,
         phase: state.phase,
@@ -4990,11 +5000,15 @@ function recordInboundForwardMeter(
         droppedIdleSilence2s: dropped,
         speechLike2s: speechLike,
         silenceLike2s: silenceLike,
+        activeSpeechWindow: activeWindow,
+        trailingSpeechWindow: trailingWindow,
       });
       (state as any)._dbgFwdAppendedFrames = 0;
       (state as any)._dbgFwdDroppedIdleSilence = 0;
       (state as any)._dbgFwdSpeechLike = 0;
       (state as any)._dbgFwdSilenceLike = 0;
+      (state as any)._dbgFwdActiveSpeechWindow = 0;
+      (state as any)._dbgFwdTrailingSpeechWindow = 0;
       (state as any)._dbgFwdLogAtMs = now;
     }
   } catch {}
@@ -5198,38 +5212,39 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
     const isInboundSpeechLike = !isLikelySilenceOrComfortNoiseMulawBase64(payload);
 
-    // "Actually speaking" means: we saw speech start very recently AND have not seen a stop after it.
-    const speechIsActuallyActive =
+    // "Actually speaking" means: OpenAI recently detected speech and has not emitted a matching stop.
+    const activeSpeechWindow =
       startedAt > 0 &&
-      (nowMs - startedAt) <= 2500 &&
+      (nowMs - startedAt) <= 3500 &&
       (stopAt <= 0 || stopAt < startedAt);
+    const trailingSpeechWindow =
+      stopAt > 0 &&
+      stopAt >= startedAt &&
+      (nowMs - stopAt) <= 1200;
 
     // Safety reset: if OpenAI never sends speech_stopped, do NOT let userSpeechInProgress stay true forever.
     try {
-      if (state.userSpeechInProgress && !speechIsActuallyActive && startedAt > 0 && (nowMs - startedAt) > 2500) {
+      if (state.userSpeechInProgress && !activeSpeechWindow && startedAt > 0 && (nowMs - startedAt) > 3500) {
         state.userSpeechInProgress = false;
       }
     } catch {}
 
     if (!isInboundSpeechLike) {
-      const recentlySpoke =
-        (stopAt > 0 && (nowMs - stopAt) <= 1200) ||
-        (startedAt > 0 && (nowMs - startedAt) <= 1200);
-
-      if (!recentlySpoke) {
-        recordInboundForwardMeter(state, "droppedIdleSilence", false);
+      if (!activeSpeechWindow && !trailingSpeechWindow) {
+        recordInboundForwardMeter(state, "droppedIdleSilence", false, activeSpeechWindow, trailingSpeechWindow);
         return;
       }
 
       const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
-      if (nowMs - lastMs < 400) {
-        recordInboundForwardMeter(state, "droppedIdleSilence", false);
+      const minSilenceGapMs = activeSpeechWindow ? 100 : 200;
+      if (nowMs - lastMs < minSilenceGapMs) {
+        recordInboundForwardMeter(state, "droppedIdleSilence", false, activeSpeechWindow, trailingSpeechWindow);
         return;
       }
       (state as any).lastSilenceSentAtMs = nowMs;
     }
 
-    recordInboundForwardMeter(state, "appended", isInboundSpeechLike);
+    recordInboundForwardMeter(state, "appended", isInboundSpeechLike, activeSpeechWindow, trailingSpeechWindow);
 
     state.openAiWs.send(
       JSON.stringify({
