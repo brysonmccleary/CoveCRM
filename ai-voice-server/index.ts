@@ -5385,7 +5385,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         type: "realtime",
         model: OPENAI_REALTIME_MODEL,
         instructions: systemPrompt,
-        modalities: ["audio"],
+        output_modalities: ["audio"],
         audio: {
           input: {
             format: { type: "audio/pcmu" },
