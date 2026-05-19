@@ -1129,11 +1129,7 @@ async function replayPendingCommittedTurn(
       // This does NOT change model, audio format, or session settings. Only the chosen line.
       let overrideRebuttalLine: string | null = null;
       try {
-        const t = String(lastUserText || "").toLowerCase();
-        const looksHowLong =
-          (t.includes("how long") && (t.includes("take") || t.includes("takes") || t.includes("call") || t.includes("does it"))) ||
-          t.trim() === "how long";
-        if (looksHowLong) {
+        if (isHowLongDurationQuestion(lastUserText)) {
           overrideRebuttalLine =
             "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
         }
@@ -1887,9 +1883,41 @@ function looksLikeUserQuestion(textRaw: string): boolean {
   return false;
 }
 
+function isHowLongDurationQuestion(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+  const normalized = t.replace(/[?.!,]+$/g, "").replace(/\s+/g, " ").trim();
+
+  return (
+    normalized.includes("how long") ||
+    normalized.includes("how much time") ||
+    normalized.includes("how many minutes") ||
+    normalized.includes("is this quick")
+  );
+}
+
+function hasExplicitLiveTransferIntent(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+  const normalized = t.replace(/[?.!,]+$/g, "").replace(/\s+/g, " ").trim();
+
+  return (
+    normalized.includes("connect me") ||
+    normalized.includes("transfer me") ||
+    normalized.includes("can i talk to him") ||
+    normalized.includes("can i speak to the agent") ||
+    normalized.includes("put him on") ||
+    normalized.includes("speak to bryson") ||
+    normalized.includes("right now") ||
+    normalized === "now"
+  );
+}
+
 function detectQuestionKindForTurn(textRaw: string): string | null {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return null;
+
+  if (isHowLongDurationQuestion(t)) return "what_entails";
 
   // If it's clearly a scheduling/availability question, let the existing time ladder handle it.
   try {
@@ -1911,14 +1939,6 @@ function detectQuestionKindForTurn(textRaw: string): string | null {
 
   // "How long / what happens" variants not covered by detectObjection
   if (
-    t.includes("how long") ||
-    t.includes("how much time") ||
-    t.includes("how long is") ||
-    t.includes("how long will this be") ||
-    t.includes("how long will it be") ||
-    t.includes("how long does the call") ||
-    t.includes("how long is the call") ||
-    t.includes("how long will the call") ||
     t.includes("what happens") ||
     t.includes("what do i need to do") ||
     t.includes("what do you need") ||
@@ -4566,6 +4586,15 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
   if (!ctx) return;
   if (!ctx.liveTransferEnabled || !ctx.liveTransferPhone) return;
   if (state.phase === "ended") return;
+  if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) {
+    console.log("[AI-VOICE][LIVE-TRANSFER] Skipping transfer while response is active", {
+      callSid: state.callSid,
+      waitingForResponse: !!state.waitingForResponse,
+      responseInFlight: !!state.responseInFlight,
+      aiSpeaking: !!state.aiSpeaking,
+    });
+    return;
+  }
 
   const agentFirst = (ctx.agentName || "my agent").split(" ")[0] || "my agent";
   const leadName = ctx.clientFirstName || "them";
@@ -5835,15 +5864,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           return;
         }
 
-        // ✅ If AMD hasn't resolved yet (empty/unknown), wait up to ~1.6s more before greeting
-        // Reduced from 6x500ms — proceed and greet if still unknown after loop
+        // ✅ If AMD hasn't resolved yet (empty/unknown), wait briefly before greeting.
+        // Proceed if still unknown after the bounded loop; preserve voicemail suppression.
         if (!answeredByNow || answeredByNow === "unknown") {
-          console.log("[AI-VOICE] AMD not resolved yet — waiting up to 1.6s before greeting", {
+          console.log("[AI-VOICE] AMD not resolved yet — waiting up to 600ms before greeting", {
             callSid: state.callSid,
             answeredByNow,
           });
-          for (let i = 0; i < 4; i++) {
-            await sleep(400);
+          for (let i = 0; i < 2; i++) {
+            await sleep(300);
             await refreshAnsweredByFromCoveCRM(state, `amd-wait-${i}`);
             const latest = String(state.context?.answeredBy || "").toLowerCase();
             if (isVoicemailAnsweredBy(latest)) {
@@ -5864,11 +5893,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           }
         }
 
-        const isHuman = String(state.context?.answeredBy || "").toLowerCase() === "human";
-        try {
-          if (isHuman) await sleep(250);
-        } catch {}
-
         const liveState = calls.get(twilioWs);
         if (
           !liveState ||
@@ -5882,13 +5906,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         // ✅ FIX: If the caller is already speaking (very common right at connect),
         // do NOT fire the greeting yet. Wait briefly for speech to stop so we don't talk over them.
         try {
-          for (let i = 0; i < 10; i++) {
+          for (let i = 0; i < 3; i++) {
             const startedAt = Number((liveState as any).lastUserSpeechStartedAtMs || 0);
             const stopAt = Number((liveState as any).lastUserSpeechStoppedAtMs || 0);
             const now = Date.now();
             const userSpeaking = startedAt > 0 && (stopAt <= 0 || stopAt < startedAt) && (now - startedAt) <= 5000;
             if (!userSpeaking) break;
-            await sleep(200);
+            await sleep(150);
           }
         } catch {}
 
@@ -6482,11 +6506,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       // This does NOT change model, audio format, or session settings. Only the chosen line.
       let overrideRebuttalLine: string | null = null;
       try {
-        const t = String(lastUserText || "").toLowerCase();
-        const looksHowLong =
-          (t.includes("how long") && (t.includes("take") || t.includes("takes") || t.includes("call") || t.includes("does it"))) ||
-          t.trim() === "how long";
-        if (looksHowLong) {
+        if (isHowLongDurationQuestion(lastUserText)) {
           overrideRebuttalLine =
             "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
         }
@@ -6599,6 +6619,46 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       isTimeWindowMentioned(lastUserText) &&
       !isDayReferenceMentioned(lastUserText) &&
       !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText);
+
+    const shouldTriggerLiveTransfer =
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      hasExplicitLiveTransferIntent(lastUserText) &&
+      !!state.context?.liveTransferEnabled &&
+      !!state.context?.liveTransferPhone &&
+      state.phase !== "ended";
+
+    if (shouldTriggerLiveTransfer) {
+      if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) {
+        console.log("[AI-VOICE][LIVE-TRANSFER] Explicit transfer deferred; response already active", {
+          callSid: state.callSid,
+          waitingForResponse: !!state.waitingForResponse,
+          responseInFlight: !!state.responseInFlight,
+          aiSpeaking: !!state.aiSpeaking,
+        });
+        state.awaitingUserAnswer = true;
+        return;
+      }
+
+      console.log("[AI-VOICE][LIVE-TRANSFER] Explicit transfer intent detected — triggering live transfer", {
+        callSid: state.callSid,
+        agentPhone: state.context!.liveTransferPhone,
+      });
+      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      const wsConn = state.openAiWs;
+      if (wsConn) {
+        void performLiveTransfer(wsConn, state);
+      }
+      return;
+    }
 
 
 
@@ -6998,22 +7058,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     } else {
       // hold position; next turn will reprompt / ask again
       state.scriptStepIndex = idx;
-    }
-
-    // ✅ LIVE TRANSFER: when lead answers STEP 1 (interest confirmed, idx=1),
-    // and live transfer is enabled, hand off to agent immediately.
-    // Booking path (CHANGE D) is skipped here — performLiveTransfer handles the fallback
-    // via Twilio's <Dial action="fallback"> which plays a graceful message if agent is unavailable.
-    if (canAdvance && idx === 1 && state.context?.liveTransferEnabled && state.context?.liveTransferPhone && state.phase !== "ended") {
-      console.log("[AI-VOICE][LIVE-TRANSFER] Interest confirmed at step 1 — triggering live transfer", {
-        callSid: state.callSid,
-        agentPhone: state.context.liveTransferPhone,
-      });
-      const wsConn = state.openAiWs;
-      if (wsConn) {
-        void performLiveTransfer(wsConn, state);
-      }
-      return;
     }
 
     // SERVER-SIDE BOOKING TRIGGER
