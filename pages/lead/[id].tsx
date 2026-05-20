@@ -810,6 +810,13 @@ export default function LeadProfileDial() {
       "donotcall",
       "donotcallat",
       "appointmenttime",
+      "aifirstcallattemptedat",
+      "aifirstcalltriggeredat",
+      "aiprioritycategory",
+      "aipriorityscore",
+      "externalid",
+      "source",
+      "status",
     ]);
 
     const alreadyUsedAliasesNorm = new Set<string>();
