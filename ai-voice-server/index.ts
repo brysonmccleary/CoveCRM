@@ -945,6 +945,37 @@ async function replayPendingCommittedTurn(
 
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
 
+    if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
+      const lineToSay =
+        "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
+      const instr = buildExactScriptLineInstruction(lineToSay);
+
+      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
+
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      setWaitingForResponse(state, true, "response.create (how-long)");
+      setAiSpeaking(state, true, "response.create (how-long)");
+      setResponseInFlight(state, true, "response.create (how-long)");
+      state.outboundOpenAiDone = false;
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
+      state.phase = "in_call";
+      return;
+    }
+
     if (isGreetingReply) {
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
 
@@ -1012,8 +1043,6 @@ async function replayPendingCommittedTurn(
         }
       }
 
-      const ack = getGreetingAckPrefix(lastUserText);
-
       if (isGreetingNegativeHearing(lastUserText)) {
         const aiName2 = (state.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
         const clientName2 = (state.context!.clientFirstName || "").trim() || "there";
@@ -1050,11 +1079,8 @@ async function replayPendingCommittedTurn(
         return;
       }
 
-      const lineToSay2 = `${ack} ${lineToSay}`;
-      const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay2, {
-        userText: lastUserText,
-        recentExchanges: state.recentExchanges,
-      });
+      const lineToSay2 = lineToSay;
+      const perTurnInstr = buildExactScriptLineInstruction(lineToSay2);
 
       // Push greeting exchange to memory
       if (lastUserText) pushExchange(state, "user", lastUserText, 0);
@@ -3864,19 +3890,24 @@ DELIVERY RULES:
   }
 
   return `
-You are ${aiName}, a real person making a phone call. Sound warm, natural, and unhurried — the way a friendly professional speaks, not a robot or a recording.
-
-YOUR ONLY JOB RIGHT NOW:
 Say this greeting EXACTLY:
 "Hey ${clientName}. This is ${aiName}. Can you hear me alright?"
 
-DELIVERY RULES:
-- Say ONLY those words. Nothing more, nothing less.
-- Speak in a warm, relaxed tone — like you're calling a neighbor, not reading a script.
-- Add a tiny natural pause after "Hey ${clientName}." — a real person would.
-- STOP completely after asking "Can you hear me alright?" and WAIT. Do not fill the silence.
-- Do NOT introduce yourself further. Do NOT mention the reason for the call yet.
-- English only.
+Use a natural phone tone.
+No extra words.
+`.trim();
+}
+
+function buildExactScriptLineInstruction(lineRaw: string): string {
+  const line = String(lineRaw || "").trim();
+  return `
+Say this exact script line and nothing else:
+"${line}"
+
+Do not add "thanks for answering."
+Do not paraphrase "request you put in."
+Use a natural phone tone.
+No extra words.
 `.trim();
 }
 
@@ -6327,12 +6358,40 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     const lastCreateAt = Number(state.lastResponseCreateAtMs || 0);
     if (now - lastCreateAt < 150) return;
 
+    if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
+      const lineToSay =
+        "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
+      const instr = buildExactScriptLineInstruction(lineToSay);
+
+      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
+
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      setWaitingForResponse(state, true, "response.create (how-long)");
+      setAiSpeaking(state, true, "response.create (how-long)");
+      setResponseInFlight(state, true, "response.create (how-long)");
+      state.outboundOpenAiDone = false;
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
+      state.phase = "in_call";
+      return;
+    }
+
     if (isGreetingReply) {
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
 
-      // ✅ Human-sounding deterministic acknowledgment after "Can you hear me?"
-      // We ONLY do this on the very first step after the greeting.
-      const ack = getGreetingAckPrefix(lastUserText);
       // Also treat a bare greeting response ("hello", "hi") the same as negative hearing —
       // they didn't acknowledge us, just said hello back. Re-ask the hearing check.
       // ✅ Only retry on actual hearing failure signals — NOT on "hi"/"hey" greetings
@@ -6380,11 +6439,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         return;
       }
 
-      // prefix the first script step with a safe ack
-      const lineToSay2 = `${ack} ${lineToSay}`;      const perTurnInstr = buildStepperTurnInstruction(
-        state.context!,
-        lineToSay2
-      );
+      const lineToSay2 = lineToSay;
+      const perTurnInstr = buildExactScriptLineInstruction(lineToSay2);
 
       // ✅ consume awaitingUserAnswer ONLY when we are about to speak
       state.awaitingUserAnswer = false;
