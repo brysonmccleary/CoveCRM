@@ -231,6 +231,9 @@ type CallState = {
   greetingAdvancePending?: boolean;
   greetingAdvanceNextIndex?: number;
   greetingAdvanceNextPhase?: CallPhase;
+  pendingLiveTransferAvailabilityConfirm?: boolean;
+  pendingLiveTransferAfterLine?: boolean;
+  liveTransferIntroSpoken?: boolean;
 
   // ✅ strict call phase to enforce “greet → WAIT → script”
   phase?: CallPhase;
@@ -309,6 +312,7 @@ type CallState = {
 
   // micro anti-spam: last response.create timestamp (prevents rapid double-fires)
   lastResponseCreateAtMs?: number;
+  lastHandledTurnKey?: string;
   // cost control: throttle silence frames we forward to OpenAI (keep VAD working)
   lastSilenceSentAtMs?: number;
 
@@ -696,6 +700,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
             twilioWs.readyState === WebSocket.OPEN
           ) {
             (live as any).greetingAudioDone = true;
+            finalizeGreetingAdvance(live, "pacer drained greeting empty");
             live.awaitingUserAnswer = true;
             live.awaitingAnswerForStepIndex = 0;
             console.log("[AI-VOICE][FIX] greeting listen re-armed", { callSid: live.callSid, reason: "pacer drained greeting empty" });
@@ -705,6 +710,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
             (live as any).listenWarmupUntilMs = Date.now() + 2000;
             armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call empty");
           }
+          maybePerformPendingLiveTransfer(twilioWs, live, "pacer drained empty");
           void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
           return;
         }
@@ -741,6 +747,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
             twilioWs.readyState === WebSocket.OPEN
           ) {
             (live as any).greetingAudioDone = true;
+            finalizeGreetingAdvance(live, "pacer drained greeting");
             live.awaitingUserAnswer = true;
             live.awaitingAnswerForStepIndex = 0;
             console.log("[AI-VOICE][FIX] greeting listen re-armed", { callSid: live.callSid, reason: "pacer drained greeting" });
@@ -748,6 +755,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
             armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting");
           }
         }
+        maybePerformPendingLiveTransfer(twilioWs, live, "pacer drained");
         void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
         return;
       }
@@ -843,6 +851,53 @@ function armSilenceWatchdog(
   }, ms);
 
   console.log("[AI-VOICE][SILENCE] armed |", { callSid: state.callSid, reason, ms });
+}
+
+function finalizeGreetingAdvance(state: CallState, reason: string) {
+  if (!state.greetingAdvancePending) return;
+
+  try {
+    const nextIndex =
+      typeof state.greetingAdvanceNextIndex === "number"
+        ? state.greetingAdvanceNextIndex
+        : 0;
+    const nextPhase = state.greetingAdvanceNextPhase || "in_call";
+
+    state.scriptStepIndex = nextIndex;
+    state.phase = nextPhase;
+    state.awaitingUserAnswer = true;
+    state.awaitingAnswerForStepIndex = Math.max(0, nextIndex - 1);
+
+    console.log("[AI-VOICE][GREETING] advanced after greeting audio completion", {
+      callSid: state.callSid,
+      reason,
+      scriptStepIndex: state.scriptStepIndex,
+      awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex,
+    });
+  } catch {
+    state.phase = "in_call";
+    state.awaitingUserAnswer = true;
+    state.awaitingAnswerForStepIndex = 0;
+  } finally {
+    state.greetingAdvancePending = false;
+    state.greetingAdvanceNextIndex = undefined;
+    state.greetingAdvanceNextPhase = undefined;
+  }
+}
+
+function maybePerformPendingLiveTransfer(ws: WebSocket, state: CallState, reason: string) {
+  if (!state.pendingLiveTransferAfterLine) return;
+  if (state.phase === "ended") return;
+  if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) return;
+
+  state.pendingLiveTransferAfterLine = false;
+  try {
+    console.log("[AI-VOICE][LIVE-TRANSFER] starting deferred transfer after intro", {
+      callSid: state.callSid,
+      reason,
+    });
+  } catch {}
+  void performLiveTransfer(ws, state);
 }
 
 
@@ -944,8 +999,10 @@ async function replayPendingCommittedTurn(
     if (now - lastCreateAt < 150) return;
 
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
+    const turnKey = buildCommittedTurnKey(state, lastUserText, restoredAudioMs, expectedAnswerIdx);
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
+      if (!markCommittedTurnHandled(state, turnKey, "replay how-long")) return;
       const lineToSay =
         "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
       const instr = buildExactScriptLineInstruction(lineToSay);
@@ -976,7 +1033,82 @@ async function replayPendingCommittedTurn(
       return;
     }
 
+    if (state.pendingLiveTransferAvailabilityConfirm) {
+      if (!markCommittedTurnHandled(state, turnKey, "replay live-transfer availability")) return;
+      const yesNow = isLiveTransferAvailabilityYes(lastUserText);
+      const noLater = isLiveTransferAvailabilityNo(lastUserText);
+      const lineToSay = yesNow
+        ? getLiveTransferTryingLine()
+        : noLater
+          ? "No problem. Would later today or tomorrow be better?"
+          : getLiveTransferAvailabilityLine();
+      const instr = buildExactScriptLineInstruction(lineToSay);
+
+      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
+
+      state.pendingLiveTransferAvailabilityConfirm = !yesNow && !noLater;
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      setWaitingForResponse(state, true, yesNow ? "response.create (live-transfer try)" : "response.create (live-transfer later)");
+      setAiSpeaking(state, true, yesNow ? "response.create (live-transfer try)" : "response.create (live-transfer later)");
+      setResponseInFlight(state, true, yesNow ? "response.create (live-transfer try)" : "response.create (live-transfer later)");
+      state.outboundOpenAiDone = false;
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+
+      state.phase = "in_call";
+      if (yesNow) {
+        state.liveTransferIntroSpoken = true;
+        state.pendingLiveTransferAfterLine = true;
+      } else if (noLater) {
+        state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
+      }
+      return;
+    }
+
+    if (!isGreetingReply && idx === 1 && expectedAnswerIdx === 0 && isFirstTurnContinueReply(lastUserText)) {
+      if (!markCommittedTurnHandled(state, turnKey, "replay first-turn continue")) return;
+      const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
+      const instr = buildExactScriptLineInstruction(lineToSay);
+
+      if (lastUserText) pushExchange(state, "user", lastUserText, 0);
+      pushExchange(state, "ai", lineToSay, 0);
+
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      setWaitingForResponse(state, true, "response.create (first-turn continue)");
+      setAiSpeaking(state, true, "response.create (first-turn continue)");
+      setResponseInFlight(state, true, "response.create (first-turn continue)");
+      state.outboundOpenAiDone = false;
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+
+      state.phase = "in_call";
+      state.scriptStepIndex = 1;
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = 0;
+      return;
+    }
+
     if (isGreetingReply) {
+      if (!markCommittedTurnHandled(state, turnKey, "replay greeting reply")) return;
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
 
       // ✅ Guard: do NOT treat empty/noisy commits as a greeting reply.
@@ -1109,7 +1241,7 @@ async function replayPendingCommittedTurn(
       );
 
       // ✅ Do NOT advance out of greeting yet.
-      // We only advance after we confirm OpenAI actually produced outbound audio (first audio.delta).
+      // We only advance after the Step 1 audio is done/drained so early caller audio cannot route as a Step 1 answer.
       let nextIdx = steps.length > 1 ? 1 : 0;
 
       // ✅ Keep stepper alignment: rebuttals end with a booking question.
@@ -1151,6 +1283,7 @@ async function replayPendingCommittedTurn(
     } catch {}
 
     if (objectionOrQuestionKind) {
+      if (!markCommittedTurnHandled(state, turnKey, "replay objection")) return;
       // ✅ HARD-LOCK: "How long does it take?" must ALWAYS get the same rebuttal (prevents inconsistent answers).
       // This does NOT change model, audio format, or session settings. Only the chosen line.
       let overrideRebuttalLine: string | null = null;
@@ -1252,6 +1385,7 @@ async function replayPendingCommittedTurn(
     }
 
     if (!treatAsAnswer || forceNotAnswer) {
+      if (!markCommittedTurnHandled(state, turnKey, "replay reprompt")) return;
 
       // ✅ Guard: if we only got a hesitation fragment, DO NOT reprompt (reprompts cause cut-offs).
       // Examples: "um", "uh", "uhh", "umm", "probably", "maybe"
@@ -1337,6 +1471,18 @@ async function replayPendingCommittedTurn(
     }
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
+
+    const shouldAskLiveTransferAvailability =
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      !!state.context?.liveTransferEnabled &&
+      !!state.context?.liveTransferPhone &&
+      isStepOneCoverageSubjectAnswer(lastUserText);
+    if (shouldAskLiveTransferAvailability) {
+      lineToSay = getLiveTransferAvailabilityLine();
+      state.pendingLiveTransferAvailabilityConfirm = true;
+    }
 
     // ✅ Day-choice answer handling:
     // If the current step is "today or tomorrow" and they answer with a day ("tomorrow")
@@ -1429,6 +1575,7 @@ async function replayPendingCommittedTurn(
 
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
     try { console.log("[AI-VOICE][STEPPER][REPLAY-SEND]", { callSid: state.callSid, stepIndex: idx, expectedAnswerIdx, stepType, lineToSay }); } catch {}
+    if (!markCommittedTurnHandled(state, turnKey, "replay script step")) return;
 
     if (lastUserText) {
       state.lastAcceptedUserText = lastUserText;
@@ -1464,7 +1611,9 @@ async function replayPendingCommittedTurn(
 
     // advance logic (mirror normal path)
     if (canAdvance) {
-      state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+      state.scriptStepIndex = shouldAskLiveTransferAvailability
+        ? idx
+        : Math.min(idx + 1, Math.max(0, steps.length - 1));
       state.timeOfferCountForStepIndex = undefined;
       state.timeOfferCount = 0;
     } else {
@@ -1592,6 +1741,47 @@ function hash8(s: string): string {
   } catch {
     return "00000000";
   }
+}
+
+function normalizeTurnTextForKey(textRaw: string): string {
+  return String(textRaw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildCommittedTurnKey(
+  state: CallState,
+  transcriptRaw: string,
+  audioMsRaw: number,
+  expectedAnswerIdx: number
+): string {
+  const transcript = normalizeTurnTextForKey(transcriptRaw);
+  const audioBucket = Math.floor(Math.max(0, Number(audioMsRaw || 0)) / 500);
+  return [
+    state.phase || "",
+    String(expectedAnswerIdx),
+    transcript || "(no-text)",
+    String(audioBucket),
+  ].join("|");
+}
+
+function markCommittedTurnHandled(state: CallState, turnKey: string, reason: string): boolean {
+  if (!turnKey) return true;
+  if (state.lastHandledTurnKey === turnKey) {
+    try {
+      console.log("[AI-VOICE][TURN-GATE] duplicate committed turn skipped", {
+        callSid: state.callSid,
+        reason,
+        turnHash: hash8(turnKey),
+      });
+    } catch {}
+    return false;
+  }
+  state.lastHandledTurnKey = turnKey;
+  return true;
 }
 
 function computePromptMarkers(systemPrompt: string, uniqueLine?: string) {
@@ -2287,6 +2477,78 @@ function isAffirmativeConfirmation(textRaw: string): boolean {
   ) return true;
 
   return false;
+}
+
+function isFirstTurnContinueReply(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    [
+      "yeah",
+      "yes",
+      "yep",
+      "yup",
+      "sure",
+      "go ahead",
+      "okay",
+      "ok",
+      "hi",
+      "hello",
+      "what s up",
+      "whats up",
+      "yeah what s up",
+      "yeah whats up",
+      "yes what s up",
+      "yes whats up",
+    ].includes(t) ||
+    /^(yeah|yes|yep|yup|sure|ok|okay|hi|hello)\s+(what s up|whats up|go ahead)$/.test(t)
+  );
+}
+
+function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  if (["me", "myself", "my self", "just me", "for me", "spouse", "both", "both of us"].includes(t)) return true;
+  return (
+    /\b(myself|my self|just me|for me|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i)\b/.test(t)
+  );
+}
+
+function isLiveTransferAvailabilityYes(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    isAffirmativeConfirmation(t) ||
+    t === "now" ||
+    t.includes("right now") ||
+    t.includes("that works") ||
+    t.includes("works now") ||
+    t.includes("i can do now")
+  );
+}
+
+function isLiveTransferAvailabilityNo(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    t === "no" ||
+    t === "nope" ||
+    t.includes("not now") ||
+    t.includes("later") ||
+    t.includes("busy") ||
+    t.includes("can't right now") ||
+    t.includes("cannot right now") ||
+    t.includes("don t have time") ||
+    t.includes("don't have time")
+  );
+}
+
+function getLiveTransferAvailabilityLine(): string {
+  return "Got it. I have the agent available right now. Does right now work for you?";
+}
+
+function getLiveTransferTryingLine(): string {
+  return "Okay, let me try and get the agent on the line. Give me one second.";
 }
 
 
@@ -4637,11 +4899,11 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     leadName,
   });
 
-  // 1. Say transfer line
-  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+  // 1. Say transfer line unless the availability interstitial already spoke it.
+  const transferLine = getLiveTransferTryingLine();
 
   try {
-    if (state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN) {
+    if (!state.liveTransferIntroSpoken && state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN) {
       setWaitingForResponse(state, true, "live-transfer speak");
       setAiSpeaking(state, true, "live-transfer speak");
       setResponseInFlight(state, true, "live-transfer speak");
@@ -4655,7 +4917,9 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
   }
 
   // 2. Wait for AI to finish speaking (~4 seconds for one sentence)
-  await new Promise((r) => setTimeout(r, 4500));
+  if (!state.liveTransferIntroSpoken) {
+    await new Promise((r) => setTimeout(r, 4500));
+  }
 
   const phaseAfterSpeak = (state as { phase?: CallPhase }).phase;
   if (phaseAfterSpeak === "ended") return;
@@ -4715,6 +4979,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     transferUrl.searchParams.set("leadName", leadName);
     transferUrl.searchParams.set("agentName", agentFirst);
     transferUrl.searchParams.set("scope", scope);
+    transferUrl.searchParams.set("agentIntro", `Hey ${agentFirst}, this is ${ctx.voiceProfile.aiName || "Alex"}. I have ${leadName} here ready to go over ${scope}. I'll connect you now.`);
     transferUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
     transferUrl.searchParams.set("sessionId", ctx.sessionId || "");
     transferUrl.searchParams.set("leadId", ctx.leadId || "");
@@ -6357,8 +6622,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     const now = Date.now();
     const lastCreateAt = Number(state.lastResponseCreateAtMs || 0);
     if (now - lastCreateAt < 150) return;
+    const turnKey = buildCommittedTurnKey(state, lastUserText, audioMsCommitGate, expectedAnswerIdx);
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
+      if (!markCommittedTurnHandled(state, turnKey, "how-long")) return;
       const lineToSay =
         "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
       const instr = buildExactScriptLineInstruction(lineToSay);
@@ -6389,7 +6656,82 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       return;
     }
 
+    if (state.pendingLiveTransferAvailabilityConfirm) {
+      if (!markCommittedTurnHandled(state, turnKey, "live-transfer availability")) return;
+      const yesNow = isLiveTransferAvailabilityYes(lastUserText);
+      const noLater = isLiveTransferAvailabilityNo(lastUserText);
+      const lineToSay = yesNow
+        ? getLiveTransferTryingLine()
+        : noLater
+          ? "No problem. Would later today or tomorrow be better?"
+          : getLiveTransferAvailabilityLine();
+      const instr = buildExactScriptLineInstruction(lineToSay);
+
+      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
+
+      state.pendingLiveTransferAvailabilityConfirm = !yesNow && !noLater;
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      setWaitingForResponse(state, true, yesNow ? "response.create (live-transfer try)" : "response.create (live-transfer later)");
+      setAiSpeaking(state, true, yesNow ? "response.create (live-transfer try)" : "response.create (live-transfer later)");
+      setResponseInFlight(state, true, yesNow ? "response.create (live-transfer try)" : "response.create (live-transfer later)");
+      state.outboundOpenAiDone = false;
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+
+      state.phase = "in_call";
+      if (yesNow) {
+        state.liveTransferIntroSpoken = true;
+        state.pendingLiveTransferAfterLine = true;
+      } else if (noLater) {
+        state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
+      }
+      return;
+    }
+
+    if (!isGreetingReply && idx === 1 && expectedAnswerIdx === 0 && isFirstTurnContinueReply(lastUserText)) {
+      if (!markCommittedTurnHandled(state, turnKey, "first-turn continue")) return;
+      const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
+      const instr = buildExactScriptLineInstruction(lineToSay);
+
+      if (lastUserText) pushExchange(state, "user", lastUserText, 0);
+      pushExchange(state, "ai", lineToSay, 0);
+
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      setWaitingForResponse(state, true, "response.create (first-turn continue)");
+      setAiSpeaking(state, true, "response.create (first-turn continue)");
+      setResponseInFlight(state, true, "response.create (first-turn continue)");
+      state.outboundOpenAiDone = false;
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+
+      state.phase = "in_call";
+      state.scriptStepIndex = 1;
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = 0;
+      return;
+    }
+
     if (isGreetingReply) {
+      if (!markCommittedTurnHandled(state, turnKey, "greeting reply")) return;
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
 
       // Also treat a bare greeting response ("hello", "hi") the same as negative hearing —
@@ -6494,13 +6836,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       );
 
       // ✅ Do NOT advance out of greeting yet.
-      // We only advance after we confirm OpenAI actually produced outbound audio (first audio.delta).
+      // We only advance after the Step 1 audio is done/drained so early caller audio cannot route as a Step 1 answer.
       state.greetingAdvancePending = true;
       state.greetingAdvanceNextIndex = steps.length > 1 ? 1 : 0;
       state.greetingAdvanceNextPhase = "in_call";
 
-      // ✅ Pre-arm awaitingUserAnswer so inbound audio is forwarded to OpenAI during Step 1.
-      // greetingAdvancePending will finalize phase/stepIndex on first audio delta.
+      // ✅ Pre-arm awaitingUserAnswer so barge-in audio is still forwarded; commit routing stays blocked by greetingAudioDone.
       state.awaitingUserAnswer = true;
       state.awaitingAnswerForStepIndex = 0;
 
@@ -6523,6 +6864,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     } catch {}
 
     if (objectionOrQuestionKind) {
+      if (!markCommittedTurnHandled(state, turnKey, "objection")) return;
       // ✅ HARD-LOCK: "How long does it take?" must ALWAYS get the same rebuttal (prevents inconsistent answers).
       // This does NOT change model, audio format, or session settings. Only the chosen line.
       let overrideRebuttalLine: string | null = null;
@@ -6651,6 +6993,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.phase !== "ended";
 
     if (shouldTriggerLiveTransfer) {
+      if (!markCommittedTurnHandled(state, turnKey, "explicit live-transfer")) return;
       if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) {
         console.log("[AI-VOICE][LIVE-TRANSFER] Explicit transfer deferred; response already active", {
           callSid: state.callSid,
@@ -6691,6 +7034,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     }
 
     if (!treatAsAnswer || forceNotAnswer) {
+      if (!markCommittedTurnHandled(state, turnKey, "reprompt")) return;
       // ✅ HOTFIX: Never go silent after a committed user turn.
       // If we didn't accept it as a real answer, immediately reprompt — or use free-response.
       const repromptN = Number(state.repromptCountForCurrentStep || 0);
@@ -6815,6 +7159,18 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
+
+    const shouldAskLiveTransferAvailability =
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      !!state.context?.liveTransferEnabled &&
+      !!state.context?.liveTransferPhone &&
+      isStepOneCoverageSubjectAnswer(lastUserText);
+    if (shouldAskLiveTransferAvailability) {
+      lineToSay = getLiveTransferAvailabilityLine();
+      state.pendingLiveTransferAvailabilityConfirm = true;
+    }
 
     // ✅ Day-choice answer handling:
     // If the current step is "today or tomorrow" and they answer with a day ("tomorrow")
@@ -7007,6 +7363,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       recentExchanges: state.recentExchanges,
     });
     try { console.log("[AI-VOICE][STEPPER][SEND]", { callSid: state.callSid, stepIndex: idx, expectedAnswerIdx, stepType, lineToSay }); } catch {}
+    if (!markCommittedTurnHandled(state, turnKey, "script step")) return;
     // ✅ Patch 3: remember what we accepted from the user BEFORE clearing transcript
     if (lastUserText) {
       state.lastAcceptedUserText = lastUserText;
@@ -7072,7 +7429,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
     // ✅ Patch 3: only advance when we have a real transcript answer for this step
     if (canAdvance) {
-      state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+      state.scriptStepIndex = shouldAskLiveTransferAvailability
+        ? idx
+        : Math.min(idx + 1, Math.max(0, steps.length - 1));
       // reset time offer ladder once we actually received a real time
       state.timeOfferCountForStepIndex = undefined;
       state.timeOfferCount = 0;
@@ -7258,22 +7617,6 @@ void handleFinalOutcomeIntent(state, {
         }, 3000);
       }
 
-      // ✅ If we were waiting to advance out of greeting, do it ONLY after we confirm audio started.
-      if (state.greetingAdvancePending) {
-        try {
-          const ni = typeof state.greetingAdvanceNextIndex === "number" ? state.greetingAdvanceNextIndex : 0;
-          const np = (state.greetingAdvanceNextPhase as any) || "in_call";
-          state.scriptStepIndex = ni;
-          state.phase = np;
-        } catch {
-          state.phase = "in_call";
-        }
-        state.greetingAdvancePending = false;
-        state.greetingAdvanceNextIndex = undefined;
-        state.greetingAdvanceNextPhase = undefined;
-        state.awaitingUserAnswer = true;
-        state.awaitingAnswerForStepIndex = (state.scriptStepIndex ?? 1) - 1;
-      }
     }
 
     setAiSpeaking(state, true, `OpenAI ${t} (audio delta)`);
@@ -7332,6 +7675,7 @@ void handleFinalOutcomeIntent(state, {
       const inGreetingPhase = greetingFired && !userTurnFired;
       if (inGreetingPhase && !(state as any).greetingAudioDone) {
         (state as any).greetingAudioDone = true;
+        finalizeGreetingAdvance(state, `OpenAI ${t}`);
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = 0;
         console.log("[AI-VOICE] greetingAudioDone = true | awaitingUserAnswer armed | commits now unblocked", {
@@ -7368,21 +7712,13 @@ void handleFinalOutcomeIntent(state, {
       // ✅ Force greetingAudioDone on <1 frame path too
       if (state.phase === "awaiting_greeting_reply" && !(state as any).greetingAudioDone) {
         (state as any).greetingAudioDone = true;
+        finalizeGreetingAdvance(state, `OpenAI ${t} (<1frame path)`);
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = 0;
         console.log("[AI-VOICE] greetingAudioDone=true on <1frame path | awaitingUserAnswer armed", { callSid: state.callSid });
       }
 
-      // ✅ If we never produced audible greeting audio, do NOT advance steps/phases.
-      if (state.greetingAdvancePending) {
-        state.greetingAdvancePending = false;
-        state.greetingAdvanceNextIndex = undefined;
-        state.greetingAdvanceNextPhase = undefined;
-        // Stay aligned to greeting (Step 0) so we don't skip straight to Step 1.
-
-        state.scriptStepIndex = 0;
-      }
-
+      maybePerformPendingLiveTransfer(twilioWs, state, `OpenAI ${t} (buffer < 1 frame)`);
       void replayPendingCommittedTurn(twilioWs, state, `OpenAI ${t} (buffer < 1 frame)`);
     }
   }
