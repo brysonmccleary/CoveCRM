@@ -13,6 +13,12 @@ export type A2PRegistrationStatus =
   | "rejected";
 
 export type A2PApplicationStatus = "pending" | "approved" | "declined";
+export type A2PFailureStage =
+  | "business_profile"
+  | "trust_product"
+  | "brand"
+  | "campaign"
+  | "unknown";
 
 export interface IA2PProfile extends Document {
   userId: string;
@@ -74,6 +80,21 @@ export interface IA2PProfile extends Document {
   trustProductStatus?: string;
   campaignStatus?: string;
   brandFailureReason?: string;
+  campaignFailureReason?: string;
+
+  failure?: {
+    stage?: A2PFailureStage;
+    rawCode?: string;
+    rawMessage?: string;
+    simpleTitle?: string;
+    simpleExplanation?: string;
+    requiredFields?: string[];
+    userActionNeeded?: boolean;
+    canAutoResubmit?: boolean;
+    signature?: string;
+    lastDetectedAt?: Date;
+    lastEmailSentAt?: Date;
+  };
 
   brandErrors?: any[];
   brandErrorsText?: string;
@@ -184,6 +205,24 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   trustProductStatus: { type: String },
   campaignStatus: { type: String },
   brandFailureReason: { type: String },
+  campaignFailureReason: { type: String },
+
+  failure: {
+    stage: {
+      type: String,
+      enum: ["business_profile", "trust_product", "brand", "campaign", "unknown"],
+    },
+    rawCode: { type: String },
+    rawMessage: { type: String },
+    simpleTitle: { type: String },
+    simpleExplanation: { type: String },
+    requiredFields: { type: [String], default: undefined },
+    userActionNeeded: { type: Boolean },
+    canAutoResubmit: { type: Boolean },
+    signature: { type: String },
+    lastDetectedAt: { type: Date },
+    lastEmailSentAt: { type: Date },
+  },
 
   brandErrors: { type: [Schema.Types.Mixed], default: undefined },
   brandErrorsText: { type: String },

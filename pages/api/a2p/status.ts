@@ -64,6 +64,29 @@ function flattenErrorsText(errorsArr: any[]): string {
     .join(" | ");
 }
 
+function publicFailure(a2p: any, includeRaw = false) {
+  const failure = a2p?.failure;
+  if (!failure) return null;
+  return {
+    stage: failure.stage || "unknown",
+    simpleTitle: failure.simpleTitle || "SMS registration needs review",
+    simpleExplanation:
+      failure.simpleExplanation ||
+      "The SMS registration could not be approved yet. CoveCRM will review the registration details and guide the next step.",
+    requiredFields: Array.isArray(failure.requiredFields) ? failure.requiredFields : [],
+    userActionNeeded: Boolean(failure.userActionNeeded),
+    canAutoResubmit: Boolean(failure.canAutoResubmit),
+    lastDetectedAt: failure.lastDetectedAt || null,
+    ...(includeRaw
+      ? {
+          rawCode: failure.rawCode || "",
+          rawMessage: failure.rawMessage || "",
+          signature: failure.signature || "",
+        }
+      : {}),
+  };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
@@ -78,6 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await mongooseConnect();
 
     const user = await User.findOne({ email: session.user.email });
+    const includeRawFailure = req.query.debug === "true" || req.query.debug === "1";
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -96,6 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         campaign: { sid: null, status: "unknown" },
         messagingServiceSid: null,
         senders: [],
+        failure: null,
         hints: {
           hasProfile: false,
           hasBrand: false,
@@ -166,6 +191,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
         messagingServiceSid: (a2p as any).messagingServiceSid || null,
         senders: [],
+        failure: publicFailure(a2p, includeRawFailure),
         hints: {
           hasProfile: Boolean((a2p as any).profileSid),
           hasBrand: Boolean((a2p as any).brandSid),
@@ -458,6 +484,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       applicationStatus,
       a2pStatusLabel,
       declinedReason: (a2p as any).declinedReason || null,
+      failure: publicFailure(a2p, includeRawFailure),
       stages: {
         businessProfile: {
           sid: (a2p as any).profileSid || null,

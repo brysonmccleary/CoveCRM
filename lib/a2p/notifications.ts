@@ -155,6 +155,10 @@ export async function sendA2PDeclinedEmail(opts: {
   name?: string;
   reason?: string;
   helpUrl?: string;
+  stage?: string;
+  simpleTitle?: string;
+  simpleExplanation?: string;
+  requiredFields?: string[];
 }) {
   // ✅ Global kill-switch: if disabled, log and bail.
   if (!A2P_DECLINE_EMAILS_ENABLED) {
@@ -165,8 +169,64 @@ export async function sendA2PDeclinedEmail(opts: {
     return;
   }
 
-  const subject = "⚠️ A2P Campaign Requires Changes";
+  const hasSimpleFailure = Boolean(opts.simpleTitle || opts.simpleExplanation);
+  const subject = hasSimpleFailure
+    ? "Action needed: Your SMS registration needs one update"
+    : "⚠️ A2P Campaign Requires Changes";
   const greeting = opts.name ? `Hi ${opts.name},` : "Hi there,";
+
+  if (hasSimpleFailure) {
+    const fields = (opts.requiredFields || []).map((field) => String(field || "").trim()).filter(Boolean);
+    const fieldLabels: Record<string, string> = {
+      businessType: "Business type",
+      businessName: "Legal business name",
+      ein: "EIN",
+      address: "Business street address",
+      addressCity: "Business city",
+      addressState: "Business state",
+      addressPostalCode: "Business ZIP/postal code",
+      website: "Website",
+      landingPrivacyUrl: "Privacy policy page",
+      landingTosUrl: "Terms page",
+      optInDetails: "SMS opt-in explanation",
+      sampleMessages: "Sample messages",
+    };
+    const fieldLines = fields.map((field) => `- ${fieldLabels[field] || field}`);
+    const htmlFieldLines = fields.map((field) => `<li>${fieldLabels[field] || field}</li>`).join("");
+    const settingsUrl = opts.helpUrl && !/\/help\/a2p-checklist\/?$/i.test(opts.helpUrl)
+      ? opts.helpUrl
+      : "https://www.covecrm.com/settings/messaging";
+
+    const text = `${greeting}
+
+Your SMS registration needs one update before it can be approved.
+
+${opts.simpleTitle || "SMS registration needs review"}
+
+${opts.simpleExplanation || "CoveCRM will review the registration details and guide the next step."}
+
+${fieldLines.length ? `Please update:\n${fieldLines.join("\n")}\n\n` : ""}Go back to Settings → A2P Registration in CoveCRM to update your details:
+${settingsUrl}
+
+If you're not sure what to change, reply to this email and our team will help.
+
+— CoveCRM`;
+
+    const html = `
+      <p>${greeting}</p>
+      <p>Your SMS registration needs one update before it can be approved.</p>
+      <p><strong>${opts.simpleTitle || "SMS registration needs review"}</strong></p>
+      <p>${opts.simpleExplanation || "CoveCRM will review the registration details and guide the next step."}</p>
+      ${htmlFieldLines ? `<p>Please update:</p><ul>${htmlFieldLines}</ul>` : ""}
+      <p>Go back to <strong>Settings → A2P Registration</strong> in CoveCRM to update your details.</p>
+      <p><a href="${settingsUrl}">Open A2P settings</a></p>
+      <p>If you're not sure what to change, reply to this email and our team will help.</p>
+      <p>— CoveCRM</p>
+    `;
+
+    await safeSendEmail({ to: opts.to, subject, text, html });
+    return;
+  }
 
   const reasonLine = opts.reason
     ? `Reason from carrier: ${opts.reason} (this is the exact text they sent).\n\n`

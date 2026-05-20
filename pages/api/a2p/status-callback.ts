@@ -8,6 +8,8 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notifications";
 import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
 import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
+import { buildA2PFailureObject } from "@/lib/a2p/failureTranslator";
+import { maybeHandleA2PFailure } from "@/lib/a2p/a2pFailureAutomation";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -33,6 +35,38 @@ const DECLINED_MATCH = /(reject|denied|declined|failed|error)/i;
 
 const lc = (v: any) =>
   typeof v === "string" ? v.toLowerCase() : String(v ?? "").toLowerCase();
+
+function inferFailureStage(body: any, anySid?: string): string {
+  const joined = [
+    body?.Stage,
+    body?.stage,
+    body?.ObjectType,
+    body?.objectType,
+    body?.ResourceType,
+    body?.resourceType,
+    body?.EventType,
+    body?.Event,
+    body?.Type,
+    anySid,
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+
+  if (joined.includes("trust")) return "trust_product";
+  if (joined.includes("campaign") || String(anySid || "").startsWith("QE")) return "campaign";
+  if (joined.includes("brand") || String(anySid || "").startsWith("BN")) return "brand";
+  if (joined.includes("profile") || String(anySid || "").startsWith("BU")) return "business_profile";
+  return "unknown";
+}
+
+function shouldSendFailureEmail(previousFailure: any, nextFailure: any): boolean {
+  if (!nextFailure?.signature) return false;
+  const previousSignature = String(previousFailure?.signature || "");
+  if (previousSignature !== String(nextFailure.signature)) return true;
+  const lastEmailSentAt = previousFailure?.lastEmailSentAt ? new Date(previousFailure.lastEmailSentAt) : null;
+  if (!lastEmailSentAt || Number.isNaN(lastEmailSentAt.getTime())) return true;
+  return Date.now() - lastEmailSentAt.getTime() > 24 * 60 * 60 * 1000;
+}
 
 function buildCampaignDescription(opts: {
   businessName: string;
@@ -630,7 +664,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // DECLINED / FAILED
     if (DECLINED_MATCH.test(statusRaw)) {
-      const declinedReason = String(body.Reason || body.reason || body.Error || "Rejected by reviewers");
+      const rawCode = body.Code || body.code || body.ErrorCode || body.errorCode || body.error_code || "";
+      const declinedReason = String(
+        body.Reason ||
+          body.reason ||
+          body.Error ||
+          body.error ||
+          body.Message ||
+          body.message ||
+          "Rejected by reviewers",
+      );
+      const failure = buildA2PFailureObject({
+        stage: inferFailureStage(body, anySid),
+        rawCode,
+        rawMessage: declinedReason,
+        previousSignature: (a2p as any)?.failure?.signature,
+      });
+      const shouldNotify = shouldSendFailureEmail((a2p as any)?.failure, failure);
+      const failureToSave = {
+        ...(a2p as any)?.failure,
+        ...failure,
+        lastEmailSentAt: (a2p as any)?.failure?.lastEmailSentAt,
+      };
+
+      console.log("[A2P][FAILURE_TRANSLATED]", {
+        userEmail: user.email,
+        stage: failure.stage,
+        signature: failure.signature,
+        simpleTitle: failure.simpleTitle,
+      });
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
@@ -643,6 +705,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             lastSyncedAt: new Date(),
             brandStatus: "FAILED",
             brandFailureReason: declinedReason,
+            ...(failure.stage === "campaign" ? { campaignFailureReason: declinedReason } : {}),
+            failure: failureToSave,
           },
           $push: {
             approvalHistory: {
@@ -670,25 +734,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn("A2P declined mirror to User.a2p failed:", e?.message || e);
       }
 
-      let shouldNotify = false;
-      try {
-        const newlyFlagged = await A2PProfile.findOneAndUpdate(
-          { _id: a2p._id, declineNotifiedAt: { $exists: false } },
-          { $set: { declineNotifiedAt: new Date() } },
-          { new: true },
-        ).lean();
-        shouldNotify = !!newlyFlagged;
-      } catch (e: any) {
-        console.warn("A2P declined: failed to set declineNotifiedAt:", e?.message || e);
-      }
-
       if (shouldNotify) {
         try {
           await sendA2PDeclinedEmail({
             to: user.email,
             name: user.name || undefined,
             reason: declinedReason,
-            helpUrl: `${BASE_URL}/help/a2p-checklist`,
+            helpUrl: `${BASE_URL}/settings/messaging`,
+            stage: failure.stage,
+            simpleTitle: failure.simpleTitle,
+            simpleExplanation: failure.simpleExplanation,
+            requiredFields: failure.requiredFields,
+          });
+          await A2PProfile.updateOne(
+            { _id: a2p._id },
+            {
+              $set: {
+                "failure.lastEmailSentAt": new Date(),
+                declineNotifiedAt: new Date(),
+              },
+            },
+          );
+          console.log("[A2P][FAILURE_EMAIL_SENT]", {
+            userEmail: user.email,
+            stage: failure.stage,
+            signature: failure.signature,
           });
         } catch (e: any) {
           console.warn("A2P declined email failed:", e?.message || e);
@@ -698,6 +768,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
         }
       }
+
+      const latestA2P = await A2PProfile.findById(a2p._id).lean<any>();
+      void maybeHandleA2PFailure({
+        userId: String(user._id || ""),
+        userEmail: String(user.email || "").toLowerCase(),
+        a2pRecord: latestA2P || { ...(a2p as any), failure },
+        rejectionReason: declinedReason,
+        source: "status-callback",
+      }).catch((err: any) => {
+        console.warn("[A2P] maybeHandleA2PFailure failed:", err?.message || err);
+      });
 
       return res.status(200).json({ ok: true, messagingReady: false, ...(debugEnabled ? { debug } : {}) });
     }

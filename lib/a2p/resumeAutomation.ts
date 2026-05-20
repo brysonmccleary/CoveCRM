@@ -5,6 +5,7 @@ import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { Buffer } from "buffer";
 import twilio from "twilio";
+import { buildA2PFailureObject } from "@/lib/a2p/failureTranslator";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -1585,10 +1586,39 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         messagingServiceSid: messagingServiceSid || undefined,
       });
     } else if (isFailed) {
+      const failureStage = FAILED_STATUSES.has(campaignStatus)
+        ? "campaign"
+        : FAILED_STATUSES.has(brandStatus)
+          ? "brand"
+          : "unknown";
+      const failureRawMessage =
+        failureStage === "campaign"
+          ? (profile as any).campaignFailureReason || campaignStatus || "Campaign rejected by reviewers"
+          : brandFailureReason || profile.declinedReason || "Rejected by reviewers";
+      const failure = buildA2PFailureObject({
+        stage: failureStage,
+        rawCode: failureStage === "campaign" ? campaignStatus : brandStatus,
+        rawMessage: failureRawMessage,
+        previousSignature: (profile as any).failure?.signature,
+      });
+      log("A2P][FAILURE_TRANSLATED", {
+        userEmail: normalizedEmail,
+        stage: failure.stage,
+        signature: failure.signature,
+        simpleTitle: failure.simpleTitle,
+      });
       update.messagingReady = false;
       update.applicationStatus = "declined";
       update.registrationStatus = "rejected";
-      update.declinedReason = brandFailureReason || profile.declinedReason || "Rejected by reviewers";
+      update.declinedReason = failureRawMessage;
+      update.failure = {
+        ...((profile as any).failure || {}),
+        ...failure,
+        lastEmailSentAt: (profile as any).failure?.lastEmailSentAt,
+      };
+      if (failure.stage === "campaign") {
+        update.campaignFailureReason = failureRawMessage;
+      }
     } else {
       update.messagingReady = false;
       update.applicationStatus = "pending";
