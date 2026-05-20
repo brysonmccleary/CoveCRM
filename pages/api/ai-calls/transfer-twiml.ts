@@ -6,6 +6,15 @@ import type { NextApiRequest, NextApiResponse } from "next";
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
 
+function xmlEscape(value: any): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const { agentPhone, leadName, agentName, scope, key, sessionId, leadId, callSid, exactTimeText, startTimeUtc, leadTimeZone, agentTimeZone, userEmail } = req.query as Record<string, string>;
 
@@ -36,11 +45,18 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   fallbackUrl.searchParams.set("agentName", agentName || "");
 
   // TwiML: Say hold message, then dial the agent. On no-answer (timeout 25s / 4 rings), redirect to fallback.
+  const safeAgentFirst = xmlEscape(agentFirst);
+  const safeCallerId = process.env.TWILIO_PHONE_NUMBER
+    ? ` callerId="${xmlEscape(process.env.TWILIO_PHONE_NUMBER)}"`
+    : "";
+  const safeFallbackUrl = xmlEscape(fallbackUrl.toString());
+  const safeE164 = xmlEscape(e164);
+
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna">Please hold for just a moment while I connect you with ${agentFirst}.</Say>
-  <Dial timeout="25" answerOnBridge="true" callerId="${process.env.TWILIO_PHONE_NUMBER || ""}" action="${fallbackUrl.toString()}" method="POST">
-    <Number statusCallbackEvent="initiated ringing answered completed">${e164}</Number>
+  <Say voice="Polly.Joanna">Please hold for just a moment while I connect you with ${safeAgentFirst}.</Say>
+  <Dial timeout="25" answerOnBridge="true"${safeCallerId} action="${safeFallbackUrl}" method="POST">
+    <Number statusCallbackEvent="initiated ringing answered completed">${safeE164}</Number>
   </Dial>
 </Response>`;
 

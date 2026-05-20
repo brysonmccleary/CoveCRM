@@ -232,6 +232,7 @@ type CallState = {
   greetingAdvanceNextIndex?: number;
   greetingAdvanceNextPhase?: CallPhase;
   pendingLiveTransferAvailabilityConfirm?: boolean;
+  pendingLiveTransferAvailabilityAttempts?: number;
   pendingLiveTransferAfterLine?: boolean;
   liveTransferIntroSpoken?: boolean;
 
@@ -1102,17 +1103,22 @@ async function replayPendingCommittedTurn(
       if (!markCommittedTurnHandled(state, turnKey, "replay live-transfer availability")) return;
       const yesNow = isLiveTransferAvailabilityYes(lastUserText);
       const noLater = isLiveTransferAvailabilityNo(lastUserText);
+      const nextAvailabilityAttempts = !yesNow && !noLater
+        ? Number(state.pendingLiveTransferAvailabilityAttempts || 0) + 1
+        : 0;
+      const escapeAvailabilityLoop = !yesNow && !noLater && nextAvailabilityAttempts >= 3;
       const lineToSay = yesNow
-        ? getLiveTransferTryingLine()
-        : noLater
+        ? getLiveTransferTryingLine(state.context!)
+        : noLater || escapeAvailabilityLoop
           ? "No problem. Would later today or tomorrow be better?"
-          : getLiveTransferAvailabilityLine();
+          : getLiveTransferAvailabilityLine(state.context!);
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
 
-      state.pendingLiveTransferAvailabilityConfirm = !yesNow && !noLater;
+      state.pendingLiveTransferAvailabilityConfirm = !yesNow && !noLater && !escapeAvailabilityLoop;
+      state.pendingLiveTransferAvailabilityAttempts = state.pendingLiveTransferAvailabilityConfirm ? nextAvailabilityAttempts : 0;
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
       state.userAudioMsBuffered = 0;
@@ -1133,7 +1139,7 @@ async function replayPendingCommittedTurn(
       if (yesNow) {
         state.liveTransferIntroSpoken = true;
         state.pendingLiveTransferAfterLine = true;
-      } else if (noLater) {
+      } else if (noLater || escapeAvailabilityLoop) {
         state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
@@ -1545,8 +1551,9 @@ async function replayPendingCommittedTurn(
       !!state.context?.liveTransferPhone &&
       isStepOneCoverageSubjectAnswer(lastUserText);
     if (shouldAskLiveTransferAvailability) {
-      lineToSay = getLiveTransferAvailabilityLine();
+      lineToSay = getLiveTransferAvailabilityLine(state.context!);
       state.pendingLiveTransferAvailabilityConfirm = true;
+      state.pendingLiveTransferAvailabilityAttempts = 0;
     }
 
     // ✅ Day-choice answer handling:
@@ -2181,6 +2188,26 @@ function hasExplicitLiveTransferIntent(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
   const normalized = t.replace(/[?.!,]+$/g, "").replace(/\s+/g, " ").trim();
+  const wantsAgentNow =
+    /\b(speak|talk)\s+(to|with)\s+(him|her|them|the agent|an agent|someone|a person|a real person|your agent|my agent)\b/.test(normalized) ||
+    /\b(connect|transfer|put)\s+(me|him|her|them)\b/.test(normalized);
+  const nowIntent =
+    normalized === "now" ||
+    normalized === "right now" ||
+    normalized.includes("right now") ||
+    normalized.includes("do it now") ||
+    normalized.includes("let's do it now") ||
+    normalized.includes("let s do it now") ||
+    normalized.includes("lets do it now") ||
+    normalized.includes("i can do it now") ||
+    normalized.includes("i can do now") ||
+    normalized.includes("that works now") ||
+    normalized.includes("now works") ||
+    normalized.includes("available now") ||
+    normalized.includes("call now") ||
+    normalized.includes("talk now") ||
+    normalized.includes("speak now") ||
+    normalized.includes("connect now");
 
   return (
     normalized.includes("connect me") ||
@@ -2188,9 +2215,8 @@ function hasExplicitLiveTransferIntent(textRaw: string): boolean {
     normalized.includes("can i talk to him") ||
     normalized.includes("can i speak to the agent") ||
     normalized.includes("put him on") ||
-    normalized.includes("speak to bryson") ||
-    normalized.includes("right now") ||
-    normalized === "now"
+    wantsAgentNow ||
+    nowIntent
   );
 }
 
@@ -2588,7 +2614,13 @@ function isLiveTransferAvailabilityYes(textRaw: string): boolean {
     t.includes("right now") ||
     t.includes("that works") ||
     t.includes("works now") ||
-    t.includes("i can do now")
+    t.includes("now works") ||
+    t.includes("i can do now") ||
+    t.includes("i can do it now") ||
+    t.includes("do it now") ||
+    t.includes("let s do it now") ||
+    t.includes("lets do it now") ||
+    t.includes("available now")
   );
 }
 
@@ -2608,12 +2640,17 @@ function isLiveTransferAvailabilityNo(textRaw: string): boolean {
   );
 }
 
-function getLiveTransferAvailabilityLine(): string {
-  return "Got it. I have the agent available right now. Does right now work for you?";
+function getAgentFirstName(ctx?: AICallContext): string {
+  const raw = String(ctx?.agentName || "").trim();
+  return raw ? raw.split(/\s+/)[0] : "the agent";
 }
 
-function getLiveTransferTryingLine(): string {
-  return "Okay, let me try and get the agent on the line. Give me one second.";
+function getLiveTransferAvailabilityLine(ctx?: AICallContext): string {
+  return `Got it. I have ${getAgentFirstName(ctx)} available right now. Does right now work for you?`;
+}
+
+function getLiveTransferTryingLine(ctx?: AICallContext): string {
+  return `Okay, let me try and get ${getAgentFirstName(ctx)} on the line. Give me one second.`;
 }
 
 
@@ -4794,6 +4831,7 @@ wss.on("connection", (ws: WebSocket) => {
     lastSilenceSentAtMs: 0,
     inputCommitInFlight: false,
     lastInputCommitAtMs: 0,
+    pendingLiveTransferAvailabilityAttempts: 0,
   };
 
   calls.set(ws, state);
@@ -4967,7 +5005,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
   });
 
   // 1. Say transfer line unless the availability interstitial already spoke it.
-  const transferLine = getLiveTransferTryingLine();
+  const transferLine = getLiveTransferTryingLine(ctx);
 
   try {
     if (!state.liveTransferIntroSpoken && state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN) {
@@ -6021,7 +6059,7 @@ async function handleOpenAiEvent(
           });
           sendManualInputCommit(state, "post-stop");
         } catch {}
-      }, 220);
+      }, 450);
     } catch {}
 
 state.lastUserSpeechStoppedAtMs = Date.now();
@@ -6745,17 +6783,22 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       if (!markCommittedTurnHandled(state, turnKey, "live-transfer availability")) return;
       const yesNow = isLiveTransferAvailabilityYes(lastUserText);
       const noLater = isLiveTransferAvailabilityNo(lastUserText);
+      const nextAvailabilityAttempts = !yesNow && !noLater
+        ? Number(state.pendingLiveTransferAvailabilityAttempts || 0) + 1
+        : 0;
+      const escapeAvailabilityLoop = !yesNow && !noLater && nextAvailabilityAttempts >= 3;
       const lineToSay = yesNow
-        ? getLiveTransferTryingLine()
-        : noLater
+        ? getLiveTransferTryingLine(state.context!)
+        : noLater || escapeAvailabilityLoop
           ? "No problem. Would later today or tomorrow be better?"
-          : getLiveTransferAvailabilityLine();
+          : getLiveTransferAvailabilityLine(state.context!);
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
 
-      state.pendingLiveTransferAvailabilityConfirm = !yesNow && !noLater;
+      state.pendingLiveTransferAvailabilityConfirm = !yesNow && !noLater && !escapeAvailabilityLoop;
+      state.pendingLiveTransferAvailabilityAttempts = state.pendingLiveTransferAvailabilityConfirm ? nextAvailabilityAttempts : 0;
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
       state.userAudioMsBuffered = 0;
@@ -6776,7 +6819,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       if (yesNow) {
         state.liveTransferIntroSpoken = true;
         state.pendingLiveTransferAfterLine = true;
-      } else if (noLater) {
+      } else if (noLater || escapeAvailabilityLoop) {
         state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
@@ -7253,8 +7296,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       !!state.context?.liveTransferPhone &&
       isStepOneCoverageSubjectAnswer(lastUserText);
     if (shouldAskLiveTransferAvailability) {
-      lineToSay = getLiveTransferAvailabilityLine();
+      lineToSay = getLiveTransferAvailabilityLine(state.context!);
       state.pendingLiveTransferAvailabilityConfirm = true;
+      state.pendingLiveTransferAvailabilityAttempts = 0;
     }
 
     // ✅ Day-choice answer handling:
