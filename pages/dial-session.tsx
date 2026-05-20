@@ -1538,6 +1538,8 @@ export default function DialSession() {
       "sheetmeta","sourcetype","realtimeeligible",
       "aifirstcallattempteat","aifirstcallattemptdat","aifirstcalldueat","aifirstcallstatus",
       "donotcall","donotcallat","leadtype","reminderssent","isaiengaged",
+      "aifirstcallattemptdat","aifirstcallattemptedat","aifirstcalltriggeredat",
+      "aiprioritycategory","aipriorityscore","externalid","source","status",
     ]);
 
     const bannedTopNorm = new Set<string>();
