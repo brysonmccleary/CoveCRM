@@ -315,6 +315,8 @@ type CallState = {
   lastHandledTurnKey?: string;
   // cost control: throttle silence frames we forward to OpenAI (keep VAD working)
   lastSilenceSentAtMs?: number;
+  inputCommitInFlight?: boolean;
+  lastInputCommitAtMs?: number;
 
 
   /**
@@ -628,6 +630,61 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
   }
 }
 
+function sendManualInputCommit(state: CallState, reason: string): boolean {
+  try {
+    if (
+      state.phase === "ended" ||
+      !state.openAiWs ||
+      !state.openAiReady ||
+      state.openAiWs.readyState !== WebSocket.OPEN
+    ) {
+      console.log("[AI-VOICE][VAD] stuck-speech commit skipped during active response", {
+        callSid: state.callSid,
+        reason,
+        phase: state.phase,
+        openAiReady: !!state.openAiReady,
+        socketOpen: state.openAiWs?.readyState === WebSocket.OPEN,
+      });
+      return false;
+    }
+
+    if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) {
+      console.log("[AI-VOICE][VAD] stuck-speech commit skipped during active response", {
+        callSid: state.callSid,
+        reason,
+        waitingForResponse: !!state.waitingForResponse,
+        responseInFlight: !!state.responseInFlight,
+        aiSpeaking: !!state.aiSpeaking,
+      });
+      return false;
+    }
+
+    const now = Date.now();
+    const lastCommitAt = Number(state.lastInputCommitAtMs || 0);
+    if (state.inputCommitInFlight || (lastCommitAt > 0 && now - lastCommitAt < 800)) {
+      console.log("[AI-VOICE][VAD] skipped duplicate input_audio_buffer.commit", {
+        callSid: state.callSid,
+        reason,
+        inputCommitInFlight: !!state.inputCommitInFlight,
+        msSinceLastCommit: lastCommitAt > 0 ? now - lastCommitAt : null,
+      });
+      return false;
+    }
+
+    state.inputCommitInFlight = true;
+    state.lastInputCommitAtMs = now;
+    state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    return true;
+  } catch (err: any) {
+    console.warn("[AI-VOICE][VAD] manual input_audio_buffer.commit failed:", {
+      callSid: state.callSid,
+      reason,
+      error: err?.message || err,
+    });
+    return false;
+  }
+}
+
 /**
  * ✅ Outbound pacing (Twilio wants ~20ms μ-law frames)
  * μ-law @ 8k: 20ms = 160 bytes.
@@ -648,6 +705,14 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
     try {
       const live = calls.get(twilioWs);
       if (!live) return;
+      if (twilioWs.readyState !== WebSocket.OPEN) {
+        stopOutboundPacer(twilioWs, live, "Twilio socket closed");
+        console.log("[AI-VOICE][PACE] stopped because Twilio socket closed", {
+          callSid: live.callSid,
+          readyState: twilioWs.readyState,
+        });
+        return;
+      }
 
       const buf = live.outboundMuLawBuffer || Buffer.alloc(0);
 
@@ -4727,6 +4792,8 @@ wss.on("connection", (ws: WebSocket) => {
     lastCancelAtMs: 0,
     lastResponseCreateAtMs: 0,
     lastSilenceSentAtMs: 0,
+    inputCommitInFlight: false,
+    lastInputCommitAtMs: 0,
   };
 
   calls.set(ws, state);
@@ -5759,6 +5826,18 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         if (event?.error?.code === "beta_api_shape_disabled") {
           console.error("[AI-VOICE] OpenAI Realtime GA setup failed: beta API shape disabled. Check session.update/response.create payloads and remove beta headers.");
         }
+        try {
+          const errorText = String(
+            event?.error?.code ||
+              event?.code ||
+              event?.error?.message ||
+              event?.message ||
+              ""
+          ).toLowerCase();
+          if (errorText.includes("input_audio_buffer") || errorText.includes("commit")) {
+            state.inputCommitInFlight = false;
+          }
+        } catch {}
       } else if (event?.type) {
         console.log("[AI-VOICE] OpenAI event:", event.type);
       }
@@ -5854,7 +5933,7 @@ async function handleOpenAiEvent(
                 console.log("[AI-VOICE][VAD] stuck-speech FORCE-COMMIT (retry)", { callSid: state.callSid, msSinceStart: now2 - start2 });
                 state.userSpeechInProgress = false;
                 (state as any).lastUserSpeechStoppedAtMs = Date.now();
-                if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+                sendManualInputCommit(state, "stuck-speech retry");
               } catch {}
             }, 2000);
             return;
@@ -5884,7 +5963,7 @@ async function handleOpenAiEvent(
           state.userSpeechInProgress = false;
           (state as any).lastUserSpeechStoppedAtMs = Date.now();
 
-          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+          sendManualInputCommit(state, "stuck-speech");
 
           // ✅ Re-arm watchdog in case VAD still doesn't fire speech_stopped
           state.userSpeechStuckWatchdog = setTimeout(() => {
@@ -5894,7 +5973,7 @@ async function handleOpenAiEvent(
               if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
               state.userSpeechInProgress = false;
               (state as any).lastUserSpeechStoppedAtMs = Date.now();
-              state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+              sendManualInputCommit(state, "stuck-speech rearm");
             } catch {}
           }, 3400);
         } catch {}
@@ -5940,7 +6019,7 @@ async function handleOpenAiEvent(
             callSid: state.callSid,
             streamSid: state.streamSid,
           });
-          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+          sendManualInputCommit(state, "post-stop");
         } catch {}
       }, 220);
     } catch {}
@@ -6226,7 +6305,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     return;
   }
 
+  if (t === "input_audio_buffer.cleared") {
+    state.inputCommitInFlight = false;
+    return;
+  }
+
   if (t === "input_audio_buffer.committed") {
+    state.inputCommitInFlight = false;
     try {
       if (state.userSpeechCommitWatchdog) {
         clearTimeout(state.userSpeechCommitWatchdog);
