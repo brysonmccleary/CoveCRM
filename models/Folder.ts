@@ -62,6 +62,8 @@ export const SYSTEM_FOLDERS = [
   "Not Interested",
   "Booked Appointment",
   "Bad Number",
+  "No Show",
+  "Do Not Contact",
 ] as const;
 
 export type SystemFolderName = (typeof SYSTEM_FOLDERS)[number];
@@ -95,5 +97,7 @@ export function isSystemish(name?: string | null): boolean {
   if (compact === "notinterested") return true;
   if (compact === "booked" || compact === "bookedappointment") return true;
   if (compact === "badnumber" || compact === "wrongnumber" || compact === "disconnected") return true;
+  if (compact === "noshow") return true;
+  if (compact === "donotcontact" || compact === "dnc" || compact === "optout") return true;
   return false;
 }

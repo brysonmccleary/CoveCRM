@@ -641,6 +641,8 @@ export default async function handler(
 
     // ---- Save booking metadata -------------------------------------------
     const bookingDoc = await Booking.create({
+      leadId,
+      userEmail: user.email,
       leadEmail: leadEmailForConfirmation,
       leadPhone: to,
       agentEmail: user.email,
@@ -649,6 +651,8 @@ export default async function handler(
       emailConfirmationSkipped,
       emailConfirmationSkippedReason: emailConfirmationSkipped ? "invalid_or_missing_lead_email" : "",
       date: appointmentJS,
+      appointmentTime: appointmentJS,
+      source: bearer && bearer === INTERNAL_API_TOKEN ? "ai_appointment" : "google_calendar_booking",
       timezone: clientZone,
       reminderSent: {
         confirm: false,

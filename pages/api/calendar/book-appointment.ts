@@ -12,6 +12,7 @@ import { google } from "googleapis";
 import twilioClient from "@/lib/twilioClient";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
+import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
 
 // NEW: email utilities
 import {
@@ -316,6 +317,21 @@ export default async function handler(
     lead.folderId = folder._id;
     lead.status = "Booked Appointment";
     await lead.save();
+
+    recordLeadOutcome({
+      leadId: String(lead._id),
+      userEmail: userEmail.toLowerCase(),
+      rawDisposition: "booked_appointment",
+      source: "calendar_booking",
+      folderId: folder._id as any,
+      metadata: {
+        eventId,
+        eventUrl: eventUrl || null,
+        appointmentTime: startAgent.toJSDate().toISOString(),
+      },
+    }).catch((err) => {
+      console.warn("[calendar/book-appointment] outcome event failed (non-fatal):", err?.message || err);
+    });
 
     // Timeline note (records agent-local time)
     try {

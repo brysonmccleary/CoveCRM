@@ -11,7 +11,7 @@ interface NumberEntry {
   sid: string;
 }
 
-const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number"];
+const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number", "No Show", "Do Not Contact"];
 
 /* =========================
    Google Sheets Wizard Utils

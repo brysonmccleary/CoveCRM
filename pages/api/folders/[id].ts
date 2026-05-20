@@ -4,6 +4,7 @@ import Folder from "@/models/Folder";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
+import { isSystemFolderName } from "@/lib/systemFolders";
 
 export default async function handler(
   req: NextApiRequest,
@@ -47,6 +48,10 @@ export default async function handler(
         description?: string;
       };
 
+      if (isSystemFolderName(folder.name) && typeof name === "string" && name.trim() && name.trim() !== folder.name) {
+        return res.status(400).json({ message: "System folders cannot be renamed" });
+      }
+
       if (typeof name === "string" && name.trim()) {
         folder.name = name.trim();
       }
@@ -62,6 +67,9 @@ export default async function handler(
     }
 
     if (req.method === "DELETE") {
+      if (isSystemFolderName(folder.name)) {
+        return res.status(400).json({ message: "System folders cannot be deleted" });
+      }
       await folder.deleteOne();
       return res.status(200).json({ message: "Folder deleted" });
     }

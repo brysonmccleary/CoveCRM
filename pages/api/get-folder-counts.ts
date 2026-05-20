@@ -6,8 +6,9 @@ import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { Types } from "mongoose";
+import { SYSTEM_FOLDERS } from "@/lib/systemFolders";
 
-const SYSTEM = ["Not Interested", "Booked Appointment", "Sold", "Unsorted"];
+const SYSTEM = [...SYSTEM_FOLDERS, "Unsorted"];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });

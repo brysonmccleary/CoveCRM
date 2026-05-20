@@ -5,6 +5,7 @@ import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
+import { isSystemFolderName } from "@/lib/systemFolders";
 
 export default async function handler(
   req: NextApiRequest,
@@ -29,12 +30,17 @@ export default async function handler(
   try {
     await dbConnect();
 
-    const folder = await Folder.findOneAndDelete({ _id: folderId, userEmail });
+    const folder = await Folder.findOne({ _id: folderId, userEmail });
     if (!folder) {
       return res
         .status(404)
         .json({ message: "Folder not found or already deleted" });
     }
+    if (isSystemFolderName(folder.name)) {
+      return res.status(400).json({ message: "System folders cannot be deleted" });
+    }
+
+    await folder.deleteOne();
 
     // Remove all leads in that folder
     const leadDelete = await Lead.deleteMany({

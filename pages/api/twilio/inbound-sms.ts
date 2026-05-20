@@ -29,6 +29,7 @@ import { trackUsage } from "@/lib/billing/trackUsage";
 import { priceOpenAIUsage } from "@/lib/billing/openaiPricing";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import { buildLeadContext } from "@/lib/ai/memory/buildLeadContext";
+import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
 
 export const config = { api: { bodyParser: false } };
 
@@ -1838,6 +1839,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       lead.interactionHistory = lead.interactionHistory || [];
       lead.interactionHistory.push(note);
       await lead.save();
+      recordLeadOutcome({
+        leadId: String(lead._id),
+        userEmail: user.email,
+        rawDisposition: "do_not_contact",
+        source: "twilio_inbound_opt_out",
+        folderId: (lead as any).folderId || null,
+        metadata: {
+          messageSid: messageSid || null,
+          fromNumber,
+          toNumber,
+        },
+      }).catch((err) => {
+        console.warn("[twilio/inbound-sms] outcome event failed (non-fatal):", err?.message || err);
+      });
       if (io) {
         io.to(user.email).emit("lead:updated", {
           _id: lead._id,

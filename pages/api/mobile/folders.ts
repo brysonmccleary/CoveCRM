@@ -5,8 +5,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
-
-const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment", "Bad Number"] as const;
+import { SYSTEM_FOLDERS } from "@/lib/systemFolders";
 
 type LeanFolder = {
   _id: string;

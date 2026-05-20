@@ -10,6 +10,7 @@ import User from "@/models/User";
 import Message from "@/models/Message";
 import { sendSms } from "@/lib/twilio/sendSMS";
 import { resolveLeadDisplayName } from "@/lib/email";
+import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
@@ -176,6 +177,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     await lead.save();
+
+    recordLeadOutcome({
+      leadId: String(lead._id),
+      userEmail,
+      rawDisposition: "booked_appointment",
+      source: "ai_appointment",
+      metadata: {
+        eventId: bookResp.data?.eventId || bookResp.data?.event?.id || null,
+        appointmentTime: apptZoned.toISO(),
+      },
+    }).catch((err) => {
+      console.warn("[ai/appointments] outcome event failed (non-fatal):", err?.message || err);
+    });
 
     return res.status(200).json({
       success: true,

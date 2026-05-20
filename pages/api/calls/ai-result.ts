@@ -14,6 +14,7 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { Types } from "mongoose";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
 
 const COVECRM_API_SECRET = process.env.COVECRM_API_SECRET || "";
 
@@ -92,11 +93,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const agent = await User.findOne({ email: userEmail.toLowerCase() }).lean() as any;
 
         booking = await Booking.create({
+          leadId: lead?._id || null,
+          userEmail: userEmail.toLowerCase(),
           leadEmail: lead?.Email || lead?.email || "",
           leadPhone: lead?.Phone || lead?.phone || phoneNumber || "",
           agentEmail: userEmail.toLowerCase(),
           agentPhone: agent?.agentPhone || "",
           date: new Date(appointmentDate),
+          appointmentTime: new Date(appointmentDate),
+          source: "legacy_ai_result",
           timezone: appointmentTimezone || agent?.bookingTimezone || "America/Phoenix",
           reminderSent: {},
           noShow: false,
@@ -110,6 +115,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { _id: lead._id },
             { $set: { appointmentTime: new Date(appointmentDate), folderId: bookedFolder._id, status: "Booked Appointment" } }
           );
+          recordLeadOutcome({
+            leadId: String(lead._id),
+            userEmail: userEmail.toLowerCase(),
+            rawDisposition: "booked_appointment",
+            source: "legacy_ai_result",
+            folderId: bookedFolder._id as any,
+            metadata: {
+              callSid: callSid || null,
+              appointmentTime: appointmentDate,
+              bookingId: booking ? String((booking as any)._id) : null,
+            },
+          }).catch((err) => {
+            console.warn("[ai-result] outcome event failed (non-fatal):", err?.message || err);
+          });
         }
       }
     } catch (err: any) {
@@ -134,6 +153,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadUpdate.doNotCallAt = new Date();
         }
         await Lead.updateOne({ _id: leadId }, { $set: leadUpdate });
+        if (outcome === "do_not_call") {
+          recordLeadOutcome({
+            leadId: String(leadId),
+            userEmail: userEmail.toLowerCase(),
+            rawDisposition: "do_not_contact",
+            source: "legacy_ai_result",
+            folderId: sysFolder._id as any,
+            metadata: { callSid: callSid || null },
+          }).catch((err) => {
+            console.warn("[ai-result] outcome event failed (non-fatal):", err?.message || err);
+          });
+        }
       }
     } catch (err: any) {
       console.error("[ai-result] Folder move error:", err?.message);

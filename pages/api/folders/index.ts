@@ -4,6 +4,7 @@ import Folder from "@/models/Folder";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
+import { isSystemFolderName } from "@/lib/systemFolders";
 
 export default async function handler(
   req: NextApiRequest,
@@ -54,6 +55,9 @@ export default async function handler(
       }
 
       const trimmedName = name.trim();
+      if (isSystemFolderName(trimmedName)) {
+        return res.status(400).json({ message: "Cannot create system folders manually" });
+      }
 
       // Create folder tied ONLY to this user (canonical userEmail).
       const newFolder = new Folder({

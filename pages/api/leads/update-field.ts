@@ -5,6 +5,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import { Types } from "mongoose";
+import { isImmutableAttributionField } from "@/lib/leads/immutableAttributionFields";
 
 /**
  * POST /api/leads/update-field
@@ -64,7 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     "dripProgress",
   ]);
 
-  if (BLOCKED_FIELDS.has(trimmedField)) {
+  if (BLOCKED_FIELDS.has(trimmedField) || isImmutableAttributionField(trimmedField)) {
     return res.status(400).json({ success: false, message: "This field cannot be edited" });
   }
 

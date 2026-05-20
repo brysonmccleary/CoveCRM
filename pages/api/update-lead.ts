@@ -5,6 +5,7 @@ import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import { Types } from "mongoose";
+import { isImmutableAttributionField } from "@/lib/leads/immutableAttributionFields";
 
 function normalizeFieldName(f: any) {
   return String(f || "").trim();
@@ -37,6 +38,7 @@ function isBlockedField(field: string) {
   ]);
 
   if (BLOCKED.has(lower)) return true;
+  if (isImmutableAttributionField(field)) return true;
   return false;
 }
 

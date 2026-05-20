@@ -7,6 +7,7 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder"; // same model used elsewhere
 import Call from "@/models/Call";
 import { Types } from "mongoose";
+import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
 
 const AI_DIALER_AGENT_KEY = (process.env.AI_DIALER_AGENT_KEY || "").trim();
 
@@ -667,6 +668,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderId: targetFolderId,
           updatedAt: new Date(),
         };
+        let hadExistingAppointmentTime = false;
 
         if (nextOutcome === "booked") {
           // Set appointmentTime only if not already set (prevent duplicate booking)
@@ -675,7 +677,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             $or: [{ userEmail }, { ownerEmail: userEmail }, { user: userEmail }],
           }).select("appointmentTime status").lean().exec() as any;
 
-          if (existingLead?.appointmentTime) {
+          hadExistingAppointmentTime = Boolean(existingLead?.appointmentTime);
+          if (hadExistingAppointmentTime) {
             // Already booked — only move folder, don't overwrite appointment
             console.info(`[ai-calls/outcome] Lead ${leadId} already has appointmentTime — skipping duplicate appointmentTime write`);
           } else {
@@ -711,6 +714,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ).exec();
 
         moved = !!updateResult.modifiedCount;
+
+        if (nextOutcome === "booked" || nextOutcome === "do_not_call") {
+          const shouldRecordBookedOutcome =
+            nextOutcome !== "booked" || !hadExistingAppointmentTime;
+          if (shouldRecordBookedOutcome) {
+            recordLeadOutcome({
+              leadId: String(leadId),
+              userEmail,
+              rawDisposition: nextOutcome === "booked" ? "booked_appointment" : "do_not_contact",
+              source: "ai_call_outcome",
+              folderId: targetFolderId,
+              metadata: {
+                callSid,
+                aiCallRecordingId: String(rec._id),
+                aiCallSessionId: aiCallSessionId ? String(aiCallSessionId) : null,
+                appointmentTime: nextOutcome === "booked" ? leadFieldUpdate.appointmentTime || null : null,
+              },
+            }).catch((err) => {
+              console.warn("[ai-calls/outcome] lead outcome event failed (non-fatal):", err?.message || err);
+            });
+          }
+        }
       }
     }
 

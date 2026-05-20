@@ -16,8 +16,8 @@ interface FoldersListProps {
   onFolderSelect?: (folderId: string) => void;
 }
 
-const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number"];
-const SYSTEM_FOLDER_ORDER = ["Sold", "Not Interested", "Booked Appointment", "Bad Number"];
+const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number", "No Show", "Do Not Contact"];
+const SYSTEM_FOLDER_ORDER = ["Sold", "Not Interested", "Booked Appointment", "Bad Number", "No Show", "Do Not Contact"];
 
 export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersListProps) {
   const router = useRouter();

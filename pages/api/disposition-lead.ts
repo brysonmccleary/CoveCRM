@@ -10,7 +10,7 @@ import { initSocket } from "@/lib/socket";
 import { folderNameForDisposition } from "@/lib/dispositionToFolder";
 import { isSystemFolderName } from "@/lib/systemFolders";
 import jwt from "jsonwebtoken";
-import { trackOutcomeFromDisposition } from "@/lib/facebook/trackCRMOutcome";
+import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -22,6 +22,8 @@ const ALLOW_STATUS_SET = new Set([
   "not interested",
   "booked appointment",
   "bad number",
+  "no show",
+  "do not contact",
 ]);
 
 const MOBILE_JWT_SECRET =
@@ -140,7 +142,7 @@ export default async function handler(
 
       if (isSystemFolderName(desiredFolderName)) {
         // 🔒 Deterministic pick: fetch all system folders for the user, then match in code.
-        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment", "Bad Number"];
+        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment", "Bad Number", "No Show", "Do Not Contact"];
         const systemRows = await Folder.find({
           userEmail,
           name: { $in: SYSTEM_NAMES },
@@ -231,7 +233,20 @@ export default async function handler(
     } catch {}
 
     // FB outcome tracking (best-effort, non-blocking)
-    trackOutcomeFromDisposition(leadId, rawName).catch(() => {});
+    recordLeadOutcome({
+      leadId,
+      userEmail,
+      rawDisposition: rawName,
+      source: "manual_disposition",
+      folderId: targetFolderId,
+      metadata: {
+        fromFolderName: fromFolderName || null,
+        toFolderName: toFolderName || null,
+        previousStatus: previousStatus || null,
+      },
+    }).catch((err) => {
+      console.warn("disposition-lead: outcome event failed (non-fatal):", err?.message || err);
+    });
 
     // Socket notify (best-effort)
     try {

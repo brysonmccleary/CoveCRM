@@ -1295,6 +1295,25 @@ This removes it from CoveCRM and archives it in Meta.`
           </button>
         </div>
 
+        <div className="bg-[#0f172a] border border-blue-500/20 rounded-xl p-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Ad Command Center</h2>
+            <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+              Track which ads, states, and lead sources are turning into booked calls and sales.
+            </p>
+            <p className="text-[11px] text-gray-500 mt-2">
+              Recommendations stay conservative until enough data is collected.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => router.push("/facebook-ads/command-center")}
+            className="w-full sm:w-auto text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg transition"
+          >
+            Open Command Center
+          </button>
+        </div>
+
         {/* Header Metrics Bar */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[

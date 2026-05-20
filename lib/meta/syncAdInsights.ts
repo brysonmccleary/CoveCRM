@@ -97,6 +97,15 @@ export async function syncAdInsights(
     clicks: number;
     cpl: number;
   }>>();
+  const campaignDailyTotals = new Map<string, {
+    campaignId: any;
+    date: string;
+    spend: number;
+    leads: number;
+    impressions: number;
+    clicks: number;
+    weightedCtr: number;
+  }>();
 
   for (const insight of insights) {
     const campaign =
@@ -125,26 +134,25 @@ export async function syncAdInsights(
       createdAt: { $gte: startOfDay, $lte: endOfDay },
     });
 
-    const cpl = leads > 0 && spend > 0 ? spend / leads : 0;
+    const dailyKey = `${String((campaign as any)._id)}:${date}`;
+    const prevDaily = campaignDailyTotals.get(dailyKey) || {
+      campaignId: (campaign as any)._id,
+      date,
+      spend: 0,
+      leads: 0,
+      impressions: 0,
+      clicks: 0,
+      weightedCtr: 0,
+    };
+    campaignDailyTotals.set(dailyKey, {
+      ...prevDaily,
+      spend: prevDaily.spend + spend,
+      leads: prevDaily.leads + leads,
+      impressions: prevDaily.impressions + impressions,
+      clicks: prevDaily.clicks + clicks,
+      weightedCtr: prevDaily.weightedCtr + ctr * impressions,
+    });
 
-    await AdMetricsDaily.findOneAndUpdate(
-      { campaignId: (campaign as any)._id, date },
-      {
-        $set: {
-          userId: new Types.ObjectId(String(userId)),
-          userEmail,
-          spend,
-          impressions,
-          clicks,
-          ctr,
-          cpl,
-          leads,
-        },
-      },
-      { upsert: true }
-    );
-
-    syncedDays++;
     totalSpend += spend;
     totalLeads += leads;
 
@@ -186,6 +194,28 @@ export async function syncAdInsights(
       });
       campaignAdTotals.set(cid, existingCampaignAds);
     }
+  }
+
+  for (const daily of campaignDailyTotals.values()) {
+    const cpl = daily.leads > 0 && daily.spend > 0 ? daily.spend / daily.leads : 0;
+    const ctr = daily.impressions > 0 ? daily.weightedCtr / daily.impressions : 0;
+    await AdMetricsDaily.findOneAndUpdate(
+      { campaignId: daily.campaignId, date: daily.date },
+      {
+        $set: {
+          userId: new Types.ObjectId(String(userId)),
+          userEmail,
+          spend: daily.spend,
+          impressions: daily.impressions,
+          clicks: daily.clicks,
+          ctr,
+          cpl,
+          leads: daily.leads,
+        },
+      },
+      { upsert: true }
+    );
+    syncedDays++;
   }
 
   // ✅ Update FBLeadCampaign aggregate metrics so campaign cards show real synced data

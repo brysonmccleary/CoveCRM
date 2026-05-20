@@ -8,6 +8,10 @@ const BookingSchema = new Schema(
     leadPhone: { type: String, required: true },
     agentEmail: { type: String, required: true }, // Who they're meeting with
     agentPhone: { type: String }, // Optional, for reminder content
+    leadId: { type: Schema.Types.ObjectId, ref: "Lead", default: null, index: true },
+    userEmail: { type: String, default: "", lowercase: true, index: true },
+    appointmentTime: { type: Date, default: null, index: true },
+    source: { type: String, default: "", index: true },
 
     // Optional: link back to Google Calendar event
     eventId: { type: String, required: false, default: "" },
