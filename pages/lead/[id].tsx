@@ -1349,7 +1349,7 @@ export default function LeadProfileDial() {
               <option value="Sold">Sold</option>
               <option value="Booked Appointment">Booked Appointment</option>
               <option value="Not Interested">Not Interested</option>
-              
+              <option value="Bad Number">Bad Number</option>
             </select>
           </div>
 
