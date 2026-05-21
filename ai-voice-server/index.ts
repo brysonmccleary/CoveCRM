@@ -36,6 +36,12 @@ import WebSocket, { WebSocketServer } from "ws";
 import fetch from "node-fetch";
 import { Buffer } from "buffer";
 import { getKaylaSignupScript } from "./scripts/kaylaSignupScript";
+import {
+  buildInboundGreetingInstructions,
+  buildInboundReasonLine,
+  buildInboundReasonInstructions,
+  shouldUseInboundFlow,
+} from "./flows/inbound";
 
 /**
  * ENV + config
@@ -171,6 +177,7 @@ type AICallContext = {
   clientPhone?: string;
   clientEmail?: string;
   clientNotes?: string;
+  callDirection?: string;
   scriptKey: string;
   voiceKey: string;
   voiceProfile: {
@@ -1282,8 +1289,11 @@ async function replayPendingCommittedTurn(
         return;
       }
 
-      const lineToSay2 = lineToSay;
-      const perTurnInstr = buildExactScriptLineInstruction(lineToSay2);
+      const useInboundOpening = shouldUseInboundFlow(state.context);
+      const lineToSay2 = useInboundOpening ? buildInboundReasonLine(state.context!) : lineToSay;
+      const perTurnInstr = useInboundOpening
+        ? buildInboundReasonInstructions(state.context!)
+        : buildExactScriptLineInstruction(lineToSay2);
 
       // Push greeting exchange to memory
       if (lastUserText) pushExchange(state, "user", lastUserText, 0);
@@ -6314,7 +6324,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         const clientName = (!clientNameRaw || isTestOrPlaceholderName(clientNameRaw)) ? "there" : clientNameRaw;
         const greetingLine = `Hey ${clientName}. This is ${aiName}. Can you hear me alright?`;
         // Greeting instruction: dead simple — say the line, stop, wait. No history/goals scaffolding.
-        const greetingInstr = buildGreetingInstructions(liveState.context!);
+        const greetingInstr = shouldUseInboundFlow(liveState.context)
+          ? buildInboundGreetingInstructions(liveState.context!)
+          : buildGreetingInstructions(liveState.context!);
 
         try {
           if (!liveState.debugLoggedResponseCreateGreeting) {
@@ -6909,8 +6921,11 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         return;
       }
 
-      const lineToSay2 = lineToSay;
-      const perTurnInstr = buildExactScriptLineInstruction(lineToSay2);
+      const useInboundOpening = shouldUseInboundFlow(state.context);
+      const lineToSay2 = useInboundOpening ? buildInboundReasonLine(state.context!) : lineToSay;
+      const perTurnInstr = useInboundOpening
+        ? buildInboundReasonInstructions(state.context!)
+        : buildExactScriptLineInstruction(lineToSay2);
 
       // ✅ consume awaitingUserAnswer ONLY when we are about to speak
       state.awaitingUserAnswer = false;
