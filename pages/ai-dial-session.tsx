@@ -91,14 +91,14 @@ const SCRIPT_OPTIONS = [
  */
 const VOICE_OPTIONS = [
   {
+    key: "iris",
+    label: "Kayla (Female) — Default",
+    providerVoiceId: "marin",
+  },
+  {
     key: "jacob",
     label: "Jacob (Male)",
     providerVoiceId: "cedar",
-  },
-  {
-    key: "iris",
-    label: "Kayla (Female)",
-    providerVoiceId: "marin",
   },
 ];
 
@@ -129,7 +129,7 @@ export default function AIDialSessionPage() {
 
   const [selectedFolderId, setSelectedFolderId] = useState<string>("");
   const [selectedScriptKey, setSelectedScriptKey] = useState<string>("");
-  const [selectedVoiceKey, setSelectedVoiceKey] = useState<string>("");
+  const [selectedVoiceKey, setSelectedVoiceKey] = useState<string>("iris");
   const [selectedFromNumber, setSelectedFromNumber] = useState<string>("");
 
   // If switching accounts, clear any saved dial number that isn't owned by this account.
@@ -189,7 +189,12 @@ export default function AIDialSessionPage() {
         const res = await fetch("/api/get-folders");
         if (!res.ok) throw new Error("Failed to fetch folders");
         const data = await res.json();
-        setFolders(Array.isArray(data?.folders) ? data.folders : []);
+        // Filter out the KAYLA LEADS folder — Kayla demo calls are backend/internal only.
+        setFolders(
+          (Array.isArray(data?.folders) ? data.folders : []).filter(
+            (f: Folder) => f.name !== "KAYLA LEADS",
+          ),
+        );
       } catch (e: any) {
         console.error("AI Dial: error fetching folders", e);
         setError(e?.message || "Failed to load folders");

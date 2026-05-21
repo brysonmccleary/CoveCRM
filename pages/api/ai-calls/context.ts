@@ -173,6 +173,7 @@ export default async function handler(
       ? {
           ...voiceProfile,
           aiName: "Kayla",
+          openAiVoiceId: "marin", // Kayla uses the Marin (female) voice regardless of session voiceKey
         }
       : voiceProfile;
 

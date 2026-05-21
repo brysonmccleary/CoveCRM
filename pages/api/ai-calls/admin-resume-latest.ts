@@ -90,7 +90,10 @@ export default async function handler(
     query.userEmail = userEmail;
   }
 
-  const latest: any = await AICallSession.findOne(query)
+  const latest: any = await AICallSession.findOne({
+    ...query,
+    scriptKey: { $ne: "kayla_signup" },
+  })
     .sort({ createdAt: -1 })
     .exec();
 

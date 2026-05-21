@@ -38,6 +38,7 @@ const CANONICAL_SCRIPTS = [
   "veteran_leads",
   "trucker_leads",
   "generic_life",
+  "kayla_signup",
 ] as const;
 
 type CanonicalScriptKey = (typeof CANONICAL_SCRIPTS)[number];
@@ -86,12 +87,17 @@ function normalizeScriptKey(raw: any): CanonicalScriptKey {
     return "generic_life";
   }
 
+  // Kayla demo calls — internal only, never accessible via normal AI Dial Session UI
+  if (v === "kayla_signup" || v === "kayla" || v === "kayla_demo") {
+    return "kayla_signup";
+  }
+
   // If they already sent canonical, accept it
   if ((CANONICAL_SCRIPTS as readonly string[]).includes(v)) {
     return v as CanonicalScriptKey;
   }
 
-  // Unknown → safest default (prevents “wrong script” drift)
+  // Unknown → safest default (prevents "wrong script" drift)
   return "mortgage_protection";
 }
 
@@ -182,7 +188,7 @@ function serializeSession(doc: any | null) {
   //   stats.notInterested
   //   stats.noAnswers
   //
-  // We normalize here without changing what’s in Mongo.
+  // We normalize here without changing what's in Mongo.
   const rawStats = (json.stats || {}) as any;
 
   const totalFromSession =
@@ -240,6 +246,7 @@ export default async function handler(
           userEmail: email,
           folderId: fid,
           callDirection: { $ne: "inbound" },
+          scriptKey: { $ne: "kayla_signup" },
         })
           .sort({ createdAt: -1 })
           .exec();
@@ -252,6 +259,7 @@ export default async function handler(
       const activeDoc = await AICallSession.findOne({
         userEmail: email,
         callDirection: { $ne: "inbound" },
+        scriptKey: { $ne: "kayla_signup" },
         status: { $in: ["queued", "running", "paused"] },
       })
         .sort({ createdAt: -1 })
@@ -301,8 +309,16 @@ export default async function handler(
           .json({ ok: false, message: "voiceKey is required" });
       }
 
-      // ✅ Normalize scriptKey BEFORE saving (this is the real fix for “wrong script”)
+      // ✅ Normalize scriptKey BEFORE saving (this is the real fix for "wrong script")
       const normalizedScriptKey = normalizeScriptKey(scriptKey);
+
+      // Block Kayla demo sessions from the normal AI dial session UI.
+      if (normalizedScriptKey === "kayla_signup") {
+        return res.status(400).json({
+          ok: false,
+          message: "This folder is reserved for internal demo calls and cannot be used in AI Dial Sessions.",
+        });
+      }
 
       const fid = new Types.ObjectId(folderId);
 
@@ -329,6 +345,7 @@ export default async function handler(
         userEmail: email,
         folderId: fid,
         callDirection: { $ne: "inbound" },
+        scriptKey: { $ne: "kayla_signup" },
       })
         .sort({ createdAt: -1 })
         .exec();
@@ -422,6 +439,7 @@ export default async function handler(
         _id: sid,
         userEmail: email,
         callDirection: { $ne: "inbound" },
+        scriptKey: { $ne: "kayla_signup" },
       }).exec();
 
       if (!aiSession) {

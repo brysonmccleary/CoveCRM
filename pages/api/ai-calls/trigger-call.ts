@@ -49,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ ok: false, error: "Unauthorized" });
   }
 
-  const { userEmail, leadId, leadPhone, scriptKey, fromNumber } = req.body || {};
+  const { userEmail, leadId, leadPhone, scriptKey, fromNumber, voiceKey } = req.body || {};
   const email = String(userEmail || "").trim().toLowerCase();
   const to = normalizeE164(leadPhone);
   const from = normalizeE164(fromNumber);
@@ -169,7 +169,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     leadIds: [lead._id],
     fromNumber: from,
     scriptKey: resolvedScriptKey,
-    voiceKey: "jacob",
+    voiceKey: String(voiceKey || "jacob"),
     total: 1,
     lastIndex: 0,
     status: "paused",

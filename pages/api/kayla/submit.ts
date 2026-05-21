@@ -276,7 +276,7 @@ export default async function handler(
       email: cleanEmail,
       Phone: normalizedPhone,
       phoneLast10: normalizedPhone.replace(/\D/g, "").slice(-10),
-      normalizedPhone: normalizedPhone.replace(/\D/g, "").slice(-10),
+      normalizedPhone: normalizedPhone, // E.164 from normalizePhoneForLead()
       userEmail: ownerEmail,
       folderId: ownerFolder._id,
       folderName: "KAYLA LEADS",
@@ -308,6 +308,14 @@ export default async function handler(
     folderId: String(ownerFolder._id),
   });
 
+  // TODO: enroll lead in Kayla nurture drip once a campaign is configured on the KAYLA LEADS folder.
+  // Call enrollOnNewLeadIfWatched({ userEmail: ownerEmail, folderId: String(ownerFolder._id), leadId, startMode: "now" })
+  // from lib/drips/enrollOnNewLeadIfWatched.ts once DripFolderEnrollment watcher exists.
+  console.info("[KAYLA] drip enrollment skipped — no drip watcher configured on KAYLA LEADS folder yet", {
+    leadId,
+    folderId: String(ownerFolder._id),
+  });
+
   await FunnelSubmission.updateOne(
     { _id: (submission as any)._id },
     { $set: { createdLeadId: leadId ? new mongoose.Types.ObjectId(leadId) : null } },
@@ -329,6 +337,7 @@ export default async function handler(
           leadId,
           leadPhone: normalizedPhone,
           scriptKey: "kayla_signup",
+          voiceKey: "iris",
           fromNumber,
         }),
       });

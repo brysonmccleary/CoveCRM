@@ -396,6 +396,10 @@ function normalizeScriptKey(raw: any): string {
   if (v === "trucker_iul" || v === "iul_trucker" || v === "truckers_iul") return "trucker_iul";
   if (v === "trucker_mortgage" || v === "mortgage_trucker" || v === "truckers_mortgage") return "trucker_mortgage";
 
+  if (v === "kayla_signup" || v === "kayla" || v === "kayla_demo") {
+    return "kayla_signup";
+  }
+
   if (v === "generic" || v === "life" || v === "generic_life") {
     return "generic_life";
   }
@@ -410,7 +414,8 @@ function normalizeScriptKey(raw: any): string {
     v === "veteran_mortgage" ||
     v === "trucker_iul" ||
     v === "trucker_mortgage" ||
-    v === "generic_life"
+    v === "generic_life" ||
+    v === "kayla_signup"
   ) {
     return v;
   }
