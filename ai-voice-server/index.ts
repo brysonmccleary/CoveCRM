@@ -1483,6 +1483,27 @@ async function replayPendingCommittedTurn(
     }
 
     if (!treatAsAnswer || forceNotAnswer) {
+      if (
+        hasTranscript &&
+        hasExplicitLiveTransferIntent(lastUserText) &&
+        !hasNegativeLiveTransferNowIntent(lastUserText) &&
+        !!state.context?.liveTransferEnabled &&
+        !!state.context?.liveTransferPhone &&
+        !state.transferStarting &&
+        !state.transferInProgress &&
+        String(state.phase) !== "ended"
+      ) {
+        if (!markCommittedTurnHandled(state, turnKey, "replay explicit live-transfer reprompt intercept")) return;
+        state.awaitingUserAnswer = false;
+        state.awaitingAnswerForStepIndex = undefined;
+        state.userAudioMsBuffered = 0;
+        state.lastUserTranscript = "";
+        state.lowSignalCommitCount = 0;
+        state.repromptCountForCurrentStep = 0;
+        void performLiveTransfer(twilioWs, state);
+        return;
+      }
+
       if (!markCommittedTurnHandled(state, turnKey, "replay reprompt")) return;
 
       // ✅ Guard: if we only got a hesitation fragment, DO NOT reprompt (reprompts cause cut-offs).
@@ -2244,6 +2265,23 @@ function hasExplicitLiveTransferIntent(textRaw: string): boolean {
     normalized.includes("put him on") ||
     wantsAgentNow ||
     nowIntent
+  );
+}
+
+function hasNegativeLiveTransferNowIntent(textRaw: string): boolean {
+  const normalized = String(textRaw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[?.!,]+$/g, "")
+    .replace(/\s+/g, " ");
+  return (
+    normalized.includes("not right now") ||
+    normalized.includes("right now doesn't work") ||
+    normalized.includes("right now doesnt work") ||
+    normalized.includes("can't right now") ||
+    normalized.includes("cant right now") ||
+    normalized.includes("not now") ||
+    normalized.includes("later")
   );
 }
 
@@ -5165,7 +5203,6 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     transferUrl.searchParams.set("leadName", leadName);
     transferUrl.searchParams.set("agentName", agentFirst);
     transferUrl.searchParams.set("scope", scope);
-    transferUrl.searchParams.set("agentIntro", `Hey ${agentFirst}, this is ${ctx.voiceProfile.aiName || "Alex"}. I have ${leadName} here ready to go over ${scope}. I'll connect you now.`);
     transferUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
     transferUrl.searchParams.set("sessionId", ctx.sessionId || "");
     transferUrl.searchParams.set("leadId", ctx.leadId || "");
@@ -6443,6 +6480,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
   if (t === "input_audio_buffer.committed") {
     state.inputCommitInFlight = false;
+    state.lastInputCommitAtMs = Date.now();
     try {
       if (state.userSpeechCommitWatchdog) {
         clearTimeout(state.userSpeechCommitWatchdog);
@@ -7270,6 +7308,30 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     }
 
     if (!treatAsAnswer || forceNotAnswer) {
+      if (
+        hasTranscript &&
+        hasExplicitLiveTransferIntent(lastUserText) &&
+        !hasNegativeLiveTransferNowIntent(lastUserText) &&
+        !!state.context?.liveTransferEnabled &&
+        !!state.context?.liveTransferPhone &&
+        !state.transferStarting &&
+        !state.transferInProgress &&
+        state.phase !== "ended"
+      ) {
+        if (!markCommittedTurnHandled(state, turnKey, "explicit live-transfer reprompt intercept")) return;
+        state.awaitingUserAnswer = false;
+        state.awaitingAnswerForStepIndex = undefined;
+        state.userAudioMsBuffered = 0;
+        state.lastUserTranscript = "";
+        state.lowSignalCommitCount = 0;
+        state.repromptCountForCurrentStep = 0;
+        const wsConn = state.openAiWs;
+        if (wsConn) {
+          void performLiveTransfer(wsConn, state);
+        }
+        return;
+      }
+
       if (!markCommittedTurnHandled(state, turnKey, "reprompt")) return;
       // ✅ HOTFIX: Never go silent after a committed user turn.
       // If we didn't accept it as a real answer, immediately reprompt — or use free-response.
