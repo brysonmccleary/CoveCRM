@@ -2,6 +2,7 @@
 // Generates TwiML to dial the agent for a live transfer.
 // Called by the voice server via Twilio REST API call redirect.
 import type { NextApiRequest, NextApiResponse } from "next";
+import { createHash } from "crypto";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
@@ -15,10 +16,24 @@ function xmlEscape(value: any): string {
     .replace(/'/g, "&apos;");
 }
 
+function hashPrefix(value: any): string {
+  const v = String(value ?? "");
+  if (!v) return "";
+  return createHash("sha256").update(v).digest("hex").slice(0, 8);
+}
+
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const { agentPhone, leadName, agentName, scope, key, sessionId, leadId, callSid, exactTimeText, startTimeUtc, leadTimeZone, agentTimeZone, userEmail } = req.query as Record<string, string>;
 
   if (!key || key !== AI_DIALER_CRON_KEY) {
+    console.warn("[AI-CALLS][TRANSFER_TWIML_AUTH_FAIL]", {
+      hasProvidedKey: !!key,
+      providedKeyLength: key ? String(key).length : 0,
+      expectedKeyLength: AI_DIALER_CRON_KEY ? AI_DIALER_CRON_KEY.length : 0,
+      providedKeyHashPrefix: hashPrefix(key),
+      expectedKeyHashPrefix: hashPrefix(AI_DIALER_CRON_KEY),
+      queryKeysPresent: Object.keys(req.query || {}).sort(),
+    });
     return res.status(401).send("Unauthorized");
   }
 
