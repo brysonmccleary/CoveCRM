@@ -239,6 +239,7 @@ export default async function handler(
         const latestDoc = await AICallSession.findOne({
           userEmail: email,
           folderId: fid,
+          callDirection: { $ne: "inbound" },
         })
           .sort({ createdAt: -1 })
           .exec();
@@ -250,6 +251,7 @@ export default async function handler(
       // No folderId → return most recent active session for this user
       const activeDoc = await AICallSession.findOne({
         userEmail: email,
+        callDirection: { $ne: "inbound" },
         status: { $in: ["queued", "running", "paused"] },
       })
         .sort({ createdAt: -1 })
@@ -326,6 +328,7 @@ export default async function handler(
       let aiSession = await AICallSession.findOne({
         userEmail: email,
         folderId: fid,
+        callDirection: { $ne: "inbound" },
       })
         .sort({ createdAt: -1 })
         .exec();
@@ -418,6 +421,7 @@ export default async function handler(
       const aiSession = await AICallSession.findOne({
         _id: sid,
         userEmail: email,
+        callDirection: { $ne: "inbound" },
       }).exec();
 
       if (!aiSession) {

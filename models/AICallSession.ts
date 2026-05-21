@@ -26,6 +26,8 @@ export interface IAICallSession extends Document {
   folderId: mongoose.Types.ObjectId;
   leadIds: mongoose.Types.ObjectId[];
   fromNumber: string;
+  callDirection?: "inbound" | "outbound";
+  sourceCallSid?: string | null;
   scriptKey: string;
   voiceKey: string;
   total: number;
@@ -68,6 +70,13 @@ const AICallSessionSchema = new Schema<IAICallSession>(
       },
     ],
     fromNumber: { type: String, required: true },
+    callDirection: {
+      type: String,
+      enum: ["inbound", "outbound"],
+      default: "outbound",
+      index: true,
+    },
+    sourceCallSid: { type: String, default: null, index: true },
     scriptKey: { type: String, required: true },
     voiceKey: { type: String, required: true },
     total: { type: Number, required: true, default: 0 },
@@ -102,6 +111,14 @@ const AICallSessionSchema = new Schema<IAICallSession>(
   },
   {
     timestamps: true,
+  }
+);
+
+AICallSessionSchema.index(
+  { sourceCallSid: 1, callDirection: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { sourceCallSid: { $type: "string" } },
   }
 );
 

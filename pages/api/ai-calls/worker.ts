@@ -219,6 +219,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // or "queued" but recently updated (fresh).
     const candidate: any = await AICallSession.findOne({
       total: { $gt: 0 },
+      callDirection: { $ne: "inbound" },
       $or: [
         { status: "running" },
         { status: "queued", updatedAt: { $gte: freshCutoff } },
@@ -251,6 +252,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           { lockExpiresAt: { $lt: new Date() } },
         ],
         status: { $in: ["queued", "running"] },
+        callDirection: { $ne: "inbound" },
       },
       {
         $set: {

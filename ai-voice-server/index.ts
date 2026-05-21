@@ -241,6 +241,8 @@ type CallState = {
   pendingLiveTransferAvailabilityConfirm?: boolean;
   pendingLiveTransferAvailabilityAttempts?: number;
   pendingLiveTransferAfterLine?: boolean;
+  transferStarting?: boolean;
+  transferInProgress?: boolean;
   liveTransferIntroSpoken?: boolean;
 
   // ✅ strict call phase to enforce “greet → WAIT → script”
@@ -784,7 +786,9 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
             armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call empty");
           }
           maybePerformPendingLiveTransfer(twilioWs, live, "pacer drained empty");
-          void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
+          if (!live.transferStarting && !live.transferInProgress) {
+            void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
+          }
           return;
         }
 
@@ -829,7 +833,9 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
           }
         }
         maybePerformPendingLiveTransfer(twilioWs, live, "pacer drained");
-        void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
+        if (!live.transferStarting && !live.transferInProgress) {
+          void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
+        }
         return;
       }
 
@@ -964,6 +970,8 @@ function maybePerformPendingLiveTransfer(ws: WebSocket, state: CallState, reason
   if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) return;
 
   state.pendingLiveTransferAfterLine = false;
+  state.transferStarting = true;
+  state.pendingCommittedTurn = null;
   try {
     console.log("[AI-VOICE][LIVE-TRANSFER] starting deferred transfer after intro", {
       callSid: state.callSid,
@@ -982,6 +990,10 @@ async function replayPendingCommittedTurn(
 ) {
   try {
     if (state.phase === "ended") return;
+    if (state.transferStarting || state.transferInProgress) {
+      state.pendingCommittedTurn = null;
+      return;
+    }
     const pending = state.pendingCommittedTurn;
     if (!pending) return;
 
@@ -5003,10 +5015,60 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     });
     return;
   }
+  state.transferStarting = true;
+  state.pendingCommittedTurn = null;
 
   const agentFirst = (ctx.agentName || "my agent").split(" ")[0] || "my agent";
   const leadName = ctx.clientFirstName || "them";
   const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+
+  const recoverFromTransferFailure = (reason: string) => {
+    try {
+      state.transferStarting = false;
+      state.transferInProgress = false;
+      state.pendingLiveTransferAfterLine = false;
+      state.pendingCommittedTurn = null;
+      if (state.phase === "ended") return;
+      if (!state.openAiWs || state.openAiWs.readyState !== WebSocket.OPEN || !state.openAiReady) return;
+      if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) return;
+
+      const lineToSay = `Okay, looks like ${agentFirst} isn’t available right this second. What time works later today or tomorrow?`;
+      const instr = buildExactScriptLineInstruction(lineToSay);
+
+      const steps = state.scriptSteps || [];
+      const currentIdx = typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 1;
+      if (steps.length > 0) {
+        state.scriptStepIndex = Math.min(currentIdx + 1, Math.max(0, steps.length - 1));
+        state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
+      } else {
+        state.awaitingAnswerForStepIndex = undefined;
+      }
+
+      state.awaitingUserAnswer = false;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      setWaitingForResponse(state, true, "response.create (live-transfer failure fallback)");
+      setAiSpeaking(state, true, "response.create (live-transfer failure fallback)");
+      setResponseInFlight(state, true, "response.create (live-transfer failure fallback)");
+      state.outboundOpenAiDone = false;
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+      state.phase = "in_call";
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      state.awaitingUserAnswer = true;
+
+      console.log("[AI-VOICE][LIVE-TRANSFER] recovered to booking flow after redirect failure", {
+        callSid: state.callSid,
+        reason,
+      });
+    } catch (err: any) {
+      console.warn("[AI-VOICE][LIVE-TRANSFER] failure recovery could not speak fallback:", err?.message || err);
+    }
+  };
 
   console.log("[AI-VOICE][LIVE-TRANSFER] Initiating transfer", {
     callSid: state.callSid,
@@ -5037,7 +5099,11 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
   }
 
   const phaseAfterSpeak = (state as { phase?: CallPhase }).phase;
-  if (phaseAfterSpeak === "ended") return;
+  if (phaseAfterSpeak === "ended") {
+    state.transferStarting = false;
+    state.transferInProgress = false;
+    return;
+  }
 
   // 3. Redirect the call via Twilio REST API
   // Capture booking context for the fallback in case agent doesn't answer
@@ -5108,6 +5174,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     const twilioCallUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls/${state.callSid}.json`;
     const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
 
+    state.transferInProgress = true;
     const redirectRes = await fetch(twilioCallUrl, {
       method: "POST",
       headers: {
@@ -5122,20 +5189,24 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
         callSid: state.callSid,
         agentPhone: ctx.liveTransferPhone,
       });
+      state.transferStarting = false;
+      state.phase = "ended";
+      safelyCloseOpenAi(state, "live transfer redirect");
+      return;
     } else {
       const errBody = await redirectRes.text().catch(() => "");
       console.error("[AI-VOICE][LIVE-TRANSFER] Twilio redirect failed", {
         status: redirectRes.status,
         body: errBody.slice(0, 200),
       });
+      recoverFromTransferFailure(`redirect_failed_${redirectRes.status}`);
+      return;
     }
   } catch (err: any) {
     console.error("[AI-VOICE][LIVE-TRANSFER] Error redirecting call:", err?.message);
+    recoverFromTransferFailure("redirect_exception");
+    return;
   }
-
-  // 4. Mark call ended on our side — Twilio now owns the call
-  state.phase = "ended";
-  safelyCloseOpenAi(state, "live transfer redirect");
 }
 
 async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
@@ -5236,6 +5307,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
   const leadId = custom.leadId;
+  const callDirection = String(custom.callDirection || "").trim().toLowerCase();
 
   console.log(
     `[AI-VOICE] start: callSid=${state.callSid}, streamSid=${state.streamSid}, sessionId=${sessionId}, leadId=${leadId}`
@@ -5266,12 +5338,15 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
 
     const context: AICallContext = json.context;
     (context as any).scriptKey = normalizeScriptKey((context as any).scriptKey);
+    if (callDirection && !(context as any).callDirection) {
+      (context as any).callDirection = callDirection;
+    }
     state.context = context;
 
     console.log(
       `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId}, scriptKey: ${context.scriptKey}, answeredBy: ${
         context.answeredBy || "(none)"
-      })`
+      }, callDirection: ${context.callDirection || "outbound"})`
     );
 
     await initOpenAiRealtime(ws, state);
@@ -6246,8 +6321,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.initialGreetingQueued = true;
 
       (async () => {
+        const inboundFlow = shouldUseInboundFlow(state.context);
         const existing = String(state.context?.answeredBy || "").trim();
-        const amdChecks = existing
+        const amdChecks = inboundFlow || existing
           ? Promise.resolve()
           : (async () => {
               await Promise.all([
@@ -6274,7 +6350,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           return;
         }
 
-        if (!answeredByNow || answeredByNow === "unknown") {
+        if (!inboundFlow && (!answeredByNow || answeredByNow === "unknown")) {
           console.log("[AI-VOICE] AMD unresolved after bounded pre-greeting check — proceeding", {
             callSid: state.callSid,
             answeredByNow,
@@ -6635,6 +6711,18 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     // ✅ Use bestTranscript as the canonical lastUserTranscript for this turn
 
     if (bestTranscript) state.lastUserTranscript = bestTranscript;
+
+    if (state.transferStarting || state.transferInProgress) {
+      state.pendingCommittedTurn = null;
+      try {
+        console.log("[AI-VOICE][LIVE-TRANSFER] committed turn ignored while transfer is starting", {
+          callSid: state.callSid,
+          transferStarting: !!state.transferStarting,
+          transferInProgress: !!state.transferInProgress,
+        });
+      } catch {}
+      return;
+    }
 
     // ✅ If commit fires before transcription arrives, avoid using stale lastUserTranscript.
     // Queue and replay shortly to capture the real transcript (e.g., objections like 'taken care of').

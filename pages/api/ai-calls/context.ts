@@ -162,6 +162,8 @@ export default async function handler(
       typeof scriptKeyRaw === "string" && scriptKeyRaw.trim().length > 0
         ? scriptKeyRaw
         : "mortgage_protection";
+    const callDirectionRaw = String((aiSession as any).callDirection || "outbound").trim().toLowerCase();
+    const callDirection = callDirectionRaw === "inbound" ? "inbound" : "outbound";
 
     const leadAny = lead as any;
     const isKaylaPublicLead =
@@ -260,26 +262,28 @@ Conversation strategy:
       .join("\n\n");
 
     // ✅ Optional: expose AMD AnsweredBy when known (typing-safe access)
-    let answeredBy: string | undefined = undefined;
-    try {
-      const callSid =
-        (aiSession as any).callSid ||
-        (aiSession as any).currentCallSid ||
-        (aiSession as any).lastCallSid ||
-        "";
+    let answeredBy: string | undefined = callDirection === "inbound" ? "human" : undefined;
+    if (callDirection !== "inbound") {
+      try {
+        const callSid =
+          (aiSession as any).callSid ||
+          (aiSession as any).currentCallSid ||
+          (aiSession as any).lastCallSid ||
+          "";
 
-      if (callSid) {
-        const rec = await AICallRecording.findOne({ callSid })
-          .select({ answeredBy: 1 })
-          .lean();
+        if (callSid) {
+          const rec = await AICallRecording.findOne({ callSid })
+            .select({ answeredBy: 1 })
+            .lean();
 
-        const ab = rec ? (rec as any).answeredBy : "";
-        if (ab) {
-          answeredBy = String(ab);
+          const ab = rec ? (rec as any).answeredBy : "";
+          if (ab) {
+            answeredBy = String(ab);
+          }
         }
+      } catch {
+        // swallow (context must still return)
       }
-    } catch {
-      // swallow (context must still return)
     }
 
     const context = {
@@ -301,6 +305,7 @@ Conversation strategy:
       memoryPrompt,
       scriptKey,
       voiceKey,
+      callDirection,
       fromNumber: (aiSession as any).fromNumber,
       voiceProfile: resolvedVoiceProfile,
 

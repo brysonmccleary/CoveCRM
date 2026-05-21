@@ -8,7 +8,10 @@ import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
+import Folder from "@/models/Folder";
 import InboundCall from "@/models/InboundCall";
+import AISettings from "@/models/AISettings";
+import AICallSession from "@/models/AICallSession";
 
 // optional models (tolerant)
 let PhoneNumberModel: any = null;
@@ -53,6 +56,51 @@ function makeInboundConferenceName(ownerEmail: string, callSid: string) {
 function baseUrl(): string {
   const raw = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
   return raw || "https://www.covecrm.com";
+}
+
+function aiVoiceStreamUrl(): string {
+  const raw = String(process.env.AI_VOICE_STREAM_URL || "").replace(/\/$/, "");
+  return raw ? `${raw}/media-stream` : "";
+}
+
+function xmlEscape(value: any): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function buildAiInboundTwiml(args: {
+  streamUrl: string;
+  sessionId: string;
+  leadId: string;
+  userEmail: string;
+}) {
+  const param = (name: string, value: string) =>
+    `<Parameter name="${xmlEscape(name)}" value="${xmlEscape(value)}" />`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${xmlEscape(args.streamUrl)}">
+      ${param("sessionId", args.sessionId)}
+      ${param("leadId", args.leadId)}
+      ${param("userEmail", args.userEmail)}
+      ${param("callDirection", "inbound")}
+    </Stream>
+  </Connect>
+</Response>`;
+}
+
+function maskPhone(value: string) {
+  const d = String(value || "").replace(/\D+/g, "");
+  return d ? `***${d.slice(-4)}` : "";
+}
+
+function safeScriptKey(value: any) {
+  return String(value || "").trim();
 }
 
 function pickFirst(obj: any, keys: string[]): string | undefined {
@@ -248,6 +296,114 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   } catch (e) {
     console.error("Render emit error:", e);
+  }
+
+  // ✅ AI INBOUND MODE (feature-gated):
+  // Only intercept the call if the owner explicitly enabled inbound AI and every
+  // bootstrap requirement succeeds. Otherwise fall through to existing human routing.
+  try {
+    if (!ownerEmail || !leadDoc?._id || !callSid) {
+      if (ownerEmail) {
+        console.log("[inbound-ai] skip", {
+          reason: "missing_owner_lead_or_call_sid",
+          ownerEmail,
+          hasLead: !!leadDoc?._id,
+          callSid: !!callSid,
+        });
+      }
+    } else {
+      const aiSettings: any = await AISettings.findOne({ userEmail: ownerEmail }).lean();
+      if (aiSettings?.aiInboundEnabled) {
+        const streamUrl = aiVoiceStreamUrl();
+        const leadId = String(leadDoc._id);
+        const folderId = leadDoc.folderId ? String(leadDoc.folderId) : "";
+
+        if (!streamUrl) {
+          console.warn("[inbound-ai] bootstrap skipped", { reason: "missing_stream_url", ownerEmail, callSid });
+        } else {
+          const settingsScriptKey = safeScriptKey(aiSettings.aiInboundScriptKey);
+          let folder: any = folderId
+            ? await (Folder as any)
+                .findOne({ _id: folderId, userEmail: ownerEmail })
+                .select("_id aiScriptKey")
+                .lean()
+            : null;
+
+          let folderScriptKey = safeScriptKey(folder?.aiScriptKey);
+          if (!folder?._id && settingsScriptKey) {
+            folder = await (Folder as any)
+              .findOne({ userEmail: ownerEmail, aiScriptKey: settingsScriptKey })
+              .select("_id aiScriptKey")
+              .lean();
+            folderScriptKey = safeScriptKey(folder?.aiScriptKey);
+          }
+
+          const validFolderScriptKey =
+            folderScriptKey && folderScriptKey !== "default" ? folderScriptKey : "";
+          const scriptKey = validFolderScriptKey || settingsScriptKey;
+          const voiceKey = safeScriptKey(aiSettings.aiInboundVoiceKey) || "jacob";
+
+          if (!folder?._id || !scriptKey) {
+            console.warn("[inbound-ai] bootstrap skipped", {
+              reason: !scriptKey ? "missing_script_key" : "folder_not_found",
+              ownerEmail,
+              callSid,
+              leadId,
+              folderId,
+            });
+          } else {
+            const now = new Date();
+            const aiSession: any = await (AICallSession as any).findOneAndUpdate(
+              { sourceCallSid: callSid, callDirection: "inbound" },
+              {
+                $setOnInsert: {
+                  userEmail: ownerEmail,
+                  folderId: folder._id,
+                  leadIds: [leadDoc._id],
+                  fromNumber: to,
+                  callDirection: "inbound",
+                  sourceCallSid: callSid,
+                  scriptKey,
+                  voiceKey,
+                  total: 1,
+                  lastIndex: 0,
+                  status: "running",
+                  startedAt: now,
+                  completedAt: null,
+                  errorMessage: null,
+                },
+              },
+              { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
+
+            const twiml = buildAiInboundTwiml({
+              streamUrl,
+              sessionId: String(aiSession._id),
+              leadId,
+              userEmail: ownerEmail,
+            });
+
+            console.log("[inbound-ai] streaming call", {
+              ownerEmail,
+              callSid,
+              leadId,
+              sessionId: String(aiSession._id),
+              to: maskPhone(to),
+              from: maskPhone(from),
+            });
+
+            res.setHeader("Content-Type", "text/xml");
+            return res.status(200).send(twiml);
+          }
+        }
+      }
+    }
+  } catch (e: any) {
+    console.warn("[inbound-ai] bootstrap failed; falling back to human routing", {
+      ownerEmail: ownerEmail || null,
+      callSid,
+      reason: e?.message || String(e),
+    });
   }
 
   // ✅ MOBILE INBOUND MODE (flagged):

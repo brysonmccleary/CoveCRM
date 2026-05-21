@@ -7,6 +7,15 @@ const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
 
+function xmlEscape(value: any): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { key, sessionId, leadId, callSid, exactTimeText, startTimeUtc, leadTimeZone, agentTimeZone, userEmail, agentName } = req.query as Record<string, string>;
 
@@ -15,6 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const agentFirst = (agentName || "our agent").split(" ")[0] || "our agent";
+  const safeAgentFirst = xmlEscape(agentFirst);
 
   // Twilio sends DialCallStatus as form-encoded body
   const body = req.body as Record<string, string> | undefined;
@@ -81,7 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (booked) {
       return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna" rate="90%">${agentFirst} wasn't available right now, but we've got your appointment scheduled. They'll reach out at the time we discussed. Have a great day!</Say>
+  <Say voice="Polly.Joanna" rate="90%">${safeAgentFirst} wasn't available right now, but we've got your appointment scheduled. They'll reach out at the time we discussed. Have a great day!</Say>
   <Hangup/>
 </Response>`);
     }
