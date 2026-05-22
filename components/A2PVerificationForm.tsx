@@ -21,6 +21,13 @@ type A2PStatusApiResponse = {
     hasBrand?: boolean;
     hasCampaign?: boolean;
   };
+  failure?: {
+    simpleTitle?: string;
+    simpleExplanation?: string;
+    requiredFields?: string[];
+    userActionNeeded?: boolean;
+    canAutoResubmit?: boolean;
+  } | null;
 };
 
 type A2PStatusState =
@@ -170,8 +177,9 @@ export default function A2PVerificationForm() {
       if (declined) {
         return {
           state: "declined",
-          title: "A2P Declined – changes required",
+          title: resp.failure?.simpleTitle || "A2P Declined – changes required",
           description:
+            resp.failure?.simpleExplanation ||
             resp.declinedReason ||
             "Reviewers declined your submission. Update your opt-in details and sample messages, then resubmit.",
         };
@@ -687,8 +695,9 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
                 if (declined) {
                   return {
                     state: "declined",
-                    title: "A2P Declined – changes required",
+                    title: resp.failure?.simpleTitle || "A2P Declined – changes required",
                     description:
+                      resp.failure?.simpleExplanation ||
                       resp.declinedReason ||
                       "Reviewers declined your submission. Update your opt-in details and sample messages, then resubmit.",
                   };

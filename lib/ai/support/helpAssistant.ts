@@ -7,6 +7,8 @@ import { ensureSupportKnowledgeSeeded } from "./seedSupportKnowledge";
 import { priceOpenAIUsage } from "@/lib/billing/openaiPricing";
 import {
   getA2PStatus,
+  getA2PProposalStatus,
+  getA2PSupportEmailStatus,
   getAIFeatureStatus,
   getFolderMappings,
   inspectLeadSnapshot,
@@ -31,6 +33,8 @@ const MAX_USER_MESSAGE_CHARS = 1200;
 const SUPPORT_TOOL_DEFS = [
   { name: "getTwilioStatus", description: "Inspect Twilio and phone-number setup for the tenant." },
   { name: "getA2PStatus", description: "Inspect A2P registration and messaging readiness." },
+  { name: "getA2PProposalStatus", description: "Read-only: inspect the latest A2P failure correction proposal for the tenant (status, title, autoEligible, createdAt). Do not claim any action was taken." },
+  { name: "getA2PSupportEmailStatus", description: "Read-only: inspect the latest A2P support email draft for the tenant (status, subject, createdAt). Do not claim an email was sent." },
   { name: "getMetaStatus", description: "Inspect Meta/Facebook integration state." },
   { name: "getRecentImportErrors", description: "Inspect recent lead import issues." },
   { name: "getRecentSmsFailures", description: "Inspect recent SMS delivery failures." },
@@ -43,6 +47,8 @@ const SUPPORT_TOOL_DEFS = [
 const SUPPORT_TOOL_RUNNERS: Record<string, (userEmail: string) => Promise<any>> = {
   getTwilioStatus,
   getA2PStatus,
+  getA2PProposalStatus,
+  getA2PSupportEmailStatus,
   getMetaStatus,
   getRecentImportErrors,
   getRecentSmsFailures,
@@ -105,6 +111,17 @@ function compactSupportContextForPrompt(supportContext: any) {
             messagingReady: Boolean(supportContext.messagingStatus.a2p.profile.messagingReady),
             brandStatus: supportContext.messagingStatus.a2p.profile.brandStatus || "",
             lastError: truncateText(supportContext.messagingStatus.a2p.profile.lastError, 120),
+            failure: supportContext.messagingStatus.a2p.profile.failure
+              ? {
+                  simpleTitle: truncateText(supportContext.messagingStatus.a2p.profile.failure.simpleTitle, 120),
+                  simpleExplanation: truncateText(supportContext.messagingStatus.a2p.profile.failure.simpleExplanation, 300),
+                  requiredFields: Array.isArray(supportContext.messagingStatus.a2p.profile.failure.requiredFields)
+                    ? supportContext.messagingStatus.a2p.profile.failure.requiredFields.slice(0, 10).map((f: any) => truncateText(f, 80))
+                    : [],
+                  userActionNeeded: Boolean(supportContext.messagingStatus.a2p.profile.failure.userActionNeeded),
+                  canAutoResubmit: Boolean(supportContext.messagingStatus.a2p.profile.failure.canAutoResubmit),
+                }
+              : null,
           }
         : null,
       recentSmsFailures: summarizeRecentFailures(supportContext?.messagingStatus?.recentSmsFailures, 3),
@@ -460,6 +477,18 @@ function buildA2PAnswer(toolResults: Record<string, any>, supportContext: any) {
   if (a2p.messagingReady === true) {
     return "Your A2P setup looks approved and messaging-ready.";
   }
+  const failure = a2p.failure || null;
+  if (failure?.simpleExplanation) {
+    const parts: string[] = [failure.simpleTitle || "Your A2P registration was not approved."];
+    parts.push(failure.simpleExplanation);
+    if (Array.isArray(failure.requiredFields) && failure.requiredFields.length > 0) {
+      parts.push(`Information needed: ${failure.requiredFields.join(", ")}.`);
+    }
+    if (failure.userActionNeeded) {
+      parts.push("You will need to update your registration details and resubmit.");
+    }
+    return parts.join(" ");
+  }
   const bits = [a2p.registrationStatus, a2p.applicationStatus, a2p.brandStatus, a2p.lastError]
     .filter(Boolean)
     .map((item) => String(item));
@@ -664,6 +693,7 @@ export async function runHelpAssistant({
                 "- For operational issues, still diagnose clearly and step by step when needed.",
                 "- You may explain A2P, phone numbers, leads, folders, drips, SMS/text thread failures, Meta, imports, billing/usage, and AI feature status using real account data.",
                 "- You may recommend fixes and tell the user what an admin can review, but do not claim A2P resubmission, email sending, billing changes, or other actions happened unless backend results explicitly confirm it.",
+                "- When using getA2PProposalStatus or getA2PSupportEmailStatus, only describe what the status field says. Never claim a resubmission was made or an email was sent based solely on proposal/draft status.",
                 "- Do not promise unsupported actions or guaranteed A2P approval.",
               ].join("\n"),
             },

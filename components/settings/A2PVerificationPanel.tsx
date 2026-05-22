@@ -36,6 +36,13 @@ interface A2PStatusResponse {
     hasCampaign: boolean;
     hasMessagingService: boolean;
   };
+  failure?: {
+    simpleTitle?: string;
+    simpleExplanation?: string;
+    requiredFields?: string[];
+    userActionNeeded?: boolean;
+    canAutoResubmit?: boolean;
+  } | null;
 }
 
 export default function A2PVerificationPanel() {
@@ -164,22 +171,41 @@ export default function A2PVerificationPanel() {
 
           {showDeclinedGuidance && (
             <div className="rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm text-red-200 space-y-1">
-              <p className="font-semibold">Your registration was rejected.</p>
-              <p>
-                Carriers did not accept your A2P brand or campaign details. This
-                usually means some of your business information (legal name,
-                tax ID, address, website, or sample messages) did not match
-                their records or policies.
+              <p className="font-semibold">
+                {status.failure?.simpleTitle || "Your registration was rejected."}
               </p>
-              <p>
-                Review the information in the form below, correct any issues,
-                and submit again. If you believe this is a mistake, contact
-                support with your brand and campaign IDs.
-              </p>
+              {status.failure?.simpleExplanation ? (
+                <p>{status.failure.simpleExplanation}</p>
+              ) : (
+                <>
+                  <p>
+                    Carriers did not accept your A2P brand or campaign details. This
+                    usually means some of your business information (legal name,
+                    tax ID, address, website, or sample messages) did not match
+                    their records or policies.
+                  </p>
+                  <p>
+                    Review the information in the form below, correct any issues,
+                    and submit again. If you believe this is a mistake, contact
+                    support with your brand and campaign IDs.
+                  </p>
+                </>
+              )}
+              {Array.isArray(status.failure?.requiredFields) &&
+                status.failure!.requiredFields!.length > 0 && (
+                  <div className="pt-1">
+                    <p className="font-semibold">Information needed:</p>
+                    <ul className="list-disc list-inside mt-1 space-y-0.5">
+                      {status.failure!.requiredFields!.map((field) => (
+                        <li key={field}>{field}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
             </div>
           )}
 
-          {status.declinedReason && (
+          {status.declinedReason && !status.failure?.simpleExplanation && (
             <div className="rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm text-red-200">
               <p className="font-semibold mb-1">Why it was declined:</p>
               <p>{status.declinedReason}</p>

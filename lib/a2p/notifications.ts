@@ -116,7 +116,7 @@ async function sendWithSendGrid(msg: EmailBase) {
   return true;
 }
 
-async function safeSendEmail(msg: EmailBase) {
+export async function safeSendEmail(msg: EmailBase) {
   // Try Resend (with backoff), then SendGrid, else soft-fail
   if (await sendWithResend(msg)) return true;
   if (await sendWithSendGrid(msg)) return true;

@@ -5,6 +5,8 @@ import Number from "@/models/Number";
 import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
 import Lead from "@/models/Lead";
+import AdminAiActionProposal from "@/models/AdminAiActionProposal";
+import SupportEmailDraft from "@/models/SupportEmailDraft";
 
 function truncateText(value: any, maxChars: number) {
   const text = String(value || "").trim();
@@ -47,6 +49,15 @@ export async function getA2PStatus(userEmail: string) {
           campaignSid: profile.campaignSid || profile.usa2pSid || null,
           messagingServiceSid: profile.messagingServiceSid || null,
           lastError: profile.lastError || "",
+          failure: profile.failure
+            ? {
+                simpleTitle: profile.failure.simpleTitle || null,
+                simpleExplanation: profile.failure.simpleExplanation || null,
+                requiredFields: Array.isArray(profile.failure.requiredFields) ? profile.failure.requiredFields : [],
+                userActionNeeded: Boolean(profile.failure.userActionNeeded),
+                canAutoResubmit: Boolean(profile.failure.canAutoResubmit),
+              }
+            : null,
         }
       : null,
   };
@@ -215,6 +226,39 @@ export async function inspectRecentTextThreads(userEmail: string) {
         createdAt: item?.createdAt || null,
       })),
     }));
+}
+
+export async function getA2PProposalStatus(userEmail: string) {
+  await mongooseConnect();
+  const proposal = await (AdminAiActionProposal as any)
+    .findOne({ targetUserEmail: userEmail, actionType: "a2p_resubmission" })
+    .sort({ createdAt: -1 })
+    .lean();
+  if (!proposal) return { proposal: null };
+  return {
+    proposal: {
+      status: String(proposal.status || ""),
+      title: String(proposal.title || ""),
+      autoEligible: Boolean(proposal.autoEligible),
+      createdAt: proposal.createdAt || null,
+    },
+  };
+}
+
+export async function getA2PSupportEmailStatus(userEmail: string) {
+  await mongooseConnect();
+  const draft = await (SupportEmailDraft as any)
+    .findOne({ userEmail, source: "a2p_failure" })
+    .sort({ createdAt: -1 })
+    .lean();
+  if (!draft) return { draft: null };
+  return {
+    draft: {
+      status: String(draft.status || ""),
+      subject: String(draft.subject || ""),
+      createdAt: draft.createdAt || null,
+    },
+  };
 }
 
 export async function inspectLeadSnapshot(userEmail: string) {

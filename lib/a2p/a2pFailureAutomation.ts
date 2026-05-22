@@ -12,6 +12,7 @@ import {
 } from "@/lib/admin-ai/a2pCorrectionService";
 import { canAutoExecuteA2PFix, getRiskLevel } from "@/lib/admin-ai/safety";
 import { executeA2PResubmission } from "./a2pResubmissionExecutor";
+import { safeSendEmail } from "./notifications";
 
 type A2PFailureInput = {
   userId?: string;
@@ -221,6 +222,33 @@ export async function generateA2PCorrectionWithAI(context: any) {
   });
 }
 
+async function notifyAdminOfNewFailureProposal(opts: {
+  proposalId: string;
+  targetUserEmail: string;
+  classification: string;
+  confidence: number;
+  simpleTitle: string;
+}) {
+  try {
+    const to = (process.env.A2P_ADMIN_NOTIFY_EMAIL || "").trim();
+    if (!to) return;
+
+    const subject = "[CoveCRM] New A2P failure proposal created";
+    const lines = [
+      `Proposal ID:     ${opts.proposalId}`,
+      `Target user:     ${opts.targetUserEmail}`,
+      `Classification:  ${opts.classification || "(none)"}`,
+      `Confidence:      ${typeof opts.confidence === "number" ? opts.confidence : "(none)"}`,
+      opts.simpleTitle ? `Failure summary: ${opts.simpleTitle}` : "",
+    ].filter(Boolean);
+    const text = lines.join("\n");
+
+    await safeSendEmail({ to, subject, text });
+  } catch {
+    // fire-and-forget: never throw, never block proposal creation
+  }
+}
+
 export async function createA2PFailureProposal(context: any, aiDraft: A2PCorrectionDraft) {
   const targetUserId = String(context?.user?.id || context?.a2p?.userId || "");
   const targetUserEmail = String(context?.user?.email || "").toLowerCase();
@@ -283,6 +311,17 @@ export async function createA2PFailureProposal(context: any, aiDraft: A2PCorrect
     proposedActions: [{ actionType: "a2p_resubmission", proposalId: String(proposal._id), autoEligible: autoGate.allowed }],
     metadata: { proposalId: String(proposal._id), autoGate },
   });
+
+  // Fire-and-forget admin awareness notification — never blocks, never throws.
+  // Only fires for NEW proposals (existing/deduped proposals return early above).
+  void notifyAdminOfNewFailureProposal({
+    proposalId: String(proposal._id),
+    targetUserEmail,
+    classification: String(aiDraft.classification || ""),
+    confidence: Number(aiDraft.confidence || 0),
+    simpleTitle: String((proposal.proposedPayload as any)?.simpleTitle || ""),
+  }).catch(() => {});
+
   return proposal;
 }
 
