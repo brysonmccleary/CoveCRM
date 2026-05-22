@@ -1093,21 +1093,13 @@ async function replayPendingCommittedTurn(
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
       if (!markCommittedTurnHandled(state, turnKey, "replay how-long")) return;
-      const keepLiveTransferContext =
-        !!state.pendingLiveTransferAvailabilityConfirm ||
-        (!!state.context?.liveTransferEnabled && !!state.context?.liveTransferPhone);
-      const lineToSay = keepLiveTransferContext
-        ? "I understand — it’s usually about 5 to 10 minutes. Does right now work for you?"
-        : "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
+      const lineToSay =
+        "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
 
-      if (keepLiveTransferContext) {
-        state.pendingLiveTransferAvailabilityConfirm = true;
-        state.pendingLiveTransferAvailabilityAttempts = 0;
-      }
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
       state.userAudioMsBuffered = 0;
@@ -1124,43 +1116,6 @@ async function replayPendingCommittedTurn(
       state.lastPromptLine = lineToSay;
       state.lastResponseCreateAtMs = Date.now();
 
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-      state.phase = "in_call";
-      return;
-    }
-
-    if (lastUserText && isCostCoverageDetailsQuestion(lastUserText)) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay cost/details")) return;
-      const useTransferContext = !!state.context?.liveTransferEnabled && !!state.context?.liveTransferPhone;
-      const agentFirstName = getAgentFirstName(state.context!);
-      const lineToSay = useTransferContext
-        ? `Bryson covers all of that on the call. I have ${agentFirstName} available right now. Does right now work for you?`
-        : "Bryson covers all of that on the call. Would later today or tomorrow be better?";
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-
-      if (useTransferContext) {
-        state.pendingLiveTransferAvailabilityConfirm = true;
-        state.pendingLiveTransferAvailabilityAttempts = 0;
-      }
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      setWaitingForResponse(state, true, "response.create (cost/details)");
-      setAiSpeaking(state, true, "response.create (cost/details)");
-      setResponseInFlight(state, true, "response.create (cost/details)");
-      state.outboundOpenAiDone = false;
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
       state.awaitingUserAnswer = true;
       state.awaitingAnswerForStepIndex = expectedAnswerIdx;
@@ -1527,91 +1482,7 @@ async function replayPendingCommittedTurn(
       return;
     }
 
-    if (
-      hasTranscript &&
-      hasExplicitLiveTransferIntent(lastUserText) &&
-      !hasNegativeLiveTransferNowIntent(lastUserText) &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone &&
-      !state.transferStarting &&
-      !state.transferInProgress &&
-      String(state.phase) !== "ended"
-    ) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay explicit live-transfer")) return;
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-      void performLiveTransfer(twilioWs, state);
-      return;
-    }
-
-    const shouldAskStepOneLiveTransferAvailability =
-      idx === 1 &&
-      expectedAnswerIdx === 0 &&
-      stepType === "open_question" &&
-      hasTranscript &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone &&
-      !state.transferStarting &&
-      !state.transferInProgress &&
-      String(state.phase) !== "ended" &&
-      isStepOneCoverageSubjectAnswer(lastUserText);
-    if (shouldAskStepOneLiveTransferAvailability) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay step-one live-transfer availability")) return;
-      const lineToSay = getLiveTransferAvailabilityLine(state.context!);
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-
-      state.pendingLiveTransferAvailabilityConfirm = true;
-      state.pendingLiveTransferAvailabilityAttempts = 0;
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      setWaitingForResponse(state, true, "response.create (step-one live-transfer availability)");
-      setAiSpeaking(state, true, "response.create (step-one live-transfer availability)");
-      setResponseInFlight(state, true, "response.create (step-one live-transfer availability)");
-      state.outboundOpenAiDone = false;
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-      state.phase = "in_call";
-      return;
-    }
-
     if (!treatAsAnswer || forceNotAnswer) {
-      if (
-        hasTranscript &&
-        hasExplicitLiveTransferIntent(lastUserText) &&
-        !hasNegativeLiveTransferNowIntent(lastUserText) &&
-        !!state.context?.liveTransferEnabled &&
-        !!state.context?.liveTransferPhone &&
-        !state.transferStarting &&
-        !state.transferInProgress &&
-        String(state.phase) !== "ended"
-      ) {
-        if (!markCommittedTurnHandled(state, turnKey, "replay explicit live-transfer reprompt intercept")) return;
-        state.awaitingUserAnswer = false;
-        state.awaitingAnswerForStepIndex = undefined;
-        state.userAudioMsBuffered = 0;
-        state.lastUserTranscript = "";
-        state.lowSignalCommitCount = 0;
-        state.repromptCountForCurrentStep = 0;
-        void performLiveTransfer(twilioWs, state);
-        return;
-      }
-
       if (!markCommittedTurnHandled(state, turnKey, "replay reprompt")) return;
 
       // ✅ Guard: if we only got a hesitation fragment, DO NOT reprompt (reprompts cause cut-offs).
@@ -2340,26 +2211,6 @@ function isHowLongDurationQuestion(textRaw: string): boolean {
   );
 }
 
-function isCostCoverageDetailsQuestion(textRaw: string): boolean {
-  const t = String(textRaw || "").trim().toLowerCase();
-  if (!t) return false;
-  const normalized = t.replace(/[?.!,]+$/g, "").replace(/\s+/g, " ").trim();
-  return (
-    normalized.includes("how much") ||
-    normalized.includes("cost") ||
-    normalized.includes("price") ||
-    normalized.includes("pricing") ||
-    normalized.includes("premium") ||
-    normalized.includes("details") ||
-    normalized.includes("coverage") ||
-    normalized.includes("program info") ||
-    normalized.includes("program information") ||
-    normalized.includes("what is this program") ||
-    normalized.includes("what's this program") ||
-    normalized.includes("whats this program")
-  );
-}
-
 function hasExplicitLiveTransferIntent(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
@@ -2393,23 +2244,6 @@ function hasExplicitLiveTransferIntent(textRaw: string): boolean {
     normalized.includes("put him on") ||
     wantsAgentNow ||
     nowIntent
-  );
-}
-
-function hasNegativeLiveTransferNowIntent(textRaw: string): boolean {
-  const normalized = String(textRaw || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[?.!,]+$/g, "")
-    .replace(/\s+/g, " ");
-  return (
-    normalized.includes("not right now") ||
-    normalized.includes("right now doesn't work") ||
-    normalized.includes("right now doesnt work") ||
-    normalized.includes("can't right now") ||
-    normalized.includes("cant right now") ||
-    normalized.includes("not now") ||
-    normalized.includes("later")
   );
 }
 
@@ -2846,19 +2680,6 @@ function getLiveTransferTryingLine(ctx?: AICallContext): string {
   return `Okay, let me try and get ${getAgentFirstName(ctx)} on the line. Give me one second.`;
 }
 
-/**
- * Deterministic fallback for outbound scheduler scripts when the lead says something
- * unexpected (objection, question, confusion). Never discusses coverage/options/details.
- * Always routes back to the agent or booking.
- */
-function buildOutboundSchedulerFallbackLine(ctx: AICallContext): string {
-  const agent = getAgentFirstName(ctx);
-  const hasTransfer = !!ctx.liveTransferEnabled && !!ctx.liveTransferPhone;
-  if (hasTransfer) {
-    return `I get what you mean. ${agent} is the licensed agent and will go over that with you on the call. I have ${agent} available right now — does right now work for you?`;
-  }
-  return `I get what you mean. ${agent} is the licensed agent and will go over that with you clearly. Would later today or tomorrow be better for a quick call?`;
-}
 
 function enforceBookingOnlyLine(ctx: AICallContext, lineRaw: string): string {
   let line = String(lineRaw || "").replace(/\s+/g, " ").trim();
@@ -5344,6 +5165,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     transferUrl.searchParams.set("leadName", leadName);
     transferUrl.searchParams.set("agentName", agentFirst);
     transferUrl.searchParams.set("scope", scope);
+    transferUrl.searchParams.set("agentIntro", `Hey ${agentFirst}, this is ${ctx.voiceProfile.aiName || "Alex"}. I have ${leadName} here ready to go over ${scope}. I'll connect you now.`);
     transferUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
     transferUrl.searchParams.set("sessionId", ctx.sessionId || "");
     transferUrl.searchParams.set("leadId", ctx.leadId || "");
@@ -6621,7 +6443,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
   if (t === "input_audio_buffer.committed") {
     state.inputCommitInFlight = false;
-    state.lastInputCommitAtMs = Date.now();
     try {
       if (state.userSpeechCommitWatchdog) {
         clearTimeout(state.userSpeechCommitWatchdog);
@@ -7033,21 +6854,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
       if (!markCommittedTurnHandled(state, turnKey, "how-long")) return;
-      const keepLiveTransferContext =
-        !!state.pendingLiveTransferAvailabilityConfirm ||
-        (!!state.context?.liveTransferEnabled && !!state.context?.liveTransferPhone);
-      const lineToSay = keepLiveTransferContext
-        ? "I understand — it’s usually about 5 to 10 minutes. Does right now work for you?"
-        : "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
+      const lineToSay =
+        "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
 
-      if (keepLiveTransferContext) {
-        state.pendingLiveTransferAvailabilityConfirm = true;
-        state.pendingLiveTransferAvailabilityAttempts = 0;
-      }
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
       state.userAudioMsBuffered = 0;
@@ -7064,43 +6877,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastPromptLine = lineToSay;
       state.lastResponseCreateAtMs = Date.now();
 
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-      state.phase = "in_call";
-      return;
-    }
-
-    if (lastUserText && isCostCoverageDetailsQuestion(lastUserText)) {
-      if (!markCommittedTurnHandled(state, turnKey, "cost/details")) return;
-      const useTransferContext = !!state.context?.liveTransferEnabled && !!state.context?.liveTransferPhone;
-      const agentFirstName = getAgentFirstName(state.context!);
-      const lineToSay = useTransferContext
-        ? `Bryson covers all of that on the call. I have ${agentFirstName} available right now. Does right now work for you?`
-        : "Bryson covers all of that on the call. Would later today or tomorrow be better?";
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-
-      if (useTransferContext) {
-        state.pendingLiveTransferAvailabilityConfirm = true;
-        state.pendingLiveTransferAvailabilityAttempts = 0;
-      }
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      setWaitingForResponse(state, true, "response.create (cost/details)");
-      setAiSpeaking(state, true, "response.create (cost/details)");
-      setResponseInFlight(state, true, "response.create (cost/details)");
-      state.outboundOpenAiDone = false;
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
       state.awaitingUserAnswer = true;
       state.awaitingAnswerForStepIndex = expectedAnswerIdx;
@@ -7444,13 +7220,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText);
 
     const shouldTriggerLiveTransfer =
+      canAdvance &&
+      idx === 1 &&
       hasTranscript &&
       hasExplicitLiveTransferIntent(lastUserText) &&
-      !hasNegativeLiveTransferNowIntent(lastUserText) &&
       !!state.context?.liveTransferEnabled &&
       !!state.context?.liveTransferPhone &&
-      !state.transferStarting &&
-      !state.transferInProgress &&
       state.phase !== "ended";
 
     if (shouldTriggerLiveTransfer) {
@@ -7494,73 +7269,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       return;
     }
 
-    const shouldAskStepOneLiveTransferAvailability =
-      idx === 1 &&
-      expectedAnswerIdx === 0 &&
-      stepType === "open_question" &&
-      hasTranscript &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone &&
-      !state.transferStarting &&
-      !state.transferInProgress &&
-      state.phase !== "ended" &&
-      isStepOneCoverageSubjectAnswer(lastUserText);
-    if (shouldAskStepOneLiveTransferAvailability) {
-      if (!markCommittedTurnHandled(state, turnKey, "step-one live-transfer availability")) return;
-      const lineToSay = getLiveTransferAvailabilityLine(state.context!);
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-
-      state.pendingLiveTransferAvailabilityConfirm = true;
-      state.pendingLiveTransferAvailabilityAttempts = 0;
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      setWaitingForResponse(state, true, "response.create (step-one live-transfer availability)");
-      setAiSpeaking(state, true, "response.create (step-one live-transfer availability)");
-      setResponseInFlight(state, true, "response.create (step-one live-transfer availability)");
-      state.outboundOpenAiDone = false;
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-      state.phase = "in_call";
-      return;
-    }
-
     if (!treatAsAnswer || forceNotAnswer) {
-      if (
-        hasTranscript &&
-        hasExplicitLiveTransferIntent(lastUserText) &&
-        !hasNegativeLiveTransferNowIntent(lastUserText) &&
-        !!state.context?.liveTransferEnabled &&
-        !!state.context?.liveTransferPhone &&
-        !state.transferStarting &&
-        !state.transferInProgress &&
-        state.phase !== "ended"
-      ) {
-        if (!markCommittedTurnHandled(state, turnKey, "explicit live-transfer reprompt intercept")) return;
-        state.awaitingUserAnswer = false;
-        state.awaitingAnswerForStepIndex = undefined;
-        state.userAudioMsBuffered = 0;
-        state.lastUserTranscript = "";
-        state.lowSignalCommitCount = 0;
-        state.repromptCountForCurrentStep = 0;
-        const wsConn = state.openAiWs;
-        if (wsConn) {
-          void performLiveTransfer(wsConn, state);
-        }
-        return;
-      }
-
       if (!markCommittedTurnHandled(state, turnKey, "reprompt")) return;
       // ✅ HOTFIX: Never go silent after a committed user turn.
       // If we didn't accept it as a real answer, immediately reprompt — or use free-response.
@@ -7601,13 +7310,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         try {
           if (!hasTranscript) return false;
           if (!lastUserText || lastUserText.trim().length < 4) return false;
-          const outboundSchedulerFlow =
-            !shouldUseInboundFlow(state.context) &&
-            normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
-          // Outbound scheduler scripts never use generic GPT free-response.
-          // All unknown objections/questions route to the locked scheduler fallback
-          // (handled below in the async block via useOutboundFallback).
-          if (outboundSchedulerFlow) return false;
 
           // Time/availability is handled by the time ladder — don't free-respond to that
           if (stepType === "time_question") return false;
@@ -7629,15 +7331,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         } catch { return false; }
       })();
 
-      // For outbound scheduler scripts, unknown objections/questions use a locked fallback
-      // that acknowledges briefly and routes back to transfer/booking — never GPT free-form.
-      const outboundSchedulerFlowForFallback =
-        !shouldUseInboundFlow(state.context) &&
-        normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
-      const useOutboundFallback = outboundSchedulerFlowForFallback && !useFreeResponse;
-
       try {
-        console.log("[AI-VOICE][TURN-GATE] not-real-answer ->", useFreeResponse ? "free-response" : useOutboundFallback ? "outbound-scheduler-fallback" : "reprompt", {
+        console.log("[AI-VOICE][TURN-GATE] not-real-answer ->", useFreeResponse ? "free-response" : "reprompt", {
           callSid: state.callSid,
           streamSid: state.streamSid,
           stepType,
@@ -7645,7 +7340,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           hasText: !!String(lastUserText || "").trim(),
           n: repromptN,
           useFreeResponse,
-          useOutboundFallback,
         });
       } catch {}
 
@@ -7655,7 +7349,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         try {
           // Free-response turns skip the artificial pause — respond immediately.
           // Script reprompt turns keep it to sound natural.
-          if (!useFreeResponse && !useOutboundFallback) await humanPause();
+          if (!useFreeResponse) await humanPause();
         } catch {}
 
         try {
@@ -7670,15 +7364,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
               stepType: stepType,
             });
             lineForMemory = `[free-response to: "${lastUserText.slice(0, 60)}"]`;
-          } else if (useOutboundFallback) {
-            // Outbound scheduler: acknowledge then route to agent/booking — never discuss details.
-            const fallbackLine = buildOutboundSchedulerFallbackLine(state.context!);
-            instr = buildExactScriptLineInstruction(fallbackLine);
-            lineForMemory = fallbackLine;
-            if (state.context?.liveTransferEnabled && state.context?.liveTransferPhone) {
-              state.pendingLiveTransferAvailabilityConfirm = true;
-              state.pendingLiveTransferAvailabilityAttempts = 0;
-            }
           } else {
             instr = buildStepperTurnInstruction(state.context!, repromptLine, {
               userText: lastUserText,
@@ -7834,35 +7519,16 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         /^(yeah|yep|yes|yup|sure|okay|ok|hi|hello)[,.]?\s*(what'?s? up|what do you (want|need)|what is (this|it)|huh)\??$/i.test(openQText);
 
       if (isOffTopic) {
-        // Don't advance — re-ask deterministically.
-        // For outbound scheduler scripts: always use a deterministic stepper reprompt.
-        // Free-form GPT is disabled on outbound to prevent coverage/sales-call drift.
+        // Don't advance — fire free-response so GPT re-asks conversationally
         const repromptLine = getRepromptLineForStepType(state.context!, stepType, 0);
         if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
 
-        const isOutboundScheduler =
-          !shouldUseInboundFlow(state.context) &&
-          normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
-
-        let offTopicInstr: string;
-        let offTopicLine: string;
-        if (isOutboundScheduler) {
-          // Outbound: acknowledge briefly and route to agent/booking — never discuss details.
-          offTopicLine = buildOutboundSchedulerFallbackLine(state.context!);
-          offTopicInstr = buildExactScriptLineInstruction(offTopicLine);
-          if (state.context?.liveTransferEnabled && state.context?.liveTransferPhone) {
-            state.pendingLiveTransferAvailabilityConfirm = true;
-            state.pendingLiveTransferAvailabilityAttempts = 0;
-          }
-        } else {
-          offTopicLine = repromptLine;
-          offTopicInstr = buildFreeResponseInstruction(state.context!, {
-            userText: lastUserText,
-            currentStepLine: repromptLine,
-            stepType,
-            recentExchanges: state.recentExchanges,
-          });
-        }
+        const freeInstr = buildFreeResponseInstruction(state.context!, {
+          userText: lastUserText,
+          currentStepLine: repromptLine,
+          stepType,
+          recentExchanges: state.recentExchanges,
+        });
 
         (async () => {
           try {
@@ -7872,12 +7538,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             state.outboundOpenAiDone = false;
 
             state.lastPromptSentAtMs = Date.now();
-            state.lastPromptLine = offTopicLine;
+            state.lastPromptLine = repromptLine;
             state.lastResponseCreateAtMs = Date.now();
 
-            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(offTopicInstr, { temperature: 0.75 })));
+            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(freeInstr, { temperature: 0.75 })));
           } catch (e) {
-            try { console.log("[AI-VOICE] open_question off-topic error:", String(e)); } catch {}
+            try { console.log("[AI-VOICE] open_question off-topic free-response error:", String(e)); } catch {}
           }
         })();
         return;
