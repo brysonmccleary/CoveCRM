@@ -16,6 +16,7 @@ import IncomingCallBanner from "@/components/IncomingCallBanner";
 // 🔌 client socket + unread store
 import { connectAndJoin } from "@/lib/socketClient";
 import { useNotifStore } from "@/lib/notificationsStore";
+import { useTimezoneSync } from "@/hooks/useTimezoneSync";
 
 /** Public routes where we must NOT init voice/callback/leads/widgets */
 const PUBLIC_ROUTES = new Set<string>([
@@ -47,6 +48,7 @@ function InnerApp({
 }: Pick<AppProps, "Component" | "pageProps">) {
   const { data: session, status } = useSession();
   const authed = status === "authenticated" && !!session?.user?.email;
+  useTimezoneSync(authed);
 
   const router = useRouter();
 
