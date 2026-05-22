@@ -3583,16 +3583,20 @@ HARD RULES (non-negotiable, always):
 - If they ask cost/coverage/details: "${agent} covers all of that on the call."
 - Use the lead name "${leadName}" only if it flows naturally.
 - After you speak, STOP and wait. Do not fill silence.
+- You are a scheduling assistant only. You are not the licensed agent. Do not run the sales call.
+- Never discuss coverage options, plan options, policy details, underwriting, or program information.
+- Never ask discovery questions. Do not open new topics or invite elaboration.
+- Never say or imply: "tell me more", "what would you like to start with", "let's go through the details", "step by step", "cover options", "coverage options", "coverage you're looking for", "I'm here to help with that", "I'll walk you through", "we can discuss", "explore your options".
+- End ONLY with one of these: "Would later today or tomorrow be better?" or "Does right now work for you?" or the exact current step question. Nothing else.
 ${historyBlock}${stepHint}
 WHAT THE LEAD JUST SAID:
 "${userText}"
 
 YOUR JOB:
-1. Respond naturally to what they said — like a real person would. Be direct, warm, brief.
-2. If they asked something: answer it honestly in 1 sentence (within the hard rules above).
-3. If they said something unexpected: acknowledge it, don't be flustered, keep going.
-4. Gently steer back toward booking. Don't force it if it feels abrupt — be human about it.
-5. End with a soft question that moves things forward (ideally toward a time/day).
+1. Acknowledge what they said in one short sentence — warm, direct, human.
+2. If they asked something: answer it in one sentence using only hard-rule-safe information.
+3. Immediately redirect to the current scheduling objective. Do not linger on their topic.
+4. End with the required closing question above. Do not deviate from it.
 
 KEEP IT SHORT: 2–3 sentences max. No speeches. No over-explaining.
 `.trim();
@@ -7309,11 +7313,20 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       const useFreeResponse = (() => {
         try {
           if (!hasTranscript) return false;
-          if (!lastUserText || lastUserText.trim().length < 4) return false;
+          // Raised from 4 to 8: blocks stale 4-char fillers ("yeah","sure","okay") from reaching GPT
+          if (!lastUserText || lastUserText.trim().length < 8) return false;
 
           // Time/availability is handled by the time ladder — don't free-respond to that
           if (stepType === "time_question") return false;
           if (isTimeIndecisionOrAvailability(lastUserText)) return false;
+
+          // Outbound scheduler: Step 1 open_question must route through the deterministic
+          // isStepOneCoverageSubjectAnswer / shouldAskLiveTransferAvailability path, never GPT.
+          // Stale filler transcripts (race condition) must not produce free-form sales responses.
+          const outboundScheduler =
+            !shouldUseInboundFlow(state.context) &&
+            normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
+          if (outboundScheduler && stepType === "open_question") return false;
 
           // open_question: ALWAYS use free-response for non-answers.
           // GPT will acknowledge what they said and re-ask the question naturally.
@@ -7519,16 +7532,30 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         /^(yeah|yep|yes|yup|sure|okay|ok|hi|hello)[,.]?\s*(what'?s? up|what do you (want|need)|what is (this|it)|huh)\??$/i.test(openQText);
 
       if (isOffTopic) {
-        // Don't advance — fire free-response so GPT re-asks conversationally
-        const repromptLine = getRepromptLineForStepType(state.context!, stepType, 0);
+        // Don't advance — re-ask the current step.
+        // Outbound scheduler: use deterministic reprompt so GPT cannot drift into sales-call mode.
+        // If shouldAskLiveTransferAvailability already set a transfer line above, preserve it.
+        // Non-outbound (inbound, kayla): use free-response so GPT re-asks conversationally.
+        const isOutboundScheduler =
+          !shouldUseInboundFlow(state.context) &&
+          normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
+
+        // For outbound: use whichever line was already chosen (transfer availability or step line).
+        // For inbound/kayla: use free-response GPT.
+        const offTopicLine = isOutboundScheduler
+          ? lineToSay  // already set by shouldAskLiveTransferAvailability or enforceBookingOnlyLine above
+          : getRepromptLineForStepType(state.context!, stepType, 0);
+
         if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
 
-        const freeInstr = buildFreeResponseInstruction(state.context!, {
-          userText: lastUserText,
-          currentStepLine: repromptLine,
-          stepType,
-          recentExchanges: state.recentExchanges,
-        });
+        const offTopicInstr = isOutboundScheduler
+          ? buildExactScriptLineInstruction(offTopicLine)
+          : buildFreeResponseInstruction(state.context!, {
+              userText: lastUserText,
+              currentStepLine: offTopicLine,
+              stepType,
+              recentExchanges: state.recentExchanges,
+            });
 
         (async () => {
           try {
@@ -7538,12 +7565,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             state.outboundOpenAiDone = false;
 
             state.lastPromptSentAtMs = Date.now();
-            state.lastPromptLine = repromptLine;
+            state.lastPromptLine = offTopicLine;
             state.lastResponseCreateAtMs = Date.now();
 
-            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(freeInstr, { temperature: 0.75 })));
+            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(offTopicInstr, { temperature: 0.75 })));
           } catch (e) {
-            try { console.log("[AI-VOICE] open_question off-topic free-response error:", String(e)); } catch {}
+            try { console.log("[AI-VOICE] open_question off-topic error:", String(e)); } catch {}
           }
         })();
         return;
