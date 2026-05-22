@@ -1583,6 +1583,62 @@ async function replayPendingCommittedTurn(
       state.pendingLiveTransferAvailabilityAttempts = 0;
     }
 
+    // ── STEP 1 HARD ROUTE (replay path mirror) ──
+    // Same guard as main committed handler: outbound Step 1 coverage-subject answer must use
+    // exact-line TTS only. Never reach buildStepperTurnInstruction.
+    {
+      const isOutboundSchedulerS1 =
+        !shouldUseInboundFlow(state.context) &&
+        normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
+      if (
+        isOutboundSchedulerS1 &&
+        canAdvance &&
+        idx === 1 &&
+        expectedAnswerIdx === 0 &&
+        hasTranscript &&
+        isStepOneCoverageSubjectAnswer(lastUserText)
+      ) {
+        if (!markCommittedTurnHandled(state, turnKey, "replay-step1-hard-route")) return;
+        const step1Instr = buildExactScriptLineInstruction(lineToSay);
+        try {
+          console.log("[AI-VOICE][STEP1-HARD-ROUTE]", {
+            callSid: state.callSid,
+            lastUserText,
+            liveTransferEnabled: !!state.context?.liveTransferEnabled,
+            hasLiveTransferPhone: !!state.context?.liveTransferPhone,
+            lineToSay,
+          });
+        } catch {}
+        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+        pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
+        if (lastUserText) {
+          state.lastAcceptedUserText = lastUserText;
+          state.lastAcceptedStepType = stepType;
+          state.lastAcceptedStepIndex = expectedAnswerIdx;
+        }
+        state.awaitingUserAnswer = false;
+        state.awaitingAnswerForStepIndex = undefined;
+        state.userAudioMsBuffered = 0;
+        state.lastUserTranscript = "";
+        state.lowSignalCommitCount = 0;
+        state.repromptCountForCurrentStep = 0;
+        await humanPause();
+        setWaitingForResponse(state, true, "response.create (replay-step1-hard-route)");
+        setAiSpeaking(state, true, "response.create (replay-step1-hard-route)");
+        setResponseInFlight(state, true, "response.create (replay-step1-hard-route)");
+        state.outboundOpenAiDone = false;
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = lineToSay;
+        state.lastResponseCreateAtMs = Date.now();
+        if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(step1Instr)));
+        state.scriptStepIndex = shouldAskLiveTransferAvailability ? idx : Math.min(idx + 1, Math.max(0, steps.length - 1));
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = expectedAnswerIdx;
+        state.phase = "in_call";
+        return;
+      }
+    }
+
     // ✅ Day-choice answer handling:
     // If the current step is "today or tomorrow" and they answer with a day ("tomorrow")
     // but not an exact clock time yet, offer concrete options and HOLD position.
@@ -7420,6 +7476,65 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       lineToSay = getLiveTransferAvailabilityLine(state.context!);
       state.pendingLiveTransferAvailabilityConfirm = true;
       state.pendingLiveTransferAvailabilityAttempts = 0;
+    }
+
+    // ── STEP 1 HARD ROUTE ──
+    // Outbound scheduler: Step 1 coverage-subject answer ("myself", "both of us", etc.) must NEVER
+    // reach buildStepperTurnInstruction or buildFreeResponseInstruction — those allow GPT to rephrase
+    // and can produce off-script sales-call output. Send exactly the already-computed lineToSay via TTS.
+    //   liveTransfer available → lineToSay = getLiveTransferAvailabilityLine (set above)
+    //   no liveTransfer        → lineToSay = steps[idx] via enforceBookingOnlyLine (set above)
+    {
+      const isOutboundSchedulerS1 =
+        !shouldUseInboundFlow(state.context) &&
+        normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
+      if (
+        isOutboundSchedulerS1 &&
+        canAdvance &&
+        idx === 1 &&
+        expectedAnswerIdx === 0 &&
+        hasTranscript &&
+        isStepOneCoverageSubjectAnswer(lastUserText)
+      ) {
+        if (!markCommittedTurnHandled(state, turnKey, "step1-hard-route")) return;
+        const step1Instr = buildExactScriptLineInstruction(lineToSay);
+        try {
+          console.log("[AI-VOICE][STEP1-HARD-ROUTE]", {
+            callSid: state.callSid,
+            lastUserText,
+            liveTransferEnabled: !!state.context?.liveTransferEnabled,
+            hasLiveTransferPhone: !!state.context?.liveTransferPhone,
+            lineToSay,
+          });
+        } catch {}
+        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+        pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
+        if (lastUserText) {
+          state.lastAcceptedUserText = lastUserText;
+          state.lastAcceptedStepType = stepType;
+          state.lastAcceptedStepIndex = expectedAnswerIdx;
+        }
+        state.awaitingUserAnswer = false;
+        state.awaitingAnswerForStepIndex = undefined;
+        state.userAudioMsBuffered = 0;
+        state.lastUserTranscript = "";
+        state.lowSignalCommitCount = 0;
+        state.repromptCountForCurrentStep = 0;
+        await humanPause();
+        setWaitingForResponse(state, true, "response.create (step1-hard-route)");
+        setAiSpeaking(state, true, "response.create (step1-hard-route)");
+        setResponseInFlight(state, true, "response.create (step1-hard-route)");
+        state.outboundOpenAiDone = false;
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = lineToSay;
+        state.lastResponseCreateAtMs = Date.now();
+        if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(step1Instr)));
+        state.scriptStepIndex = shouldAskLiveTransferAvailability ? idx : Math.min(idx + 1, Math.max(0, steps.length - 1));
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = expectedAnswerIdx;
+        state.phase = "in_call";
+        return;
+      }
     }
 
     // ✅ Day-choice answer handling:
