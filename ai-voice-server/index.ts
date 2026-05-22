@@ -98,6 +98,7 @@ function buildRealtimeResponseCreate(
   const response: any = {
     output_modalities: ["audio"],
     instructions,
+    temperature: options?.temperature ?? 0.6,
     audio: {
       output: {
         format: { type: "audio/pcmu" },
@@ -1167,6 +1168,11 @@ async function replayPendingCommittedTurn(
         state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
+      } else {
+        // Fallthrough: ambiguous response (e.g. "what?") — re-ask the same availability question.
+        // Re-arm so the next commit is accepted and routed back into this block.
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = expectedAnswerIdx;
       }
       return;
     }
@@ -2705,13 +2711,20 @@ function isLiveTransferAvailabilityNo(textRaw: string): boolean {
   return (
     t === "no" ||
     t === "nope" ||
+    t === "what" ||
+    t === "huh" ||
+    t === "who is this" ||
+    t === "what do you mean" ||
     t.includes("not now") ||
     t.includes("later") ||
     t.includes("busy") ||
     t.includes("can't right now") ||
     t.includes("cannot right now") ||
     t.includes("don t have time") ||
-    t.includes("don't have time")
+    t.includes("don't have time") ||
+    t.includes("who is") ||
+    t.includes("what do you mean") ||
+    t.includes("confused")
   );
 }
 
@@ -4341,13 +4354,19 @@ No extra words.
 function buildExactScriptLineInstruction(lineRaw: string): string {
   const line = String(lineRaw || "").trim();
   return `
-Say this exact script line and nothing else:
+Your ONLY job this turn is to say this exact line. Nothing else.
+
 "${line}"
 
-Do not add "thanks for answering."
-Do not paraphrase "request you put in."
-Use a natural phone tone.
-No extra words.
+HARD STOP RULES — non-negotiable:
+- Say ONLY the line above. Stop immediately after.
+- Do NOT add any words before or after.
+- Do NOT ask about coverage, amounts, health, or any discovery question.
+- Do NOT ask what they need or what they are looking for.
+- Do NOT summarize, explain, or acknowledge what they said.
+- Do NOT say "thanks", "great", "got it", "that helps", or any filler.
+- Do NOT continue into the next script step.
+- After saying the line, STOP and wait in silence.
 `.trim();
 }
 
@@ -6945,6 +6964,11 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
+      } else {
+        // Fallthrough: ambiguous response (e.g. "what?") — re-ask the same availability question.
+        // Re-arm so the next commit is accepted and routed back into this block.
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = expectedAnswerIdx;
       }
       return;
     }
