@@ -98,7 +98,6 @@ function buildRealtimeResponseCreate(
   const response: any = {
     output_modalities: ["audio"],
     instructions,
-    temperature: options?.temperature ?? 0.6,
     audio: {
       output: {
         format: { type: "audio/pcmu" },
