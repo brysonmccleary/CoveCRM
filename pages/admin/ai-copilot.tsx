@@ -16,6 +16,56 @@ type Proposal = {
   updatedAt?: string;
 };
 
+type SimulationResult = {
+  simulationFingerprint: string;
+  simulatedAt: string;
+  canProceed: boolean;
+  riskLevel: "low" | "medium" | "high" | "blocked";
+  requiredAdminApproval: true;
+  blockers: string[];
+  warnings: string[];
+  currentState: {
+    profileId: string;
+    userEmail: string;
+    messagingReady: boolean;
+    applicationStatus: string;
+    registrationStatus: string;
+    brandSid: string | null;
+    brandStatus: string | null;
+    campaignSid: string | null;
+    campaignStatus: string | null;
+    trustProductSid: string | null;
+    profileSid: string | null;
+    failure: { stage?: string; simpleTitle?: string; signature?: string } | null;
+    profileUpdatedAt: string;
+    lastSubmittedAt: string | null;
+    campaignSubmitAttempts: number;
+  };
+  proposedChanges: {
+    proposalId: string;
+    classification: string;
+    confidence: number;
+    issueType: string;
+    likelyCause: string;
+    fieldsToUpdate: Record<string, { current: string | null; proposed: string | null }>;
+    wouldTriggerChainRotation: boolean;
+    wouldTouchBrand: boolean;
+    wouldTouchCampaign: boolean;
+    wouldTouchTrustProduct: boolean;
+  };
+  intendedDbMutations: string[];
+  intendedTwilioActions: string[];
+  forbiddenActionsConfirmedNotUsed: {
+    noTwilioCallsMade: boolean;
+    noSmsSent: boolean;
+    noEmailSent: boolean;
+    noDbWritten: boolean;
+    noStartTsInvoked: boolean;
+    noExecutorConnected: boolean;
+    noBillingTouched: boolean;
+  };
+};
+
 type EmailDraft = {
   _id: string;
   userEmail: string;
@@ -35,6 +85,11 @@ export default function AdminAiCopilotPage() {
   const [providerHealth, setProviderHealth] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [supportEmailSendEnabled, setSupportEmailSendEnabled] = useState(false);
+
+  // Per-proposal dry-run simulation state — keyed by proposal._id
+  const [simulations, setSimulations] = useState<Record<string, SimulationResult>>({});
+  const [simLoading, setSimLoading] = useState<Record<string, boolean>>({});
+  const [simErrors, setSimErrors] = useState<Record<string, string>>({});
 
   const email = String(session?.user?.email || "").toLowerCase();
   const isAdmin = isExperimentalAdminEmail(email);
@@ -84,6 +139,24 @@ export default function AdminAiCopilotPage() {
       await loadData();
     } finally {
       setLoading(false);
+    }
+  };
+
+  const runDryRun = async (proposalId: string) => {
+    setSimLoading((prev) => ({ ...prev, [proposalId]: true }));
+    setSimErrors((prev) => { const next = { ...prev }; delete next[proposalId]; return next; });
+    try {
+      const res = await fetch(`/api/admin/ai/a2p-proposals/${proposalId}/dry-run`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        setSimErrors((prev) => ({ ...prev, [proposalId]: data.error || `HTTP ${res.status}` }));
+      } else {
+        setSimulations((prev) => ({ ...prev, [proposalId]: data.simulation as SimulationResult }));
+      }
+    } catch (err: any) {
+      setSimErrors((prev) => ({ ...prev, [proposalId]: err?.message || "Network error" }));
+    } finally {
+      setSimLoading((prev) => ({ ...prev, [proposalId]: false }));
     }
   };
 
@@ -247,6 +320,169 @@ export default function AdminAiCopilotPage() {
                         </div>
                       </div>
                     )}
+
+                    {/* ── Dry-Run Simulation Panel ── */}
+                    <div className="mt-4 border-t border-white/10 pt-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs font-semibold text-slate-300">Dry-Run Simulation</div>
+                        <button
+                          type="button"
+                          onClick={() => void runDryRun(proposal._id)}
+                          disabled={Boolean(simLoading[proposal._id])}
+                          className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                        >
+                          {simLoading[proposal._id] ? "Running simulation…" : "Run Dry-Run Simulation"}
+                        </button>
+                      </div>
+
+                      {simErrors[proposal._id] && (
+                        <div className="mt-3 rounded border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-200">
+                          {simErrors[proposal._id]}
+                        </div>
+                      )}
+
+                      {simulations[proposal._id] && (() => {
+                        const sim = simulations[proposal._id];
+                        const riskColors: Record<string, string> = {
+                          blocked: "border-red-500/50 bg-red-500/10 text-red-200",
+                          high:    "border-amber-500/50 bg-amber-500/10 text-amber-200",
+                          medium:  "border-yellow-500/50 bg-yellow-500/10 text-yellow-200",
+                          low:     "border-green-500/50 bg-green-500/10 text-green-200",
+                        };
+                        const riskCls = riskColors[sim.riskLevel] ?? riskColors.blocked;
+
+                        return (
+                          <div className="mt-3 space-y-3 text-xs">
+
+                            {/* Metadata */}
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 rounded bg-black/30 px-3 py-2 font-mono text-slate-400">
+                              <span>Fingerprint: <span className="text-slate-200">{sim.simulationFingerprint}</span></span>
+                              <span>At: <span className="text-slate-200">{new Date(sim.simulatedAt).toLocaleString()}</span></span>
+                            </div>
+
+                            {/* Required approval notice — always visible */}
+                            <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-200">
+                              ⚠️ Admin approval required — this simulation does not approve or execute anything.
+                            </div>
+
+                            {/* Verdict */}
+                            <div className={`rounded border px-3 py-2 font-semibold ${riskCls}`}>
+                              {sim.canProceed
+                                ? `Simulation: Can Proceed — Risk level: ${sim.riskLevel.toUpperCase()}`
+                                : `Simulation: BLOCKED — Risk level: ${sim.riskLevel.toUpperCase()}`}
+                            </div>
+
+                            {/* Blockers — never collapsed */}
+                            {sim.blockers.length > 0 && (
+                              <div className="rounded border border-red-500/40 bg-red-500/10 p-3">
+                                <div className="font-semibold text-red-200">Blockers (must be resolved before execution)</div>
+                                <ul className="mt-2 space-y-1">
+                                  {sim.blockers.map((b, i) => (
+                                    <li key={i} className="text-red-300">• {b}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {/* Warnings */}
+                            {sim.warnings.length > 0 && (
+                              <div className="rounded border border-amber-500/40 bg-amber-500/10 p-3">
+                                <div className="font-semibold text-amber-200">Warnings</div>
+                                <ul className="mt-2 space-y-1">
+                                  {sim.warnings.map((w, i) => (
+                                    <li key={i} className="text-amber-300">• {w}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {/* Current state */}
+                            <div className="rounded bg-black/30 p-3">
+                              <div className="font-semibold text-slate-100">Current A2P State</div>
+                              <div className="mt-2 grid gap-x-6 gap-y-1 text-slate-300 sm:grid-cols-2">
+                                <span>Application: <span className="text-slate-100">{sim.currentState.applicationStatus || "—"}</span></span>
+                                <span>Registration: <span className="text-slate-100">{sim.currentState.registrationStatus || "—"}</span></span>
+                                <span>Brand: <span className="text-slate-100">{sim.currentState.brandStatus || "—"} {sim.currentState.brandSid ? `(${sim.currentState.brandSid.slice(0, 10)}…)` : ""}</span></span>
+                                <span>Campaign: <span className="text-slate-100">{sim.currentState.campaignStatus || "—"} {sim.currentState.campaignSid ? `(${sim.currentState.campaignSid.slice(0, 10)}…)` : ""}</span></span>
+                                <span>Messaging ready: <span className="text-slate-100">{sim.currentState.messagingReady ? "Yes" : "No"}</span></span>
+                                <span>Submit attempts: <span className="text-slate-100">{sim.currentState.campaignSubmitAttempts} / 3</span></span>
+                                {sim.currentState.failure?.simpleTitle && (
+                                  <span className="sm:col-span-2">Failure: <span className="text-red-300">{sim.currentState.failure.simpleTitle}</span></span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Proposed changes */}
+                            <div className="rounded bg-black/30 p-3">
+                              <div className="font-semibold text-slate-100">Proposed Changes</div>
+                              <div className="mt-2 grid gap-x-6 gap-y-1 text-slate-300 sm:grid-cols-2">
+                                <span>Classification: <span className="text-slate-100">{sim.proposedChanges.classification || "—"}</span></span>
+                                <span>Confidence: <span className="text-slate-100">{(sim.proposedChanges.confidence * 100).toFixed(0)}%</span></span>
+                                <span>Issue type: <span className="text-slate-100">{sim.proposedChanges.issueType || "—"}</span></span>
+                                <span>Chain rotation: <span className={sim.proposedChanges.wouldTriggerChainRotation ? "text-red-300" : "text-slate-100"}>{sim.proposedChanges.wouldTriggerChainRotation ? "YES ⚠️" : "No"}</span></span>
+                                <span>Touches brand: <span className="text-slate-100">{sim.proposedChanges.wouldTouchBrand ? "Yes" : "No"}</span></span>
+                                <span>Touches campaign: <span className="text-slate-100">{sim.proposedChanges.wouldTouchCampaign ? "Yes" : "No"}</span></span>
+                                <span>Touches trust product: <span className="text-slate-100">{sim.proposedChanges.wouldTouchTrustProduct ? "Yes" : "No"}</span></span>
+                              </div>
+                              {Object.keys(sim.proposedChanges.fieldsToUpdate).length > 0 && (
+                                <div className="mt-3 space-y-1">
+                                  <div className="font-semibold text-slate-200">Field diffs:</div>
+                                  {Object.entries(sim.proposedChanges.fieldsToUpdate).map(([field, diff]) => (
+                                    <div key={field} className="rounded bg-black/20 px-2 py-1.5">
+                                      <span className="font-mono text-slate-400">{field}</span>
+                                      <div className="mt-0.5 pl-2">
+                                        {diff.current !== null && <div className="text-red-300/80 line-through">{String(diff.current).slice(0, 120)}</div>}
+                                        <div className="text-green-300">{String(diff.proposed ?? "").slice(0, 120)}</div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Intended DB mutations — collapsed */}
+                            <details className="rounded bg-black/30">
+                              <summary className="cursor-pointer px-3 py-2 font-semibold text-slate-200 hover:text-white">
+                                Intended DB mutations ({sim.intendedDbMutations.length})
+                              </summary>
+                              <ul className="border-t border-white/5 px-3 pb-3 pt-2 space-y-1 text-slate-300">
+                                {sim.intendedDbMutations.map((m, i) => <li key={i}>• {m}</li>)}
+                              </ul>
+                            </details>
+
+                            {/* Intended Twilio actions — collapsed, clearly labelled simulation-only */}
+                            <details className="rounded bg-black/30">
+                              <summary className="cursor-pointer px-3 py-2 font-semibold text-slate-200 hover:text-white">
+                                Planned Twilio calls — simulation only ({sim.intendedTwilioActions.length})
+                              </summary>
+                              <div className="border-t border-white/5 px-3 pb-3 pt-2">
+                                <div className="mb-2 rounded border border-indigo-500/30 bg-indigo-500/10 px-2 py-1 text-indigo-200">
+                                  Simulation only — no Twilio calls were made during this dry-run.
+                                </div>
+                                <ul className="space-y-1 text-slate-300">
+                                  {sim.intendedTwilioActions.map((a, i) => <li key={i}>• {a}</li>)}
+                                </ul>
+                              </div>
+                            </details>
+
+                            {/* Forbidden actions safety attestation */}
+                            <div className="rounded border border-green-500/20 bg-green-500/5 p-3">
+                              <div className="font-semibold text-green-300">Safety confirmation</div>
+                              <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">
+                                {Object.entries(sim.forbiddenActionsConfirmedNotUsed).map(([key, val]) => (
+                                  <span key={key} className={val ? "text-green-400" : "text-red-400"}>
+                                    {val ? "✓" : "✗"} {key.replace(/([A-Z])/g, " $1").replace(/^no/, "No").trim()}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    {/* ── End Dry-Run Simulation Panel ── */}
+
                   </div>
                 ))
               )}

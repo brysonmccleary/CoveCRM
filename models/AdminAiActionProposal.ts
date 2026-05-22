@@ -20,7 +20,7 @@ const AdminAiActionProposalSchema = new Schema(
     proposedPayload: { type: Schema.Types.Mixed, default: {} },
     status: {
       type: String,
-      enum: ["pending", "approved", "executed", "rejected", "failed"],
+      enum: ["pending", "approved", "executed", "rejected", "failed", "partial_success"],
       default: "pending",
       index: true,
     },
@@ -57,6 +57,14 @@ const AdminAiActionProposalSchema = new Schema(
     lastError:  { type: String },
     executedAt: { type: Date },
     failedAt:   { type: Date },
+
+    // ── Executor observability ────────────────────────────────────────────
+    // Step-level execution log written by the executor as each phase completes.
+    // Enables partial-failure recovery and forensic diff of planned vs actual.
+    executionSteps: { type: [Schema.Types.Mixed], default: undefined },
+    // Full snapshot of A2PProfile and proposal state taken immediately before
+    // any Twilio mutation. Required for recovery if execution partially succeeds.
+    preExecutionSnapshot: { type: Schema.Types.Mixed },
   },
   { timestamps: true }
 );

@@ -198,9 +198,6 @@ export default function KaylaPage() {
                 <Link href="/covecrm-features" className="text-slate-300 transition hover:text-white">
                   Features
                 </Link>
-                <Link href="/pricing" className="text-slate-300 transition hover:text-white">
-                  Pricing
-                </Link>
                 <Link href="/kayla" className="text-white">
                   Kayla
                 </Link>
@@ -209,7 +206,7 @@ export default function KaylaPage() {
                 </Link>
                 <Link
                   href="/signup"
-                  className="rounded-full bg-white px-4 py-2 font-semibold text-slate-950 transition hover:bg-slate-200"
+                  className="rounded-full bg-blue-500 px-4 py-2 font-semibold text-white transition hover:bg-blue-400"
                 >
                   Try for free
                 </Link>
