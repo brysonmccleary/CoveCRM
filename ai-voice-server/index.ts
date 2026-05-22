@@ -1649,7 +1649,8 @@ async function replayPendingCommittedTurn(
     // but not an exact clock time yet, offer concrete options and HOLD position.
     if (stepType === "time_question" && hasTranscript) {
       const stepLineDay = String(steps[idx] || "");
-      if (isDayChoiceQuestion(stepLineDay) && isDayReferenceMentioned(lastUserText) && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
+      const lastPromptDay = String(state.lastPromptLine || "");
+      if ((isDayChoiceQuestion(stepLineDay) || isDayChoiceQuestion(lastPromptDay)) && isDayReferenceMentioned(lastUserText) && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
         const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
         const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
         lineToSay = getTimeOfferLine(
@@ -2722,7 +2723,17 @@ function isLiveTransferAvailabilityNo(textRaw: string): boolean {
     t === "who is this" ||
     t === "what do you mean" ||
     t.includes("not now") ||
-    t.includes("later") ||
+    t === "later" ||
+    t.includes("call back later") ||
+    t.includes("try later") ||
+    t.includes("later today won't work") ||
+    t.includes("not later today") ||
+    t.includes("tomorrow") ||
+    t.includes("next week") ||
+    t.includes("another day") ||
+    t.includes("different day") ||
+    t === "probably tomorrow" ||
+    t.includes("maybe tomorrow") ||
     t.includes("busy") ||
     t.includes("can't right now") ||
     t.includes("cannot right now") ||
@@ -7529,7 +7540,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     // but not an exact clock time yet, offer concrete options and HOLD position.
     if (stepType === "time_question" && hasTranscript) {
       const stepLineDay = String(steps[idx] || "");
-      if (isDayChoiceQuestion(stepLineDay) && isDayReferenceMentioned(lastUserText) && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
+      const lastPromptDay = String(state.lastPromptLine || "");
+      if ((isDayChoiceQuestion(stepLineDay) || isDayChoiceQuestion(lastPromptDay)) && isDayReferenceMentioned(lastUserText) && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
         const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
         const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
         lineToSay = getTimeOfferLine(
