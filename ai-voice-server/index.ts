@@ -2521,6 +2521,13 @@ function isExactClockTimeMentioned(textRaw: string): boolean {
   // 3 o'clock / 3 oclock
   if (/\b\d{1,2}\s?o'?clock\b/i.test(t)) return true;
 
+  // "at 3" / "at 4" / "around 3" / "about 3" — bare hour reference with preposition
+  if (/\b(at|around|about|by)\s+\d{1,2}\b/i.test(t)) return true;
+
+  // "3 tomorrow" / "tomorrow at 3" / "3 today" — day + bare hour
+  if (/\b\d{1,2}\s+(tomorrow|today|tonight|morning|afternoon|evening)\b/i.test(t)) return true;
+  if (/\b(tomorrow|today|tonight|morning|afternoon|evening)\s+(at\s+)?\d{1,2}\b/i.test(t)) return true;
+
   // 230 / 0230 / 1430 (military-ish compact forms)
   // Accept only when minutes are valid (00-59).
   try {
