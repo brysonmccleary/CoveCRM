@@ -2656,18 +2656,10 @@ function isAffirmativeConfirmation(textRaw: string): boolean {
 function isFirstTurnContinueReply(textRaw: string): boolean {
   const t = normalizeTurnTextForKey(textRaw);
   if (!t) return false;
+  // Only match pure "what's up" social openers — NOT simple affirmatives like
+  // "yeah", "yes", "sure" which are real answers to Step 1 spouse question.
   return (
     [
-      "yeah",
-      "yes",
-      "yep",
-      "yup",
-      "sure",
-      "go ahead",
-      "okay",
-      "ok",
-      "hi",
-      "hello",
       "what s up",
       "whats up",
       "yeah what s up",
@@ -2675,7 +2667,7 @@ function isFirstTurnContinueReply(textRaw: string): boolean {
       "yes what s up",
       "yes whats up",
     ].includes(t) ||
-    /^(yeah|yes|yep|yup|sure|ok|okay|hi|hello)\s+(what s up|whats up|go ahead)$/.test(t)
+    /^(yeah|yes|yep|yup|sure|ok|okay|hi|hello)\s+(what s up|whats up)$/.test(t)
   );
 }
 
