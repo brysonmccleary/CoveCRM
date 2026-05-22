@@ -29,6 +29,34 @@ const AdminAiActionProposalSchema = new Schema(
     autoEligible: { type: Boolean, default: false, index: true },
     confidence: { type: Number, default: 0 },
     executionResult: { type: Schema.Types.Mixed, default: undefined },
+
+    // ── Execution locking ──────────────────────────────────────────────────
+    // Prevents concurrent approval requests from firing the executor twice.
+    // Acquired atomically via findOneAndUpdate before any Twilio call.
+    resubmitLockUntil: { type: Date },
+    resubmitLockedBy:  { type: String },
+    resubmitAttempts:  { type: Number, default: 0 },
+
+    // ── Approval tracking ─────────────────────────────────────────────────
+    // Separate from createdBy (which records the system/AI that created the proposal).
+    approvedBy: { type: String },
+    approvedAt: { type: Date },
+
+    // ── Rejection tracking ────────────────────────────────────────────────
+    rejectedBy: { type: String },
+    rejectedAt: { type: Date },
+
+    // ── Dry-run attestation ───────────────────────────────────────────────
+    // Records which simulation was in view when the admin approved.
+    // The fingerprint is re-verified server-side at approval time to detect
+    // profile state changes between simulation and execution.
+    lastSimulationFingerprint: { type: String },
+    lastSimulationAt:          { type: Date },
+
+    // ── Error and execution timestamps ────────────────────────────────────
+    lastError:  { type: String },
+    executedAt: { type: Date },
+    failedAt:   { type: Date },
   },
   { timestamps: true }
 );
