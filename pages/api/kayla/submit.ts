@@ -263,8 +263,6 @@ export default async function handler(
         $set: {
           folderId: ownerFolder._id,
           folderName: "KAYLA LEADS",
-          sourceType: "kayla_landing_page",
-          leadSource: "kayla_page",
         },
       },
     );

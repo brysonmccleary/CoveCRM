@@ -166,9 +166,7 @@ export default async function handler(
     const callDirection = callDirectionRaw === "inbound" ? "inbound" : "outbound";
 
     const leadAny = lead as any;
-    const isKaylaPublicLead =
-      leadAny?.sourceType === "kayla_landing_page" &&
-      leadAny?.leadSource === "kayla_page";
+    const isKaylaPublicLead = scriptKey === "kayla_signup";
     const resolvedVoiceProfile = isKaylaPublicLead
       ? {
           ...voiceProfile,

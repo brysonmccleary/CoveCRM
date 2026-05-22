@@ -3890,8 +3890,7 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
   const scope = getScopeLabelForScriptKey(scriptKey);
   const isKaylaSignupLead =
-    ctx?.raw?.lead?.sourceType === "kayla_landing_page" &&
-    ctx?.raw?.lead?.leadSource === "kayla_page";
+    normalizeScriptKey(ctx?.scriptKey) === "kayla_signup";
 
   if (isKaylaSignupLead) {
     return getKaylaSignupScript({
@@ -4219,8 +4218,7 @@ function getScriptBlock(ctx: AICallContext): string {
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
   const scope = getScopeLabelForScriptKey(scriptKey);
   const isKaylaLead =
-    ctx?.raw?.lead?.sourceType === "kayla_landing_page" &&
-    ctx?.raw?.lead?.leadSource === "kayla_page";
+    normalizeScriptKey(ctx?.scriptKey) === "kayla_signup";
 
   if (isKaylaLead) {
     return `
@@ -4315,8 +4313,7 @@ function buildGreetingInstructions(ctx: AICallContext): string {
   const clientNameRaw = (ctx.clientFirstName || "").trim();
   const clientName = (!clientNameRaw || isTestOrPlaceholderName(clientNameRaw)) ? "there" : clientNameRaw;
   const isKaylaLead =
-    ctx?.raw?.lead?.sourceType === "kayla_landing_page" &&
-    ctx?.raw?.lead?.leadSource === "kayla_page";
+    normalizeScriptKey(ctx?.scriptKey) === "kayla_signup";
 
   if (isKaylaLead) {
     return `
@@ -4373,8 +4370,7 @@ function buildSystemPrompt(ctx: AICallContext): string {
   const leadName = (ctx.clientFirstName || "").trim() || "there";
   const scope = getScopeLabelForScriptKey(scriptKey);
   const isKaylaLead =
-    ctx?.raw?.lead?.sourceType === "kayla_landing_page" &&
-    ctx?.raw?.lead?.leadSource === "kayla_page";
+    normalizeScriptKey(ctx?.scriptKey) === "kayla_signup";
 
   if (isKaylaLead) {
     const kaylaScript = getScriptBlock(ctx);
