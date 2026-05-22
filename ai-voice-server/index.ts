@@ -1460,7 +1460,7 @@ async function replayPendingCommittedTurn(
       hasTranscript &&
       (stepType !== "time_question"
         ? !isFillerOnly(lastUserText)
-        : isExactClockTimeMentioned(lastUserText));
+        : isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText));
 
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
@@ -3082,13 +3082,13 @@ function getTimeOfferLine(
     return hh * 60 + mm;
   }
 
-  // Choose timezone: lead tz hint > agent tz > Phoenix
+  // Choose timezone: lead tz hint > agent tz > America/New_York
   let tz = "";
   try { tz = String(getLeadTimeZoneHintFromContext(ctx as any) || "").trim(); } catch {}
   const ctxAgentTz = String((ctx as any)?.agentTimeZone || "").trim();
   if (!tz || !isValidIanaTimeZone(tz)) {
     if (isValidIanaTimeZone(ctxAgentTz)) tz = ctxAgentTz;
-    else tz = "America/Phoenix";
+    else tz = "America/New_York";
   }
 
   if (isToday) {
@@ -3155,7 +3155,7 @@ function getTimeOfferLine(
   const wantsLaterLock = utLock.includes("later") || utLock.includes("latest") || utLock.includes("after");
   const lock = wantsLaterLock ? b : a;
   const ladder = [
-    `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
+    `Okay — it looks like we have availability at ${a} or ${b}. Which would work better for you?`,
     `Which is easier for you — ${dayLabel} at ${a}, or ${dayLabel} at ${b}?`,
     `If you’re flexible, I can lock in ${dayLabel} at ${lock} — does that work?`,
     `To keep it easy, should I put you down for ${dayLabel} at ${a}, or ${dayLabel} at ${b}?`,

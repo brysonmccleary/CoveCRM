@@ -25,6 +25,20 @@ function looksLikeIanaTz(tz?: any) {
   return typeof tz === "string" && tz.includes("/") && tz.length <= 64;
 }
 
+function getTimezoneFromState(stateRaw: string | undefined): string | null {
+  const s = String(stateRaw || "").trim().toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
+  if (!s) return null;
+  const EST = new Set(["NY","NJ","CT","MA","RI","VT","NH","ME","PA","OH","MI","IN","FL","GA","SC","NC","VA","WV","MD","DE","DC"]);
+  const CST = new Set(["TX","IL","MN","WI","IA","MO","AR","LA","MS","AL","TN","KY","OK","KS","NE","SD","ND"]);
+  const MST = new Set(["AZ","CO","UT","NM","WY","MT","ID"]);
+  const PST = new Set(["CA","OR","WA","NV"]);
+  if (EST.has(s)) return "America/New_York";
+  if (CST.has(s)) return "America/Chicago";
+  if (MST.has(s)) return "America/Denver";
+  if (PST.has(s)) return "America/Los_Angeles";
+  return null;
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<OkResponse | ErrorResponse>
@@ -227,7 +241,8 @@ export default async function handler(
     const agentTimeZone: string =
       (looksLikeIanaTz(tzFromBooking) ? String(tzFromBooking) : undefined) ||
       (tzLegacy ? String(tzLegacy) : undefined) ||
-      "America/Los_Angeles";
+      getTimezoneFromState(clientState) ||
+      "America/New_York";
 
     // Optional notes from lead fields
     const notesFromLead =
