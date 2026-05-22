@@ -2846,6 +2846,19 @@ function getLiveTransferTryingLine(ctx?: AICallContext): string {
   return `Okay, let me try and get ${getAgentFirstName(ctx)} on the line. Give me one second.`;
 }
 
+/**
+ * Deterministic fallback for outbound scheduler scripts when the lead says something
+ * unexpected (objection, question, confusion). Never discusses coverage/options/details.
+ * Always routes back to the agent or booking.
+ */
+function buildOutboundSchedulerFallbackLine(ctx: AICallContext): string {
+  const agent = getAgentFirstName(ctx);
+  const hasTransfer = !!ctx.liveTransferEnabled && !!ctx.liveTransferPhone;
+  if (hasTransfer) {
+    return `I get what you mean. ${agent} is the licensed agent and will go over that with you on the call. I have ${agent} available right now — does right now work for you?`;
+  }
+  return `I get what you mean. ${agent} is the licensed agent and will go over that with you clearly. Would later today or tomorrow be better for a quick call?`;
+}
 
 function enforceBookingOnlyLine(ctx: AICallContext, lineRaw: string): string {
   let line = String(lineRaw || "").replace(/\s+/g, " ").trim();
@@ -7591,16 +7604,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           const outboundSchedulerFlow =
             !shouldUseInboundFlow(state.context) &&
             normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
-          if (
-            outboundSchedulerFlow &&
-            (
-              stepType === "open_question" ||
-              stepType === "yesno_question" ||
-              stepType === "time_question" ||
-              !!state.context?.liveTransferEnabled ||
-              !!state.pendingLiveTransferAvailabilityConfirm
-            )
-          ) return false;
+          // Outbound scheduler scripts never use generic GPT free-response.
+          // All unknown objections/questions route to the locked scheduler fallback
+          // (handled below in the async block via useOutboundFallback).
+          if (outboundSchedulerFlow) return false;
 
           // Time/availability is handled by the time ladder — don't free-respond to that
           if (stepType === "time_question") return false;
@@ -7622,8 +7629,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         } catch { return false; }
       })();
 
+      // For outbound scheduler scripts, unknown objections/questions use a locked fallback
+      // that acknowledges briefly and routes back to transfer/booking — never GPT free-form.
+      const outboundSchedulerFlowForFallback =
+        !shouldUseInboundFlow(state.context) &&
+        normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
+      const useOutboundFallback = outboundSchedulerFlowForFallback && !useFreeResponse;
+
       try {
-        console.log("[AI-VOICE][TURN-GATE] not-real-answer ->", useFreeResponse ? "free-response" : "reprompt", {
+        console.log("[AI-VOICE][TURN-GATE] not-real-answer ->", useFreeResponse ? "free-response" : useOutboundFallback ? "outbound-scheduler-fallback" : "reprompt", {
           callSid: state.callSid,
           streamSid: state.streamSid,
           stepType,
@@ -7631,6 +7645,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           hasText: !!String(lastUserText || "").trim(),
           n: repromptN,
           useFreeResponse,
+          useOutboundFallback,
         });
       } catch {}
 
@@ -7640,7 +7655,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         try {
           // Free-response turns skip the artificial pause — respond immediately.
           // Script reprompt turns keep it to sound natural.
-          if (!useFreeResponse) await humanPause();
+          if (!useFreeResponse && !useOutboundFallback) await humanPause();
         } catch {}
 
         try {
@@ -7655,6 +7670,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
               stepType: stepType,
             });
             lineForMemory = `[free-response to: "${lastUserText.slice(0, 60)}"]`;
+          } else if (useOutboundFallback) {
+            // Outbound scheduler: acknowledge then route to agent/booking — never discuss details.
+            const fallbackLine = buildOutboundSchedulerFallbackLine(state.context!);
+            instr = buildExactScriptLineInstruction(fallbackLine);
+            lineForMemory = fallbackLine;
+            if (state.context?.liveTransferEnabled && state.context?.liveTransferPhone) {
+              state.pendingLiveTransferAvailabilityConfirm = true;
+              state.pendingLiveTransferAvailabilityAttempts = 0;
+            }
           } else {
             instr = buildStepperTurnInstruction(state.context!, repromptLine, {
               userText: lastUserText,
@@ -7810,16 +7834,35 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         /^(yeah|yep|yes|yup|sure|okay|ok|hi|hello)[,.]?\s*(what'?s? up|what do you (want|need)|what is (this|it)|huh)\??$/i.test(openQText);
 
       if (isOffTopic) {
-        // Don't advance — fire free-response so GPT re-asks conversationally
+        // Don't advance — re-ask deterministically.
+        // For outbound scheduler scripts: always use a deterministic stepper reprompt.
+        // Free-form GPT is disabled on outbound to prevent coverage/sales-call drift.
         const repromptLine = getRepromptLineForStepType(state.context!, stepType, 0);
         if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
 
-        const freeInstr = buildFreeResponseInstruction(state.context!, {
-          userText: lastUserText,
-          currentStepLine: repromptLine,
-          stepType,
-          recentExchanges: state.recentExchanges,
-        });
+        const isOutboundScheduler =
+          !shouldUseInboundFlow(state.context) &&
+          normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
+
+        let offTopicInstr: string;
+        let offTopicLine: string;
+        if (isOutboundScheduler) {
+          // Outbound: acknowledge briefly and route to agent/booking — never discuss details.
+          offTopicLine = buildOutboundSchedulerFallbackLine(state.context!);
+          offTopicInstr = buildExactScriptLineInstruction(offTopicLine);
+          if (state.context?.liveTransferEnabled && state.context?.liveTransferPhone) {
+            state.pendingLiveTransferAvailabilityConfirm = true;
+            state.pendingLiveTransferAvailabilityAttempts = 0;
+          }
+        } else {
+          offTopicLine = repromptLine;
+          offTopicInstr = buildFreeResponseInstruction(state.context!, {
+            userText: lastUserText,
+            currentStepLine: repromptLine,
+            stepType,
+            recentExchanges: state.recentExchanges,
+          });
+        }
 
         (async () => {
           try {
@@ -7829,12 +7872,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             state.outboundOpenAiDone = false;
 
             state.lastPromptSentAtMs = Date.now();
-            state.lastPromptLine = repromptLine;
+            state.lastPromptLine = offTopicLine;
             state.lastResponseCreateAtMs = Date.now();
 
-            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(freeInstr, { temperature: 0.75 })));
+            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(offTopicInstr, { temperature: 0.75 })));
           } catch (e) {
-            try { console.log("[AI-VOICE] open_question off-topic free-response error:", String(e)); } catch {}
+            try { console.log("[AI-VOICE] open_question off-topic error:", String(e)); } catch {}
           }
         })();
         return;
