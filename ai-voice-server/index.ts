@@ -2528,6 +2528,19 @@ function isExactClockTimeMentioned(textRaw: string): boolean {
   // 230pm / 1430 pm
   if (/\b\d{3,4}\s?(am|pm)\b/i.test(t)) return true;
 
+  // Word-number times: "one PM", "two thirty", "three o'clock", "half past two"
+  const wordNums: Record<string, number> = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+    seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12
+  };
+  void wordNums;
+  const wordTimeRe = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(am|pm|o'?clock|thirty|fifteen|forty.?five)?\b/i;
+  if (wordTimeRe.test(t)) {
+    // Only match if there's an am/pm or o'clock qualifier, or it's paired with a day reference
+    if (/\b(am|pm|o'?clock)\b/i.test(t)) return true;
+    if (/\b(tomorrow|today|tonight|morning|afternoon|evening)\b/i.test(t) && wordTimeRe.test(t)) return true;
+  }
+
   return false;
 }
 
@@ -2547,8 +2560,6 @@ function pickOfferedClockTimeFromPrompt(lastPromptLineRaw: string, userTextRaw: 
     userText.includes("later") ||
     userText.includes("latest");
 
-  if (!choosingFirst && !choosingSecond) return null;
-
   // Pull the first two clock-like times from the last prompt line.
   const times: string[] = [];
   const reTime = /\b(\d{1,2}:\d{2}\s?(?:am|pm)?|\d{1,2}\s?(?:am|pm))\b/gi;
@@ -2557,9 +2568,32 @@ function pickOfferedClockTimeFromPrompt(lastPromptLineRaw: string, userTextRaw: 
     if (t) times.push(t);
     if (times.length >= 2) break;
   }
-  if (times.length < 2) return null;
 
-  return choosingFirst ? times[0] : times[1];
+  if (choosingFirst || choosingSecond) {
+    if (times.length < 2) return null;
+    return choosingFirst ? times[0] : times[1];
+  }
+
+  // Also match if the user explicitly restates one of the offered times by number or word
+  // e.g. "Would one PM work?" when prompt offered "1:00 PM or 1:30 PM"
+  const timeMatches = lastPromptLine.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))/gi) || [];
+  for (const offered of timeMatches) {
+    const offeredHour = offered.match(/\b(\d{1,2})/)?.[1];
+    if (!offeredHour) continue;
+    const hourNum = parseInt(offeredHour, 10);
+    const wordMap: Record<number, string> = {
+      1:"one",2:"two",3:"three",4:"four",5:"five",6:"six",
+      7:"seven",8:"eight",9:"nine",10:"ten",11:"eleven",12:"twelve"
+    };
+    const wordVersion = wordMap[hourNum];
+    const digitPattern = new RegExp(`\\b${hourNum}\\b`);
+    const wordPattern = wordVersion ? new RegExp(`\\b${wordVersion}\\b`, "i") : null;
+    if (digitPattern.test(userText) || (wordPattern && wordPattern.test(userText))) {
+      return offered.trim();
+    }
+  }
+
+  return null;
 }
 
 function isExactOrOfferedClockTime(stateLastPromptLine: string, userTextRaw: string): boolean {
