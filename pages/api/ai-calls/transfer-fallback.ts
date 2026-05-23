@@ -2,6 +2,7 @@
 // Called by Twilio if the agent doesn't answer on live transfer.
 // Attempts to book the appointment automatically, then says an appropriate message.
 import type { NextApiRequest, NextApiResponse } from "next";
+import { sendEmail } from "@/lib/email";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
@@ -34,6 +35,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     if (dialCallStatus === "completed") {
+      try {
+        const agentEmailTo = String(req.query.userEmail || req.body?.userEmail || "");
+        if (agentEmailTo) {
+          const leadFields: [string, string][] = [
+            ["Lead Name", String(req.query.leadName || "")],
+            ["Phone", String(req.body?.Called || req.body?.From || "")],
+            ["Agent", String(req.query.agentName || "")],
+            ["Scope", String(req.query.scope || "")],
+            ["Lead ID", String(req.query.leadId || "")],
+            ["Transfer Time", new Date().toLocaleString("en-US", { timeZone: String(req.query.agentTimeZone || "America/New_York") })],
+          ];
+          const rows = leadFields
+            .filter(([, v]) => v)
+            .map(([k, v]) => `<tr><td style="padding:6px 12px;border-bottom:1px solid #eee;font-weight:600;color:#555;width:160px">${k}</td><td style="padding:6px 12px;border-bottom:1px solid #eee;color:#222">${v}</td></tr>`)
+            .join("");
+          const html = `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+        <h2 style="color:#1a1a1a">Live Transfer Connected ✅</h2>
+        <p style="color:#555">A lead was just live transferred to you. Here are their details:</p>
+        <table style="width:100%;border-collapse:collapse;background:#f9f9f9;border-radius:8px;overflow:hidden">${rows}</table>
+        <p style="color:#888;font-size:12px;margin-top:16px">Sent automatically by CoveCRM after a successful live transfer.</p>
+      </div>`;
+          await sendEmail(agentEmailTo, "Live Transfer Connected — Lead Details", html);
+        }
+      } catch (e) {
+        console.error("[TRANSFER-FALLBACK] Failed to send agent email", e);
+      }
+
       return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Joanna" rate="90%">Thank you for your time. Have a great day!</Say>
