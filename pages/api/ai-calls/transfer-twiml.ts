@@ -67,11 +67,18 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const safeFallbackUrl = xmlEscape(fallbackUrl.toString());
   const safeE164 = xmlEscape(e164);
 
+  const safeAgentIntro = xmlEscape(
+    (req.query.agentIntro as string) ||
+    `Hey ${agentFirst}, this is Kayla. I have ${xmlEscape((req.query.leadName as string) || "the lead")} on the line. You're all set — I'll drop off now.`
+  );
+
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna">Please hold for just a moment while I connect you with ${safeAgentFirst}.</Say>
+  <Say voice="Polly.Joanna">Please hold for just a moment while I connect you.</Say>
   <Dial timeout="25" answerOnBridge="true"${safeCallerId} action="${safeFallbackUrl}" method="POST">
-    <Number statusCallbackEvent="initiated ringing answered completed">${safeE164}</Number>
+    <Number statusCallbackEvent="initiated ringing answered completed"
+      url="${xmlEscape(new URL("/api/ai-calls/agent-intro?intro=" + encodeURIComponent(safeAgentIntro), COVECRM_BASE_URL).toString())}"
+    >${safeE164}</Number>
   </Dial>
 </Response>`;
 

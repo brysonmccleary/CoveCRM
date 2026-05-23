@@ -2729,6 +2729,31 @@ function isLiveTransferAvailabilityNo(textRaw: string): boolean {
     t === "what do you mean" ||
     t.includes("not now") ||
     t === "later" ||
+    t === "later today" ||
+    t.includes("later today") ||
+    t.includes("later on") ||
+    t.includes("this afternoon") ||
+    t.includes("this evening") ||
+    t.includes("tonight") ||
+    t.includes("tomorrow morning") ||
+    t.includes("tomorrow afternoon") ||
+    t.includes("tomorrow evening") ||
+    t.includes("tomorrow night") ||
+    t.includes("in a bit") ||
+    t.includes("few hours") ||
+    t.includes("couple hours") ||
+    t.includes("not right now") ||
+    t.includes("schedule") ||
+    t.includes("set something up") ||
+    t.includes("monday") ||
+    t.includes("tuesday") ||
+    t.includes("wednesday") ||
+    t.includes("thursday") ||
+    t.includes("friday") ||
+    t.includes("saturday") ||
+    t.includes("sunday") ||
+    t.includes("next week") ||
+    t.includes("this week") ||
     t.includes("call back later") ||
     t.includes("try later") ||
     t.includes("later today won't work") ||
@@ -2756,7 +2781,7 @@ function getAgentFirstName(ctx?: AICallContext): string {
 }
 
 function getLiveTransferAvailabilityLine(ctx?: AICallContext): string {
-  return `Got it. I have ${getAgentFirstName(ctx)} available right now. Does right now work for you?`;
+  return `Got it — I can try to get ${getAgentFirstName(ctx)} on right now if that works, or we can schedule something for later today or tomorrow. What works best for you?`;
 }
 
 function getLiveTransferTryingLine(ctx?: AICallContext): string {
@@ -3944,7 +3969,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -3968,7 +3993,7 @@ Say: "I was just giving you a quick call about the request you put in for final 
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -3992,7 +4017,7 @@ Say: "I was just giving you a quick call about the request you put in for cash v
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4016,7 +4041,7 @@ Say: "I was just giving you a quick call about the request you put in for the ve
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4040,7 +4065,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4064,7 +4089,7 @@ Say: "I was just giving you a quick call about the request you put in for the ve
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4088,7 +4113,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4112,7 +4137,7 @@ Say: "I was just giving you a quick call about the request you put in for the IU
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4136,7 +4161,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4160,7 +4185,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
