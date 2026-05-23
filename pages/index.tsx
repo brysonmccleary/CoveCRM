@@ -78,6 +78,9 @@ export default function Home() {
           content={homepageDescription}
         />
         <link rel="canonical" href="https://www.covecrm.com/" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&display=swap" rel="stylesheet" />
         <meta property="og:title" content={homepageTitle} />
         <meta property="og:description" content={homepageDescription} />
         <meta property="og:type" content="website" />
@@ -151,12 +154,11 @@ export default function Home() {
           </div>
 
           <div className="relative max-w-4xl mx-auto">
-            <div className="inline-flex items-center gap-2 rounded-full bg-blue-600/15 border border-blue-500/25 px-4 py-1.5 text-xs font-medium text-blue-300 mb-6">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />
-              Built exclusively for life insurance telesales
-            </div>
+            <p style={{ fontFamily: "'Sora', sans-serif" }} className="text-[11px] font-semibold uppercase tracking-[0.3em] text-blue-400 mb-6">
+              Life Insurance Telesales
+            </p>
 
-            <h1 className="text-5xl md:text-7xl font-bold mb-6 leading-[1.08] tracking-tight">
+            <h1 style={{ fontFamily: "'Sora', sans-serif" }} className="text-5xl md:text-7xl font-bold mb-6 leading-[1.08] tracking-tight">
               Sell More Policies.<br />
               <span className="bg-gradient-to-r from-blue-400 via-cyan-400 to-blue-300 bg-clip-text text-transparent">
                 Work Smarter.
@@ -166,12 +168,31 @@ export default function Home() {
             {/* Glow line */}
             <div className="w-24 h-0.5 bg-gradient-to-r from-transparent via-blue-500 to-transparent mx-auto mb-6" />
 
-            <p className="text-lg md:text-xl max-w-2xl mx-auto mb-6 text-slate-300 leading-relaxed">
-              CoveCRM is an AI-powered sales system that calls leads, texts leads, follows up, books appointments, and coaches you — automatically.
-            </p>
-            <p className="text-sm text-slate-500 mb-8">
-              Built specifically for high-volume life insurance agents.
-            </p>
+            <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", justifyContent: "center", gap: "0", marginBottom: "2rem", flexWrap: "wrap" }}>
+
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", padding: "0 2rem", flex: "1", minWidth: "160px" }}>
+                <span style={{ fontFamily: "'Sora', sans-serif", fontSize: "10px", fontWeight: 700, letterSpacing: "0.25em", textTransform: "uppercase", color: "#3b82f6", marginBottom: "8px" }}>01</span>
+                <p style={{ fontFamily: "'Sora', sans-serif", color: "#ffffff", fontWeight: 700, fontSize: "1.05rem", lineHeight: "1.3", marginBottom: "6px" }}>Generate<br />Real-Time Leads</p>
+                <p style={{ color: "#64748b", fontSize: "12px", lineHeight: "1.6" }}>Facebook ads, Google Sheets,<br />manual — all flow in automatically</p>
+              </div>
+
+              <div style={{ color: "#1d4ed8", fontSize: "1.4rem", fontWeight: 100, userSelect: "none", padding: "0.5rem 0", alignSelf: "center" }}>→</div>
+
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", padding: "0 2rem", flex: "1", minWidth: "160px" }}>
+                <span style={{ fontFamily: "'Sora', sans-serif", fontSize: "10px", fontWeight: 700, letterSpacing: "0.25em", textTransform: "uppercase", color: "#3b82f6", marginBottom: "8px" }}>02</span>
+                <p style={{ fontFamily: "'Sora', sans-serif", color: "#ffffff", fontWeight: 700, fontSize: "1.05rem", lineHeight: "1.3", marginBottom: "6px" }}>AI Calls,<br />Texts & Books</p>
+                <p style={{ color: "#64748b", fontSize: "12px", lineHeight: "1.6" }}>Kayla follows up, handles objections,<br />and locks in appointments 24/7</p>
+              </div>
+
+              <div style={{ color: "#1d4ed8", fontSize: "1.4rem", fontWeight: 100, userSelect: "none", padding: "0.5rem 0", alignSelf: "center" }}>→</div>
+
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", padding: "0 2rem", flex: "1", minWidth: "160px" }}>
+                <span style={{ fontFamily: "'Sora', sans-serif", fontSize: "10px", fontWeight: 700, letterSpacing: "0.25em", textTransform: "uppercase", color: "#22d3ee", marginBottom: "8px" }}>03</span>
+                <p style={{ fontFamily: "'Sora', sans-serif", color: "#ffffff", fontWeight: 700, fontSize: "1.05rem", lineHeight: "1.3", marginBottom: "6px" }}>You Just<br />Close</p>
+                <p style={{ color: "#64748b", fontSize: "12px", lineHeight: "1.6" }}>Show up to warm appointments.<br />That&apos;s your only job.</p>
+              </div>
+
+            </div>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link href="/signup">
@@ -395,29 +416,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Agent Recruiting */}
-          <div className="bg-[#020617] text-white rounded-3xl border border-white/8 px-8 py-10 md:px-12 md:py-12 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
-            <div className="max-w-xl">
-              <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">Coming Soon</p>
-              <h3 className="text-2xl md:text-3xl font-bold mb-4">Agent Recruiting – Build Your Team Inside Cove <span className="ml-2 inline-flex items-center rounded-full bg-yellow-500 px-2 py-0.5 text-xs font-bold text-black">Coming Soon</span></h3>
-              <p className="text-sm md:text-base text-gray-200 mb-5 leading-relaxed">
-                Invite agents, track team performance with leaderboards, and manage your downline — all from your Cove dashboard. No separate platform needed.
-              </p>
-              <ul className="text-sm text-gray-300 space-y-2">
-                <li className="flex items-start gap-2"><span className="text-blue-400 mt-0.5">•</span> Invite agents via email and manage team access centrally.</li>
-                <li className="flex items-start gap-2"><span className="text-blue-400 mt-0.5">•</span> Real-time leaderboard: dials, contacts, and bookings by agent.</li>
-                <li className="flex items-start gap-2"><span className="text-blue-400 mt-0.5">•</span> Built-in affiliate program to earn recurring commissions by referring other agents.</li>
-                <li className="flex items-start gap-2"><span className="text-blue-400 mt-0.5">•</span> Visual pipeline board to see where every lead stands.</li>
-              </ul>
-            </div>
-            <div className="border border-gray-700/70 rounded-2xl px-6 py-5 text-xs md:text-sm text-gray-200 w-full md:max-w-xs flex flex-col justify-center bg-white/3">
-              <p className="text-[10px] tracking-[0.25em] uppercase text-gray-400 mb-2 text-center">Team Performance</p>
-              <p className="text-center leading-relaxed text-gray-300">
-                See who\'s dialing, who\'s booking, and where each agent is falling behind — all in one leaderboard.
-              </p>
-            </div>
-          </div>
-
           {/* Core CRM Grid */}
           <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
             {[
@@ -438,26 +436,6 @@ export default function Home() {
                 <p className="text-slate-400 text-sm leading-relaxed">{description}</p>
               </div>
             ))}
-          </div>
-        </section>
-
-        {/* Product Screenshots */}
-        <section className="py-14 px-6">
-          <div className="max-w-6xl mx-auto">
-            <div className="grid gap-6 md:grid-cols-2">
-              <div className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
-                <div className="text-xs tracking-[0.22em] uppercase text-slate-400 px-2 pt-2 pb-3">Dashboard</div>
-                <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#020617]">
-                  <Image src="/landing/dashboard.png" alt="Cove CRM dashboard screenshot" width={1400} height={900} className="w-full h-auto" priority />
-                </div>
-              </div>
-              <div className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
-                <div className="text-xs tracking-[0.22em] uppercase text-slate-400 px-2 pt-2 pb-3">Affiliate Program</div>
-                <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#020617]">
-                  <Image src="/landing/affiliate-25refs.png" alt="Cove CRM affiliate program screenshot" width={1400} height={900} className="w-full h-auto" />
-                </div>
-              </div>
-            </div>
           </div>
         </section>
 
