@@ -1131,10 +1131,13 @@ async function replayPendingCommittedTurn(
         ? Number(state.pendingLiveTransferAvailabilityAttempts || 0) + 1
         : 0;
       const escapeAvailabilityLoop = !yesNow && !noLater && nextAvailabilityAttempts >= 3;
+      const userAlreadySaidWhen = isDayReferenceMentioned(lastUserText) || isTimeWindowMentioned(lastUserText);
       const lineToSay = yesNow
         ? getLiveTransferTryingLine(state.context!)
         : noLater || escapeAvailabilityLoop
-          ? "No problem. Would later today or tomorrow be better?"
+          ? userAlreadySaidWhen
+            ? getTimeOfferLine(state.context!, 0, pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
+            : "No problem. Would later today or tomorrow be better?"
           : getLiveTransferAvailabilityLine(state.context!);
       const instr = buildExactScriptLineInstruction(lineToSay);
 
@@ -1167,6 +1170,10 @@ async function replayPendingCommittedTurn(
         state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
+        if (userAlreadySaidWhen) {
+          state.timeOfferCountForStepIndex = state.scriptStepIndex;
+          state.timeOfferCount = 1;
+        }
       } else {
         // Fallthrough: ambiguous response (e.g. "what?") — re-ask the same availability question.
         // Re-arm so the next commit is accepted and routed back into this block.
@@ -6984,10 +6991,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         ? Number(state.pendingLiveTransferAvailabilityAttempts || 0) + 1
         : 0;
       const escapeAvailabilityLoop = !yesNow && !noLater && nextAvailabilityAttempts >= 3;
+      const userAlreadySaidWhen = isDayReferenceMentioned(lastUserText) || isTimeWindowMentioned(lastUserText);
       const lineToSay = yesNow
         ? getLiveTransferTryingLine(state.context!)
         : noLater || escapeAvailabilityLoop
-          ? "No problem. Would later today or tomorrow be better?"
+          ? userAlreadySaidWhen
+            ? getTimeOfferLine(state.context!, 0, pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
+            : "No problem. Would later today or tomorrow be better?"
           : getLiveTransferAvailabilityLine(state.context!);
       const instr = buildExactScriptLineInstruction(lineToSay);
 
@@ -7020,6 +7030,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
+        if (userAlreadySaidWhen) {
+          state.timeOfferCountForStepIndex = state.scriptStepIndex;
+          state.timeOfferCount = 1;
+        }
       } else {
         // Fallthrough: ambiguous response (e.g. "what?") — re-ask the same availability question.
         // Re-arm so the next commit is accepted and routed back into this block.
