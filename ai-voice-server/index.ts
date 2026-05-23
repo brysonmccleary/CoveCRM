@@ -3976,7 +3976,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4000,7 +4000,7 @@ Say: "I was just giving you a quick call about the request you put in for final 
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4024,7 +4024,7 @@ Say: "I was just giving you a quick call about the request you put in for cash v
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4048,7 +4048,7 @@ Say: "I was just giving you a quick call about the request you put in for the ve
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4072,7 +4072,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4096,7 +4096,7 @@ Say: "I was just giving you a quick call about the request you put in for the ve
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4120,7 +4120,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4144,7 +4144,7 @@ Say: "I was just giving you a quick call about the request you put in for the IU
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4168,7 +4168,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4192,7 +4192,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -5264,7 +5264,6 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     transferUrl.searchParams.set("leadName", leadName);
     transferUrl.searchParams.set("agentName", agentFirst);
     transferUrl.searchParams.set("scope", scope);
-    transferUrl.searchParams.set("agentIntro", `Hey ${agentFirst}, this is ${ctx.voiceProfile.aiName || "Alex"}. I have ${leadName} here ready to go over ${scope}. I'll connect you now.`);
     transferUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
     transferUrl.searchParams.set("sessionId", ctx.sessionId || "");
     transferUrl.searchParams.set("leadId", ctx.leadId || "");
