@@ -1581,6 +1581,8 @@ async function replayPendingCommittedTurn(
       hasTranscript &&
       !!state.context?.liveTransferEnabled &&
       !!state.context?.liveTransferPhone &&
+      !isDayReferenceMentioned(lastUserText) &&
+      !isExactClockTimeMentioned(lastUserText) &&
       isStepOneCoverageSubjectAnswer(lastUserText);
     if (shouldAskLiveTransferAvailability) {
       lineToSay = getLiveTransferAvailabilityLine(state.context!);
@@ -7458,6 +7460,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       hasTranscript &&
       !!state.context?.liveTransferEnabled &&
       !!state.context?.liveTransferPhone &&
+      !isDayReferenceMentioned(lastUserText) &&
+      !isExactClockTimeMentioned(lastUserText) &&
       isStepOneCoverageSubjectAnswer(lastUserText);
     if (shouldAskLiveTransferAvailability) {
       lineToSay = getLiveTransferAvailabilityLine(state.context!);
