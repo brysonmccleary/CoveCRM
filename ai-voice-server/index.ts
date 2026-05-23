@@ -1176,36 +1176,6 @@ async function replayPendingCommittedTurn(
       return;
     }
 
-    if (!isGreetingReply && idx === 1 && expectedAnswerIdx === 0 && isFirstTurnContinueReply(lastUserText)) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay first-turn continue")) return;
-      const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      if (lastUserText) pushExchange(state, "user", lastUserText, 0);
-      pushExchange(state, "ai", lineToSay, 0);
-
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      setWaitingForResponse(state, true, "response.create (first-turn continue)");
-      setAiSpeaking(state, true, "response.create (first-turn continue)");
-      setResponseInFlight(state, true, "response.create (first-turn continue)");
-      state.outboundOpenAiDone = false;
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-
-      state.phase = "in_call";
-      state.scriptStepIndex = 1;
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = 0;
-      return;
-    }
 
     if (isGreetingReply) {
       if (!markCommittedTurnHandled(state, turnKey, "replay greeting reply")) return;
@@ -1593,8 +1563,7 @@ async function replayPendingCommittedTurn(
     // exact-line TTS only. Never reach buildStepperTurnInstruction.
     {
       const isOutboundSchedulerS1 =
-        !shouldUseInboundFlow(state.context) &&
-        normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
+        !shouldUseInboundFlow(state.context);
       if (
         isOutboundSchedulerS1 &&
         canAdvance &&
@@ -3836,6 +3805,15 @@ WHAT THE LEAD JUST SAID:
   }
 
   return `
+CRITICAL ROLE LOCK — READ FIRST:
+You are a scheduling assistant ONLY. Your ONLY job is to get this person scheduled with the licensed agent.
+- You are NOT the agent. You are NOT licensed. You cannot discuss coverage, rates, or policy details.
+- Do NOT answer questions about what the agent covers, what programs are available, or what insurance costs.
+- Do NOT say "I can help go over the details" or "I can walk you through options" or "I can explain your options."
+- If they ask what you do or what you can help with: "I'm just here to get you scheduled with ${agent} — they'll go over everything with you."
+- After EVERY response, STOP and WAIT. Never keep talking.
+- Your only acceptable outcomes: book a time, offer a time, or get a yes/no on right now.
+
 You are a natural, confident scheduling assistant on a live phone call. Sound fully human — warm, real, never robotic.
 
 HARD RULES (non-negotiable):
@@ -6990,36 +6968,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       return;
     }
 
-    if (!isGreetingReply && idx === 1 && expectedAnswerIdx === 0 && isFirstTurnContinueReply(lastUserText)) {
-      if (!markCommittedTurnHandled(state, turnKey, "first-turn continue")) return;
-      const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      if (lastUserText) pushExchange(state, "user", lastUserText, 0);
-      pushExchange(state, "ai", lineToSay, 0);
-
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      setWaitingForResponse(state, true, "response.create (first-turn continue)");
-      setAiSpeaking(state, true, "response.create (first-turn continue)");
-      setResponseInFlight(state, true, "response.create (first-turn continue)");
-      state.outboundOpenAiDone = false;
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-
-      state.phase = "in_call";
-      state.scriptStepIndex = 1;
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = 0;
-      return;
-    }
 
     if (isGreetingReply) {
       if (!markCommittedTurnHandled(state, turnKey, "greeting reply")) return;
@@ -7484,8 +7432,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     //   no liveTransfer        → lineToSay = steps[idx] via enforceBookingOnlyLine (set above)
     {
       const isOutboundSchedulerS1 =
-        !shouldUseInboundFlow(state.context) &&
-        normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
+        !shouldUseInboundFlow(state.context);
       if (
         isOutboundSchedulerS1 &&
         canAdvance &&
