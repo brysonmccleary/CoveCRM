@@ -1168,10 +1168,13 @@ async function replayPendingCommittedTurn(
         : 0;
       const escapeAvailabilityLoop = !yesNow && !noLater && nextAvailabilityAttempts >= 3;
       const userAlreadySaidWhen = isDayReferenceMentioned(lastUserText) || isTimeWindowMentioned(lastUserText);
+      if (explicitDay === "today" || explicitDay === "tomorrow") {
+        state.selectedDay = explicitDay;
+      }
       const lineToSay = yesNow
         ? getLiveTransferTryingLine(state.context!)
         : noLater || escapeAvailabilityLoop
-          ? userAlreadySaidWhen
+          ? noLater || userAlreadySaidWhen
             ? getTimeOfferLine(state.context!, 0, pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
             : "No problem. Would later today or tomorrow be better?"
           : getLiveTransferAvailabilityLine(state.context!);
@@ -1198,7 +1201,7 @@ async function replayPendingCommittedTurn(
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "replay",
-        routeKind: yesNow ? "live_transfer_try" : "live_transfer_availability",
+        routeKind: yesNow ? "live_transfer_try" : noLater ? "time_offer" : "live_transfer_availability",
         routeReason: yesNow ? "availability_yes" : noLater ? "availability_no" : escapeAvailabilityLoop ? "availability_escape" : "availability_ambiguous",
         userText: lastUserText,
         lineToSay,
@@ -7566,10 +7569,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         : 0;
       const escapeAvailabilityLoop = !yesNow && !noLater && nextAvailabilityAttempts >= 3;
       const userAlreadySaidWhen = isDayReferenceMentioned(lastUserText) || isTimeWindowMentioned(lastUserText);
+      if (explicitDay === "today" || explicitDay === "tomorrow") {
+        state.selectedDay = explicitDay;
+      }
       const lineToSay = yesNow
         ? getLiveTransferTryingLine(state.context!)
         : noLater || escapeAvailabilityLoop
-          ? userAlreadySaidWhen
+          ? noLater || userAlreadySaidWhen
             ? getTimeOfferLine(state.context!, 0, pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
             : "No problem. Would later today or tomorrow be better?"
           : getLiveTransferAvailabilityLine(state.context!);
@@ -7596,7 +7602,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "main",
-        routeKind: yesNow ? "live_transfer_try" : "live_transfer_availability",
+        routeKind: yesNow ? "live_transfer_try" : noLater ? "time_offer" : "live_transfer_availability",
         routeReason: yesNow ? "availability_yes" : noLater ? "availability_no" : escapeAvailabilityLoop ? "availability_escape" : "availability_ambiguous",
         userText: lastUserText,
         lineToSay,
