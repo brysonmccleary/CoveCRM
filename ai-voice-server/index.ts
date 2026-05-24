@@ -3793,12 +3793,20 @@ function getTimeOfferLine(
       const wantsLater =
         ut.includes("later") || ut.includes("later today") || ut.includes("later on") || ut.includes("after");
 
+      // Prefer 90-min gap (3 × 30-min slots), fallback 60 min (2 slots), absolute min 1 slot.
+      // Never offer adjacent 30-min slots (e.g. 1:00 and 1:30).
+      const _gapPref = 3;
+      const _gapFb = 2;
       const i =
         wantsEarlier ? 0 :
-        wantsLater ? Math.max(0, (listToUse.length - 2)) :
-        ((listToUse.length > 2) ? (hv % (listToUse.length - 1)) : 0);
+        wantsLater   ? Math.max(0, listToUse.length - 1 - _gapPref) :
+        (listToUse.length > _gapPref ? (hv % Math.max(1, listToUse.length - _gapPref)) : 0);
       a = (listToUse as any)[i] || a;
-      b = (listToUse as any)[i + 1] || b;
+      let _bIdx = i + _gapPref;
+      if (_bIdx >= listToUse.length) _bIdx = i + _gapFb;
+      if (_bIdx >= listToUse.length) _bIdx = i + 1;
+      if (_bIdx >= listToUse.length) _bIdx = listToUse.length - 1;
+      b = (listToUse as any)[_bIdx] || b;
     }
   } catch {}
 
@@ -4360,6 +4368,18 @@ function classifyTurnIntent(
     if (qKind) return { kind: "question", subKind: qKind, raw };
   } catch {}
 
+  // Priority 4.8: "neither works" / no options — catch before day detection
+  try {
+    if (
+      t.includes("neither") || t.includes("none of those") ||
+      (t.includes("no neither")) ||
+      (t.includes("don't work") && !t.includes("today") && !t.includes("tomorrow")) ||
+      (t.includes("doesn't work") && !t.includes("today") && !t.includes("tomorrow"))
+    ) {
+      return { kind: "time_window", subKind: "none_work", raw };
+    }
+  } catch {}
+
   // Priority 5: day/time detection — MUST run before live-transfer yes/no.
   // "probably tomorrow", "tomorrow works", "tomorrow afternoon" → day_selection, never live_transfer_later.
   // extractExplicitDaySelection is unconditional (not gated by isTimeMentioned) so it catches all day phrases.
@@ -4544,6 +4564,82 @@ function buildConversationPolicyDecision(
     };
   }
 
+  // ── Branch: confused identity ─────────────────────────────────────────────
+  // "Who is this?" / "Who are you?" — introduce AI name + agent + scope, return to booking.
+  if (intent.kind === "confusion" && intent.subKind === "confused_identity") {
+    if (!ctx) return NOT_HANDLED;
+    const agentFirst = getAgentFirstName(ctx);
+    const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    const lineToSay = `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${scope} request that came in. ${closingPivot}`;
+    return {
+      handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
+      objective: "return_to_booking", lineToSay, requiredClosingPivot: closingPivot,
+      forbiddenTopics: [], stateWrites: {}, shouldAdvanceStep: false,
+    };
+  }
+
+  // ── Branch: not interested ────────────────────────────────────────────────
+  if (intent.kind === "not_interested") {
+    if (!ctx) return NOT_HANDLED;
+    const agentFirst = getAgentFirstName(ctx);
+    const lineToSay = `Totally fair — and I'm not here to pressure you. Most people who felt that way ended up really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${closingPivot}`;
+    return {
+      handled: true, routeKind: "policy_not_interested", responseMode: "exact_script",
+      objective: "return_to_booking", lineToSay, requiredClosingPivot: closingPivot,
+      forbiddenTopics: [], stateWrites: {}, shouldAdvanceStep: false,
+    };
+  }
+
+  // ── Branch: all objections and questions ──────────────────────────────────
+  // Policy is the single brain for every named objection/question kind.
+  // Each response: acknowledge naturally + brief answer + state-aware closing pivot.
+  // Old rebuttal gate (after policy intercept) is now fallback-only for unhandled subKinds.
+  if (intent.kind === "objection" || intent.kind === "question") {
+    if (!ctx) return NOT_HANDLED;
+    const agentFirst = getAgentFirstName(ctx);
+    const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    const sk = intent.subKind || "";
+    let lineToSay: string;
+
+    if (sk === "scam") {
+      lineToSay = buildDeterministicScamRebuttalLine(state);
+    } else if (sk === "how_much") {
+      lineToSay = `That depends on the coverage and what you qualify for — ${agentFirst} will walk through the actual options with you on the call. ${closingPivot}`;
+    } else if (sk === "what_entails") {
+      lineToSay = `Really quick — usually 5 to 10 minutes. ${agentFirst} just covers your ${scope} request, answers your questions, and that's it. ${closingPivot}`;
+    } else if (sk === "are_you_ai") {
+      lineToSay = `Ha — fair question. I'm ${aiName}, a scheduling assistant for ${agentFirst}. Just here to get you connected with the right person. ${closingPivot}`;
+    } else if (sk === "busy") {
+      lineToSay = `No worries — this'll be really quick. ${closingPivot}`;
+    } else if (sk === "send_it" || sk === "send_info") {
+      lineToSay = `I get it — honestly easier on a quick call than back and forth over text. ${agentFirst} keeps it to 5 minutes. ${closingPivot}`;
+    } else if (sk === "already_have") {
+      lineToSay = `That's great — a lot of people ${agentFirst} works with have coverage but are overpaying or have gaps they didn't know about. Five minutes to check. ${closingPivot}`;
+    } else if (sk === "dont_remember") {
+      lineToSay = `No worries — a ${scope} request came through a little while back. ${agentFirst} just wants to make sure you got taken care of. ${closingPivot}`;
+    } else if (sk === "how_did_you_get") {
+      lineToSay = `Your info came through a form submitted online for ${scope}. ${agentFirst} just wants to make sure you're taken care of. ${closingPivot}`;
+    } else if (sk === "generic_question") {
+      lineToSay = `${agentFirst} can answer that much better on the call and make it specific to your ${scope} request. ${closingPivot}`;
+    } else {
+      return NOT_HANDLED; // unknown subKind — fall through to old rebuttal gate
+    }
+
+    return {
+      handled: true,
+      routeKind: `policy_${sk || "objection"}`,
+      responseMode: "exact_script",
+      objective: "return_to_booking",
+      lineToSay,
+      requiredClosingPivot: closingPivot,
+      forbiddenTopics: [],
+      stateWrites: {},
+      shouldAdvanceStep: false,
+    };
+  }
+
   // ── Branch: explicit day selection (today / tomorrow) ────────────────────
   // Intercepts "probably tomorrow", "tomorrow works", "I'm free tomorrow afternoon", etc.
   // Runs before pendingLiveTransferAvailabilityConfirm; clears it so live-transfer loop
@@ -4584,8 +4680,22 @@ function buildConversationPolicyDecision(
 
   // ── Branch: time window when day already known ───────────────────────────
   // User says "morning" / "afternoon" / "evening" and we already have selectedDay.
-  // Respond with concrete time slots for that day + window.
+  // Also handles "neither works" / "no neither" → ask for alternative window.
   if (intent.kind === "time_window") {
+    // "Neither works" / "none of those" → ask for a different window, not repeat same slots.
+    if (intent.subKind === "none_work") {
+      return {
+        handled: true,
+        routeKind: "policy_none_work",
+        responseMode: "exact_script",
+        objective: "time_selection",
+        lineToSay: "No problem — are mornings or afternoons generally better for you?",
+        requiredClosingPivot: closingPivot,
+        forbiddenTopics: [],
+        stateWrites: {},
+        shouldAdvanceStep: false,
+      };
+    }
     const sd = String(state.selectedDay || "").trim().toLowerCase();
     if (sd === "today" || sd === "tomorrow") {
       const windowHint = pickTimeWindowHint(intent.raw, "");
@@ -5244,59 +5354,13 @@ STOP. WAIT.
 }
 
 /**
- * ✅ Rebuttals / objection handling — booking-only.
+ * Rebuttals block — kept minimal. Objections/questions are handled by code policy in real time.
+ * GPT never sees specific rebuttal scripts; it falls back to this only if code policy doesn’t fire.
  */
-function getRebuttalsBlock(ctx: AICallContext): string {
-  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
-  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
-
+function getRebuttalsBlock(_ctx: AICallContext): string {
   return `
-REBUTTALS (USE ONLY IF NEEDED — THEN GO RIGHT BACK TO BOOKING)
-
-RULES
-- One rebuttal at a time.
-- Keep it short (1–2 sentences).
-- Then ask again: "Would later today or tomorrow work better?"
-- Never mention rates, underwriting, carriers, approvals, eligibility, age, health.
-- Never introduce any other scenario (travel, resorts, healthcare, utilities, etc.).
-- Never apologize. Never mention scripts/prompts. Never acknowledge mistakes.
-
-OBJECTION: "I don’t have time / I’m at work"
-REBUTTAL: "Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better?"
-
-OBJECTION: "Just send it / just text me"
-REBUTTAL: "I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better?"
-
-OBJECTION: "I already have coverage"
-REBUTTAL: "Got it — my job is just scheduling. It’ll be a short call with ${agent} to go over what you requested and answer any questions. Would later today or tomorrow be better?"
-
-OBJECTION: "I already talked to someone / already spoke to someone"
-REBUTTAL: "Got it — totally understand. Real quick, I’m just the scheduler. Do you remember if you already got that quick call with ${agent}, or was it someone else?"
-STOP. WAIT.
-- If they say they already spoke with ${agent}: "Perfect — you’re all set. I’ll mark this as already contacted. Have a good one."
-- If they say it was someone else / not sure: "No worries. Would later today or tomorrow be better for a quick call with ${agent}?"
-STOP. WAIT.
-Then ask again: "Would later today or tomorrow be better?"
-
-OBJECTION: "How much is it?"
-REBUTTAL: "Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better?"
-
-OBJECTION: "I’m not interested"
-REBUTTAL: "No worries — just so I don’t waste your time, did you mean you don’t want any coverage at all, or you just don’t want a call right now?"
-STOP. WAIT.
-- If they say "no call right now": "All good. Would later today or tomorrow be better?"
-- If they say "no coverage": "Got it. I’ll mark this as not interested. Stay blessed."
-
-OBJECTION: "I don’t remember filling anything out"
-REBUTTAL: "No worries — it was just a request for information on life insurance. Does that ring a bell?"
-STOP. WAIT.
-
-OBJECTION: "Is this a scam?"
-REBUTTAL: "I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better?"
-
-OBJECTION: "Call my spouse"
-REBUTTAL: "Absolutely — we can include them. What time is best when you’re both available — later today or tomorrow?"
-STOP. WAIT.
+REBUTTALS
+All objections and questions are handled in real time by the scheduling assistant. If the lead pushes back, acknowledge naturally in one sentence and immediately return to booking. Do not follow any script for rebuttals — just acknowledge and re-ask the current booking question.
 `.trim();
 }
 
