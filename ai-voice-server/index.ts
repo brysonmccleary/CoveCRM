@@ -1107,56 +1107,7 @@ async function replayPendingCommittedTurn(
     const turnKey = buildCommittedTurnKey(state, lastUserText, restoredAudioMs, expectedAnswerIdx);
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
-    // ── Policy layer intercept (replay) ───────────────────────────────────────
-    if (lastUserText) {
-      const _pIntent = classifyTurnIntent(lastUserText, state, { idx, steps, stepType });
-      const _pDecision = buildConversationPolicyDecision(_pIntent, state, { idx, steps, stepType });
-      if (_pDecision.handled) {
-        if (!markCommittedTurnHandled(state, turnKey, "replay policy")) return;
-        const _pLine = _pDecision.lineToSay || getStateAwareClosingPivot(state);
-        const _pInstr = buildResponseFromPolicy(_pDecision, state);
-        for (const [_k, _v] of Object.entries(_pDecision.stateWrites)) {
-          (state as any)[_k] = _v;
-        }
-        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-        pushExchange(state, "ai", _pLine, expectedAnswerIdx);
-        // awaitingUserAnswer is already set by stateWrites for greeting_ack; for others clear it
-        if (!("awaitingUserAnswer" in _pDecision.stateWrites)) {
-          state.awaitingUserAnswer = false;
-          state.awaitingAnswerForStepIndex = undefined;
-        }
-        state.userAudioMsBuffered = 0;
-        state.lastUserTranscript = "";
-        state.lowSignalCommitCount = 0;
-        state.repromptCountForCurrentStep = 0;
-        await humanPause();
-        setWaitingForResponse(state, true, "response.create (policy)");
-        setAiSpeaking(state, true, "response.create (policy)");
-        setResponseInFlight(state, true, "response.create (policy)");
-        state.outboundOpenAiDone = false;
-        state.lastPromptSentAtMs = Date.now();
-        state.lastPromptLine = _pLine;
-        state.lastResponseCreateAtMs = Date.now();
-        recordPassiveRouteMemory(state, {
-          source: "replay",
-          routeKind: _pDecision.routeKind,
-          routeReason: _pIntent.kind + ((_pIntent.subKind && _pIntent.subKind !== _pIntent.kind) ? `:${_pIntent.subKind}` : ""),
-          userText: lastUserText,
-          lineToSay: _pLine,
-          turnKey,
-        });
-        state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_pInstr, { temperature: 0.6 })));
-        if (!("awaitingUserAnswer" in _pDecision.stateWrites)) {
-          state.awaitingUserAnswer = !_pDecision.shouldAdvanceStep;
-          state.awaitingAnswerForStepIndex = _pDecision.shouldAdvanceStep ? undefined : expectedAnswerIdx;
-        }
-        // Only advance to "in_call" if policy didn't set phase explicitly (e.g. greeting_ack keeps greeting phase)
-        if (!("phase" in _pDecision.stateWrites)) {
-          state.phase = "in_call";
-        }
-        return;
-      }
-    }
+    if (await handleConversationTurn(state, lastUserText, "replay", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause)) return;
     // ─────────────────────────────────────────────────────────────────────────
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
@@ -4326,6 +4277,16 @@ function classifyTurnIntent(
     return { kind: "confusion", subKind: "i_just_said", raw };
   }
 
+  const identityConfusionSignal =
+    t.includes("kayla who") ||
+    t.includes("i dont know kayla") ||
+    t.includes("i don't know kayla") ||
+    t.includes("dont know kayla") ||
+    t.includes("don't know kayla");
+  if (identityConfusionSignal) {
+    return { kind: "confusion", subKind: "confused_identity", raw };
+  }
+
   // Priority 3: hearing problem
   const hearingSignals = [
     "can you repeat", "could you repeat", "say that again", "say it again",
@@ -4457,6 +4418,36 @@ function buildConversationPolicyDecision(
     };
   }
 
+  if (intent.kind === "hearing_problem") {
+    const repeatLine = String(state.lastPromptLine || "").trim();
+    const lineToSay = repeatLine || "Sure — I was just asking if later today or tomorrow works better.";
+    return {
+      handled: true,
+      routeKind: "policy_repeat",
+      responseMode: "exact_script",
+      objective: "repeat_last_prompt",
+      lineToSay,
+      requiredClosingPivot: lineToSay,
+      forbiddenTopics: [],
+      stateWrites: {},
+      shouldAdvanceStep: false,
+    };
+  }
+
+  // Identity recovery must work even before the call has fully advanced into in_call.
+  if (intent.kind === "confusion" && intent.subKind === "confused_identity") {
+    if (!ctx) return NOT_HANDLED;
+    const agentFirst = getAgentFirstName(ctx);
+    const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    const lineToSay = `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${scope} request that came in. ${closingPivot}`;
+    return {
+      handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
+      objective: "return_to_booking", lineToSay, requiredClosingPivot: closingPivot,
+      forbiddenTopics: [], stateWrites: {}, shouldAdvanceStep: false,
+    };
+  }
+
   // ── Branch: Step 1 coverage subject answer ───────────────────────────────
   // Placed BEFORE the phase gate so it fires even in edge-case non-in_call phases.
   // "just me", "myself", "both of us", spouse answers → scripted booking frame WITH live-transfer option.
@@ -4488,6 +4479,69 @@ function buildConversationPolicyDecision(
   // All remaining branches only run in in_call phase.
   // Greeting-phase turns that aren't greeting_ack fall through to the existing greeting handler.
   if (state.phase !== "in_call") return NOT_HANDLED;
+
+  if (intent.kind === "live_transfer_now") {
+    if (!ctx || !(ctx as any)?.liveTransferEnabled || !(ctx as any)?.liveTransferPhone) {
+      return NOT_HANDLED;
+    }
+    const explicitNow =
+      !!state.pendingLiveTransferAvailabilityConfirm ||
+      hasImmediateTransferConfirmation(intent.raw) ||
+      hasExplicitAgentTransferCommand(intent.raw);
+    if (!explicitNow) return NOT_HANDLED;
+    return {
+      handled: true,
+      routeKind: "policy_live_transfer_try",
+      responseMode: "exact_script",
+      objective: "start_live_transfer_after_intro",
+      lineToSay: getLiveTransferTryingLine(ctx),
+      requiredClosingPivot: "",
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        liveTransferIntroSpoken: true,
+        pendingLiveTransferAfterLine: true,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  if (intent.kind === "live_transfer_later" || intent.kind === "scheduling_preference") {
+    if (!ctx) return NOT_HANDLED;
+    const explicitDay = pickDayHint(intent.raw, "");
+    const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+    const dayHint =
+      explicitDay === "today" || explicitDay === "tomorrow"
+        ? explicitDay
+        : rememberedDay === "today" || rememberedDay === "tomorrow"
+          ? (rememberedDay as "today" | "tomorrow")
+          : pickDayHint(intent.raw, String(state.lastAcceptedUserText || ""));
+    const windowHint = pickTimeWindowHint(intent.raw, String(state.lastAcceptedUserText || ""));
+    const lineToSay = getTimeOfferLine(ctx, 0, dayHint, windowHint, intent.raw);
+    const advancedIdx = Math.min(Number(state.scriptStepIndex || 0) + 1, Math.max(0, stepCtx.steps.length - 1));
+    return {
+      handled: true,
+      routeKind: "policy_live_transfer_later",
+      responseMode: "exact_script",
+      objective: "time_selection",
+      lineToSay,
+      requiredClosingPivot: lineToSay,
+      forbiddenTopics: [],
+      stateWrites: {
+        ...(dayHint ? { selectedDay: dayHint } : {}),
+        ...(windowHint ? { selectedWindow: windowHint } : {}),
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        scriptStepIndex: Math.max(advancedIdx, Math.min(2, Math.max(0, stepCtx.steps.length - 1))),
+        timeOfferCountForStepIndex: Math.max(advancedIdx, Math.min(2, Math.max(0, stepCtx.steps.length - 1))),
+        timeOfferCount: 1,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
 
   // ── Branch: angry or profane ──────────────────────────────────────────────
   if (intent.kind === "angry_or_profane") {
@@ -4722,6 +4776,24 @@ function buildConversationPolicyDecision(
     }
   }
 
+  if (intent.kind === "unknown" || intent.kind === "off_topic") {
+    if (!ctx) return NOT_HANDLED;
+    return {
+      handled: true,
+      routeKind: "policy_unknown",
+      responseMode: "exact_script",
+      objective: "return_to_current_objective",
+      lineToSay: `No worries — ${closingPivot}`,
+      requiredClosingPivot: closingPivot,
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
   return NOT_HANDLED;
 }
 
@@ -4736,6 +4808,74 @@ function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): st
   }
   if (decision.lineToSay) return buildExactScriptLineInstruction(decision.lineToSay);
   return buildExactScriptLineInstruction(getStateAwareClosingPivot(state));
+}
+
+async function handleConversationTurn(
+  state: CallState,
+  lastUserText: string,
+  source: "main" | "replay",
+  stepCtx: { idx: number; steps: string[]; stepType: StepType; expectedAnswerIdx: number },
+  turnKey: string,
+  humanPause: () => Promise<void>
+): Promise<boolean> {
+  const text = String(lastUserText || "").trim();
+  if (!text) return false;
+
+  const intent = classifyTurnIntent(text, state, stepCtx);
+  const decision = buildConversationPolicyDecision(intent, state, stepCtx);
+  if (!decision.handled) return false;
+  if (!markCommittedTurnHandled(state, turnKey, `${source} policy`)) return true;
+
+  const lineToSay = decision.lineToSay || getStateAwareClosingPivot(state);
+  const instr = buildResponseFromPolicy(decision, state);
+
+  for (const [k, v] of Object.entries(decision.stateWrites)) {
+    (state as any)[k] = v;
+  }
+
+  pushExchange(state, "user", text, stepCtx.expectedAnswerIdx);
+  pushExchange(state, "ai", lineToSay, stepCtx.expectedAnswerIdx);
+
+  if (!("awaitingUserAnswer" in decision.stateWrites)) {
+    state.awaitingUserAnswer = false;
+    state.awaitingAnswerForStepIndex = undefined;
+  }
+
+  state.userAudioMsBuffered = 0;
+  state.lastUserTranscript = "";
+  state.lowSignalCommitCount = 0;
+  state.repromptCountForCurrentStep = 0;
+
+  await humanPause();
+  setWaitingForResponse(state, true, "response.create (policy)");
+  setAiSpeaking(state, true, "response.create (policy)");
+  setResponseInFlight(state, true, "response.create (policy)");
+  state.outboundOpenAiDone = false;
+  state.lastPromptSentAtMs = Date.now();
+  state.lastPromptLine = lineToSay;
+  state.lastResponseCreateAtMs = Date.now();
+
+  recordPassiveRouteMemory(state, {
+    source,
+    routeKind: decision.routeKind,
+    routeReason: intent.kind + ((intent.subKind && intent.subKind !== intent.kind) ? `:${intent.subKind}` : ""),
+    userText: text,
+    lineToSay,
+    turnKey,
+  });
+
+  state.openAiWs?.send(JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 })));
+
+  if (!("awaitingUserAnswer" in decision.stateWrites)) {
+    state.awaitingUserAnswer = !decision.shouldAdvanceStep;
+    state.awaitingAnswerForStepIndex = decision.shouldAdvanceStep ? undefined : stepCtx.expectedAnswerIdx;
+  }
+
+  if (!("phase" in decision.stateWrites)) {
+    state.phase = "in_call";
+  }
+
+  return true;
 }
 
 // ── End Policy Layer ───────────────────────────────────────────────────────────
@@ -8038,56 +8178,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     const turnKey = buildCommittedTurnKey(state, lastUserText, audioMsCommitGate, expectedAnswerIdx);
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
-    // ── Policy layer intercept (main) ─────────────────────────────────────────
-    if (lastUserText) {
-      const _pIntent = classifyTurnIntent(lastUserText, state, { idx, steps, stepType });
-      const _pDecision = buildConversationPolicyDecision(_pIntent, state, { idx, steps, stepType });
-      if (_pDecision.handled) {
-        if (!markCommittedTurnHandled(state, turnKey, "main policy")) return;
-        const _pLine = _pDecision.lineToSay || getStateAwareClosingPivot(state);
-        const _pInstr = buildResponseFromPolicy(_pDecision, state);
-        for (const [_k, _v] of Object.entries(_pDecision.stateWrites)) {
-          (state as any)[_k] = _v;
-        }
-        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-        pushExchange(state, "ai", _pLine, expectedAnswerIdx);
-        // awaitingUserAnswer is already set by stateWrites for greeting_ack; for others clear it
-        if (!("awaitingUserAnswer" in _pDecision.stateWrites)) {
-          state.awaitingUserAnswer = false;
-          state.awaitingAnswerForStepIndex = undefined;
-        }
-        state.userAudioMsBuffered = 0;
-        state.lastUserTranscript = "";
-        state.lowSignalCommitCount = 0;
-        state.repromptCountForCurrentStep = 0;
-        await humanPause();
-        setWaitingForResponse(state, true, "response.create (policy)");
-        setAiSpeaking(state, true, "response.create (policy)");
-        setResponseInFlight(state, true, "response.create (policy)");
-        state.outboundOpenAiDone = false;
-        state.lastPromptSentAtMs = Date.now();
-        state.lastPromptLine = _pLine;
-        state.lastResponseCreateAtMs = Date.now();
-        recordPassiveRouteMemory(state, {
-          source: "main",
-          routeKind: _pDecision.routeKind,
-          routeReason: _pIntent.kind + ((_pIntent.subKind && _pIntent.subKind !== _pIntent.kind) ? `:${_pIntent.subKind}` : ""),
-          userText: lastUserText,
-          lineToSay: _pLine,
-          turnKey,
-        });
-        state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_pInstr, { temperature: 0.6 })));
-        if (!("awaitingUserAnswer" in _pDecision.stateWrites)) {
-          state.awaitingUserAnswer = !_pDecision.shouldAdvanceStep;
-          state.awaitingAnswerForStepIndex = _pDecision.shouldAdvanceStep ? undefined : expectedAnswerIdx;
-        }
-        // Only advance to "in_call" if policy didn't set phase explicitly (e.g. greeting_ack keeps greeting phase)
-        if (!("phase" in _pDecision.stateWrites)) {
-          state.phase = "in_call";
-        }
-        return;
-      }
-    }
+    if (await handleConversationTurn(state, lastUserText, "main", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause)) return;
     // ─────────────────────────────────────────────────────────────────────────
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
