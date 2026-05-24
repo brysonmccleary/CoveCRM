@@ -1625,6 +1625,76 @@ async function replayPendingCommittedTurn(
       return;
     }
 
+    if (shouldRouteDaySelectionToTimeOffer(state, lastUserText, idx, expectedAnswerIdx, steps)) {
+      if (!markCommittedTurnHandled(state, turnKey, "replay day-choice time offer")) return;
+      const explicitDay = extractExplicitDaySelection(lastUserText);
+      const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+      const dayHint =
+        explicitDay === "today" || explicitDay === "tomorrow"
+          ? explicitDay
+          : rememberedDay === "today" || rememberedDay === "tomorrow"
+            ? (rememberedDay as "today" | "tomorrow")
+            : null;
+      const timeStepIndex = idx <= 1 ? Math.min(2, Math.max(0, steps.length - 1)) : idx;
+      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
+      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+      const lineToSay = getTimeOfferLine(
+        state.context!,
+        n,
+        dayHint,
+        pickTimeWindowHint(lastUserText, ""),
+        lastUserText
+      );
+      const instr = buildStepperTurnInstruction(state.context!, lineToSay);
+
+      state.timeOfferCountForStepIndex = timeStepIndex;
+      state.timeOfferCount = n + 1;
+      state.scriptStepIndex = timeStepIndex;
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      await humanPause();
+
+      setWaitingForResponse(state, true, "response.create (replay day-choice time offer)");
+      setAiSpeaking(state, true, "response.create (replay day-choice time offer)");
+      setResponseInFlight(state, true, "response.create (replay day-choice time offer)");
+      state.outboundOpenAiDone = false;
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "replay",
+        routeKind: "time_offer",
+        routeReason: "selected_day",
+        userText: lastUserText,
+        lineToSay,
+        turnKey,
+      });
+      try {
+        console.log("[AI-VOICE][DAY-CHOICE-ROUTE]", {
+          source: "replay",
+          selectedDay: state.selectedDay || null,
+          explicitDay: explicitDay || null,
+          idx,
+          expectedAnswerIdx,
+          scriptStepIndex: state.scriptStepIndex,
+          lastRouteKind: state.lastRouteKind || null,
+          lineHash: hash8(lineToSay),
+        });
+      } catch {}
+
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      state.phase = "in_call";
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
+      return;
+    }
+
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
 
     const shouldAskLiveTransferAvailability =
@@ -2077,6 +2147,51 @@ function extractExplicitDaySelection(textRaw: string): "today" | "tomorrow" | st
   if (t.includes("tomorrow")) return "tomorrow";
   const dayMatch = t.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekend|next week)\b/);
   return dayMatch?.[1] || null;
+}
+
+function shouldRouteDaySelectionToTimeOffer(
+  state: CallState,
+  lastUserText: string,
+  idx: number,
+  expectedAnswerIdx: number,
+  steps: string[]
+): boolean {
+  try {
+    if (state.phase !== "in_call") return false;
+    if (state.pendingLiveTransferAvailabilityConfirm) return false;
+
+    const text = String(lastUserText || "").trim();
+    const normalized = normalizeTurnTextForKey(text);
+    if (!normalized) return false;
+    if (hasExplicitLiveTransferIntent(text)) return false;
+    if (isExactClockTimeMentioned(text)) return false;
+    if (detectObjection(text)) return false;
+    if (
+      normalized.includes("wrong number") ||
+      normalized.includes("no coverage") ||
+      normalized.includes("stop calling") ||
+      normalized.includes("do not call")
+    ) return false;
+
+    const explicitDay = extractExplicitDaySelection(text);
+    const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+    const hasRememberedDay = rememberedDay === "today" || rememberedDay === "tomorrow";
+    if (!explicitDay && !hasRememberedDay) return false;
+    if (!explicitDay && hasRememberedDay && !isTimeIndecisionOrAvailability(text)) return false;
+
+    const currentLine = String(steps[idx] || "");
+    const expectedLine = String(steps[expectedAnswerIdx] || "");
+    const lastPrompt = String(state.lastPromptLine || "");
+    const atBookingFrameStep = idx === 1;
+    const promptIsDayChoice =
+      isDayChoiceQuestion(currentLine) ||
+      isDayChoiceQuestion(expectedLine) ||
+      isDayChoiceQuestion(lastPrompt);
+
+    return atBookingFrameStep || promptIsDayChoice;
+  } catch {
+    return false;
+  }
 }
 
 function recordPassiveRouteMemory(
@@ -7804,6 +7919,79 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       return;
     }
 
+
+    if (shouldRouteDaySelectionToTimeOffer(state, lastUserText, idx, expectedAnswerIdx, steps)) {
+      if (!markCommittedTurnHandled(state, turnKey, "day-choice time offer")) return;
+      const explicitDay = extractExplicitDaySelection(lastUserText);
+      const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+      const dayHint =
+        explicitDay === "today" || explicitDay === "tomorrow"
+          ? explicitDay
+          : rememberedDay === "today" || rememberedDay === "tomorrow"
+            ? (rememberedDay as "today" | "tomorrow")
+            : null;
+      const timeStepIndex = idx <= 1 ? Math.min(2, Math.max(0, steps.length - 1)) : idx;
+      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
+      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+      const lineToSay = getTimeOfferLine(
+        state.context!,
+        n,
+        dayHint,
+        pickTimeWindowHint(lastUserText, ""),
+        lastUserText
+      );
+      const instr = buildStepperTurnInstruction(state.context!, lineToSay, {
+        userText: lastUserText,
+        recentExchanges: state.recentExchanges,
+      });
+
+      state.timeOfferCountForStepIndex = timeStepIndex;
+      state.timeOfferCount = n + 1;
+      state.scriptStepIndex = timeStepIndex;
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      await humanPause();
+
+      setWaitingForResponse(state, true, "response.create (day-choice time offer)");
+      setAiSpeaking(state, true, "response.create (day-choice time offer)");
+      setResponseInFlight(state, true, "response.create (day-choice time offer)");
+      state.outboundOpenAiDone = false;
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "main",
+        routeKind: "time_offer",
+        routeReason: "selected_day",
+        userText: lastUserText,
+        lineToSay,
+        turnKey,
+      });
+      try {
+        console.log("[AI-VOICE][DAY-CHOICE-ROUTE]", {
+          source: "main",
+          selectedDay: state.selectedDay || null,
+          explicitDay: explicitDay || null,
+          idx,
+          expectedAnswerIdx,
+          scriptStepIndex: state.scriptStepIndex,
+          lastRouteKind: state.lastRouteKind || null,
+          lineHash: hash8(lineToSay),
+        });
+      } catch {}
+
+      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      state.phase = "in_call";
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
+      return;
+    }
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
 
