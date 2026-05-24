@@ -1148,12 +1148,23 @@ async function replayPendingCommittedTurn(
     }
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
+      if (objectionOrQuestionKind) {
+        state.pendingLiveTransferAvailabilityConfirm = false;
+        state.pendingLiveTransferAvailabilityAttempts = 0;
+      } else {
       if (!markCommittedTurnHandled(state, turnKey, "replay live-transfer availability")) return;
       const explicitDay = extractExplicitDaySelection(lastUserText);
+      const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+      const selectedAvailabilityDay =
+        explicitDay === "today" || explicitDay === "tomorrow"
+          ? explicitDay
+          : rememberedDay === "today" || rememberedDay === "tomorrow"
+            ? (rememberedDay as "today" | "tomorrow")
+            : null;
       const immediateYes = hasImmediateTransferConfirmation(lastUserText);
       const schedulingPreference = isImmediateTransferSchedulingPreference(lastUserText);
-      const yesNow = immediateYes || (isLiveTransferAvailabilityYes(lastUserText) && !schedulingPreference);
-      const noLater = !yesNow && (schedulingPreference || isLiveTransferAvailabilityNo(lastUserText));
+      const yesNow = !selectedAvailabilityDay && (immediateYes || (isLiveTransferAvailabilityYes(lastUserText) && !schedulingPreference));
+      const noLater = !yesNow && (!!selectedAvailabilityDay || schedulingPreference || isLiveTransferAvailabilityNo(lastUserText));
       try {
         console.log("[AI-VOICE][LIVE-TRANSFER-INTENT]", {
           source: "replay",
@@ -1168,14 +1179,14 @@ async function replayPendingCommittedTurn(
         : 0;
       const escapeAvailabilityLoop = !yesNow && !noLater && nextAvailabilityAttempts >= 3;
       const userAlreadySaidWhen = isDayReferenceMentioned(lastUserText) || isTimeWindowMentioned(lastUserText);
-      if (explicitDay === "today" || explicitDay === "tomorrow") {
-        state.selectedDay = explicitDay;
+      if (selectedAvailabilityDay) {
+        state.selectedDay = selectedAvailabilityDay;
       }
       const lineToSay = yesNow
         ? getLiveTransferTryingLine(state.context!)
         : noLater || escapeAvailabilityLoop
           ? noLater || userAlreadySaidWhen
-            ? getTimeOfferLine(state.context!, 0, pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
+            ? getTimeOfferLine(state.context!, 0, selectedAvailabilityDay || pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
             : "No problem. Would later today or tomorrow be better?"
           : getLiveTransferAvailabilityLine(state.context!);
       const instr = buildExactScriptLineInstruction(lineToSay);
@@ -1228,6 +1239,7 @@ async function replayPendingCommittedTurn(
         state.awaitingAnswerForStepIndex = expectedAnswerIdx;
       }
       return;
+      }
     }
 
 
@@ -1446,13 +1458,19 @@ async function replayPendingCommittedTurn(
             "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
         }
       } catch {}
-      const lineToSay = enforceBookingOnlyLine(state.context!, overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind));
-      const perTurnInstr = buildConversationalRebuttalInstruction(state.context!, lineToSay, {
-        objectionKind: objectionOrQuestionKind,
-        userText: lastUserText,
-        lastOutboundLine: state.lastPromptLine,
-        lastOutboundAtMs: state.lastPromptSentAtMs,
-      });
+      let lineToSay = enforceBookingOnlyLine(state.context!, overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind));
+      if (objectionOrQuestionKind === "scam") {
+        lineToSay = buildDeterministicScamRebuttalLine(state);
+      }
+      const perTurnInstr = objectionOrQuestionKind === "scam"
+        ? buildExactScriptLineInstruction(lineToSay)
+        : buildConversationalRebuttalInstruction(state.context!, lineToSay, {
+            objectionKind: objectionOrQuestionKind,
+            userText: lastUserText,
+            lastOutboundLine: state.lastPromptLine,
+            lastOutboundAtMs: state.lastPromptSentAtMs,
+            closingPivot: getStateAwareClosingPivot(state),
+          });
 
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
@@ -4167,6 +4185,54 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   return getBookingFallbackLine(ctx);
 }
 
+function buildDeterministicScamRebuttalLine(state: CallState): string {
+  const ctx = state.context!;
+  const k = normalizeScriptKey(ctx.scriptKey);
+  const firstName = (ctx.clientFirstName || "").trim() || "there";
+  const agentFirst = ((ctx.agentName || "").split(/\s+/)[0] || "the agent").trim();
+
+  let requestScope = "insurance request";
+  if (k.startsWith("veteran")) {
+    requestScope = "veteran life insurance request";
+  } else if (k.startsWith("trucker")) {
+    requestScope = "life insurance for truckers request";
+  } else if (k === "mortgage_protection") {
+    requestScope = "mortgage protection request";
+  } else if (k === "final_expense") {
+    requestScope = "final expense request";
+  } else if (k === "iul_cash_value") {
+    requestScope = "IUL request";
+  }
+
+  const selectedTime = String((state as any).lastExactTimeText || "").trim();
+  const selectedDay = String(state.selectedDay || "").trim().toLowerCase();
+
+  let nextStepLine: string;
+  if (selectedTime) {
+    nextStepLine = `Does ${selectedTime} still work for you?`;
+  } else if (selectedDay === "today" || selectedDay === "tomorrow") {
+    nextStepLine = getTimeOfferLine(ctx, 0, selectedDay as "today" | "tomorrow", null, "");
+  } else {
+    nextStepLine = "Does later today or tomorrow work better?";
+  }
+
+  return `I completely understand the concern, ${firstName}. This is a state-regulated ${requestScope}, and ${agentFirst} is licensed through the state. Everything is explained clearly on the call through licensed carriers. ${nextStepLine}`;
+}
+
+function getStateAwareClosingPivot(state: CallState): string {
+  try {
+    const selectedTime = String((state as any).lastExactTimeText || "").trim();
+    const selectedDay = String(state.selectedDay || "").trim().toLowerCase();
+    if (selectedTime) {
+      return `Does ${selectedTime} still work for you?`;
+    }
+    if ((selectedDay === "today" || selectedDay === "tomorrow") && state.context) {
+      return getTimeOfferLine(state.context, 0, selectedDay as "today" | "tomorrow", null, "");
+    }
+  } catch {}
+  return "Does later today or tomorrow work better?";
+}
+
 /**
  * ✅ Build per-turn instruction that makes drift basically impossible.
  * We do NOT change audio/timers/turn detection. Only the "text instructions" for response.create.
@@ -4285,6 +4351,7 @@ function buildConversationalRebuttalInstruction(
     lastOutboundAtMs?: number;
     repeatMode?: boolean;  // true when same objection fires 2nd+ time
     recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
+    closingPivot?: string;
   }
 ): string {
   const leadName = (ctx.clientFirstName || "").trim() || "there";
@@ -4310,6 +4377,9 @@ function buildConversationalRebuttalInstruction(
 
   const recentlyRepeated = !!lastLine && !!baseLine && (now - lastAt) < 10000 && lastLine === baseLine.toLowerCase();
   const bookingQ = recentlyRepeated ? bookingPrompts[1] : bookingPrompts[0];
+  const closeWithBlock = opts?.closingPivot
+    ? `CLOSE WITH THIS EXACT LINE — do not vary it:\n"${opts.closingPivot}"`
+    : `CLOSE WITH one of these (vary it):\n- "What works better — later today or tomorrow?"\n- "Does later today or tomorrow work for you?"\n- "Would today or tomorrow be easier?"\n- "${bookingQ}"`;
 
   // Build recent-exchange block
   let historyBlock = "";
@@ -4371,11 +4441,7 @@ NEVER SAY:
 BASE IDEA — rephrase this in your own natural voice, don't read it verbatim:
 "${baseLine}"
 
-CLOSE WITH one of these (vary it):
-- "What works better — later today or tomorrow?"
-- "Does later today or tomorrow work for you?"
-- "Would today or tomorrow be easier?"
-- "${bookingQ}"
+${closeWithBlock}
 `.trim();
 }
 function buildStepperTurnInstructionLegacy(
@@ -4534,7 +4600,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4558,7 +4624,7 @@ Say: "I was just giving you a quick call about the request you put in for final 
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4582,7 +4648,7 @@ Say: "I was just giving you a quick call about the request you put in for cash v
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4606,7 +4672,7 @@ Say: "I was just giving you a quick call about the request you put in for the ve
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4630,7 +4696,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4654,7 +4720,7 @@ Say: "I was just giving you a quick call about the request you put in for the ve
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4678,7 +4744,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4702,7 +4768,7 @@ Say: "I was just giving you a quick call about the request you put in for the IU
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4726,7 +4792,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -4750,7 +4816,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "Okay. I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Does later today or tomorrow work, or did you want to try right now?"
+Say: "Got it — I just need to get you scheduled for a quick call with ${agent} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -7552,12 +7618,23 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     }
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
+      if (objectionOrQuestionKind) {
+        state.pendingLiveTransferAvailabilityConfirm = false;
+        state.pendingLiveTransferAvailabilityAttempts = 0;
+      } else {
       if (!markCommittedTurnHandled(state, turnKey, "live-transfer availability")) return;
       const explicitDay = extractExplicitDaySelection(lastUserText);
+      const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+      const selectedAvailabilityDay =
+        explicitDay === "today" || explicitDay === "tomorrow"
+          ? explicitDay
+          : rememberedDay === "today" || rememberedDay === "tomorrow"
+            ? (rememberedDay as "today" | "tomorrow")
+            : null;
       const immediateYes = hasImmediateTransferConfirmation(lastUserText);
       const schedulingPreference = isImmediateTransferSchedulingPreference(lastUserText);
-      const yesNow = immediateYes || (isLiveTransferAvailabilityYes(lastUserText) && !schedulingPreference);
-      const noLater = !yesNow && (schedulingPreference || isLiveTransferAvailabilityNo(lastUserText));
+      const yesNow = !selectedAvailabilityDay && (immediateYes || (isLiveTransferAvailabilityYes(lastUserText) && !schedulingPreference));
+      const noLater = !yesNow && (!!selectedAvailabilityDay || schedulingPreference || isLiveTransferAvailabilityNo(lastUserText));
       try {
         console.log("[AI-VOICE][LIVE-TRANSFER-INTENT]", {
           source: "main",
@@ -7572,14 +7649,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         : 0;
       const escapeAvailabilityLoop = !yesNow && !noLater && nextAvailabilityAttempts >= 3;
       const userAlreadySaidWhen = isDayReferenceMentioned(lastUserText) || isTimeWindowMentioned(lastUserText);
-      if (explicitDay === "today" || explicitDay === "tomorrow") {
-        state.selectedDay = explicitDay;
+      if (selectedAvailabilityDay) {
+        state.selectedDay = selectedAvailabilityDay;
       }
       const lineToSay = yesNow
         ? getLiveTransferTryingLine(state.context!)
         : noLater || escapeAvailabilityLoop
           ? noLater || userAlreadySaidWhen
-            ? getTimeOfferLine(state.context!, 0, pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
+            ? getTimeOfferLine(state.context!, 0, selectedAvailabilityDay || pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
             : "No problem. Would later today or tomorrow be better?"
           : getLiveTransferAvailabilityLine(state.context!);
       const instr = buildExactScriptLineInstruction(lineToSay);
@@ -7632,6 +7709,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.awaitingAnswerForStepIndex = expectedAnswerIdx;
       }
       return;
+      }
     }
 
 
@@ -7799,10 +7877,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
         }
       } catch {}
-      const lineToSay = enforceBookingOnlyLine(
+      let lineToSay = enforceBookingOnlyLine(
         state.context!,
         overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind)
       );
+      if (objectionOrQuestionKind === "scam") {
+        lineToSay = buildDeterministicScamRebuttalLine(state);
+      }
 
       // ── Repeat-objection tracking ──
       const isRepeatObjection =
@@ -7819,14 +7900,17 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       // Push user turn to exchange memory before building instruction
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
 
-      const perTurnInstr = buildConversationalRebuttalInstruction(state.context!, lineToSay, {
-        objectionKind: objectionOrQuestionKind,
-        userText: lastUserText,
-        lastOutboundLine: state.lastPromptLine,
-        lastOutboundAtMs: state.lastPromptSentAtMs,
-        repeatMode,
-        recentExchanges: state.recentExchanges,
-      });
+      const perTurnInstr = objectionOrQuestionKind === "scam"
+        ? buildExactScriptLineInstruction(lineToSay)
+        : buildConversationalRebuttalInstruction(state.context!, lineToSay, {
+            objectionKind: objectionOrQuestionKind,
+            userText: lastUserText,
+            lastOutboundLine: state.lastPromptLine,
+            lastOutboundAtMs: state.lastPromptSentAtMs,
+            repeatMode,
+            recentExchanges: state.recentExchanges,
+            closingPivot: getStateAwareClosingPivot(state),
+          });
 
       // ✅ consume awaitingUserAnswer ONLY when we are about to speak
       state.awaitingUserAnswer = false;
