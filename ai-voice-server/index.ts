@@ -294,6 +294,19 @@ type CallState = {
   timeOfferCountForStepIndex?: number;
   timeOfferCount?: number;
 
+  // Passive durable conversation memory (diagnostics only; no routing decisions read these yet)
+  selectedDay?: "today" | "tomorrow" | string;
+  selectedTimeText?: string;
+  selectedWindow?: TimeWindowHint;
+  lastAnsweredIntent?: string;
+  resolvedObjectionKinds?: string[];
+  lastOfferedSlots?: string[];
+  lastRouteKind?: string;
+  lastRouteReason?: string;
+  routeSequenceId?: number;
+  currentTurnId?: string;
+  responseCreateId?: string;
+
   // instrumentation: system prompt markers
   systemPromptLen?: number;
   systemPromptHead300?: string;
@@ -1115,6 +1128,14 @@ async function replayPendingCommittedTurn(
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay;
       state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "replay",
+        routeKind: "how_long",
+        routeReason: "duration_question",
+        userText: lastUserText,
+        lineToSay,
+        turnKey,
+      });
 
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
       state.awaitingUserAnswer = true;
@@ -1160,6 +1181,14 @@ async function replayPendingCommittedTurn(
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay;
       state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "replay",
+        routeKind: yesNow ? "live_transfer_try" : "live_transfer_availability",
+        routeReason: yesNow ? "availability_yes" : noLater ? "availability_no" : escapeAvailabilityLoop ? "availability_escape" : "availability_ambiguous",
+        userText: lastUserText,
+        lineToSay,
+        turnKey,
+      });
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
 
       state.phase = "in_call";
@@ -1238,6 +1267,15 @@ async function replayPendingCommittedTurn(
           state.lastResponseCreateAtMs = Date.now();
           state.lastObjectionKind = greetingObjOrQ;
           state.objectionRepeatCount = 0;
+          recordPassiveRouteMemory(state, {
+            source: "replay",
+            routeKind: "objection",
+            routeReason: greetingObjOrQ,
+            userText: lastUserText,
+            lineToSay: overrideLine,
+            turnKey,
+            trackResolvedObjection: !!greetingObjKind,
+          });
 
           state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(rebuttalInstr, { temperature: 0.6 })));
 
@@ -1275,6 +1313,14 @@ async function replayPendingCommittedTurn(
         state.lastPromptSentAtMs = Date.now();
         state.lastPromptLine = retryLine;
         state.lastResponseCreateAtMs = Date.now();
+        recordPassiveRouteMemory(state, {
+          source: "replay",
+          routeKind: "greeting_retry",
+          routeReason: "negative_hearing",
+          userText: lastUserText,
+          lineToSay: retryLine,
+          turnKey,
+        });
 
         state.openAiWs.send(
           JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
@@ -1315,6 +1361,14 @@ async function replayPendingCommittedTurn(
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay2;
       state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "replay",
+        routeKind: "greeting_reply",
+        routeReason: useInboundOpening ? "inbound_reason" : "stepper_after_greeting",
+        userText: lastUserText,
+        lineToSay: lineToSay2,
+        turnKey,
+      });
 
       state.openAiWs.send(
         JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
@@ -1398,6 +1452,15 @@ async function replayPendingCommittedTurn(
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay;
       state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "replay",
+        routeKind: "objection",
+        routeReason: objectionOrQuestionKind,
+        userText: lastUserText,
+        lineToSay,
+        turnKey,
+        trackResolvedObjection: !!objectionKind,
+      });
 
       state.openAiWs.send(
         JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
@@ -1543,6 +1606,14 @@ async function replayPendingCommittedTurn(
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = repromptLine;
       state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "replay",
+        routeKind: looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
+        routeReason: stepType,
+        userText: lastUserText,
+        lineToSay: repromptLine,
+        turnKey,
+      });
 
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
 
@@ -1613,6 +1684,14 @@ async function replayPendingCommittedTurn(
         state.lastPromptSentAtMs = Date.now();
         state.lastPromptLine = lineToSay;
         state.lastResponseCreateAtMs = Date.now();
+        recordPassiveRouteMemory(state, {
+          source: "replay",
+          routeKind: "step1_hard_route",
+          routeReason: shouldAskLiveTransferAvailability ? "live_transfer_availability" : "booking_frame",
+          userText: lastUserText,
+          lineToSay,
+          turnKey,
+        });
         if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(step1Instr)));
         state.scriptStepIndex = shouldAskLiveTransferAvailability ? idx : Math.min(idx + 1, Math.max(0, steps.length - 1));
         state.awaitingUserAnswer = true;
@@ -1745,6 +1824,14 @@ async function replayPendingCommittedTurn(
     state.lastPromptSentAtMs = Date.now();
     state.lastPromptLine = lineToSay;
     state.lastResponseCreateAtMs = Date.now();
+    recordPassiveRouteMemory(state, {
+      source: "replay",
+      routeKind: looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step",
+      routeReason: stepType,
+      userText: lastUserText,
+      lineToSay,
+      turnKey,
+    });
 
     state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(perTurnInstr)));
 
@@ -1921,6 +2008,108 @@ function markCommittedTurnHandled(state: CallState, turnKey: string, reason: str
   }
   state.lastHandledTurnKey = turnKey;
   return true;
+}
+
+function extractOfferedSlotsFromLine(lineRaw: string): string[] {
+  const line = String(lineRaw || "");
+  const matches = line.match(/\b\d{1,2}:\d{2}\s?(?:am|pm)\b/gi) || [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of matches) {
+    const normalized = String(raw || "").replace(/\s+/g, "").toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function looksLikeGeneratedTimeOfferLine(lineRaw: string): boolean {
+  const line = String(lineRaw || "").toLowerCase();
+  if (!line) return false;
+  const slots = extractOfferedSlotsFromLine(line);
+  return slots.length >= 2 && (
+    line.includes("availability at") ||
+    line.includes("which would work") ||
+    line.includes("which is easier") ||
+    line.includes("put you down") ||
+    line.includes("lock in")
+  );
+}
+
+function extractExplicitDaySelection(textRaw: string): "today" | "tomorrow" | string | null {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return null;
+  if (t.includes("today") || t.includes("later today") || t.includes("tonight")) return "today";
+  if (t.includes("tomorrow")) return "tomorrow";
+  const dayMatch = t.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekend|next week)\b/);
+  return dayMatch?.[1] || null;
+}
+
+function recordPassiveRouteMemory(
+  state: CallState,
+  args: {
+    source: "main" | "replay";
+    routeKind: string;
+    routeReason?: string;
+    userText?: string;
+    lineToSay?: string;
+    turnKey?: string;
+    trackResolvedObjection?: boolean;
+  }
+) {
+  try {
+    const userText = String(args.userText || "").trim();
+    const lineToSay = String(args.lineToSay || "").trim();
+    const sequence = Number(state.routeSequenceId || 0) + 1;
+    state.routeSequenceId = sequence;
+    state.currentTurnId = args.turnKey ? hash8(args.turnKey) : `${args.source}-${sequence}`;
+    state.responseCreateId = `${args.source}-${sequence}-${hash8(`${args.routeKind}|${args.routeReason || ""}|${lineToSay}`)}`;
+    state.lastRouteKind = args.routeKind;
+    state.lastRouteReason = args.routeReason || "";
+    if (args.routeReason) state.lastAnsweredIntent = args.routeReason;
+
+    const dayHint = userText ? extractExplicitDaySelection(userText) : null;
+    if (dayHint) state.selectedDay = dayHint;
+
+    if (userText && isExactClockTimeMentioned(userText)) {
+      state.selectedTimeText = userText;
+    }
+
+    const windowHint = userText ? pickTimeWindowHint(userText, "") : null;
+    if (windowHint) state.selectedWindow = windowHint;
+
+    if (args.trackResolvedObjection && args.routeReason) {
+      const existing = Array.isArray(state.resolvedObjectionKinds)
+        ? state.resolvedObjectionKinds
+        : [];
+      if (!existing.includes(args.routeReason)) {
+        state.resolvedObjectionKinds = [...existing, args.routeReason].slice(-10);
+      }
+    }
+
+    if (looksLikeGeneratedTimeOfferLine(lineToSay)) {
+      state.lastOfferedSlots = extractOfferedSlotsFromLine(lineToSay);
+    }
+
+    const payload = {
+      routeSequenceId: state.routeSequenceId,
+      currentTurnId: state.currentTurnId,
+      responseCreateId: state.responseCreateId,
+      source: args.source,
+      selectedDay: state.selectedDay || null,
+      selectedWindow: state.selectedWindow || null,
+      selectedTimeText: state.selectedTimeText ? "[captured]" : null,
+      lastRouteKind: state.lastRouteKind || null,
+      lastRouteReason: state.lastRouteReason || null,
+      scriptStepIndex: state.scriptStepIndex,
+      awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex,
+      pendingLiveTransferAvailabilityConfirm: !!state.pendingLiveTransferAvailabilityConfirm,
+    };
+
+    console.log("[AI-VOICE][MEMORY]", payload);
+    console.log("[AI-VOICE][ROUTE]", payload);
+  } catch {}
 }
 
 function computePromptMarkers(systemPrompt: string, uniqueLine?: string) {
@@ -4958,6 +5147,8 @@ wss.on("connection", (ws: WebSocket) => {
     inputCommitInFlight: false,
     lastInputCommitAtMs: 0,
     pendingLiveTransferAvailabilityAttempts: 0,
+    resolvedObjectionKinds: [],
+    routeSequenceId: 0,
   };
 
   calls.set(ws, state);
@@ -6974,6 +7165,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay;
       state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "main",
+        routeKind: "how_long",
+        routeReason: "duration_question",
+        userText: lastUserText,
+        lineToSay,
+        turnKey,
+      });
 
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
       state.awaitingUserAnswer = true;
@@ -7019,6 +7218,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay;
       state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "main",
+        routeKind: yesNow ? "live_transfer_try" : "live_transfer_availability",
+        routeReason: yesNow ? "availability_yes" : noLater ? "availability_no" : escapeAvailabilityLoop ? "availability_escape" : "availability_ambiguous",
+        userText: lastUserText,
+        lineToSay,
+        turnKey,
+      });
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
 
       state.phase = "in_call";
@@ -7077,6 +7284,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.lastPromptSentAtMs = Date.now();
         state.lastPromptLine = retryLine;
         state.lastResponseCreateAtMs = Date.now();
+        recordPassiveRouteMemory(state, {
+          source: "main",
+          routeKind: "greeting_retry",
+          routeReason: "negative_hearing",
+          userText: lastUserText,
+          lineToSay: retryLine,
+          turnKey,
+        });
 
         state.openAiWs.send(
           JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
@@ -7146,6 +7361,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay2;
       state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "main",
+        routeKind: "greeting_reply",
+        routeReason: useInboundOpening ? "inbound_reason" : "stepper_after_greeting",
+        userText: lastUserText,
+        lineToSay: lineToSay2,
+        turnKey,
+      });
 
       state.openAiWs.send(
         JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
@@ -7237,6 +7460,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay;
       state.lastResponseCreateAtMs = Date.now();
+      recordPassiveRouteMemory(state, {
+        source: "main",
+        routeKind: "objection",
+        routeReason: objectionOrQuestionKind,
+        userText: lastUserText,
+        lineToSay,
+        turnKey,
+        trackResolvedObjection: !!objectionKind,
+      });
 
       // Push AI rebuttal line to exchange memory
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
@@ -7326,6 +7558,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         agentPhone: state.context!.liveTransferPhone,
       });
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+      recordPassiveRouteMemory(state, {
+        source: "main",
+        routeKind: "live_transfer_direct",
+        routeReason: "explicit_intent",
+        userText: lastUserText,
+        lineToSay: getLiveTransferTryingLine(state.context!),
+        turnKey,
+      });
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
       state.userAudioMsBuffered = 0;
@@ -7471,6 +7711,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           state.lastPromptSentAtMs = Date.now();
           state.lastPromptLine = useFreeResponse ? repromptLine : repromptLine;
           state.lastResponseCreateAtMs = Date.now();
+          recordPassiveRouteMemory(state, {
+            source: "main",
+            routeKind: useFreeResponse ? "free_response" : looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
+            routeReason: stepType,
+            userText: lastUserText,
+            lineToSay: repromptLine,
+            turnKey,
+          });
 
           if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.75 })));
 
@@ -7549,6 +7797,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.lastPromptSentAtMs = Date.now();
         state.lastPromptLine = lineToSay;
         state.lastResponseCreateAtMs = Date.now();
+        recordPassiveRouteMemory(state, {
+          source: "main",
+          routeKind: "step1_hard_route",
+          routeReason: shouldAskLiveTransferAvailability ? "live_transfer_availability" : "booking_frame",
+          userText: lastUserText,
+          lineToSay,
+          turnKey,
+        });
         if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(step1Instr)));
         state.scriptStepIndex = shouldAskLiveTransferAvailability ? idx : Math.min(idx + 1, Math.max(0, steps.length - 1));
         state.awaitingUserAnswer = true;
@@ -7704,6 +7960,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             state.lastPromptSentAtMs = Date.now();
             state.lastPromptLine = offTopicLine;
             state.lastResponseCreateAtMs = Date.now();
+            recordPassiveRouteMemory(state, {
+              source: "main",
+              routeKind: "open_question_off_topic",
+              routeReason: isOutboundScheduler ? "deterministic_reask" : "free_response",
+              userText: lastUserText,
+              lineToSay: offTopicLine,
+              turnKey,
+            });
 
             if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(offTopicInstr, { temperature: 0.75 })));
           } catch (e) {
@@ -7823,6 +8087,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     state.lastPromptSentAtMs = Date.now();
     state.lastPromptLine = lineToSay;
     state.lastResponseCreateAtMs = Date.now();
+    recordPassiveRouteMemory(state, {
+      source: "main",
+      routeKind: looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step",
+      routeReason: stepType,
+      userText: lastUserText,
+      lineToSay,
+      turnKey,
+    });
 
     state.openAiWs.send(
       JSON.stringify(buildRealtimeResponseCreate(perTurnInstr))
