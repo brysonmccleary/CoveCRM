@@ -1107,6 +1107,50 @@ async function replayPendingCommittedTurn(
     const turnKey = buildCommittedTurnKey(state, lastUserText, restoredAudioMs, expectedAnswerIdx);
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
+    // ── Policy layer intercept (replay) ───────────────────────────────────────
+    if (lastUserText && !isGreetingReply) {
+      const _pIntent = classifyTurnIntent(lastUserText, state, { idx, steps, stepType });
+      const _pDecision = buildConversationPolicyDecision(_pIntent, state, { idx, steps, stepType });
+      if (_pDecision.handled) {
+        if (!markCommittedTurnHandled(state, turnKey, "replay policy")) return;
+        const _pLine = _pDecision.lineToSay || getStateAwareClosingPivot(state);
+        const _pInstr = buildResponseFromPolicy(_pDecision, state);
+        for (const [_k, _v] of Object.entries(_pDecision.stateWrites)) {
+          (state as any)[_k] = _v;
+        }
+        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+        pushExchange(state, "ai", _pLine, expectedAnswerIdx);
+        state.awaitingUserAnswer = false;
+        state.awaitingAnswerForStepIndex = undefined;
+        state.userAudioMsBuffered = 0;
+        state.lastUserTranscript = "";
+        state.lowSignalCommitCount = 0;
+        state.repromptCountForCurrentStep = 0;
+        await humanPause();
+        setWaitingForResponse(state, true, "response.create (policy)");
+        setAiSpeaking(state, true, "response.create (policy)");
+        setResponseInFlight(state, true, "response.create (policy)");
+        state.outboundOpenAiDone = false;
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = _pLine;
+        state.lastResponseCreateAtMs = Date.now();
+        recordPassiveRouteMemory(state, {
+          source: "replay",
+          routeKind: _pDecision.routeKind,
+          routeReason: _pIntent.kind + ((_pIntent.subKind && _pIntent.subKind !== _pIntent.kind) ? `:${_pIntent.subKind}` : ""),
+          userText: lastUserText,
+          lineToSay: _pLine,
+          turnKey,
+        });
+        state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_pInstr, { temperature: 0.6 })));
+        state.awaitingUserAnswer = !_pDecision.shouldAdvanceStep;
+        state.awaitingAnswerForStepIndex = _pDecision.shouldAdvanceStep ? undefined : expectedAnswerIdx;
+        state.phase = "in_call";
+        return;
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
       if (!markCommittedTurnHandled(state, turnKey, "replay how-long")) return;
       const lineToSay =
@@ -4232,6 +4276,311 @@ function getStateAwareClosingPivot(state: CallState): string {
   } catch {}
   return "Does later today or tomorrow work better?";
 }
+
+// ── Conversation Policy Layer ──────────────────────────────────────────────────
+
+type TurnIntentKind =
+  | "greeting_ack"
+  | "hearing_problem"
+  | "coverage_subject_answer"
+  | "day_selection"
+  | "time_window"
+  | "exact_time"
+  | "scheduling_preference"
+  | "live_transfer_now"
+  | "live_transfer_later"
+  | "objection"
+  | "question"
+  | "angry_or_profane"
+  | "confusion"
+  | "not_interested"
+  | "off_topic"
+  | "unknown";
+
+interface TurnIntent {
+  kind: TurnIntentKind;
+  subKind?: string | null;
+  raw: string;
+}
+
+type ResponseMode = "exact_script" | "guided_gpt" | "free_response_blocked";
+
+interface PolicyDecision {
+  handled: boolean;
+  routeKind: string;
+  responseMode: ResponseMode;
+  objective: string;
+  lineToSay?: string;
+  baseAnswer?: string;
+  requiredClosingPivot: string;
+  forbiddenTopics: string[];
+  stateWrites: Record<string, unknown>;
+  shouldAdvanceStep: boolean;
+}
+
+function classifyTurnIntent(
+  lastUserText: string,
+  state: CallState,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType }
+): TurnIntent {
+  const raw = String(lastUserText || "").trim();
+  const t = raw.toLowerCase();
+
+  if (!t) return { kind: "unknown", raw };
+
+  // Priority 1: angry or profane
+  const hasProfanity =
+    t.includes("fuck") || t.includes("shit") || t.includes("asshole") ||
+    t.includes("bastard") || t.includes("bitch") || t.includes("damn you") ||
+    t.includes("hell with") || t.includes("go to hell");
+  const hasAngerSignal =
+    t.includes("stop calling me") ||
+    t.includes("leave me alone") ||
+    t.includes("this is ridiculous") ||
+    t.includes("i keep telling you") ||
+    (t.includes("how many times") && (t.includes("told") || t.includes("said") || t.includes("tell"))) ||
+    t.includes("ive told you") || t.includes("i've told you") ||
+    t.includes("you people") ||
+    t.includes("never call me again") ||
+    t.includes("dont call me again") || t.includes("don't call me again");
+  if (hasProfanity || hasAngerSignal) {
+    return { kind: "angry_or_profane", raw };
+  }
+
+  // Priority 2: "I just said" correction (frustration that AI re-asked something already answered)
+  const hasJustSaidSignal =
+    t.includes("i just said") || t.includes("i already said") ||
+    t.includes("i already told you") || t.includes("i told you that") ||
+    t.includes("you keep asking") || t.includes("stop asking") ||
+    t.includes("i just told you");
+  const hasSchedulingContext =
+    t.includes("today") || t.includes("tomorrow") || t.includes("morning") ||
+    t.includes("afternoon") || t.includes("evening") || t.includes("time") ||
+    t.includes("daytime");
+  if (hasJustSaidSignal && hasSchedulingContext) {
+    return { kind: "confusion", subKind: "i_just_said", raw };
+  }
+
+  // Priority 3: hearing problem
+  const hearingSignals = [
+    "can you repeat", "could you repeat", "say that again", "say it again",
+    "didn't catch", "couldn't hear", "can't hear", "cannot hear",
+    "what did you say", "come again", "speak up", "louder",
+    "i'm sorry what", "im sorry what",
+  ];
+  if (hearingSignals.some(s => t.includes(s)) || t === "what" || t === "huh" || t === "what?") {
+    return { kind: "hearing_problem", raw };
+  }
+
+  // Priority 4: existing detectors
+  try {
+    const objKind = detectObjection(t);
+    if (objKind === "not_interested") return { kind: "not_interested", subKind: objKind, raw };
+    if (objKind === "confused_identity") return { kind: "confusion", subKind: objKind, raw };
+    if (objKind) return { kind: "objection", subKind: objKind, raw };
+  } catch {}
+
+  try {
+    const qKind = detectQuestionKindForTurn(t);
+    if (qKind) return { kind: "question", subKind: qKind, raw };
+  } catch {}
+
+  // Priority 5: scheduling intents — flag for existing routing, not for policy handling
+  try {
+    if (isLiveTransferAvailabilityYes(t) && !isImmediateTransferSchedulingPreference(t)) {
+      return { kind: "live_transfer_now", raw };
+    }
+    if (isLiveTransferAvailabilityNo(t) || isImmediateTransferSchedulingPreference(t)) {
+      return { kind: "live_transfer_later", raw };
+    }
+  } catch {}
+
+  try {
+    if (isTimeMentioned(t) || looksLikeTimeAnswer(t)) {
+      const day = extractExplicitDaySelection(t);
+      if (day === "today" || day === "tomorrow") return { kind: "day_selection", raw };
+      if (isTimeWindowMentioned(t)) return { kind: "time_window", raw };
+      return { kind: "exact_time", raw };
+    }
+  } catch {}
+
+  return { kind: "unknown", raw };
+}
+
+function buildConversationPolicyDecision(
+  intent: TurnIntent,
+  state: CallState,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType }
+): PolicyDecision {
+  const NOT_HANDLED: PolicyDecision = {
+    handled: false,
+    routeKind: "pass_through",
+    responseMode: "guided_gpt",
+    objective: "",
+    requiredClosingPivot: getStateAwareClosingPivot(state),
+    forbiddenTopics: [],
+    stateWrites: {},
+    shouldAdvanceStep: false,
+  };
+
+  const closingPivot = getStateAwareClosingPivot(state);
+  const ctx = state.context!;
+
+  // Strip "Got it — " prefix so time-offer body can be embedded mid-sentence.
+  function offerBody(line: string): string {
+    return String(line || "").replace(/^Got it\s*[—\-–]\s*/i, "");
+  }
+  function ucFirst(s: string): string {
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  }
+
+  // ── Branch: angry or profane ──────────────────────────────────────────────
+  if (intent.kind === "angry_or_profane") {
+    const t = intent.raw.toLowerCase();
+    const isDNC =
+      t.includes("do not call") || t.includes("don't call") ||
+      t.includes("remove") || t.includes("stop calling") ||
+      t.includes("leave me alone") || t.includes("never call");
+    if (isDNC) {
+      return {
+        handled: true,
+        routeKind: "angry_hard_stop",
+        responseMode: "exact_script",
+        objective: "end_call",
+        lineToSay: "I completely understand — I'll make a note and remove you right away. Sorry for the interruption. Take care.",
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {},
+        shouldAdvanceStep: false,
+      };
+    }
+    return {
+      handled: true,
+      routeKind: "angry_soft",
+      responseMode: "exact_script",
+      objective: "return_to_booking",
+      lineToSay: `I hear you — I'm sorry about that. ${closingPivot}`,
+      requiredClosingPivot: closingPivot,
+      forbiddenTopics: [],
+      stateWrites: {},
+      shouldAdvanceStep: false,
+    };
+  }
+
+  // ── Branch: "I just said" correction ─────────────────────────────────────
+  if (intent.kind === "confusion" && intent.subKind === "i_just_said") {
+    const raw = intent.raw.toLowerCase();
+    let correctionDay: "today" | "tomorrow" | null = null;
+    if (raw.includes("tomorrow")) correctionDay = "tomorrow";
+    else if (raw.includes("today")) correctionDay = "today";
+    const stateWrites: Record<string, unknown> = {};
+    let lineToSay: string;
+    if (correctionDay) {
+      stateWrites["selectedDay"] = correctionDay;
+      try {
+        const offer = getTimeOfferLine(ctx, 0, correctionDay, null, "");
+        lineToSay = `You're right — sorry about that. ${ucFirst(offerBody(offer))}`;
+      } catch {
+        lineToSay = `You're right — sorry about that. Does ${correctionDay === "today" ? "later today" : "tomorrow"} work?`;
+      }
+    } else {
+      const sd = String(state.selectedDay || "").trim().toLowerCase();
+      if ((sd === "today" || sd === "tomorrow") && ctx) {
+        try {
+          const offer = getTimeOfferLine(ctx, 0, sd as "today" | "tomorrow", null, "");
+          lineToSay = `You're right — sorry about that. ${ucFirst(offerBody(offer))}`;
+        } catch {
+          lineToSay = `You're right — sorry about that. ${closingPivot}`;
+        }
+      } else {
+        lineToSay = `You're right — sorry about that. ${closingPivot}`;
+      }
+    }
+    return {
+      handled: true,
+      routeKind: "correction",
+      responseMode: "exact_script",
+      objective: "return_to_booking",
+      lineToSay,
+      requiredClosingPivot: closingPivot,
+      forbiddenTopics: [],
+      stateWrites,
+      shouldAdvanceStep: false,
+    };
+  }
+
+  // ── Branch: explicit day selection (today / tomorrow) ────────────────────
+  // Intercepts "probably tomorrow", "tomorrow works", "I'm free tomorrow afternoon", etc.
+  // Always wins over the stepper — prevents ever re-asking "today or tomorrow?"
+  if (intent.kind === "day_selection") {
+    const explicitDay = pickDayHint(intent.raw, "");
+    if (explicitDay === "today" || explicitDay === "tomorrow") {
+      const windowHint = pickTimeWindowHint(intent.raw, "");
+      const stateWrites: Record<string, unknown> = { selectedDay: explicitDay };
+      let lineToSay: string;
+      try {
+        lineToSay = getTimeOfferLine(ctx, 0, explicitDay, windowHint, intent.raw);
+      } catch {
+        lineToSay = `Got it — ` + (explicitDay === "today" ? "later today" : "tomorrow") + `. ${closingPivot}`;
+      }
+      return {
+        handled: true,
+        routeKind: "policy_day_selected",
+        responseMode: "exact_script",
+        objective: "time_selection",
+        lineToSay,
+        requiredClosingPivot: closingPivot,
+        forbiddenTopics: [],
+        stateWrites,
+        shouldAdvanceStep: false,
+      };
+    }
+  }
+
+  // ── Branch: time window when day already known ───────────────────────────
+  // User says "morning" / "afternoon" / "evening" and we already have selectedDay.
+  // Respond with concrete time slots for that day + window.
+  if (intent.kind === "time_window") {
+    const sd = String(state.selectedDay || "").trim().toLowerCase();
+    if (sd === "today" || sd === "tomorrow") {
+      const windowHint = pickTimeWindowHint(intent.raw, "");
+      let lineToSay: string;
+      try {
+        lineToSay = getTimeOfferLine(ctx, 0, sd as "today" | "tomorrow", windowHint, intent.raw);
+      } catch {
+        lineToSay = closingPivot;
+      }
+      return {
+        handled: true,
+        routeKind: "policy_time_window",
+        responseMode: "exact_script",
+        objective: "time_selection",
+        lineToSay,
+        requiredClosingPivot: closingPivot,
+        forbiddenTopics: [],
+        stateWrites: {},
+        shouldAdvanceStep: false,
+      };
+    }
+  }
+
+  return NOT_HANDLED;
+}
+
+function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): string {
+  if (decision.responseMode === "exact_script" && decision.lineToSay) {
+    return buildExactScriptLineInstruction(decision.lineToSay);
+  }
+  if (decision.responseMode === "guided_gpt" && decision.baseAnswer && state.context) {
+    return buildConversationalRebuttalInstruction(state.context, decision.baseAnswer, {
+      closingPivot: decision.requiredClosingPivot,
+    });
+  }
+  if (decision.lineToSay) return buildExactScriptLineInstruction(decision.lineToSay);
+  return buildExactScriptLineInstruction(getStateAwareClosingPivot(state));
+}
+
+// ── End Policy Layer ───────────────────────────────────────────────────────────
 
 /**
  * ✅ Build per-turn instruction that makes drift basically impossible.
@@ -7576,6 +7925,50 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     if (now - lastCreateAt < 150) return;
     const turnKey = buildCommittedTurnKey(state, lastUserText, audioMsCommitGate, expectedAnswerIdx);
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
+
+    // ── Policy layer intercept (main) ─────────────────────────────────────────
+    if (lastUserText && !isGreetingReply) {
+      const _pIntent = classifyTurnIntent(lastUserText, state, { idx, steps, stepType });
+      const _pDecision = buildConversationPolicyDecision(_pIntent, state, { idx, steps, stepType });
+      if (_pDecision.handled) {
+        if (!markCommittedTurnHandled(state, turnKey, "main policy")) return;
+        const _pLine = _pDecision.lineToSay || getStateAwareClosingPivot(state);
+        const _pInstr = buildResponseFromPolicy(_pDecision, state);
+        for (const [_k, _v] of Object.entries(_pDecision.stateWrites)) {
+          (state as any)[_k] = _v;
+        }
+        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+        pushExchange(state, "ai", _pLine, expectedAnswerIdx);
+        state.awaitingUserAnswer = false;
+        state.awaitingAnswerForStepIndex = undefined;
+        state.userAudioMsBuffered = 0;
+        state.lastUserTranscript = "";
+        state.lowSignalCommitCount = 0;
+        state.repromptCountForCurrentStep = 0;
+        await humanPause();
+        setWaitingForResponse(state, true, "response.create (policy)");
+        setAiSpeaking(state, true, "response.create (policy)");
+        setResponseInFlight(state, true, "response.create (policy)");
+        state.outboundOpenAiDone = false;
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = _pLine;
+        state.lastResponseCreateAtMs = Date.now();
+        recordPassiveRouteMemory(state, {
+          source: "main",
+          routeKind: _pDecision.routeKind,
+          routeReason: _pIntent.kind + ((_pIntent.subKind && _pIntent.subKind !== _pIntent.kind) ? `:${_pIntent.subKind}` : ""),
+          userText: lastUserText,
+          lineToSay: _pLine,
+          turnKey,
+        });
+        state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_pInstr, { temperature: 0.6 })));
+        state.awaitingUserAnswer = !_pDecision.shouldAdvanceStep;
+        state.awaitingAnswerForStepIndex = _pDecision.shouldAdvanceStep ? undefined : expectedAnswerIdx;
+        state.phase = "in_call";
+        return;
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
       if (!markCommittedTurnHandled(state, turnKey, "how-long")) return;
