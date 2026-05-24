@@ -1149,8 +1149,20 @@ async function replayPendingCommittedTurn(
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
       if (!markCommittedTurnHandled(state, turnKey, "replay live-transfer availability")) return;
-      const yesNow = isLiveTransferAvailabilityYes(lastUserText);
-      const noLater = isLiveTransferAvailabilityNo(lastUserText);
+      const explicitDay = extractExplicitDaySelection(lastUserText);
+      const immediateYes = hasImmediateTransferConfirmation(lastUserText);
+      const schedulingPreference = isImmediateTransferSchedulingPreference(lastUserText);
+      const yesNow = immediateYes || (isLiveTransferAvailabilityYes(lastUserText) && !schedulingPreference);
+      const noLater = !yesNow && (schedulingPreference || isLiveTransferAvailabilityNo(lastUserText));
+      try {
+        console.log("[AI-VOICE][LIVE-TRANSFER-INTENT]", {
+          source: "replay",
+          yesNow,
+          noLater,
+          explicitDay: explicitDay || null,
+          reason: yesNow ? "immediate_transfer" : noLater ? "scheduling_preference" : "ambiguous",
+        });
+      } catch {}
       const nextAvailabilityAttempts = !yesNow && !noLater
         ? Number(state.pendingLiveTransferAvailabilityAttempts || 0) + 1
         : 0;
@@ -1526,6 +1538,79 @@ async function replayPendingCommittedTurn(
       !isDayReferenceMentioned(lastUserText) &&
       !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText);
 
+    const shouldTriggerLiveTransfer =
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      hasExplicitLiveTransferIntent(lastUserText) &&
+      (
+        hasImmediateTransferConfirmation(lastUserText) ||
+        hasExplicitAgentTransferCommand(lastUserText) ||
+        !isImmediateTransferSchedulingPreference(lastUserText)
+      ) &&
+      !!state.context?.liveTransferEnabled &&
+      !!state.context?.liveTransferPhone;
+
+    if (
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      hasExplicitLiveTransferIntent(lastUserText) &&
+      isImmediateTransferSchedulingPreference(lastUserText) &&
+      !hasImmediateTransferConfirmation(lastUserText) &&
+      !hasExplicitAgentTransferCommand(lastUserText) &&
+      !!state.context?.liveTransferEnabled &&
+      !!state.context?.liveTransferPhone
+    ) {
+      try {
+        console.log("[AI-VOICE][DIRECT-TRANSFER-BLOCKED]", {
+          callSid: state.callSid,
+          reason: "scheduling_preference",
+          source: "replay",
+        });
+      } catch {}
+    }
+
+    if (shouldTriggerLiveTransfer) {
+      if (!markCommittedTurnHandled(state, turnKey, "replay explicit live-transfer")) return;
+      if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) {
+        console.log("[AI-VOICE][LIVE-TRANSFER] Replay explicit transfer deferred; response already active", {
+          callSid: state.callSid,
+          waitingForResponse: !!state.waitingForResponse,
+          responseInFlight: !!state.responseInFlight,
+          aiSpeaking: !!state.aiSpeaking,
+        });
+        state.awaitingUserAnswer = true;
+        return;
+      }
+
+      console.log("[AI-VOICE][LIVE-TRANSFER] Replay explicit transfer intent detected — triggering live transfer", {
+        callSid: state.callSid,
+        agentPhone: state.context!.liveTransferPhone,
+      });
+      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+      recordPassiveRouteMemory(state, {
+        source: "replay",
+        routeKind: "live_transfer_direct",
+        routeReason: "explicit_intent",
+        userText: lastUserText,
+        lineToSay: getLiveTransferTryingLine(state.context!),
+        turnKey,
+      });
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      const wsConn = state.openAiWs;
+      if (wsConn) {
+        void performLiveTransfer(wsConn, state);
+      }
+      return;
+    }
+
     if (!canSpeak) {
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
       return;
@@ -1600,7 +1685,9 @@ async function replayPendingCommittedTurn(
 
       await humanPause();
 
-      const instr = buildStepperTurnInstruction(state.context!, repromptLine);
+      const instr = looksLikeGeneratedTimeOfferLine(repromptLine)
+        ? buildExactScriptLineInstruction(repromptLine)
+        : buildStepperTurnInstruction(state.context!, repromptLine);
 
       setWaitingForResponse(state, true, "response.create (replay reprompt)");
       setAiSpeaking(state, true, "response.create (replay reprompt)");
@@ -1635,6 +1722,22 @@ async function replayPendingCommittedTurn(
           : rememberedDay === "today" || rememberedDay === "tomorrow"
             ? (rememberedDay as "today" | "tomorrow")
             : null;
+      if (
+        idx === 1 &&
+        !!state.context?.liveTransferEnabled &&
+        !!state.context?.liveTransferPhone &&
+        (explicitDay === "today" || explicitDay === "tomorrow" || rememberedDay === "today" || rememberedDay === "tomorrow")
+      ) {
+        try {
+          console.log("[AI-VOICE][LIVE-TRANSFER-SKIP-DAY-SELECTED]", {
+            source: "replay",
+            selectedDay: state.selectedDay || null,
+            explicitDay: explicitDay || null,
+            idx,
+            expectedAnswerIdx,
+          });
+        } catch {}
+      }
       const timeStepIndex = idx <= 1 ? Math.min(2, Math.max(0, steps.length - 1)) : idx;
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
@@ -1645,7 +1748,7 @@ async function replayPendingCommittedTurn(
         pickTimeWindowHint(lastUserText, ""),
         lastUserText
       );
-      const instr = buildStepperTurnInstruction(state.context!, lineToSay);
+      const instr = buildExactScriptLineInstruction(lineToSay);
 
       state.timeOfferCountForStepIndex = timeStepIndex;
       state.timeOfferCount = n + 1;
@@ -1697,15 +1800,45 @@ async function replayPendingCommittedTurn(
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
 
+    const explicitDayForLiveTransferSkip = extractExplicitDaySelection(lastUserText);
+    const selectedDayForLiveTransferSkip = String(state.selectedDay || "").trim().toLowerCase();
+    const hasDaySelectedForLiveTransferSkip =
+      explicitDayForLiveTransferSkip === "today" ||
+      explicitDayForLiveTransferSkip === "tomorrow" ||
+      selectedDayForLiveTransferSkip === "today" ||
+      selectedDayForLiveTransferSkip === "tomorrow";
+
     const shouldAskLiveTransferAvailability =
       canAdvance &&
       idx === 1 &&
       hasTranscript &&
       !!state.context?.liveTransferEnabled &&
       !!state.context?.liveTransferPhone &&
+      !hasDaySelectedForLiveTransferSkip &&
       !isDayReferenceMentioned(lastUserText) &&
       !isExactClockTimeMentioned(lastUserText) &&
       isStepOneCoverageSubjectAnswer(lastUserText);
+    if (
+      !shouldAskLiveTransferAvailability &&
+      hasDaySelectedForLiveTransferSkip &&
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      !!state.context?.liveTransferEnabled &&
+      !!state.context?.liveTransferPhone &&
+      !isExactClockTimeMentioned(lastUserText) &&
+      isStepOneCoverageSubjectAnswer(lastUserText)
+    ) {
+      try {
+        console.log("[AI-VOICE][LIVE-TRANSFER-SKIP-DAY-SELECTED]", {
+          source: "replay",
+          selectedDay: state.selectedDay || null,
+          explicitDay: explicitDayForLiveTransferSkip || null,
+          idx,
+          expectedAnswerIdx,
+        });
+      } catch {}
+    }
     if (shouldAskLiveTransferAvailability) {
       lineToSay = getLiveTransferAvailabilityLine(state.context!);
       state.pendingLiveTransferAvailabilityConfirm = true;
@@ -1865,7 +1998,9 @@ async function replayPendingCommittedTurn(
       }
     } catch {}
 
-    const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+    const perTurnInstr = looksLikeGeneratedTimeOfferLine(lineToSay)
+      ? buildExactScriptLineInstruction(lineToSay)
+      : buildStepperTurnInstruction(state.context!, lineToSay);
     try { console.log("[AI-VOICE][STEPPER][REPLAY-SEND]", { callSid: state.callSid, stepIndex: idx, expectedAnswerIdx, stepType, lineToSay }); } catch {}
     if (!markCommittedTurnHandled(state, turnKey, "replay script step")) return;
 
@@ -3100,6 +3235,62 @@ function isLiveTransferAvailabilityYes(textRaw: string): boolean {
   );
 }
 
+function hasImmediateTransferConfirmation(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    t === "now" ||
+    t === "right now" ||
+    t.includes("right now works") ||
+    t.includes("yes right now") ||
+    t.includes("yeah right now") ||
+    t.includes("sure right now") ||
+    t.includes("ok right now") ||
+    t.includes("okay right now") ||
+    t.includes("now works") ||
+    t.includes("now is fine") ||
+    t.includes("do it now") ||
+    t.includes("let s do it now") ||
+    t.includes("lets do it now") ||
+    t.includes("i can do it now") ||
+    t.includes("i can do now") ||
+    t.includes("available now")
+  );
+}
+
+function hasExplicitAgentTransferCommand(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    t.includes("transfer me") ||
+    t.includes("connect me") ||
+    t.includes("put him on") ||
+    t.includes("put her on") ||
+    t.includes("can i talk to him") ||
+    t.includes("can i speak to the agent")
+  );
+}
+
+function isImmediateTransferSchedulingPreference(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    t.includes("not right now") ||
+    t.includes("not now") ||
+    t.includes("can't right now") ||
+    t.includes("cannot right now") ||
+    t.includes("call me later") ||
+    t.includes("call back later") ||
+    t.includes("try later") ||
+    t.includes("later") ||
+    t.includes("tomorrow") ||
+    t.includes("today") ||
+    t.includes("today later") ||
+    t.includes("later today") ||
+    t.includes("schedule")
+  );
+}
+
 function isLiveTransferAvailabilityNo(textRaw: string): boolean {
   const t = normalizeTurnTextForKey(textRaw);
   if (!t) return false;
@@ -3387,7 +3578,6 @@ function getTimeOfferLine(
   rawUserText: string
 ): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
-  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
   const day = dayHint === "today" ? "later today" : (dayHint === "tomorrow" ? "tomorrow" : "tomorrow");
 
@@ -3395,14 +3585,7 @@ function getTimeOfferLine(
   if (windowHint === "soon_hours") {
     const h = extractSoonHours(rawUserText) || 1;
     const h2 = Math.min(12, h + 1);
-    const ladder = [
-      `Okay — it looks like I have availability about ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now. Which would work better for you?`,
-      `To keep it easy, should I put you down for about ${h} hours from now, or about ${h2} hours from now?`,
-      `If you’re flexible, I can grab the next open slot around ${h}–${h2} hours from now — does that work for you?`,
-      `Got it — my job is just to get you scheduled with ${agent}. About ${h} hours from now or about ${h2} hours from now better?`,
-      `If it helps, I can just lock in the next available time in about ${h}–${h2} hours — does that work for you?`,
-    ];
-    return ladder[Math.min(n, ladder.length - 1)];
+    return `Got it — I have about ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now available. Which works better?`;
   }
 
   // Concrete clock-time slots by window (these are "offer options", not confirming a final booking yet).
@@ -3597,15 +3780,8 @@ function getTimeOfferLine(
   const utLock = String(rawUserText || "").toLowerCase();
   const wantsLaterLock = utLock.includes("later") || utLock.includes("latest") || utLock.includes("after");
   const lock = wantsLaterLock ? b : a;
-  const ladder = [
-    `Okay — it looks like we have availability at ${a} or ${b}. Which would work better for you?`,
-    `Which is easier for you — ${dayLabel} at ${a}, or ${dayLabel} at ${b}?`,
-    `If you’re flexible, I can lock in ${dayLabel} at ${lock} — does that work?`,
-    `To keep it easy, should I put you down for ${dayLabel} at ${a}, or ${dayLabel} at ${b}?`,
-    `Got it — my job is just to get you scheduled with ${agent}. ${dayLabel} at ${a} or ${b} usually better?`,
-  ];
-
-  return ladder[Math.min(n, ladder.length - 1)];
+  if (n >= 2) return `Got it — ${dayLabel} I have ${lock} available. Does that work?`;
+  return `Got it — ${dayLabel} I have ${a} or ${b} available. Which works better?`;
 }
 
 function shouldTreatCommitAsRealAnswer(
@@ -7371,8 +7547,20 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
       if (!markCommittedTurnHandled(state, turnKey, "live-transfer availability")) return;
-      const yesNow = isLiveTransferAvailabilityYes(lastUserText);
-      const noLater = isLiveTransferAvailabilityNo(lastUserText);
+      const explicitDay = extractExplicitDaySelection(lastUserText);
+      const immediateYes = hasImmediateTransferConfirmation(lastUserText);
+      const schedulingPreference = isImmediateTransferSchedulingPreference(lastUserText);
+      const yesNow = immediateYes || (isLiveTransferAvailabilityYes(lastUserText) && !schedulingPreference);
+      const noLater = !yesNow && (schedulingPreference || isLiveTransferAvailabilityNo(lastUserText));
+      try {
+        console.log("[AI-VOICE][LIVE-TRANSFER-INTENT]", {
+          source: "main",
+          yesNow,
+          noLater,
+          explicitDay: explicitDay || null,
+          reason: yesNow ? "immediate_transfer" : noLater ? "scheduling_preference" : "ambiguous",
+        });
+      } catch {}
       const nextAvailabilityAttempts = !yesNow && !noLater
         ? Number(state.pendingLiveTransferAvailabilityAttempts || 0) + 1
         : 0;
@@ -7725,9 +7913,34 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       idx === 1 &&
       hasTranscript &&
       hasExplicitLiveTransferIntent(lastUserText) &&
+      (
+        hasImmediateTransferConfirmation(lastUserText) ||
+        hasExplicitAgentTransferCommand(lastUserText) ||
+        !isImmediateTransferSchedulingPreference(lastUserText)
+      ) &&
       !!state.context?.liveTransferEnabled &&
       !!state.context?.liveTransferPhone &&
       state.phase !== "ended";
+
+    if (
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      hasExplicitLiveTransferIntent(lastUserText) &&
+      isImmediateTransferSchedulingPreference(lastUserText) &&
+      !hasImmediateTransferConfirmation(lastUserText) &&
+      !hasExplicitAgentTransferCommand(lastUserText) &&
+      !!state.context?.liveTransferEnabled &&
+      !!state.context?.liveTransferPhone &&
+      state.phase !== "ended"
+    ) {
+      try {
+        console.log("[AI-VOICE][DIRECT-TRANSFER-BLOCKED]", {
+          callSid: state.callSid,
+          reason: "scheduling_preference",
+        });
+      } catch {}
+    }
 
     if (shouldTriggerLiveTransfer) {
       if (!markCommittedTurnHandled(state, turnKey, "explicit live-transfer")) return;
@@ -7883,10 +8096,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             });
             lineForMemory = `[free-response to: "${lastUserText.slice(0, 60)}"]`;
           } else {
-            instr = buildStepperTurnInstruction(state.context!, repromptLine, {
-              userText: lastUserText,
-              recentExchanges: state.recentExchanges,
-            });
+            instr = looksLikeGeneratedTimeOfferLine(repromptLine)
+              ? buildExactScriptLineInstruction(repromptLine)
+              : buildStepperTurnInstruction(state.context!, repromptLine, {
+                  userText: lastUserText,
+                  recentExchanges: state.recentExchanges,
+                });
             lineForMemory = repromptLine;
           }
 
@@ -7930,6 +8145,22 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           : rememberedDay === "today" || rememberedDay === "tomorrow"
             ? (rememberedDay as "today" | "tomorrow")
             : null;
+      if (
+        idx === 1 &&
+        !!state.context?.liveTransferEnabled &&
+        !!state.context?.liveTransferPhone &&
+        (explicitDay === "today" || explicitDay === "tomorrow" || rememberedDay === "today" || rememberedDay === "tomorrow")
+      ) {
+        try {
+          console.log("[AI-VOICE][LIVE-TRANSFER-SKIP-DAY-SELECTED]", {
+            source: "main",
+            selectedDay: state.selectedDay || null,
+            explicitDay: explicitDay || null,
+            idx,
+            expectedAnswerIdx,
+          });
+        } catch {}
+      }
       const timeStepIndex = idx <= 1 ? Math.min(2, Math.max(0, steps.length - 1)) : idx;
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
@@ -7940,10 +8171,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         pickTimeWindowHint(lastUserText, ""),
         lastUserText
       );
-      const instr = buildStepperTurnInstruction(state.context!, lineToSay, {
-        userText: lastUserText,
-        recentExchanges: state.recentExchanges,
-      });
+      const instr = buildExactScriptLineInstruction(lineToSay);
 
       state.timeOfferCountForStepIndex = timeStepIndex;
       state.timeOfferCount = n + 1;
@@ -7995,15 +8223,45 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
 
+    const explicitDayForLiveTransferSkip = extractExplicitDaySelection(lastUserText);
+    const selectedDayForLiveTransferSkip = String(state.selectedDay || "").trim().toLowerCase();
+    const hasDaySelectedForLiveTransferSkip =
+      explicitDayForLiveTransferSkip === "today" ||
+      explicitDayForLiveTransferSkip === "tomorrow" ||
+      selectedDayForLiveTransferSkip === "today" ||
+      selectedDayForLiveTransferSkip === "tomorrow";
+
     const shouldAskLiveTransferAvailability =
       canAdvance &&
       idx === 1 &&
       hasTranscript &&
       !!state.context?.liveTransferEnabled &&
       !!state.context?.liveTransferPhone &&
+      !hasDaySelectedForLiveTransferSkip &&
       !isDayReferenceMentioned(lastUserText) &&
       !isExactClockTimeMentioned(lastUserText) &&
       isStepOneCoverageSubjectAnswer(lastUserText);
+    if (
+      !shouldAskLiveTransferAvailability &&
+      hasDaySelectedForLiveTransferSkip &&
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      !!state.context?.liveTransferEnabled &&
+      !!state.context?.liveTransferPhone &&
+      !isExactClockTimeMentioned(lastUserText) &&
+      isStepOneCoverageSubjectAnswer(lastUserText)
+    ) {
+      try {
+        console.log("[AI-VOICE][LIVE-TRANSFER-SKIP-DAY-SELECTED]", {
+          source: "main",
+          selectedDay: state.selectedDay || null,
+          explicitDay: explicitDayForLiveTransferSkip || null,
+          idx,
+          expectedAnswerIdx,
+        });
+      } catch {}
+    }
     if (shouldAskLiveTransferAvailability) {
       lineToSay = getLiveTransferAvailabilityLine(state.context!);
       state.pendingLiveTransferAvailabilityConfirm = true;
@@ -8285,10 +8543,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     // Push user answer to exchange memory before building instruction
     if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
 
-    const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay, {
-      userText: lastUserText,
-      recentExchanges: state.recentExchanges,
-    });
+    const perTurnInstr = looksLikeGeneratedTimeOfferLine(lineToSay)
+      ? buildExactScriptLineInstruction(lineToSay)
+      : buildStepperTurnInstruction(state.context!, lineToSay, {
+          userText: lastUserText,
+          recentExchanges: state.recentExchanges,
+        });
     try { console.log("[AI-VOICE][STEPPER][SEND]", { callSid: state.callSid, stepIndex: idx, expectedAnswerIdx, stepType, lineToSay }); } catch {}
     if (!markCommittedTurnHandled(state, turnKey, "script step")) return;
     // ✅ Patch 3: remember what we accepted from the user BEFORE clearing transcript
@@ -8411,11 +8671,39 @@ void handleFinalOutcomeIntent(state, {
           const agentTz = String(state.context?.agentTimeZone || "America/Phoenix").trim();
           const leadTz = String(getLeadTimeZoneHintFromContext(state.context!) || agentTz).trim();
 
-          // Build a date string: "today at <lastExactTime>" in agent timezone
+          // Build a date string in agent timezone, preserving today/tomorrow memory from the lead.
           const nowInAgentTz = new Date().toLocaleString("en-US", { timeZone: agentTz });
-          const todayStr = new Date(nowInAgentTz).toLocaleDateString("en-US", {
+          const explicitDay =
+            extractExplicitDaySelection(lastExactTime) ||
+            extractExplicitDaySelection(String(state.selectedTimeText || "")) ||
+            extractExplicitDaySelection(String(state.lastAcceptedUserText || ""));
+          const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+          const selectedBookingDay =
+            explicitDay === "today" || explicitDay === "tomorrow"
+              ? explicitDay
+              : rememberedDay === "today" || rememberedDay === "tomorrow"
+                ? rememberedDay
+                : "today";
+          const bookingLocalDate = new Date(nowInAgentTz);
+          if (selectedBookingDay === "tomorrow") {
+            bookingLocalDate.setDate(bookingLocalDate.getDate() + 1);
+          }
+          const bookingDateStr = bookingLocalDate.toLocaleDateString("en-US", {
             year: "numeric", month: "2-digit", day: "2-digit"
           }); // MM/DD/YYYY
+
+          const extractSpokenClockForBooking = (raw: string): string => {
+            const t = String(raw || "").trim().toLowerCase();
+            const meridiem = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+            if (meridiem) return `${meridiem[1]}${meridiem[2] ? `:${meridiem[2]}` : ""}${meridiem[3]}`;
+            const clock = t.match(/\b(\d{1,2}:\d{2})\b/);
+            if (clock) return clock[1];
+            const atBare = t.match(/\b(?:at|around|about|by)\s+(\d{1,2})\b/i);
+            if (atBare) return atBare[1];
+            const dayBare = t.match(/\b(?:today|tomorrow|tonight|morning|afternoon|evening)\s+(?:at\s+)?(\d{1,2})\b/i);
+            if (dayBare) return dayBare[1];
+            return String(raw || "").trim();
+          };
 
           // Parse spoken time like "3pm", "3:30pm", "3:30" into a Date
           const parseSpokenTime = (raw: string, dateStr: string, tz: string): Date | null => {
@@ -8453,7 +8741,17 @@ void handleFinalOutcomeIntent(state, {
             } catch { return null; }
           };
 
-          const startDate = parseSpokenTime(lastExactTime, todayStr, agentTz);
+          const timeTextForBooking = extractSpokenClockForBooking(lastExactTime);
+          const startDate = parseSpokenTime(timeTextForBooking, bookingDateStr, agentTz);
+          try {
+            console.log("[AI-VOICE][BOOKING-DATE-MEMORY]", {
+              callSid: state.callSid,
+              selectedDay: rememberedDay || null,
+              explicitDay: explicitDay || null,
+              selectedTimeText: state.selectedTimeText ? "[captured]" : null,
+              finalDateIso: startDate && !isNaN(startDate.getTime()) ? startDate.toISOString() : null,
+            });
+          } catch {}
 
           if (startDate && !isNaN(startDate.getTime())) {
             // Sanity check: must be in the future (within 48 hours)
