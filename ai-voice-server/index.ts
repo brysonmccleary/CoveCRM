@@ -306,6 +306,8 @@ type CallState = {
   routeSequenceId?: number;
   currentTurnId?: string;
   responseCreateId?: string;
+  lastDuplicateGuardKey?: string;
+  lastDuplicateGuardAtMs?: number;
 
   // instrumentation: system prompt markers
   systemPromptLen?: number;
@@ -1103,6 +1105,7 @@ async function replayPendingCommittedTurn(
 
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
     const turnKey = buildCommittedTurnKey(state, lastUserText, restoredAudioMs, expectedAnswerIdx);
+    if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
       if (!markCommittedTurnHandled(state, turnKey, "replay how-long")) return;
@@ -1226,8 +1229,9 @@ async function replayPendingCommittedTurn(
       // (e.g. "already got it taken care of", "not interested", "remove me"),
       // route to the rebuttal handler instead of advancing the script.
       // This catches objections that fire before awaitingUserAnswer is set.
-      const greetingObjKind = lastUserText ? detectObjection(lastUserText) : null;
-      const greetingQKind = lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
+      const greetingContinue = isConversationalGreetingContinue(lastUserText);
+      const greetingObjKind = !greetingContinue && lastUserText ? detectObjection(lastUserText) : null;
+      const greetingQKind = !greetingContinue && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
       const greetingObjOrQ = greetingObjKind || greetingQKind;
       if (greetingObjOrQ) {
         // Treat exactly like the REBUTTAL-GATE path — just set phase and fall through.
@@ -1363,7 +1367,7 @@ async function replayPendingCommittedTurn(
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "replay",
-        routeKind: "greeting_reply",
+        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
         routeReason: useInboundOpening ? "inbound_reason" : "stepper_after_greeting",
         userText: lastUserText,
         lineToSay: lineToSay2,
@@ -1992,6 +1996,35 @@ function buildCommittedTurnKey(
     transcript || "(no-text)",
     String(audioBucket),
   ].join("|");
+}
+
+function shouldSkipShortWindowDuplicateTurn(
+  state: CallState,
+  transcriptRaw: string,
+  expectedAnswerIdx: number
+): boolean {
+  const transcript = normalizeTurnTextForKey(transcriptRaw);
+  if (!transcript) return false;
+
+  const key = [String(expectedAnswerIdx), transcript].join("|");
+  const now = Date.now();
+  const lastKey = String(state.lastDuplicateGuardKey || "");
+  const lastAt = Number(state.lastDuplicateGuardAtMs || 0);
+
+  if (lastKey === key && lastAt > 0 && now - lastAt <= 2000) {
+    try {
+      console.log("[AI-VOICE][TURN-GATE] short-window duplicate skipped", {
+        callSid: state.callSid,
+        turnHash: hash8(key),
+        msSinceLast: now - lastAt,
+      });
+    } catch {}
+    return true;
+  }
+
+  state.lastDuplicateGuardKey = key;
+  state.lastDuplicateGuardAtMs = now;
+  return false;
 }
 
 function markCommittedTurnHandled(state: CallState, turnKey: string, reason: string): boolean {
@@ -2882,6 +2915,45 @@ function isFirstTurnContinueReply(textRaw: string): boolean {
       "yes whats up",
     ].includes(t) ||
     /^(yeah|yes|yep|yup|sure|ok|okay|hi|hello)\s+(what s up|whats up)$/.test(t)
+  );
+}
+
+function isConversationalGreetingContinue(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  if (
+    t.includes("not interested") ||
+    t.includes("stop calling") ||
+    t.includes("wrong number") ||
+    t.includes("scam") ||
+    t.includes("busy") ||
+    t.includes("call me later") ||
+    t.includes("tomorrow") ||
+    t.includes("right now")
+  ) return false;
+
+  return (
+    [
+      "yeah",
+      "yep",
+      "yes",
+      "okay",
+      "ok",
+      "sure",
+      "go ahead",
+      "what s up",
+      "whats up",
+      "speaking",
+      "this is he",
+      "this is him",
+      "this is she",
+      "hello",
+      "hi",
+      "who is this",
+      "what is this about",
+      "what can i do for you",
+    ].includes(t) ||
+    /^(yeah|yes|yep|yup|ok|okay|sure|hi|hello)\s+(what s up|whats up)$/.test(t)
   );
 }
 
@@ -7140,6 +7212,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     const lastCreateAt = Number(state.lastResponseCreateAtMs || 0);
     if (now - lastCreateAt < 150) return;
     const turnKey = buildCommittedTurnKey(state, lastUserText, audioMsCommitGate, expectedAnswerIdx);
+    if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
       if (!markCommittedTurnHandled(state, turnKey, "how-long")) return;
@@ -7253,6 +7326,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     if (isGreetingReply) {
       if (!markCommittedTurnHandled(state, turnKey, "greeting reply")) return;
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
+      const greetingContinue = isConversationalGreetingContinue(lastUserText);
 
       // Also treat a bare greeting response ("hello", "hi") the same as negative hearing —
       // they didn't acknowledge us, just said hello back. Re-ask the hearing check.
@@ -7363,7 +7437,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "main",
-        routeKind: "greeting_reply",
+        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
         routeReason: useInboundOpening ? "inbound_reason" : "stepper_after_greeting",
         userText: lastUserText,
         lineToSay: lineToSay2,
