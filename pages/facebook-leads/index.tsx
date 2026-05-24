@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import DashboardLayout from "@/components/DashboardLayout";
-import MetaConnectPanel from "@/components/MetaConnectPanel";
-import AdWizard from "@/components/FacebookAds/AdWizard";
+import FacebookOnboardingFlow from "@/components/FacebookOnboarding/FacebookOnboardingFlow";
 import AdPreviewCard from "@/components/FacebookAds/AdPreviewCard";
 import { GetServerSideProps } from "next";
 import { getServerSession } from "next-auth/next";
@@ -1855,15 +1854,15 @@ function CampaignCard({
                 {campaign.status}
               </span>
               {(campaign.metaSyncStatus === "token_expired" || campaign.metaObjectHealth === "token_expired") ? (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-900/40 text-red-300 border border-red-600/30">Token Expired</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-900/40 text-red-300 border border-red-600/30">Reconnect Facebook</span>
               ) : campaign.metaPublishStatus === "failed" ? (
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-900/30 text-red-300 border border-red-700/30">Publish Failed</span>
               ) : campaign.metaPublishStatus === "skipped_missing_meta_connection" || campaign.metaObjectHealth === "disconnected" ? (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-900/30 text-yellow-300 border border-yellow-700/30">Needs Meta Connect</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-900/30 text-yellow-300 border border-yellow-700/30">Needs Facebook Setup</span>
               ) : campaign.metaObjectHealth === "healthy" ? (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/30 text-emerald-300 border border-emerald-700/30">Meta Connected</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/30 text-emerald-300 border border-emerald-700/30">Facebook Connected</span>
               ) : campaign.metaSyncStatus === "sync_failed" || campaign.metaObjectHealth === "sync_failed" || campaign.metaObjectHealth === "stale" ? (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-900/30 text-orange-300 border border-orange-700/30">Needs Sync</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-900/30 text-orange-300 border border-orange-700/30">Needs Refresh</span>
               ) : null}
               {campaign.writeLeadsToSheet ? (
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-900/40 text-teal-300 border border-teal-700/30">Sheet Connected</span>
@@ -1966,7 +1965,7 @@ function CampaignCard({
                 />
               </div>
             </div>
-            <p className="text-xs text-gray-500">Meta sync updates campaign tracking when your account is connected.</p>
+            <p className="text-xs text-gray-500">Facebook connection updates campaign tracking when your account is connected.</p>
             <div className="flex gap-2">
               <button
                 onClick={saveStats}
@@ -2357,22 +2356,10 @@ export default function FacebookLeadsPage() {
   return (
     <DashboardLayout>
       <div className="mx-auto max-w-6xl space-y-8 p-4 sm:p-6">
-        <section className="rounded-2xl border border-white/10 bg-[#0f172a] p-5 shadow-lg sm:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">FB Leads</p>
-              <h1 className="mt-1 text-2xl font-bold text-white sm:text-3xl">
-                Launch Facebook lead campaigns and let CoveCRM route, call, text, and book leads.
-              </h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
-                Connect Meta, create a paused campaign for review, and track the lead flow from first click to booked appointment.
-              </p>
-            </div>
-            <div className="rounded-xl border border-blue-500/30 bg-blue-950/30 px-4 py-3 text-sm text-blue-100">
-              Ads are created paused so you can review before spend starts.
-            </div>
-          </div>
-        </section>
+        <FacebookOnboardingFlow
+          selectedLeadType={selectedLeadType}
+          onLeadTypeChange={setSelectedLeadType}
+        />
 
         <section className="rounded-2xl border border-blue-500/20 bg-[#0f172a] p-5 shadow-lg sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -2396,21 +2383,6 @@ export default function FacebookLeadsPage() {
         </section>
 
         <HubMetricsRow campaigns={campaigns} />
-
-        <section className="space-y-3">
-          <h2 className="text-lg font-bold text-white">Meta Connection</h2>
-          <MetaConnectPanel leadType={selectedLeadType} />
-        </section>
-
-        <section className="space-y-3">
-          <div>
-            <h2 className="text-lg font-bold text-white">Launch Campaign</h2>
-            <p className="text-sm text-gray-400">
-              Choose lead type, state, and budget. CoveCRM generates the ad and creates the campaign paused for review.
-            </p>
-          </div>
-          <AdWizard onLeadTypeChange={setSelectedLeadType} />
-        </section>
 
         <section className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2457,7 +2429,7 @@ export default function FacebookLeadsPage() {
         <section className="space-y-3">
           <div>
             <h2 className="text-lg font-bold text-white">📋 Lead Feed</h2>
-            <p className="text-sm text-gray-400">All leads received via Meta webhook.</p>
+            <p className="text-sm text-gray-400">All Facebook leads received by CoveCRM appear here.</p>
           </div>
           <LeadFeed />
         </section>

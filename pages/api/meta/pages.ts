@@ -25,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const url = new URL("https://graph.facebook.com/v19.0/me/accounts");
     url.searchParams.set("access_token", token);
-    url.searchParams.set("fields", "id,name,access_token,instagram_business_account{id}");
+    url.searchParams.set("fields", "id,name,access_token,category,link,tasks,picture.type(large){url},instagram_business_account{id}");
 
     const resp = await fetch(url.toString());
     const data = await resp.json() as any;
@@ -42,6 +42,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         name: String(p.name || ""),
         hasToken: !!p.access_token,
         instagramId: String(p?.instagram_business_account?.id || ""),
+        pictureUrl: String(p?.picture?.data?.url || ""),
+        category: String(p?.category || ""),
+        link: String(p?.link || ""),
+        tasks: Array.isArray(p?.tasks) ? p.tasks.map((task: any) => String(task || "")).filter(Boolean) : [],
         selected: String(p.id || "") === String(user?.metaPageId || ""),
       })),
     });
