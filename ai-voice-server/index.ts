@@ -1108,7 +1108,7 @@ async function replayPendingCommittedTurn(
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
     // ── Policy layer intercept (replay) ───────────────────────────────────────
-    if (lastUserText && !isGreetingReply) {
+    if (lastUserText) {
       const _pIntent = classifyTurnIntent(lastUserText, state, { idx, steps, stepType });
       const _pDecision = buildConversationPolicyDecision(_pIntent, state, { idx, steps, stepType });
       if (_pDecision.handled) {
@@ -1120,8 +1120,11 @@ async function replayPendingCommittedTurn(
         }
         if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
         pushExchange(state, "ai", _pLine, expectedAnswerIdx);
-        state.awaitingUserAnswer = false;
-        state.awaitingAnswerForStepIndex = undefined;
+        // awaitingUserAnswer is already set by stateWrites for greeting_ack; for others clear it
+        if (!("awaitingUserAnswer" in _pDecision.stateWrites)) {
+          state.awaitingUserAnswer = false;
+          state.awaitingAnswerForStepIndex = undefined;
+        }
         state.userAudioMsBuffered = 0;
         state.lastUserTranscript = "";
         state.lowSignalCommitCount = 0;
@@ -1143,9 +1146,14 @@ async function replayPendingCommittedTurn(
           turnKey,
         });
         state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_pInstr, { temperature: 0.6 })));
-        state.awaitingUserAnswer = !_pDecision.shouldAdvanceStep;
-        state.awaitingAnswerForStepIndex = _pDecision.shouldAdvanceStep ? undefined : expectedAnswerIdx;
-        state.phase = "in_call";
+        if (!("awaitingUserAnswer" in _pDecision.stateWrites)) {
+          state.awaitingUserAnswer = !_pDecision.shouldAdvanceStep;
+          state.awaitingAnswerForStepIndex = _pDecision.shouldAdvanceStep ? undefined : expectedAnswerIdx;
+        }
+        // Only advance to "in_call" if policy didn't set phase explicitly (e.g. greeting_ack keeps greeting phase)
+        if (!("phase" in _pDecision.stateWrites)) {
+          state.phase = "in_call";
+        }
         return;
       }
     }
@@ -1192,7 +1200,8 @@ async function replayPendingCommittedTurn(
     }
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
-      if (objectionOrQuestionKind) {
+      const _ltClearSd = String(state.selectedDay || "").trim().toLowerCase();
+      if (objectionOrQuestionKind || _ltClearSd === "today" || _ltClearSd === "tomorrow") {
         state.pendingLiveTransferAvailabilityConfirm = false;
         state.pendingLiveTransferAvailabilityAttempts = 0;
       } else {
@@ -4372,6 +4381,16 @@ function classifyTurnIntent(
     return { kind: "hearing_problem", raw };
   }
 
+  // Priority 3.5: greeting ack — user is acknowledging the AI during greeting phase.
+  // Must be checked AFTER hearing_problem so "what?" stays as hearing_problem.
+  if (state.phase === "awaiting_greeting_reply") {
+    try {
+      if (isConversationalGreetingContinue(t)) {
+        return { kind: "greeting_ack", raw };
+      }
+    } catch {}
+  }
+
   // Priority 4: existing detectors
   try {
     const objKind = detectObjection(t);
@@ -4383,6 +4402,14 @@ function classifyTurnIntent(
   try {
     const qKind = detectQuestionKindForTurn(t);
     if (qKind) return { kind: "question", subKind: qKind, raw };
+  } catch {}
+
+  // Priority 4.5: Step 1 coverage subject answer ("just me", "both of us", "myself", etc.)
+  // Only fires at idx === 1 so it can't accidentally fire at other steps.
+  try {
+    if (stepCtx.idx === 1 && isStepOneCoverageSubjectAnswer(t)) {
+      return { kind: "coverage_subject_answer", raw };
+    }
   } catch {}
 
   // Priority 5: scheduling intents — flag for existing routing, not for policy handling
@@ -4433,6 +4460,35 @@ function buildConversationPolicyDecision(
   function ucFirst(s: string): string {
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
   }
+
+  // ── Branch: greeting ack (only during awaiting_greeting_reply phase) ──────
+  // "yep", "yeah", "what's up", etc. → advance to first script step, never reprompt.
+  if (intent.kind === "greeting_ack") {
+    if (!ctx) return NOT_HANDLED;
+    const lineToSay = stepCtx.steps[0] || getBookingFallbackLine(ctx);
+    return {
+      handled: true,
+      routeKind: "greeting_ack",
+      responseMode: "exact_script",
+      objective: "advance_to_step_0",
+      lineToSay,
+      requiredClosingPivot: "",
+      forbiddenTopics: [],
+      stateWrites: {
+        phase: "awaiting_greeting_reply",   // keep in greeting phase; greetingAdvancePending drives the transition
+        greetingAdvancePending: true,
+        greetingAdvanceNextIndex: 1,
+        greetingAdvanceNextPhase: "in_call",
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 0,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  // All remaining branches only run in in_call phase.
+  // Greeting-phase turns that aren't greeting_ack fall through to the existing greeting handler.
+  if (state.phase !== "in_call") return NOT_HANDLED;
 
   // ── Branch: angry or profane ──────────────────────────────────────────────
   if (intent.kind === "angry_or_profane") {
@@ -4509,14 +4565,39 @@ function buildConversationPolicyDecision(
     };
   }
 
+  // ── Branch: Step 1 coverage subject answer ───────────────────────────────
+  // "just me", "myself", "both of us", etc. → standardized Step 2 booking frame
+  // WITH live-transfer option. Always uses exact scripted line, never reaches stepper GPT.
+  if (intent.kind === "coverage_subject_answer") {
+    if (!ctx) return NOT_HANDLED;
+    const agentFirst = getAgentFirstName(ctx);
+    const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
+    const lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?`;
+    return {
+      handled: true,
+      routeKind: "policy_step1_coverage",
+      responseMode: "exact_script",
+      objective: "advance_to_booking_frame",
+      lineToSay,
+      requiredClosingPivot: closingPivot,
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        scriptStepIndex: stepCtx.idx,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
   // ── Branch: explicit day selection (today / tomorrow) ────────────────────
   // Intercepts "probably tomorrow", "tomorrow works", "I'm free tomorrow afternoon", etc.
-  // Always wins over the stepper — prevents ever re-asking "today or tomorrow?"
+  // Runs before pendingLiveTransferAvailabilityConfirm; clears it so live-transfer loop
+  // never fires again after a day is selected.
   if (intent.kind === "day_selection") {
     const explicitDay = pickDayHint(intent.raw, "");
     if (explicitDay === "today" || explicitDay === "tomorrow") {
       const windowHint = pickTimeWindowHint(intent.raw, "");
-      const stateWrites: Record<string, unknown> = { selectedDay: explicitDay };
       let lineToSay: string;
       try {
         lineToSay = getTimeOfferLine(ctx, 0, explicitDay, windowHint, intent.raw);
@@ -4531,7 +4612,11 @@ function buildConversationPolicyDecision(
         lineToSay,
         requiredClosingPivot: closingPivot,
         forbiddenTopics: [],
-        stateWrites,
+        stateWrites: {
+          selectedDay: explicitDay,
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
         shouldAdvanceStep: false,
       };
     }
@@ -4558,7 +4643,10 @@ function buildConversationPolicyDecision(
         lineToSay,
         requiredClosingPivot: closingPivot,
         forbiddenTopics: [],
-        stateWrites: {},
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
         shouldAdvanceStep: false,
       };
     }
@@ -7927,7 +8015,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
     // ── Policy layer intercept (main) ─────────────────────────────────────────
-    if (lastUserText && !isGreetingReply) {
+    if (lastUserText) {
       const _pIntent = classifyTurnIntent(lastUserText, state, { idx, steps, stepType });
       const _pDecision = buildConversationPolicyDecision(_pIntent, state, { idx, steps, stepType });
       if (_pDecision.handled) {
@@ -7939,8 +8027,11 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         }
         if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
         pushExchange(state, "ai", _pLine, expectedAnswerIdx);
-        state.awaitingUserAnswer = false;
-        state.awaitingAnswerForStepIndex = undefined;
+        // awaitingUserAnswer is already set by stateWrites for greeting_ack; for others clear it
+        if (!("awaitingUserAnswer" in _pDecision.stateWrites)) {
+          state.awaitingUserAnswer = false;
+          state.awaitingAnswerForStepIndex = undefined;
+        }
         state.userAudioMsBuffered = 0;
         state.lastUserTranscript = "";
         state.lowSignalCommitCount = 0;
@@ -7962,9 +8053,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           turnKey,
         });
         state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_pInstr, { temperature: 0.6 })));
-        state.awaitingUserAnswer = !_pDecision.shouldAdvanceStep;
-        state.awaitingAnswerForStepIndex = _pDecision.shouldAdvanceStep ? undefined : expectedAnswerIdx;
-        state.phase = "in_call";
+        if (!("awaitingUserAnswer" in _pDecision.stateWrites)) {
+          state.awaitingUserAnswer = !_pDecision.shouldAdvanceStep;
+          state.awaitingAnswerForStepIndex = _pDecision.shouldAdvanceStep ? undefined : expectedAnswerIdx;
+        }
+        // Only advance to "in_call" if policy didn't set phase explicitly (e.g. greeting_ack keeps greeting phase)
+        if (!("phase" in _pDecision.stateWrites)) {
+          state.phase = "in_call";
+        }
         return;
       }
     }
@@ -8011,7 +8107,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     }
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
-      if (objectionOrQuestionKind) {
+      const _ltClearSd = String(state.selectedDay || "").trim().toLowerCase();
+      if (objectionOrQuestionKind || _ltClearSd === "today" || _ltClearSd === "tomorrow") {
         state.pendingLiveTransferAvailabilityConfirm = false;
         state.pendingLiveTransferAvailabilityAttempts = 0;
       } else {
