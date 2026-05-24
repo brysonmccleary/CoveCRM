@@ -1201,7 +1201,8 @@ async function replayPendingCommittedTurn(
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
       const _ltClearSd = String(state.selectedDay || "").trim().toLowerCase();
-      if (objectionOrQuestionKind || _ltClearSd === "today" || _ltClearSd === "tomorrow") {
+      const _ltClearExplicit = extractExplicitDaySelection(lastUserText);
+      if (objectionOrQuestionKind || _ltClearSd === "today" || _ltClearSd === "tomorrow" || _ltClearExplicit === "today" || _ltClearExplicit === "tomorrow") {
         state.pendingLiveTransferAvailabilityConfirm = false;
         state.pendingLiveTransferAvailabilityAttempts = 0;
       } else {
@@ -1917,72 +1918,19 @@ async function replayPendingCommittedTurn(
       lineToSay = getLiveTransferAvailabilityLine(state.context!);
       state.pendingLiveTransferAvailabilityConfirm = true;
       state.pendingLiveTransferAvailabilityAttempts = 0;
-    } else if (!hasDaySelectedForLiveTransferSkip) {
-      const agentFirst = getAgentFirstName(state.context);
-      lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better?`;
     }
 
     // ── STEP 1 HARD ROUTE (replay path mirror) ──
-    // Same guard as main committed handler: outbound Step 1 coverage-subject answer must use
-    // exact-line TTS only. Never reach buildStepperTurnInstruction.
-    {
-      const isOutboundSchedulerS1 =
-        !shouldUseInboundFlow(state.context);
-      if (
-        isOutboundSchedulerS1 &&
-        canAdvance &&
-        idx === 1 &&
-        expectedAnswerIdx === 0 &&
-        hasTranscript &&
-        isStepOneCoverageSubjectAnswer(lastUserText)
-      ) {
-        if (!markCommittedTurnHandled(state, turnKey, "replay-step1-hard-route")) return;
-        const step1Instr = buildExactScriptLineInstruction(lineToSay);
-        try {
-          console.log("[AI-VOICE][STEP1-HARD-ROUTE]", {
-            callSid: state.callSid,
-            lastUserText,
-            liveTransferEnabled: !!state.context?.liveTransferEnabled,
-            hasLiveTransferPhone: !!state.context?.liveTransferPhone,
-            lineToSay,
-          });
-        } catch {}
-        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-        pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-        if (lastUserText) {
-          state.lastAcceptedUserText = lastUserText;
-          state.lastAcceptedStepType = stepType;
-          state.lastAcceptedStepIndex = expectedAnswerIdx;
-        }
-        state.awaitingUserAnswer = false;
-        state.awaitingAnswerForStepIndex = undefined;
-        state.userAudioMsBuffered = 0;
-        state.lastUserTranscript = "";
-        state.lowSignalCommitCount = 0;
-        state.repromptCountForCurrentStep = 0;
-        await humanPause();
-        setWaitingForResponse(state, true, "response.create (replay-step1-hard-route)");
-        setAiSpeaking(state, true, "response.create (replay-step1-hard-route)");
-        setResponseInFlight(state, true, "response.create (replay-step1-hard-route)");
-        state.outboundOpenAiDone = false;
-        state.lastPromptSentAtMs = Date.now();
-        state.lastPromptLine = lineToSay;
-        state.lastResponseCreateAtMs = Date.now();
-        recordPassiveRouteMemory(state, {
-          source: "replay",
-          routeKind: "step1_hard_route",
-          routeReason: shouldAskLiveTransferAvailability ? "live_transfer_availability" : "booking_frame",
-          userText: lastUserText,
-          lineToSay,
-          turnKey,
-        });
-        if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(step1Instr)));
-        state.scriptStepIndex = shouldAskLiveTransferAvailability ? idx : Math.min(idx + 1, Math.max(0, steps.length - 1));
-        state.awaitingUserAnswer = true;
-        state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-        state.phase = "in_call";
-        return;
-      }
+    // Policy layer (above) is now authoritative for coverage_subject_answer turns via policy_step1_coverage.
+    // Skip entirely if policy_step1_coverage would handle this turn (avoids duplicate booking frame).
+    if (
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      isStepOneCoverageSubjectAnswer(lastUserText)
+    ) {
+      // policy_step1_coverage already handled this above; fall through to day-choice / stepper.
+      return;
     }
 
     // ✅ Day-choice answer handling:
@@ -4391,6 +4339,14 @@ function classifyTurnIntent(
     } catch {}
   }
 
+  // Priority 3.7: Step 1 coverage subject answer — BEFORE detectObjection/detectQuestion so
+  // "just me", "myself", "spouse" etc. are never misclassified as objections or questions.
+  try {
+    if (stepCtx.idx === 1 && isStepOneCoverageSubjectAnswer(t)) {
+      return { kind: "coverage_subject_answer", raw };
+    }
+  } catch {}
+
   // Priority 4: existing detectors
   try {
     const objKind = detectObjection(t);
@@ -4404,30 +4360,25 @@ function classifyTurnIntent(
     if (qKind) return { kind: "question", subKind: qKind, raw };
   } catch {}
 
-  // Priority 4.5: Step 1 coverage subject answer ("just me", "both of us", "myself", etc.)
-  // Only fires at idx === 1 so it can't accidentally fire at other steps.
+  // Priority 5: day/time detection — MUST run before live-transfer yes/no.
+  // "probably tomorrow", "tomorrow works", "tomorrow afternoon" → day_selection, never live_transfer_later.
+  // extractExplicitDaySelection is unconditional (not gated by isTimeMentioned) so it catches all day phrases.
   try {
-    if (stepCtx.idx === 1 && isStepOneCoverageSubjectAnswer(t)) {
-      return { kind: "coverage_subject_answer", raw };
+    const day = extractExplicitDaySelection(t);
+    if (day === "today" || day === "tomorrow") return { kind: "day_selection", raw };
+    if (isTimeMentioned(t) || looksLikeTimeAnswer(t)) {
+      if (isTimeWindowMentioned(t)) return { kind: "time_window", raw };
+      return { kind: "exact_time", raw };
     }
   } catch {}
 
-  // Priority 5: scheduling intents — flag for existing routing, not for policy handling
+  // Priority 6: live-transfer yes/no — only when no explicit day/time was detected above.
   try {
     if (isLiveTransferAvailabilityYes(t) && !isImmediateTransferSchedulingPreference(t)) {
       return { kind: "live_transfer_now", raw };
     }
     if (isLiveTransferAvailabilityNo(t) || isImmediateTransferSchedulingPreference(t)) {
       return { kind: "live_transfer_later", raw };
-    }
-  } catch {}
-
-  try {
-    if (isTimeMentioned(t) || looksLikeTimeAnswer(t)) {
-      const day = extractExplicitDaySelection(t);
-      if (day === "today" || day === "tomorrow") return { kind: "day_selection", raw };
-      if (isTimeWindowMentioned(t)) return { kind: "time_window", raw };
-      return { kind: "exact_time", raw };
     }
   } catch {}
 
@@ -4481,6 +4432,34 @@ function buildConversationPolicyDecision(
         greetingAdvanceNextPhase: "in_call",
         awaitingUserAnswer: true,
         awaitingAnswerForStepIndex: 0,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  // ── Branch: Step 1 coverage subject answer ───────────────────────────────
+  // Placed BEFORE the phase gate so it fires even in edge-case non-in_call phases.
+  // "just me", "myself", "both of us", spouse answers → scripted booking frame WITH live-transfer option.
+  // Policy is the ONLY path for these turns; old STEP1-HARD-ROUTE is bypassed.
+  if (intent.kind === "coverage_subject_answer") {
+    if (!ctx) return NOT_HANDLED;
+    const agentFirst = getAgentFirstName(ctx);
+    const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
+    const lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?`;
+    const advancedIdx = Math.min(stepCtx.idx + 1, Math.max(0, stepCtx.steps.length - 1));
+    return {
+      handled: true,
+      routeKind: "policy_step1_coverage",
+      responseMode: "exact_script",
+      objective: "advance_to_booking_frame",
+      lineToSay,
+      requiredClosingPivot: closingPivot,
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        // Advance past Step 1 when no live-transfer pending; keep at Step 1 while waiting for availability answer.
+        scriptStepIndex: liveTransferEnabled ? stepCtx.idx : advancedIdx,
       },
       shouldAdvanceStep: false,
     };
@@ -4565,31 +4544,6 @@ function buildConversationPolicyDecision(
     };
   }
 
-  // ── Branch: Step 1 coverage subject answer ───────────────────────────────
-  // "just me", "myself", "both of us", etc. → standardized Step 2 booking frame
-  // WITH live-transfer option. Always uses exact scripted line, never reaches stepper GPT.
-  if (intent.kind === "coverage_subject_answer") {
-    if (!ctx) return NOT_HANDLED;
-    const agentFirst = getAgentFirstName(ctx);
-    const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
-    const lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?`;
-    return {
-      handled: true,
-      routeKind: "policy_step1_coverage",
-      responseMode: "exact_script",
-      objective: "advance_to_booking_frame",
-      lineToSay,
-      requiredClosingPivot: closingPivot,
-      forbiddenTopics: [],
-      stateWrites: {
-        pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
-        pendingLiveTransferAvailabilityAttempts: 0,
-        scriptStepIndex: stepCtx.idx,
-      },
-      shouldAdvanceStep: false,
-    };
-  }
-
   // ── Branch: explicit day selection (today / tomorrow) ────────────────────
   // Intercepts "probably tomorrow", "tomorrow works", "I'm free tomorrow afternoon", etc.
   // Runs before pendingLiveTransferAvailabilityConfirm; clears it so live-transfer loop
@@ -4604,6 +4558,11 @@ function buildConversationPolicyDecision(
       } catch {
         lineToSay = `Got it — ` + (explicitDay === "today" ? "later today" : "tomorrow") + `. ${closingPivot}`;
       }
+      // When clearing a pending live-transfer availability loop, also advance scriptStepIndex
+      // to mirror what the live-transfer block does on noLater (Math.min(idx + 1, ...)).
+      const wasLTPending = !!state.pendingLiveTransferAvailabilityConfirm;
+      const curIdx = Number(state.scriptStepIndex || 0);
+      const advancedDayIdx = Math.min(curIdx + 1, Math.max(0, stepCtx.steps.length - 1));
       return {
         handled: true,
         routeKind: "policy_day_selected",
@@ -4616,6 +4575,7 @@ function buildConversationPolicyDecision(
           selectedDay: explicitDay,
           pendingLiveTransferAvailabilityConfirm: false,
           pendingLiveTransferAvailabilityAttempts: 0,
+          ...(wasLTPending ? { scriptStepIndex: advancedDayIdx } : {}),
         },
         shouldAdvanceStep: false,
       };
@@ -8108,7 +8068,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
       const _ltClearSd = String(state.selectedDay || "").trim().toLowerCase();
-      if (objectionOrQuestionKind || _ltClearSd === "today" || _ltClearSd === "tomorrow") {
+      const _ltClearExplicit = extractExplicitDaySelection(lastUserText);
+      if (objectionOrQuestionKind || _ltClearSd === "today" || _ltClearSd === "tomorrow" || _ltClearExplicit === "today" || _ltClearExplicit === "tomorrow") {
         state.pendingLiveTransferAvailabilityConfirm = false;
         state.pendingLiveTransferAvailabilityAttempts = 0;
       } else {
@@ -8849,75 +8810,19 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       lineToSay = getLiveTransferAvailabilityLine(state.context!);
       state.pendingLiveTransferAvailabilityConfirm = true;
       state.pendingLiveTransferAvailabilityAttempts = 0;
-    } else if (!hasDaySelectedForLiveTransferSkip) {
-      const agentFirst = getAgentFirstName(state.context);
-      lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better?`;
     }
 
     // ── STEP 1 HARD ROUTE ──
-    // Outbound scheduler: Step 1 coverage-subject answer ("myself", "both of us", etc.) must NEVER
-    // reach buildStepperTurnInstruction or buildFreeResponseInstruction — those allow GPT to rephrase
-    // and can produce off-script sales-call output. Send exactly the already-computed lineToSay via TTS.
-    //   liveTransfer available → lineToSay = getLiveTransferAvailabilityLine (set above)
-    //   no liveTransfer        → lineToSay = steps[idx] via enforceBookingOnlyLine (set above)
-    {
-      const isOutboundSchedulerS1 =
-        !shouldUseInboundFlow(state.context);
-      if (
-        isOutboundSchedulerS1 &&
-        canAdvance &&
-        idx === 1 &&
-        expectedAnswerIdx === 0 &&
-        hasTranscript &&
-        isStepOneCoverageSubjectAnswer(lastUserText)
-      ) {
-        if (!markCommittedTurnHandled(state, turnKey, "step1-hard-route")) return;
-        const step1Instr = buildExactScriptLineInstruction(lineToSay);
-        try {
-          console.log("[AI-VOICE][STEP1-HARD-ROUTE]", {
-            callSid: state.callSid,
-            lastUserText,
-            liveTransferEnabled: !!state.context?.liveTransferEnabled,
-            hasLiveTransferPhone: !!state.context?.liveTransferPhone,
-            lineToSay,
-          });
-        } catch {}
-        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-        pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-        if (lastUserText) {
-          state.lastAcceptedUserText = lastUserText;
-          state.lastAcceptedStepType = stepType;
-          state.lastAcceptedStepIndex = expectedAnswerIdx;
-        }
-        state.awaitingUserAnswer = false;
-        state.awaitingAnswerForStepIndex = undefined;
-        state.userAudioMsBuffered = 0;
-        state.lastUserTranscript = "";
-        state.lowSignalCommitCount = 0;
-        state.repromptCountForCurrentStep = 0;
-        await humanPause();
-        setWaitingForResponse(state, true, "response.create (step1-hard-route)");
-        setAiSpeaking(state, true, "response.create (step1-hard-route)");
-        setResponseInFlight(state, true, "response.create (step1-hard-route)");
-        state.outboundOpenAiDone = false;
-        state.lastPromptSentAtMs = Date.now();
-        state.lastPromptLine = lineToSay;
-        state.lastResponseCreateAtMs = Date.now();
-        recordPassiveRouteMemory(state, {
-          source: "main",
-          routeKind: "step1_hard_route",
-          routeReason: shouldAskLiveTransferAvailability ? "live_transfer_availability" : "booking_frame",
-          userText: lastUserText,
-          lineToSay,
-          turnKey,
-        });
-        if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(step1Instr)));
-        state.scriptStepIndex = shouldAskLiveTransferAvailability ? idx : Math.min(idx + 1, Math.max(0, steps.length - 1));
-        state.awaitingUserAnswer = true;
-        state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-        state.phase = "in_call";
-        return;
-      }
+    // Policy layer (above) is now authoritative for coverage_subject_answer turns via policy_step1_coverage.
+    // Skip entirely if policy_step1_coverage would handle this turn (avoids duplicate booking frame).
+    if (
+      canAdvance &&
+      idx === 1 &&
+      hasTranscript &&
+      isStepOneCoverageSubjectAnswer(lastUserText)
+    ) {
+      // policy_step1_coverage already handled this above; fall through to day-choice / stepper.
+      return;
     }
 
     // ✅ Day-choice answer handling:
