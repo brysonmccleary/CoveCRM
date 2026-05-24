@@ -1846,6 +1846,9 @@ async function replayPendingCommittedTurn(
       lineToSay = getLiveTransferAvailabilityLine(state.context!);
       state.pendingLiveTransferAvailabilityConfirm = true;
       state.pendingLiveTransferAvailabilityAttempts = 0;
+    } else if (!hasDaySelectedForLiveTransferSkip) {
+      const agentFirst = getAgentFirstName(state.context);
+      lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better?`;
     }
 
     // ── STEP 1 HARD ROUTE (replay path mirror) ──
@@ -8272,6 +8275,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       lineToSay = getLiveTransferAvailabilityLine(state.context!);
       state.pendingLiveTransferAvailabilityConfirm = true;
       state.pendingLiveTransferAvailabilityAttempts = 0;
+    } else if (!hasDaySelectedForLiveTransferSkip) {
+      const agentFirst = getAgentFirstName(state.context);
+      lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better?`;
     }
 
     // ── STEP 1 HARD ROUTE ──
