@@ -283,6 +283,12 @@ type CallState = {
   // ✅ Realtime transcription aggregation (OpenAI events may stream deltas per item_id)
   lastUserTranscriptByItemId?: Record<string, string>;
   lastUserTranscriptPartialByItemId?: Record<string, string>;
+  lastTranscriptDeltaAtMs?: number;
+  lastTranscriptCompletedAtMs?: number;
+  deferredTurnTranscript?: string;
+  deferredTurnAtMs?: number;
+  deferredTurnSource?: "main" | "replay";
+  deferredTurnReason?: string;
 
   // ✅ Human-like waiting + reprompt (NEW)
   lastPromptSentAtMs?: number;
@@ -1068,7 +1074,23 @@ async function replayPendingCommittedTurn(
     // ✅ Re-run the same commit logic path by directly invoking the same response.create decision logic
     // We do NOT touch audio streaming; we only create a response now that drain is complete.
 
-    const lastUserText = String(state.lastUserTranscript || "").trim();
+    let lastUserText = String(state.lastUserTranscript || "").trim();
+    const turnFinalization = shouldDeferTurnRouting(state, lastUserText, "replay", {
+      reason,
+      audioMs: restoredAudioMs,
+      isFinalTranscript: String(reason || "").toLowerCase().includes("completed"),
+    });
+    if (turnFinalization.defer) {
+      state.pendingCommittedTurn = {
+        bestTranscript: turnFinalization.transcript,
+        audioMs: restoredAudioMs,
+        atMs: Date.now(),
+      };
+      state.lastUserTranscript = turnFinalization.transcript;
+      return;
+    }
+    lastUserText = turnFinalization.transcript;
+    if (lastUserText) state.lastUserTranscript = lastUserText;
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
     const questionKind = !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
     const objectionOrQuestionKind = objectionKind || questionKind;
@@ -2222,6 +2244,142 @@ function markCommittedTurnHandled(state: CallState, turnKey: string, reason: str
   }
   state.lastHandledTurnKey = turnKey;
   return true;
+}
+
+function mergeDeferredTurnText(previousRaw: string, nextRaw: string): string {
+  const previous = String(previousRaw || "").replace(/\s+/g, " ").trim();
+  const next = String(nextRaw || "").replace(/\s+/g, " ").trim();
+  if (!previous) return next;
+  if (!next) return previous;
+  const p = previous.toLowerCase();
+  const n = next.toLowerCase();
+  if (n.includes(p)) return next;
+  if (p.includes(n)) return previous;
+  return `${previous} ${next}`.replace(/\s+/g, " ").trim();
+}
+
+function isHardCompleteTurnIntent(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  if (
+    t.includes("stop calling") ||
+    t.includes("do not call") ||
+    t.includes("don t call") ||
+    t.includes("dont call") ||
+    t.includes("remove me") ||
+    t.includes("wrong number")
+  ) return true;
+  const obj = detectObjection(t);
+  if (obj === "not_interested" || obj === "scam") return true;
+  if (extractExplicitDaySelection(t) === "today" || extractExplicitDaySelection(t) === "tomorrow") return true;
+  if (t.includes("later today") || t.includes("call me later")) return true;
+  if (hasImmediateTransferConfirmation(t) || hasExplicitAgentTransferCommand(t)) return true;
+  if (isExactClockTimeMentioned(t)) return true;
+  return false;
+}
+
+function looksLikeIncompleteTurnPrefix(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return true;
+  const prefixes = new Set([
+    "yeah", "yep", "yes", "ok", "okay", "well", "so", "um", "uh", "hmm",
+    "i mean", "i guess", "like", "wait", "hold on", "the thing is",
+    "what i m", "what im", "what i am", "i was", "i just", "i don t",
+    "i dont", "but", "yeah but", "okay but", "well i mean"
+  ]);
+  if (prefixes.has(t)) return true;
+  if (/^(yeah|yes|yep|ok|okay|well|so|um|uh|wait|but)\s*$/i.test(t)) return true;
+  if (/\b(and|but|so|because|if|when|while|that|to|for|with|about)$/i.test(t)) return true;
+  if (/^(well|so|i mean|the thing is|what i'?m|what im|what i am)\b/i.test(t) && t.split(/\s+/).length <= 5) return true;
+  return false;
+}
+
+function hasConversationalContinuationTail(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return true;
+  return (
+    /[,;:]$/.test(t) ||
+    /\b(and|but|so|because|if|when|while|that|to|for|with|about)$/i.test(t) ||
+    /\b(i mean|the thing is|what i'?m trying|what im trying|let me|hold on)$/i.test(t)
+  );
+}
+
+function shouldDeferTurnRouting(
+  state: CallState,
+  transcriptRaw: string,
+  source: "main" | "replay",
+  metadata: {
+    isFinalTranscript?: boolean;
+    reason?: string;
+    audioMs?: number;
+  } = {}
+): { defer: boolean; transcript: string; reason?: string } {
+  const incoming = String(transcriptRaw || "").replace(/\s+/g, " ").trim();
+  const merged = mergeDeferredTurnText(state.deferredTurnTranscript || "", incoming);
+  if (!merged) return { defer: false, transcript: incoming };
+
+  if (isHardCompleteTurnIntent(merged)) {
+    state.deferredTurnTranscript = "";
+    state.deferredTurnAtMs = undefined;
+    state.deferredTurnSource = undefined;
+    state.deferredTurnReason = undefined;
+    return { defer: false, transcript: merged };
+  }
+
+  const now = Date.now();
+  const transcriptCompletedRecently =
+    !!metadata.isFinalTranscript ||
+    (Number(state.lastTranscriptCompletedAtMs || 0) > 0 && now - Number(state.lastTranscriptCompletedAtMs || 0) <= 1200);
+  const deltaRecently =
+    Number(state.lastTranscriptDeltaAtMs || 0) > 0 && now - Number(state.lastTranscriptDeltaAtMs || 0) <= 300;
+  const stoppedRecently =
+    Number(state.lastUserSpeechStoppedAtMs || 0) > 0 && now - Number(state.lastUserSpeechStoppedAtMs || 0) <= 650;
+  const trailingSilenceEnough =
+    Number(state.lastUserSpeechStoppedAtMs || 0) > 0 && now - Number(state.lastUserSpeechStoppedAtMs || 0) >= 650;
+  const reason = String(metadata.reason || "").toLowerCase();
+  const replayFromDelta = source === "replay" && reason.includes("delta") && !transcriptCompletedRecently;
+
+  const shortLikelyIncomplete = merged.length <= 12 && looksLikeIncompleteTurnPrefix(merged);
+  const continuationTail = hasConversationalContinuationTail(merged);
+  const stillGrowing = deltaRecently && !transcriptCompletedRecently;
+
+  const shouldDefer =
+    replayFromDelta ||
+    stillGrowing ||
+    (!transcriptCompletedRecently && stoppedRecently) ||
+    (!transcriptCompletedRecently && !trailingSilenceEnough && (shortLikelyIncomplete || continuationTail));
+
+  if (!shouldDefer) {
+    state.deferredTurnTranscript = "";
+    state.deferredTurnAtMs = undefined;
+    state.deferredTurnSource = undefined;
+    state.deferredTurnReason = undefined;
+    return { defer: false, transcript: merged };
+  }
+
+  state.deferredTurnTranscript = merged;
+  state.deferredTurnAtMs = now;
+  state.deferredTurnSource = source;
+  state.deferredTurnReason =
+    replayFromDelta ? "partial_delta" :
+    stillGrowing ? "transcript_still_growing" :
+    stoppedRecently ? "awaiting_trailing_silence_or_final" :
+    shortLikelyIncomplete ? "short_incomplete_prefix" :
+    "continuation_tail";
+
+  try {
+    console.log("[AI-VOICE][TURN-FINALIZE] deferred routing", {
+      callSid: state.callSid,
+      source,
+      reason: state.deferredTurnReason,
+      transcriptLen: merged.length,
+      isFinalTranscript: !!metadata.isFinalTranscript,
+      stoppedRecently,
+      deltaRecently,
+    });
+  } catch {}
+
+  return { defer: true, transcript: merged, reason: state.deferredTurnReason };
 }
 
 function extractOfferedSlotsFromLine(lineRaw: string): string[] {
@@ -7350,6 +7508,8 @@ async function handleOpenAiEvent(
     } catch {}
 
     state.lastUserSpeechStartedAtMs = Date.now();
+    state.lastTranscriptDeltaAtMs = undefined;
+    state.lastTranscriptCompletedAtMs = undefined;
     (state as any).listenWarmupUntilMs = 0;
 
     // ✅ STUCK-SPEECH FAILSAFE:
@@ -7507,6 +7667,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       if (typeLower === "conversation.item.input_audio_transcription.delta") {
         const d = String((event as any)?.delta || "").trim();
         if (itemId && d) {
+          state.lastTranscriptDeltaAtMs = Date.now();
           const prev = state.lastUserTranscriptPartialByItemId[itemId] || "";
           const next = (prev + d).replace(/\s+/g, " ").trim();
           state.lastUserTranscriptPartialByItemId[itemId] = next;
@@ -7516,12 +7677,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           // replay immediately once we have *any* text.
           try {
             const pending = (state as any).pendingCommittedTurn;
-            const pendingHasNoText =
-              pending && !String(pending.bestTranscript || "").trim();
 
             const got = String(next || "").trim();
             if (
-              pendingHasNoText &&
+              pending &&
               got &&
               !state.aiSpeaking &&
               !state.waitingForResponse &&
@@ -7530,7 +7689,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
               state.openAiReady &&
               !state.voicemailSkipArmed
             ) {
-              pending.bestTranscript = got;
+              pending.bestTranscript = mergeDeferredTurnText(pending.bestTranscript || state.deferredTurnTranscript || "", got);
               void replayPendingCommittedTurn(twilioWs, state, "transcript delta");
             }
           } catch {}
@@ -7538,6 +7697,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       } else if (typeLower === "conversation.item.input_audio_transcription.completed") {
         const tr = String((event as any)?.transcript || "").trim();
         if (itemId && tr) {
+          state.lastTranscriptCompletedAtMs = Date.now();
           const clean = tr.replace(/\s+/g, " ").trim();
           state.lastUserTranscriptByItemId[itemId] = clean;
           state.lastUserTranscriptPartialByItemId[itemId] = "";
@@ -7546,12 +7706,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           // replay it as soon as we have ANY transcript text (delta or completed).
           try {
             const pending = (state as any).pendingCommittedTurn;
-            const pendingHasNoText =
-              pending && !String(pending.bestTranscript || "").trim();
 
             const got = String(clean || "").trim();
             if (
-              pendingHasNoText &&
+              pending &&
               got &&
               !state.aiSpeaking &&
               !state.waitingForResponse &&
@@ -7560,7 +7718,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
               state.openAiReady &&
               !state.voicemailSkipArmed
             ) {
-              pending.bestTranscript = got;
+              pending.bestTranscript = mergeDeferredTurnText(pending.bestTranscript || state.deferredTurnTranscript || "", got);
               void replayPendingCommittedTurn(twilioWs, state, "transcript completed");
             }
           } catch {}
@@ -8149,7 +8307,21 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
     const steps = state.scriptSteps || [];
 
-    const lastUserText = String(state.lastUserTranscript || "").trim();
+    let lastUserText = String(state.lastUserTranscript || "").trim();
+    const turnFinalization = shouldDeferTurnRouting(state, lastUserText, "main", {
+      audioMs: audioMsCommitGate,
+    });
+    if (turnFinalization.defer) {
+      state.pendingCommittedTurn = {
+        bestTranscript: turnFinalization.transcript,
+        audioMs: Number(audioMsCommitGate || 0),
+        atMs: Date.now(),
+      };
+      state.lastUserTranscript = turnFinalization.transcript;
+      return;
+    }
+    lastUserText = turnFinalization.transcript;
+    if (lastUserText) state.lastUserTranscript = lastUserText;
     const objectionKind = !isGreetingReply && lastUserText ? detectObjection(lastUserText) : null;
 
     const questionKind = !isGreetingReply && !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
