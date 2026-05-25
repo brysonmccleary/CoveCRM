@@ -314,6 +314,9 @@ type CallState = {
   responseCreateId?: string;
   lastDuplicateGuardKey?: string;
   lastDuplicateGuardAtMs?: number;
+  step2BookingFrameAskedAtMs?: number;
+  step2BookingFrameAskedCount?: number;
+  lastBookingFrameNorm?: string;
 
   // instrumentation: system prompt markers
   systemPromptLen?: number;
@@ -1138,8 +1141,15 @@ async function replayPendingCommittedTurn(
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
       if (!markCommittedTurnHandled(state, turnKey, "replay how-long")) return;
-      const lineToSay =
+      let lineToSay =
         "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
+      const _guard_rhl = applyAiOutputRepeatGuard(state, lineToSay, {
+        userText: lastUserText,
+        routeKind: "how_long",
+        objective: "ask_day_after_duration",
+      });
+      lineToSay = _guard_rhl.lineToSay;
+      for (const [k, v] of Object.entries(_guard_rhl.stateWrites)) { (state as any)[k] = v; }
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
@@ -1162,13 +1172,13 @@ async function replayPendingCommittedTurn(
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "replay",
-        routeKind: "how_long",
+        routeKind: _guard_rhl.routeKind,
         routeReason: "duration_question",
         userText: lastUserText,
         lineToSay,
         turnKey,
       });
-
+      noteAiOutputSpoken(state, lineToSay);
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
       state.awaitingUserAnswer = true;
       state.awaitingAnswerForStepIndex = expectedAnswerIdx;
@@ -1213,13 +1223,20 @@ async function replayPendingCommittedTurn(
       if (selectedAvailabilityDay) {
         state.selectedDay = selectedAvailabilityDay;
       }
-      const lineToSay = yesNow
+      let lineToSay = yesNow
         ? getLiveTransferTryingLine(state.context!)
         : noLater || escapeAvailabilityLoop
           ? noLater || userAlreadySaidWhen
             ? getTimeOfferLine(state.context!, 0, selectedAvailabilityDay || pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
             : "No problem. Would later today or tomorrow be better?"
           : getLiveTransferAvailabilityLine(state.context!);
+      const _guard_rplt = applyAiOutputRepeatGuard(state, lineToSay, {
+        userText: lastUserText,
+        routeKind: yesNow ? "live_transfer_try" : noLater ? "time_offer" : "live_transfer_availability",
+        objective: yesNow ? "transfer_now" : "schedule_time",
+      });
+      lineToSay = _guard_rplt.lineToSay;
+      for (const [k, v] of Object.entries(_guard_rplt.stateWrites)) { (state as any)[k] = v; }
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
@@ -1243,12 +1260,13 @@ async function replayPendingCommittedTurn(
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "replay",
-        routeKind: yesNow ? "live_transfer_try" : noLater ? "time_offer" : "live_transfer_availability",
+        routeKind: _guard_rplt.routeKind,
         routeReason: yesNow ? "availability_yes" : noLater ? "availability_no" : escapeAvailabilityLoop ? "availability_escape" : "availability_ambiguous",
         userText: lastUserText,
         lineToSay,
         turnKey,
       });
+      noteAiOutputSpoken(state, lineToSay);
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
 
       state.phase = "in_call";
@@ -1297,10 +1315,17 @@ async function replayPendingCommittedTurn(
         // gate fires on the NEXT committed event... but we need to handle it NOW.
         // Instead: build the rebuttal inline and send it.
         try {
-          const overrideLine = enforceBookingOnlyLine(
+          let overrideLine = enforceBookingOnlyLine(
             state.context!,
             getRebuttalLine(state.context!, greetingObjOrQ)
           );
+          const _guard_rgo = applyAiOutputRepeatGuard(state, overrideLine, {
+            userText: lastUserText,
+            routeKind: "objection",
+            objective: `greeting_objection_${greetingObjOrQ}`,
+          });
+          overrideLine = _guard_rgo.lineToSay;
+          for (const [k, v] of Object.entries(_guard_rgo.stateWrites)) { (state as any)[k] = v; }
           if (lastUserText) pushExchange(state, "user", lastUserText, 0);
           const rebuttalInstr = buildConversationalRebuttalInstruction(state.context!, overrideLine, {
             objectionKind: greetingObjOrQ,
@@ -1331,14 +1356,14 @@ async function replayPendingCommittedTurn(
           state.objectionRepeatCount = 0;
           recordPassiveRouteMemory(state, {
             source: "replay",
-            routeKind: "objection",
+            routeKind: _guard_rgo.routeKind,
             routeReason: greetingObjOrQ,
             userText: lastUserText,
             lineToSay: overrideLine,
             turnKey,
             trackResolvedObjection: !!greetingObjKind,
           });
-
+          noteAiOutputSpoken(state, overrideLine);
           state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(rebuttalInstr, { temperature: 0.6 })));
 
           // Re-arm stepper so next reply answers Step 1
@@ -1355,7 +1380,14 @@ async function replayPendingCommittedTurn(
       if (isGreetingNegativeHearing(lastUserText)) {
         const aiName2 = (state.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
         const clientName2 = (state.context!.clientFirstName || "").trim() || "there";
-        const retryLine = `Okay — can you hear me now, ${clientName2}? This is ${aiName2}.`;
+        let retryLine = `Okay — can you hear me now, ${clientName2}? This is ${aiName2}.`;
+        const _guard_rgr = applyAiOutputRepeatGuard(state, retryLine, {
+          userText: lastUserText,
+          routeKind: "greeting_retry",
+          objective: "hearing_check",
+        });
+        retryLine = _guard_rgr.lineToSay;
+        for (const [k, v] of Object.entries(_guard_rgr.stateWrites)) { (state as any)[k] = v; }
         const retryInstr = buildStepperTurnInstruction(state.context!, retryLine);
 
         state.awaitingUserAnswer = false;
@@ -1377,13 +1409,13 @@ async function replayPendingCommittedTurn(
         state.lastResponseCreateAtMs = Date.now();
         recordPassiveRouteMemory(state, {
           source: "replay",
-          routeKind: "greeting_retry",
+          routeKind: _guard_rgr.routeKind,
           routeReason: "negative_hearing",
           userText: lastUserText,
           lineToSay: retryLine,
           turnKey,
         });
-
+        noteAiOutputSpoken(state, retryLine);
         state.openAiWs.send(
           JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
         );
@@ -1397,7 +1429,14 @@ async function replayPendingCommittedTurn(
       }
 
       const useInboundOpening = shouldUseInboundFlow(state.context);
-      const lineToSay2 = useInboundOpening ? buildInboundReasonLine(state.context!) : lineToSay;
+      let lineToSay2 = useInboundOpening ? buildInboundReasonLine(state.context!) : lineToSay;
+      const _guard_rsag = applyAiOutputRepeatGuard(state, lineToSay2, {
+        userText: lastUserText,
+        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
+        objective: "step1_question",
+      });
+      lineToSay2 = _guard_rsag.lineToSay;
+      for (const [k, v] of Object.entries(_guard_rsag.stateWrites)) { (state as any)[k] = v; }
       const perTurnInstr = useInboundOpening
         ? buildInboundReasonInstructions(state.context!)
         : buildExactScriptLineInstruction(lineToSay2);
@@ -1425,13 +1464,13 @@ async function replayPendingCommittedTurn(
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "replay",
-        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
+        routeKind: _guard_rsag.routeKind,
         routeReason: useInboundOpening ? "inbound_reason" : "stepper_after_greeting",
         userText: lastUserText,
         lineToSay: lineToSay2,
         turnKey,
       });
-
+      noteAiOutputSpoken(state, lineToSay2);
       state.openAiWs.send(
         JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
       );
@@ -1493,6 +1532,13 @@ async function replayPendingCommittedTurn(
       if (objectionOrQuestionKind === "scam") {
         lineToSay = buildDeterministicScamRebuttalLine(state);
       }
+      const _guard_ro = applyAiOutputRepeatGuard(state, lineToSay, {
+        userText: lastUserText,
+        routeKind: "objection",
+        objective: `rebuttal_${objectionOrQuestionKind}`,
+      });
+      lineToSay = _guard_ro.lineToSay;
+      for (const [k, v] of Object.entries(_guard_ro.stateWrites)) { (state as any)[k] = v; }
       const perTurnInstr = objectionOrQuestionKind === "scam"
         ? buildExactScriptLineInstruction(lineToSay)
         : buildConversationalRebuttalInstruction(state.context!, lineToSay, {
@@ -1522,14 +1568,14 @@ async function replayPendingCommittedTurn(
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "replay",
-        routeKind: "objection",
+        routeKind: _guard_ro.routeKind,
         routeReason: objectionOrQuestionKind,
         userText: lastUserText,
         lineToSay,
         turnKey,
         trackResolvedObjection: !!objectionKind,
       });
-
+      noteAiOutputSpoken(state, lineToSay);
       state.openAiWs.send(
         JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
       );
@@ -1737,9 +1783,16 @@ async function replayPendingCommittedTurn(
 
       await humanPause();
 
-      const instr = looksLikeGeneratedTimeOfferLine(repromptLine)
-        ? buildExactScriptLineInstruction(repromptLine)
-        : buildStepperTurnInstruction(state.context!, repromptLine);
+      const _guard_rrp = applyAiOutputRepeatGuard(state, repromptLine, {
+        userText: lastUserText,
+        routeKind: looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
+        objective: stepType,
+      });
+      const guardedRepromptLine = _guard_rrp.lineToSay;
+      for (const [k, v] of Object.entries(_guard_rrp.stateWrites)) { (state as any)[k] = v; }
+      const instr = looksLikeGeneratedTimeOfferLine(guardedRepromptLine)
+        ? buildExactScriptLineInstruction(guardedRepromptLine)
+        : buildStepperTurnInstruction(state.context!, guardedRepromptLine);
 
       setWaitingForResponse(state, true, "response.create (replay reprompt)");
       setAiSpeaking(state, true, "response.create (replay reprompt)");
@@ -1747,17 +1800,17 @@ async function replayPendingCommittedTurn(
       state.outboundOpenAiDone = false;
 
       state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = repromptLine;
+      state.lastPromptLine = guardedRepromptLine;
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "replay",
-        routeKind: looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
+        routeKind: _guard_rrp.routeKind,
         routeReason: stepType,
         userText: lastUserText,
-        lineToSay: repromptLine,
+        lineToSay: guardedRepromptLine,
         turnKey,
       });
-
+      noteAiOutputSpoken(state, guardedRepromptLine);
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
 
       state.phase = "in_call";
@@ -1793,13 +1846,20 @@ async function replayPendingCommittedTurn(
       const timeStepIndex = idx <= 1 ? Math.min(2, Math.max(0, steps.length - 1)) : idx;
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      const lineToSay = getTimeOfferLine(
+      let lineToSay = getTimeOfferLine(
         state.context!,
         n,
         dayHint,
         pickTimeWindowHint(lastUserText, ""),
         lastUserText
       );
+      const _guard_rdct = applyAiOutputRepeatGuard(state, lineToSay, {
+        userText: lastUserText,
+        routeKind: "time_offer",
+        objective: "offer_time_slots",
+      });
+      lineToSay = _guard_rdct.lineToSay;
+      for (const [k, v] of Object.entries(_guard_rdct.stateWrites)) { (state as any)[k] = v; }
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       state.timeOfferCountForStepIndex = timeStepIndex;
@@ -1824,7 +1884,7 @@ async function replayPendingCommittedTurn(
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "replay",
-        routeKind: "time_offer",
+        routeKind: _guard_rdct.routeKind,
         routeReason: "selected_day",
         userText: lastUserText,
         lineToSay,
@@ -1842,7 +1902,7 @@ async function replayPendingCommittedTurn(
           lineHash: hash8(lineToSay),
         });
       } catch {}
-
+      noteAiOutputSpoken(state, lineToSay);
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
       state.phase = "in_call";
       state.awaitingUserAnswer = true;
@@ -2000,6 +2060,17 @@ async function replayPendingCommittedTurn(
       }
     } catch {}
 
+    const replayRouteKind = looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step";
+    const replayRepeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
+      userText: lastUserText,
+      routeKind: replayRouteKind,
+      objective: stepType,
+    });
+    lineToSay = replayRepeatGuard.lineToSay;
+    for (const [k, v] of Object.entries(replayRepeatGuard.stateWrites)) {
+      (state as any)[k] = v;
+    }
+
     const perTurnInstr = looksLikeGeneratedTimeOfferLine(lineToSay)
       ? buildExactScriptLineInstruction(lineToSay)
       : buildStepperTurnInstruction(state.context!, lineToSay);
@@ -2037,12 +2108,13 @@ async function replayPendingCommittedTurn(
     state.lastResponseCreateAtMs = Date.now();
     recordPassiveRouteMemory(state, {
       source: "replay",
-      routeKind: looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step",
-      routeReason: stepType,
+      routeKind: replayRepeatGuard.routeKind,
+      routeReason: replayRepeatGuard.objective || stepType,
       userText: lastUserText,
       lineToSay,
       turnKey,
     });
+    noteAiOutputSpoken(state, lineToSay);
 
     state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(perTurnInstr)));
 
@@ -2232,6 +2304,235 @@ function shouldSkipShortWindowDuplicateTurn(
   state.lastDuplicateGuardKey = key;
   state.lastDuplicateGuardAtMs = now;
   return false;
+}
+
+function isCallerAskingForRepeat(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    t.includes("what was that") ||
+    t.includes("say that again") ||
+    t.includes("repeat that") ||
+    t.includes("repeat it") ||
+    t.includes("i didnt hear") ||
+    t.includes("i didn t hear") ||
+    t.includes("i couldn t hear") ||
+    t.includes("i couldnt hear") ||
+    t.includes("what did you say")
+  );
+}
+
+function normalizeAiLineForRepeat(textRaw: string): string {
+  return normalizeTurnTextForKey(textRaw)
+    .replace(/\b(got it|okay|ok|perfect|sure|no worries|totally fair)\b/g, "")
+    .replace(/\b(bryson|agent|licensed agent|your agent)\b/g, "agent")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isStep2BookingFrameLine(lineRaw: string): boolean {
+  const t = normalizeAiLineForRepeat(lineRaw);
+  return (
+    t.includes("scheduled for a quick call") &&
+    (t.includes("later today") || t.includes("tomorrow")) &&
+    (t.includes("right now") || t.includes("on the line") || t.includes("work better"))
+  );
+}
+
+function aiLinesAreSubstantiallySame(aRaw: string, bRaw: string): boolean {
+  const a = normalizeAiLineForRepeat(aRaw);
+  const b = normalizeAiLineForRepeat(bRaw);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length >= 40 && b.length >= 40 && (a.includes(b) || b.includes(a))) return true;
+  const aWords = new Set(a.split(/\s+/).filter(w => w.length > 2));
+  const bWords = b.split(/\s+/).filter(w => w.length > 2);
+  if (aWords.size < 6 || bWords.length < 6) return false;
+  const overlap = bWords.filter(w => aWords.has(w)).length;
+  return overlap / Math.max(1, Math.min(aWords.size, bWords.length)) >= 0.78;
+}
+
+function recentAiLinesForRepeatCheck(state: CallState): string[] {
+  const lines: string[] = [];
+  const lastPrompt = String(state.lastPromptLine || "").trim();
+  if (lastPrompt) lines.push(lastPrompt);
+  const exchanges = state.recentExchanges || [];
+  for (const ex of exchanges.slice(-8).reverse()) {
+    if (ex.role === "ai" && ex.text) lines.push(ex.text);
+    if (lines.length >= 4) break;
+  }
+  const lastBookingFrame = String(state.lastBookingFrameNorm || "").trim();
+  if (lastBookingFrame) lines.push(lastBookingFrame);
+  return lines;
+}
+
+function buildNonRepeatedStateAwareLine(
+  state: CallState,
+  attemptedLine: string,
+  userText: string,
+  routeKind: string,
+  objective: string
+): { lineToSay: string; routeKind: string; objective: string; stateWrites: Record<string, unknown> } {
+  const ctx = state.context;
+  const raw = String(userText || "");
+  const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
+  const explicitNowIntent =
+    !!ctx &&
+    liveTransferEnabled &&
+    !isImmediateTransferSchedulingPreference(raw) &&
+    (hasImmediateTransferConfirmation(raw) || hasExplicitAgentTransferCommand(raw));
+  if (explicitNowIntent) {
+    return {
+      lineToSay: getLiveTransferTryingLine(ctx),
+      routeKind: `${routeKind}_repeat_guard_transfer`,
+      objective: "start_live_transfer_after_intro",
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        liveTransferIntroSpoken: true,
+        pendingLiveTransferAfterLine: true,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+      },
+    };
+  }
+
+  if (ctx) {
+    const explicitDay = pickDayHint(raw, "");
+    const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+    const dayHint =
+      explicitDay === "today" || explicitDay === "tomorrow"
+        ? explicitDay
+        : rememberedDay === "today" || rememberedDay === "tomorrow"
+          ? (rememberedDay as "today" | "tomorrow")
+          : pickDayHint(raw, String(state.lastAcceptedUserText || ""));
+    const windowHint = pickTimeWindowHint(raw, String(state.lastAcceptedUserText || ""));
+    if (dayHint || windowHint || isTimeIndecisionOrAvailability(raw)) {
+      const timeStepIndex = Math.max(Number(state.scriptStepIndex || 0), Math.min(2, Math.max(0, (state.scriptSteps || []).length - 1)));
+      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
+      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+      return {
+        lineToSay: getTimeOfferLine(ctx, n, dayHint, windowHint, raw),
+        routeKind: `${routeKind}_repeat_guard_time_offer`,
+        objective: "time_selection",
+        stateWrites: {
+          ...(dayHint ? { selectedDay: dayHint } : {}),
+          ...(windowHint ? { selectedWindow: windowHint } : {}),
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          scriptStepIndex: timeStepIndex,
+          timeOfferCountForStepIndex: timeStepIndex,
+          timeOfferCount: n + 1,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+        },
+      };
+    }
+  }
+
+  const questionKind = (() => {
+    try { return detectQuestionKindForTurn(raw); } catch { return null; }
+  })();
+  if (questionKind && ctx) {
+    const agentFirst = getAgentFirstName(ctx);
+    const pivot = getStateAwareClosingPivot(state);
+    const answer =
+      questionKind === "how_much"
+        ? `I get why you'd ask — ${agentFirst} covers exact cost on the call.`
+        : questionKind === "what_entails" || isHowLongDurationQuestion(raw)
+          ? "It is usually about 5 to 10 minutes."
+          : `${agentFirst} can answer that clearly on the call.`;
+    return {
+      lineToSay: `${answer} ${pivot}`,
+      routeKind: `${routeKind}_repeat_guard_question`,
+      objective: "answer_then_return_to_scheduling",
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || 1) - 1),
+      },
+    };
+  }
+
+  if (isStep2BookingFrameLine(attemptedLine) || Number(state.step2BookingFrameAskedCount || 0) > 0) {
+    return {
+      lineToSay: liveTransferEnabled
+        ? "Which works better for you — later today, tomorrow, or right now?"
+        : "Which works better for you — later today or tomorrow?",
+      routeKind: `${routeKind}_repeat_guard_clarify`,
+      objective: "clarify_scheduling_choice",
+      stateWrites: {
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || 1) - 1),
+      },
+    };
+  }
+
+  return {
+    lineToSay: "What works best for you?",
+    routeKind: `${routeKind}_repeat_guard_clarify`,
+    objective: objective || "clarify_current_objective",
+    stateWrites: {
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || 1) - 1),
+    },
+  };
+}
+
+function applyAiOutputRepeatGuard(
+  state: CallState,
+  lineRaw: string,
+  args: {
+    userText: string;
+    routeKind: string;
+    objective: string;
+  }
+): { lineToSay: string; routeKind: string; objective: string; stateWrites: Record<string, unknown>; suppressed: boolean } {
+  const lineToSay = String(lineRaw || "").trim();
+  if (!lineToSay || isCallerAskingForRepeat(args.userText)) {
+    return { lineToSay, routeKind: args.routeKind, objective: args.objective, stateWrites: {}, suppressed: false };
+  }
+
+  const recentLines = recentAiLinesForRepeatCheck(state);
+  const sameRecentLine = recentLines.some(prev => aiLinesAreSubstantiallySame(prev, lineToSay));
+  const sameRouteObjective =
+    !!state.lastRouteKind &&
+    state.lastRouteKind === args.routeKind &&
+    !!state.lastRouteReason &&
+    state.lastRouteReason === args.objective;
+  const repeatsStep2Frame =
+    isStep2BookingFrameLine(lineToSay) &&
+    Number(state.step2BookingFrameAskedCount || 0) > 0;
+
+  if (!sameRecentLine && !sameRouteObjective && !repeatsStep2Frame) {
+    return { lineToSay, routeKind: args.routeKind, objective: args.objective, stateWrites: {}, suppressed: false };
+  }
+
+  const replacement = buildNonRepeatedStateAwareLine(state, lineToSay, args.userText, args.routeKind, args.objective);
+  try {
+    console.log("[AI-VOICE][OUTPUT-REPEAT-GUARD] replaced repeated line", {
+      callSid: state.callSid,
+      routeKind: args.routeKind,
+      replacementRouteKind: replacement.routeKind,
+      attemptedHash: hash8(lineToSay),
+      replacementHash: hash8(replacement.lineToSay),
+      repeatsStep2Frame,
+      sameRecentLine,
+      sameRouteObjective,
+    });
+  } catch {}
+  return { ...replacement, suppressed: true };
+}
+
+function noteAiOutputSpoken(state: CallState, lineRaw: string): void {
+  const line = String(lineRaw || "").trim();
+  if (!line) return;
+  if (isStep2BookingFrameLine(line)) {
+    state.step2BookingFrameAskedAtMs = Date.now();
+    state.step2BookingFrameAskedCount = Number(state.step2BookingFrameAskedCount || 0) + 1;
+    state.lastBookingFrameNorm = normalizeAiLineForRepeat(line);
+  }
 }
 
 function markCommittedTurnHandled(state: CallState, turnKey: string, reason: string): boolean {
@@ -5529,10 +5830,29 @@ async function handleConversationTurn(
   if (!decision.handled) return false;
   if (!markCommittedTurnHandled(state, turnKey, `${source} policy`)) return true;
 
-  const lineToSay = decision.lineToSay || getStateAwareClosingPivot(state);
+  let lineToSay = decision.lineToSay || getStateAwareClosingPivot(state);
+  let routeKindForMemory = decision.routeKind;
+  let objectiveForMemory = decision.objective;
+  const repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
+    userText: text,
+    routeKind: decision.routeKind,
+    objective: decision.objective,
+  });
+  lineToSay = repeatGuard.lineToSay;
+  routeKindForMemory = repeatGuard.routeKind;
+  objectiveForMemory = repeatGuard.objective;
+  decision.lineToSay = lineToSay;
+  if (repeatGuard.suppressed) {
+    decision.responseMode = "exact_script";
+    decision.baseAnswer = undefined;
+    decision.requiredClosingPivot = lineToSay;
+  }
   const instr = buildResponseFromPolicy(decision, state);
 
   for (const [k, v] of Object.entries(decision.stateWrites)) {
+    (state as any)[k] = v;
+  }
+  for (const [k, v] of Object.entries(repeatGuard.stateWrites)) {
     (state as any)[k] = v;
   }
 
@@ -5560,12 +5880,13 @@ async function handleConversationTurn(
 
   recordPassiveRouteMemory(state, {
     source,
-    routeKind: decision.routeKind,
-    routeReason: intent.kind + ((intent.subKind && intent.subKind !== intent.kind) ? `:${intent.subKind}` : ""),
+    routeKind: routeKindForMemory,
+    routeReason: objectiveForMemory || intent.kind + ((intent.subKind && intent.subKind !== intent.kind) ? `:${intent.subKind}` : ""),
     userText: text,
     lineToSay,
     turnKey,
   });
+  noteAiOutputSpoken(state, lineToSay);
 
   state.openAiWs?.send(JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 })));
 
@@ -8974,8 +9295,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
       if (!markCommittedTurnHandled(state, turnKey, "how-long")) return;
-      const lineToSay =
+      let lineToSay =
         "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
+      const _guard_mhl = applyAiOutputRepeatGuard(state, lineToSay, {
+        userText: lastUserText,
+        routeKind: "how_long",
+        objective: "ask_day_after_duration",
+      });
+      lineToSay = _guard_mhl.lineToSay;
+      for (const [k, v] of Object.entries(_guard_mhl.stateWrites)) { (state as any)[k] = v; }
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
@@ -8998,13 +9326,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "main",
-        routeKind: "how_long",
+        routeKind: _guard_mhl.routeKind,
         routeReason: "duration_question",
         userText: lastUserText,
         lineToSay,
         turnKey,
       });
-
+      noteAiOutputSpoken(state, lineToSay);
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
       state.awaitingUserAnswer = true;
       state.awaitingAnswerForStepIndex = expectedAnswerIdx;
@@ -9049,13 +9377,20 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       if (selectedAvailabilityDay) {
         state.selectedDay = selectedAvailabilityDay;
       }
-      const lineToSay = yesNow
+      let lineToSay = yesNow
         ? getLiveTransferTryingLine(state.context!)
         : noLater || escapeAvailabilityLoop
           ? noLater || userAlreadySaidWhen
             ? getTimeOfferLine(state.context!, 0, selectedAvailabilityDay || pickDayHint(lastUserText, ""), pickTimeWindowHint(lastUserText, ""), lastUserText)
             : "No problem. Would later today or tomorrow be better?"
           : getLiveTransferAvailabilityLine(state.context!);
+      const _guard_mplt = applyAiOutputRepeatGuard(state, lineToSay, {
+        userText: lastUserText,
+        routeKind: yesNow ? "live_transfer_try" : noLater ? "time_offer" : "live_transfer_availability",
+        objective: yesNow ? "transfer_now" : "schedule_time",
+      });
+      lineToSay = _guard_mplt.lineToSay;
+      for (const [k, v] of Object.entries(_guard_mplt.stateWrites)) { (state as any)[k] = v; }
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
@@ -9079,12 +9414,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "main",
-        routeKind: yesNow ? "live_transfer_try" : noLater ? "time_offer" : "live_transfer_availability",
+        routeKind: _guard_mplt.routeKind,
         routeReason: yesNow ? "availability_yes" : noLater ? "availability_no" : escapeAvailabilityLoop ? "availability_escape" : "availability_ambiguous",
         userText: lastUserText,
         lineToSay,
         turnKey,
       });
+      noteAiOutputSpoken(state, lineToSay);
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
 
       state.phase = "in_call";
@@ -9123,7 +9459,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         const aiName2 = (state.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
         const clientNameRaw2 = (state.context!.clientFirstName || "").trim();
         const clientName2 = (!clientNameRaw2 || isTestOrPlaceholderName(clientNameRaw2)) ? "there" : clientNameRaw2;
-        const retryLine = `Okay — can you hear me now, ${clientName2}? This is ${aiName2}.`;
+        let retryLine = `Okay — can you hear me now, ${clientName2}? This is ${aiName2}.`;
+        const _guard_mgr = applyAiOutputRepeatGuard(state, retryLine, {
+          userText: lastUserText,
+          routeKind: "greeting_retry",
+          objective: "hearing_check",
+        });
+        retryLine = _guard_mgr.lineToSay;
+        for (const [k, v] of Object.entries(_guard_mgr.stateWrites)) { (state as any)[k] = v; }
         const retryInstr = buildStepperTurnInstruction(state.context!, retryLine);
 
         // consume awaitingUserAnswer ONLY when we are about to speak
@@ -9147,13 +9490,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.lastResponseCreateAtMs = Date.now();
         recordPassiveRouteMemory(state, {
           source: "main",
-          routeKind: "greeting_retry",
+          routeKind: _guard_mgr.routeKind,
           routeReason: "negative_hearing",
           userText: lastUserText,
           lineToSay: retryLine,
           turnKey,
         });
-
+        noteAiOutputSpoken(state, retryLine);
         state.openAiWs.send(
           JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
         );
@@ -9171,7 +9514,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       }
 
       const useInboundOpening = shouldUseInboundFlow(state.context);
-      const lineToSay2 = useInboundOpening ? buildInboundReasonLine(state.context!) : lineToSay;
+      let lineToSay2 = useInboundOpening ? buildInboundReasonLine(state.context!) : lineToSay;
+      const _guard_msag = applyAiOutputRepeatGuard(state, lineToSay2, {
+        userText: lastUserText,
+        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
+        objective: "step1_question",
+      });
+      lineToSay2 = _guard_msag.lineToSay;
+      for (const [k, v] of Object.entries(_guard_msag.stateWrites)) { (state as any)[k] = v; }
       const perTurnInstr = useInboundOpening
         ? buildInboundReasonInstructions(state.context!)
         : buildExactScriptLineInstruction(lineToSay2);
@@ -9224,13 +9574,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "main",
-        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
+        routeKind: _guard_msag.routeKind,
         routeReason: useInboundOpening ? "inbound_reason" : "stepper_after_greeting",
         userText: lastUserText,
         lineToSay: lineToSay2,
         turnKey,
       });
-
+      noteAiOutputSpoken(state, lineToSay2);
       state.openAiWs.send(
         JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
       );
@@ -9294,6 +9644,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       }
       const repeatMode = isRepeatObjection && (state.objectionRepeatCount || 0) >= 1;
 
+      const _guard_mo = applyAiOutputRepeatGuard(state, lineToSay, {
+        userText: lastUserText,
+        routeKind: "objection",
+        objective: `rebuttal_${objectionOrQuestionKind}`,
+      });
+      lineToSay = _guard_mo.lineToSay;
+      for (const [k, v] of Object.entries(_guard_mo.stateWrites)) { (state as any)[k] = v; }
+
       // Push user turn to exchange memory before building instruction
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
 
@@ -9329,7 +9687,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "main",
-        routeKind: "objection",
+        routeKind: _guard_mo.routeKind,
         routeReason: objectionOrQuestionKind,
         userText: lastUserText,
         lineToSay,
@@ -9339,7 +9697,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
       // Push AI rebuttal line to exchange memory
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-
+      noteAiOutputSpoken(state, lineToSay);
       state.openAiWs.send(
         JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
       );
@@ -9574,6 +9932,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         } catch {}
 
         try {
+          const _guard_mrp = applyAiOutputRepeatGuard(state, repromptLine, {
+            userText: lastUserText,
+            routeKind: useFreeResponse ? "free_response" : looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
+            objective: stepType,
+          });
+          const guardedRepromptLine = _guard_mrp.lineToSay;
+          for (const [k, v] of Object.entries(_guard_mrp.stateWrites)) { (state as any)[k] = v; }
+
           let instr: string;
           let lineForMemory: string;
 
@@ -9586,13 +9952,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             });
             lineForMemory = `[free-response to: "${lastUserText.slice(0, 60)}"]`;
           } else {
-            instr = looksLikeGeneratedTimeOfferLine(repromptLine)
-              ? buildExactScriptLineInstruction(repromptLine)
-              : buildStepperTurnInstruction(state.context!, repromptLine, {
+            instr = looksLikeGeneratedTimeOfferLine(guardedRepromptLine)
+              ? buildExactScriptLineInstruction(guardedRepromptLine)
+              : buildStepperTurnInstruction(state.context!, guardedRepromptLine, {
                   userText: lastUserText,
                   recentExchanges: state.recentExchanges,
                 });
-            lineForMemory = repromptLine;
+            lineForMemory = guardedRepromptLine;
           }
 
           pushExchange(state, "ai", lineForMemory);
@@ -9603,17 +9969,17 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           state.outboundOpenAiDone = false;
 
           state.lastPromptSentAtMs = Date.now();
-          state.lastPromptLine = useFreeResponse ? repromptLine : repromptLine;
+          state.lastPromptLine = guardedRepromptLine;
           state.lastResponseCreateAtMs = Date.now();
           recordPassiveRouteMemory(state, {
             source: "main",
-            routeKind: useFreeResponse ? "free_response" : looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
+            routeKind: _guard_mrp.routeKind,
             routeReason: stepType,
             userText: lastUserText,
-            lineToSay: repromptLine,
+            lineToSay: guardedRepromptLine,
             turnKey,
           });
-
+          noteAiOutputSpoken(state, guardedRepromptLine);
           if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.75 })));
 
         } catch (e) {
@@ -9654,13 +10020,20 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       const timeStepIndex = idx <= 1 ? Math.min(2, Math.max(0, steps.length - 1)) : idx;
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      const lineToSay = getTimeOfferLine(
+      let lineToSay = getTimeOfferLine(
         state.context!,
         n,
         dayHint,
         pickTimeWindowHint(lastUserText, ""),
         lastUserText
       );
+      const _guard_mdct = applyAiOutputRepeatGuard(state, lineToSay, {
+        userText: lastUserText,
+        routeKind: "time_offer",
+        objective: "offer_time_slots",
+      });
+      lineToSay = _guard_mdct.lineToSay;
+      for (const [k, v] of Object.entries(_guard_mdct.stateWrites)) { (state as any)[k] = v; }
       const instr = buildExactScriptLineInstruction(lineToSay);
 
       state.timeOfferCountForStepIndex = timeStepIndex;
@@ -9685,7 +10058,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastResponseCreateAtMs = Date.now();
       recordPassiveRouteMemory(state, {
         source: "main",
-        routeKind: "time_offer",
+        routeKind: _guard_mdct.routeKind,
         routeReason: "selected_day",
         userText: lastUserText,
         lineToSay,
@@ -9703,7 +10076,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           lineHash: hash8(lineToSay),
         });
       } catch {}
-
+      noteAiOutputSpoken(state, lineToSay);
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
       state.phase = "in_call";
       state.awaitingUserAnswer = true;
@@ -9909,24 +10282,40 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
         (async () => {
           try {
+            const _guard_oqot = applyAiOutputRepeatGuard(state, offTopicLine, {
+              userText: lastUserText,
+              routeKind: "open_question_off_topic",
+              objective: isOutboundScheduler ? "deterministic_reask" : "free_response",
+            });
+            const guardedOffTopicLine = _guard_oqot.lineToSay;
+            for (const [k, v] of Object.entries(_guard_oqot.stateWrites)) { (state as any)[k] = v; }
+            const guardedOffTopicInstr = isOutboundScheduler
+              ? buildExactScriptLineInstruction(guardedOffTopicLine)
+              : buildFreeResponseInstruction(state.context!, {
+                  userText: lastUserText,
+                  currentStepLine: guardedOffTopicLine,
+                  stepType,
+                  recentExchanges: state.recentExchanges,
+                });
+
             setWaitingForResponse(state, true, "response.create (open_question off-topic)");
             setAiSpeaking(state, true, "response.create (open_question off-topic)");
             setResponseInFlight(state, true, "response.create (open_question off-topic)");
             state.outboundOpenAiDone = false;
 
             state.lastPromptSentAtMs = Date.now();
-            state.lastPromptLine = offTopicLine;
+            state.lastPromptLine = guardedOffTopicLine;
             state.lastResponseCreateAtMs = Date.now();
             recordPassiveRouteMemory(state, {
               source: "main",
-              routeKind: "open_question_off_topic",
+              routeKind: _guard_oqot.routeKind,
               routeReason: isOutboundScheduler ? "deterministic_reask" : "free_response",
               userText: lastUserText,
-              lineToSay: offTopicLine,
+              lineToSay: guardedOffTopicLine,
               turnKey,
             });
-
-            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(offTopicInstr, { temperature: 0.75 })));
+            noteAiOutputSpoken(state, guardedOffTopicLine);
+            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(guardedOffTopicInstr, { temperature: 0.75 })));
           } catch (e) {
             try { console.log("[AI-VOICE] open_question off-topic error:", String(e)); } catch {}
           }
@@ -9979,6 +10368,17 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
     // Push user answer to exchange memory before building instruction
     if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+
+    const mainRouteKind = looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step";
+    const mainRepeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
+      userText: lastUserText,
+      routeKind: mainRouteKind,
+      objective: stepType,
+    });
+    lineToSay = mainRepeatGuard.lineToSay;
+    for (const [k, v] of Object.entries(mainRepeatGuard.stateWrites)) {
+      (state as any)[k] = v;
+    }
 
     const perTurnInstr = looksLikeGeneratedTimeOfferLine(lineToSay)
       ? buildExactScriptLineInstruction(lineToSay)
@@ -10048,12 +10448,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     state.lastResponseCreateAtMs = Date.now();
     recordPassiveRouteMemory(state, {
       source: "main",
-      routeKind: looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step",
-      routeReason: stepType,
+      routeKind: mainRepeatGuard.routeKind,
+      routeReason: mainRepeatGuard.objective || stepType,
       userText: lastUserText,
       lineToSay,
       turnKey,
     });
+    noteAiOutputSpoken(state, lineToSay);
 
     state.openAiWs.send(
       JSON.stringify(buildRealtimeResponseCreate(perTurnInstr))
