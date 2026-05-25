@@ -1821,12 +1821,13 @@ async function replayPendingCommittedTurn(
       if (!markCommittedTurnHandled(state, turnKey, "replay day-choice time offer")) return;
       const explicitDay = extractExplicitDaySelection(lastUserText);
       const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
-      const dayHint =
+      const rememberedNamedDay = rememberedDay && rememberedDay !== "today" && rememberedDay !== "tomorrow" ? rememberedDay : null;
+      const dayHint: string | null =
         explicitDay === "today" || explicitDay === "tomorrow"
           ? explicitDay
           : rememberedDay === "today" || rememberedDay === "tomorrow"
-            ? (rememberedDay as "today" | "tomorrow")
-            : null;
+            ? rememberedDay
+            : extractNamedWeekday(lastUserText.toLowerCase()) || rememberedNamedDay || null;
       if (
         idx === 1 &&
         !!state.context?.liveTransferEnabled &&
@@ -2399,13 +2400,16 @@ function buildNonRepeatedStateAwareLine(
 
   if (ctx) {
     const explicitDay = pickDayHint(raw, "");
+    const namedDay: string | null = extractNamedWeekday(raw.toLowerCase());
     const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
-    const dayHint =
+    const rememberedNamedDay = rememberedDay && rememberedDay !== "today" && rememberedDay !== "tomorrow" ? rememberedDay : null;
+    const dayHint: string | null =
       explicitDay === "today" || explicitDay === "tomorrow"
         ? explicitDay
         : rememberedDay === "today" || rememberedDay === "tomorrow"
-          ? (rememberedDay as "today" | "tomorrow")
-          : pickDayHint(raw, String(state.lastAcceptedUserText || ""));
+          ? rememberedDay
+          : namedDay || rememberedNamedDay
+            || pickDayHint(raw, String(state.lastAcceptedUserText || ""));
     const windowHint = pickTimeWindowHint(raw, String(state.lastAcceptedUserText || ""));
     if (dayHint || windowHint || isTimeIndecisionOrAvailability(raw)) {
       const timeStepIndex = Math.max(Number(state.scriptStepIndex || 0), Math.min(2, Math.max(0, (state.scriptSteps || []).length - 1)));
@@ -2721,6 +2725,21 @@ function extractExplicitDaySelection(textRaw: string): "today" | "tomorrow" | st
   if (t.includes("tomorrow")) return "tomorrow";
   const dayMatch = t.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekend|next week)\b/);
   return dayMatch?.[1] || null;
+}
+
+function extractNamedWeekday(textRaw: string): string | null {
+  const t = String(textRaw || "").toLowerCase();
+  const days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+  for (const d of days) {
+    if (new RegExp(`\\b${d}\\b`).test(t)) {
+      const isNext = /\bnext\b/.test(t);
+      return isNext ? `next ${d}` : d;
+    }
+  }
+  if (/\b(this weekend|weekend)\b/.test(t)) return "this weekend";
+  if (/\b(later this week|later in the week|sometime this week)\b/.test(t)) return "later this week";
+  if (/\bnext week\b/.test(t)) return "next week";
+  return null;
 }
 
 function shouldRouteDaySelectionToTimeOffer(
@@ -4012,13 +4031,17 @@ function isTimeIndecisionOrAvailability(textRaw: string): boolean {
 function getTimeOfferLine(
   ctx: AICallContext,
   n: number,
-  dayHint: "today" | "tomorrow" | null,
+  dayHint: string | null,
   windowHint: TimeWindowHint,
   rawUserText: string
 ): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
 
-  const day = dayHint === "today" ? "later today" : (dayHint === "tomorrow" ? "tomorrow" : "tomorrow");
+  const isNamedDay = !!dayHint && dayHint !== "today" && dayHint !== "tomorrow";
+  const day = dayHint === "today" ? "later today"
+    : dayHint === "tomorrow" ? "tomorrow"
+    : isNamedDay ? (String(dayHint).charAt(0).toUpperCase() + String(dayHint).slice(1))
+    : "tomorrow";
 
   // If they asked relative ("in X hours"), offer relative slots (we can't trust server timezone).
   if (windowHint === "soon_hours") {
@@ -4634,7 +4657,9 @@ function buildDeterministicScamRebuttalLine(state: CallState): string {
   if (selectedTime) {
     nextStepLine = `Does ${selectedTime} still work for you?`;
   } else if (selectedDay === "today" || selectedDay === "tomorrow") {
-    nextStepLine = getTimeOfferLine(ctx, 0, selectedDay as "today" | "tomorrow", null, "");
+    nextStepLine = getTimeOfferLine(ctx, 0, selectedDay, null, "");
+  } else if (selectedDay) {
+    nextStepLine = getTimeOfferLine(ctx, 0, selectedDay, null, "");
   } else {
     nextStepLine = "Does later today or tomorrow work better?";
   }
@@ -4649,8 +4674,8 @@ function getStateAwareClosingPivot(state: CallState): string {
     if (selectedTime) {
       return `Does ${selectedTime} still work for you?`;
     }
-    if ((selectedDay === "today" || selectedDay === "tomorrow") && state.context) {
-      return getTimeOfferLine(state.context, 0, selectedDay as "today" | "tomorrow", null, "");
+    if (selectedDay && state.context) {
+      return getTimeOfferLine(state.context, 0, selectedDay, null, "");
     }
   } catch {}
   return "Does later today or tomorrow work better?";
@@ -4748,13 +4773,18 @@ function buildPostCoverageTimeOfferDecision(
   routeReason: string
 ): PolicyDecision {
   const explicitDay = pickDayHint(intent.raw, "");
+  const namedDay: string | null = (intent.subKind && intent.subKind !== "today" && intent.subKind !== "tomorrow")
+    ? intent.subKind
+    : extractNamedWeekday(intent.raw.toLowerCase());
   const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
-  const dayHint =
+  const rememberedNamedDay = rememberedDay && rememberedDay !== "today" && rememberedDay !== "tomorrow" ? rememberedDay : null;
+  const dayHint: string | null =
     explicitDay === "today" || explicitDay === "tomorrow"
       ? explicitDay
       : rememberedDay === "today" || rememberedDay === "tomorrow"
-        ? (rememberedDay as "today" | "tomorrow")
-        : pickDayHint(intent.raw, String(state.lastAcceptedUserText || ""));
+        ? rememberedDay
+        : namedDay || rememberedNamedDay
+          || pickDayHint(intent.raw, String(state.lastAcceptedUserText || ""));
   const windowHint = pickTimeWindowHint(intent.raw, String(state.lastAcceptedUserText || ""));
   const timeStepIndex = Math.max(
     Number(state.scriptStepIndex || 0),
@@ -4813,13 +4843,16 @@ function buildPostCoverageCurrentPivot(
   }
 
   const explicitDay = pickDayHint(raw, "");
+  const namedDay: string | null = extractNamedWeekday(raw.toLowerCase());
   const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
-  const dayHint =
+  const rememberedNamedDay = rememberedDay && rememberedDay !== "today" && rememberedDay !== "tomorrow" ? rememberedDay : null;
+  const dayHint: string | null =
     explicitDay === "today" || explicitDay === "tomorrow"
       ? explicitDay
       : rememberedDay === "today" || rememberedDay === "tomorrow"
-        ? (rememberedDay as "today" | "tomorrow")
-        : pickDayHint(raw, String(state.lastAcceptedUserText || ""));
+        ? rememberedDay
+        : namedDay || rememberedNamedDay
+          || pickDayHint(raw, String(state.lastAcceptedUserText || ""));
   const windowHint = pickTimeWindowHint(raw, String(state.lastAcceptedUserText || ""));
   const hasExactTime = isExactClockTimeMentioned(raw);
   const hasWindow = !!windowHint;
@@ -5026,6 +5059,8 @@ function classifyTurnIntent(
   try {
     const day = extractExplicitDaySelection(t);
     if (day === "today" || day === "tomorrow") return { kind: "day_selection", raw };
+    const namedDay = extractNamedWeekday(t);
+    if (namedDay) return { kind: "day_selection", subKind: namedDay, raw };
     if (isTimeMentioned(t) || looksLikeTimeAnswer(t)) {
       if (isTimeWindowMentioned(t)) return { kind: "time_window", raw };
       return { kind: "exact_time", raw };
@@ -5689,22 +5724,25 @@ function buildConversationPolicyDecision(
     };
   }
 
-  // ── Branch: explicit day selection (today / tomorrow) ────────────────────
-  // Intercepts "probably tomorrow", "tomorrow works", "I'm free tomorrow afternoon", etc.
-  // Runs before pendingLiveTransferAvailabilityConfirm; clears it so live-transfer loop
-  // never fires again after a day is selected.
+  // ── Branch: explicit day selection (today / tomorrow / any named weekday) ─
   if (intent.kind === "day_selection") {
     const explicitDay = pickDayHint(intent.raw, "");
-    if (explicitDay === "today" || explicitDay === "tomorrow") {
+    const namedDay: string | null = (intent.subKind && intent.subKind !== "today" && intent.subKind !== "tomorrow")
+      ? intent.subKind
+      : extractNamedWeekday(intent.raw.toLowerCase());
+    const isStandard = explicitDay === "today" || explicitDay === "tomorrow";
+    const dayToUse: string | null = isStandard ? explicitDay : (namedDay || null);
+    if (dayToUse) {
       const windowHint = pickTimeWindowHint(intent.raw, "");
       let lineToSay: string;
       try {
-        lineToSay = getTimeOfferLine(ctx, 0, explicitDay, windowHint, intent.raw);
+        lineToSay = getTimeOfferLine(ctx, 0, dayToUse, windowHint, intent.raw);
       } catch {
-        lineToSay = `Got it — ` + (explicitDay === "today" ? "later today" : "tomorrow") + `. ${closingPivot}`;
+        const dayLabel = isStandard
+          ? (dayToUse === "today" ? "later today" : "tomorrow")
+          : (String(dayToUse).charAt(0).toUpperCase() + String(dayToUse).slice(1));
+        lineToSay = `Got it — ${dayLabel} works. ${closingPivot}`;
       }
-      // When clearing a pending live-transfer availability loop, also advance scriptStepIndex
-      // to mirror what the live-transfer block does on noLater (Math.min(idx + 1, ...)).
       const wasLTPending = !!state.pendingLiveTransferAvailabilityConfirm;
       const curIdx = Number(state.scriptStepIndex || 0);
       const advancedDayIdx = Math.min(curIdx + 1, Math.max(0, stepCtx.steps.length - 1));
@@ -5717,10 +5755,10 @@ function buildConversationPolicyDecision(
         requiredClosingPivot: closingPivot,
         forbiddenTopics: [],
         stateWrites: {
-          selectedDay: explicitDay,
+          selectedDay: dayToUse,
           pendingLiveTransferAvailabilityConfirm: false,
           pendingLiveTransferAvailabilityAttempts: 0,
-          ...(wasLTPending ? { scriptStepIndex: advancedDayIdx } : {}),
+          ...(wasLTPending && isStandard ? { scriptStepIndex: advancedDayIdx } : {}),
         },
         shouldAdvanceStep: false,
       };
@@ -9995,12 +10033,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       if (!markCommittedTurnHandled(state, turnKey, "day-choice time offer")) return;
       const explicitDay = extractExplicitDaySelection(lastUserText);
       const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
-      const dayHint =
+      const rememberedNamedDay = rememberedDay && rememberedDay !== "today" && rememberedDay !== "tomorrow" ? rememberedDay : null;
+      const dayHint: string | null =
         explicitDay === "today" || explicitDay === "tomorrow"
           ? explicitDay
           : rememberedDay === "today" || rememberedDay === "tomorrow"
-            ? (rememberedDay as "today" | "tomorrow")
-            : null;
+            ? rememberedDay
+            : extractNamedWeekday(lastUserText.toLowerCase()) || rememberedNamedDay || null;
       if (
         idx === 1 &&
         !!state.context?.liveTransferEnabled &&
