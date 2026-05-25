@@ -1130,6 +1130,10 @@ async function replayPendingCommittedTurn(
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
     if (await handleConversationTurn(state, lastUserText, "replay", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause)) return;
+    if (isPostCoverageSchedulingState(state)) {
+      logPostCoverageLegacySuppress(state, "replay", "post-policy legacy fallback", lastUserText);
+      return;
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
@@ -4386,10 +4390,226 @@ interface PolicyDecision {
   objective: string;
   lineToSay?: string;
   baseAnswer?: string;
+  userText?: string;
   requiredClosingPivot: string;
   forbiddenTopics: string[];
   stateWrites: Record<string, unknown>;
   shouldAdvanceStep: boolean;
+}
+
+function isPostCoverageSchedulingState(state: CallState): boolean {
+  const routeKind = String(state.lastRouteKind || "");
+  const selectedDay = String(state.selectedDay || "").trim().toLowerCase();
+  return (
+    !!state.pendingLiveTransferAvailabilityConfirm ||
+    routeKind === "policy_step1_coverage" ||
+    routeKind === "policy_live_transfer_try" ||
+    routeKind === "policy_live_transfer_later" ||
+    routeKind === "policy_day_selected" ||
+    routeKind === "policy_time_window" ||
+    routeKind === "policy_none_work" ||
+    routeKind === "policy_exact_time" ||
+    routeKind === "policy_unknown" ||
+    routeKind.startsWith("post_coverage_") ||
+    ((selectedDay === "today" || selectedDay === "tomorrow") && Number(state.scriptStepIndex || 0) >= 1)
+  );
+}
+
+function logPostCoverageLegacySuppress(
+  state: CallState,
+  source: "main" | "replay",
+  routeName: string,
+  lastUserText: string
+): void {
+  try {
+    console.log("[AI-VOICE][POST-COVERAGE-GUARD] legacy route suppressed", {
+      callSid: state.callSid,
+      source,
+      routeName,
+      userTextHash: hash8(lastUserText),
+      lastRouteKind: state.lastRouteKind || null,
+      selectedDay: state.selectedDay || null,
+      selectedWindow: state.selectedWindow || null,
+      selectedTimeText: state.selectedTimeText ? "[set]" : null,
+      scriptStepIndex: state.scriptStepIndex,
+      awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex,
+      pendingLiveTransferAvailabilityConfirm: !!state.pendingLiveTransferAvailabilityConfirm,
+    });
+  } catch {}
+}
+
+function buildPostCoverageTimeOfferDecision(
+  state: CallState,
+  intent: TurnIntent,
+  ctx: AICallContext,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType },
+  routeKind: string,
+  routeReason: string
+): PolicyDecision {
+  const explicitDay = pickDayHint(intent.raw, "");
+  const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+  const dayHint =
+    explicitDay === "today" || explicitDay === "tomorrow"
+      ? explicitDay
+      : rememberedDay === "today" || rememberedDay === "tomorrow"
+        ? (rememberedDay as "today" | "tomorrow")
+        : pickDayHint(intent.raw, String(state.lastAcceptedUserText || ""));
+  const windowHint = pickTimeWindowHint(intent.raw, String(state.lastAcceptedUserText || ""));
+  const timeStepIndex = Math.max(
+    Number(state.scriptStepIndex || 0),
+    Math.min(2, Math.max(0, stepCtx.steps.length - 1))
+  );
+  const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
+  const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+  const lineToSay = getTimeOfferLine(ctx, n, dayHint, windowHint, intent.raw);
+  return {
+    handled: true,
+    routeKind,
+    responseMode: "exact_script",
+    objective: "time_selection",
+    lineToSay,
+    requiredClosingPivot: lineToSay,
+    forbiddenTopics: [],
+    stateWrites: {
+      ...(dayHint ? { selectedDay: dayHint } : {}),
+      ...(windowHint ? { selectedWindow: windowHint } : {}),
+      pendingLiveTransferAvailabilityConfirm: false,
+      pendingLiveTransferAvailabilityAttempts: 0,
+      scriptStepIndex: timeStepIndex,
+      timeOfferCountForStepIndex: timeStepIndex,
+      timeOfferCount: n + 1,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+    },
+    shouldAdvanceStep: false,
+  };
+}
+
+function buildPostCoverageCurrentPivot(
+  state: CallState,
+  intent: TurnIntent,
+  ctx: AICallContext,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType }
+): { pivot: string; stateWrites: Record<string, unknown> } {
+  const raw = String(intent.raw || "");
+  const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
+  const explicitNowIntent =
+    liveTransferEnabled &&
+    !isImmediateTransferSchedulingPreference(raw) &&
+    (hasImmediateTransferConfirmation(raw) || hasExplicitAgentTransferCommand(raw));
+  if (explicitNowIntent) {
+    return {
+      pivot: getLiveTransferTryingLine(ctx),
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        liveTransferIntroSpoken: true,
+        pendingLiveTransferAfterLine: true,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+      },
+    };
+  }
+
+  const explicitDay = pickDayHint(raw, "");
+  const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+  const dayHint =
+    explicitDay === "today" || explicitDay === "tomorrow"
+      ? explicitDay
+      : rememberedDay === "today" || rememberedDay === "tomorrow"
+        ? (rememberedDay as "today" | "tomorrow")
+        : pickDayHint(raw, String(state.lastAcceptedUserText || ""));
+  const windowHint = pickTimeWindowHint(raw, String(state.lastAcceptedUserText || ""));
+  const hasExactTime = isExactClockTimeMentioned(raw);
+  const hasWindow = !!windowHint;
+
+  if (hasExactTime) {
+    const timeStepIndex = Math.max(
+      Number(state.scriptStepIndex || 0),
+      Math.min(3, Math.max(0, stepCtx.steps.length - 1))
+    );
+    const pivot = `Does ${raw} still work for you?`;
+    return {
+      pivot,
+      stateWrites: {
+        selectedTimeText: raw,
+        lastExactTimeText: raw,
+        lastExactTimeAtMs: Date.now(),
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        scriptStepIndex: timeStepIndex,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+      },
+    };
+  }
+
+  if (dayHint || hasWindow || isTimeIndecisionOrAvailability(raw) || String(state.selectedDay || "").trim()) {
+    const timeStepIndex = Math.max(
+      Number(state.scriptStepIndex || 0),
+      Math.min(2, Math.max(0, stepCtx.steps.length - 1))
+    );
+    const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
+    const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+    const pivot = getTimeOfferLine(ctx, n, dayHint, windowHint, raw);
+    return {
+      pivot,
+      stateWrites: {
+        ...(dayHint ? { selectedDay: dayHint } : {}),
+        ...(windowHint ? { selectedWindow: windowHint } : {}),
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        scriptStepIndex: timeStepIndex,
+        timeOfferCountForStepIndex: timeStepIndex,
+        timeOfferCount: n + 1,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+      },
+    };
+  }
+
+  return {
+    pivot: getStateAwareClosingPivot(state),
+    stateWrites: {
+      pendingLiveTransferAvailabilityConfirm: false,
+      pendingLiveTransferAvailabilityAttempts: 0,
+    },
+  };
+}
+
+function buildPostCoverageSoftDecision(
+  state: CallState,
+  intent: TurnIntent,
+  ctx: AICallContext,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType },
+  routeKind: string,
+  objective: string,
+  baseAnswer: string,
+  extraStateWrites: Record<string, unknown> = {}
+): PolicyDecision {
+  const pivot = buildPostCoverageCurrentPivot(state, intent, ctx, stepCtx);
+  return {
+    handled: true,
+    routeKind,
+    responseMode: "guided_gpt",
+    objective,
+    baseAnswer,
+    userText: intent.raw,
+    lineToSay: `${baseAnswer} ${pivot.pivot}`,
+    requiredClosingPivot: pivot.pivot,
+    forbiddenTopics: [
+      "pricing specifics",
+      "coverage details",
+      "program explanation",
+      "discovery questions",
+      "third-party advice",
+    ],
+    stateWrites: {
+      ...pivot.stateWrites,
+      ...extraStateWrites,
+    },
+    shouldAdvanceStep: false,
+  };
 }
 
 function classifyTurnIntent(
@@ -4524,6 +4744,319 @@ function classifyTurnIntent(
   return { kind: "unknown", raw };
 }
 
+function handlePostCoverageSchedulingTurn(
+  state: CallState,
+  intent: TurnIntent,
+  ctx: AICallContext,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType }
+): PolicyDecision | null {
+  if (!isPostCoverageSchedulingState(state)) return null;
+
+  const closingPivot = getStateAwareClosingPivot(state);
+  const agentFirst = getAgentFirstName(ctx);
+  const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+  const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
+  const raw = String(intent.raw || "");
+  const t = raw.toLowerCase();
+  const selectedTime = String((state as any).lastExactTimeText || state.selectedTimeText || "").trim();
+
+  if (
+    t.includes("wrong number") ||
+    t.includes("stop calling") ||
+    t.includes("do not call") ||
+    t.includes("don't call") ||
+    t.includes("remove me") ||
+    t.includes("take me off")
+  ) {
+    return {
+      handled: true,
+      routeKind: "post_coverage_hard_stop",
+      responseMode: "exact_script",
+      objective: "end_call",
+      lineToSay: "I understand — I'll make a note and remove you. Sorry for the interruption. Take care.",
+      requiredClosingPivot: "",
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  if (intent.kind === "hearing_problem") {
+    const repeatLine = String(state.lastPromptLine || "").trim();
+    return {
+      handled: true,
+      routeKind: "post_coverage_repeat",
+      responseMode: "exact_script",
+      objective: "repeat_last_prompt",
+      lineToSay: repeatLine || closingPivot,
+      requiredClosingPivot: repeatLine || closingPivot,
+      forbiddenTopics: [],
+      stateWrites: {},
+      shouldAdvanceStep: false,
+    };
+  }
+
+  if (intent.kind === "live_transfer_now" && liveTransferEnabled) {
+    const explicitNow =
+      hasImmediateTransferConfirmation(raw) ||
+      hasExplicitAgentTransferCommand(raw) ||
+      (!!state.pendingLiveTransferAvailabilityConfirm && !isImmediateTransferSchedulingPreference(raw));
+    if (explicitNow) {
+      return {
+        handled: true,
+        routeKind: "post_coverage_live_transfer_try",
+        responseMode: "exact_script",
+        objective: "start_live_transfer_after_intro",
+        lineToSay: getLiveTransferTryingLine(ctx),
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          liveTransferIntroSpoken: true,
+          pendingLiveTransferAfterLine: true,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+  }
+
+  if (
+    liveTransferEnabled &&
+    !isImmediateTransferSchedulingPreference(raw) &&
+    (hasImmediateTransferConfirmation(raw) || hasExplicitAgentTransferCommand(raw))
+  ) {
+    return {
+      handled: true,
+      routeKind: "post_coverage_live_transfer_try",
+      responseMode: "exact_script",
+      objective: "start_live_transfer_after_intro",
+      lineToSay: getLiveTransferTryingLine(ctx),
+      requiredClosingPivot: "",
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        liveTransferIntroSpoken: true,
+        pendingLiveTransferAfterLine: true,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  if (intent.kind === "day_selection" || intent.kind === "scheduling_preference" || intent.kind === "live_transfer_later") {
+    return buildPostCoverageTimeOfferDecision(state, intent, ctx, stepCtx, "post_coverage_time_offer", intent.kind);
+  }
+
+  if (intent.kind === "time_window") {
+    if (intent.subKind === "none_work") {
+      return {
+        handled: true,
+        routeKind: "post_coverage_none_work",
+        responseMode: "exact_script",
+        objective: "time_refinement",
+        lineToSay: "No problem — are mornings or afternoons generally better for you?",
+        requiredClosingPivot: "Are mornings or afternoons generally better for you?",
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || stepCtx.idx) - 1),
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+    return buildPostCoverageTimeOfferDecision(state, intent, ctx, stepCtx, "post_coverage_time_window", "window_selected");
+  }
+
+  if (intent.kind === "exact_time") {
+    const timeStepIndex = Math.max(
+      Number(state.scriptStepIndex || 0),
+      Math.min(3, Math.max(0, stepCtx.steps.length - 1))
+    );
+    const lineToSay = `Perfect — I have ${raw} as the time. Does that still work for you?`;
+    return {
+      handled: true,
+      routeKind: "post_coverage_exact_time",
+      responseMode: "exact_script",
+      objective: "confirm_exact_time",
+      lineToSay,
+      requiredClosingPivot: lineToSay,
+      forbiddenTopics: [],
+      stateWrites: {
+        selectedTimeText: raw,
+        lastExactTimeText: raw,
+        lastExactTimeAtMs: Date.now(),
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        scriptStepIndex: timeStepIndex,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  if (intent.kind === "coverage_subject_answer") {
+    const selectedDay = String(state.selectedDay || "").trim().toLowerCase();
+    if (selectedDay === "today" || selectedDay === "tomorrow") {
+      return buildPostCoverageTimeOfferDecision(state, intent, ctx, stepCtx, "post_coverage_coverage_repeat_time_offer", "coverage_repeat_with_day");
+    }
+    const lineToSay = `Got it — does later today or tomorrow work better for that quick call with ${agentFirst}?`;
+    return {
+      handled: true,
+      routeKind: "post_coverage_coverage_repeat",
+      responseMode: "exact_script",
+      objective: "return_to_scheduling",
+      lineToSay,
+      requiredClosingPivot: lineToSay,
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || stepCtx.idx) - 1),
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  if (intent.kind === "angry_or_profane") {
+    return buildPostCoverageSoftDecision(
+      state,
+      intent,
+      ctx,
+      stepCtx,
+      "post_coverage_angry_recover",
+      "recover_to_scheduling",
+      "Acknowledge their frustration calmly and apologize without arguing."
+    );
+  }
+
+  if (intent.kind === "confusion" && intent.subKind === "confused_identity") {
+    return buildPostCoverageSoftDecision(
+      state,
+      intent,
+      ctx,
+      stepCtx,
+      "post_coverage_identity",
+      "identify_and_return_to_scheduling",
+      `Explain that you are ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${scope} request.`
+    );
+  }
+
+  if (intent.kind === "confusion" && intent.subKind === "i_just_said") {
+    const explicitDay = extractExplicitDaySelection(raw);
+    if (explicitDay === "today" || explicitDay === "tomorrow") {
+      const decision = buildPostCoverageTimeOfferDecision(state, intent, ctx, stepCtx, "post_coverage_correction_time_offer", "i_just_said_day");
+      decision.lineToSay = `You're right — sorry about that. ${String(decision.lineToSay || "").replace(/^Got it\s*[—\-–]\s*/i, "")}`;
+      return decision;
+    }
+    return {
+      handled: true,
+      routeKind: "post_coverage_correction",
+      responseMode: "exact_script",
+      objective: "recover_to_current_scheduling_state",
+      lineToSay: `You're right — sorry about that. ${closingPivot}`,
+      requiredClosingPivot: closingPivot,
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  if (intent.kind === "not_interested") {
+    return buildPostCoverageSoftDecision(
+      state,
+      intent,
+      ctx,
+      stepCtx,
+      "post_coverage_not_interested",
+      "soft_recover_to_scheduling",
+      `Acknowledge that they are not interested without pressure, and explain that ${agentFirst} keeps the call quick.`
+    );
+  }
+
+  if (intent.kind === "objection" || intent.kind === "question") {
+    const sk = intent.subKind || "";
+    let baseAnswer: string;
+    if (sk === "scam") {
+      baseAnswer = `Acknowledge the concern directly and explain that this is just a follow-up on the ${scope} request, and ${agentFirst} is the licensed agent who can verify everything on the call.`;
+    } else if (sk === "how_much") {
+      baseAnswer = `Acknowledge the cost question and explain that exact cost depends on coverage and qualification, so ${agentFirst} covers that on the call.`;
+    } else if (sk === "what_entails" || isHowLongDurationQuestion(raw)) {
+      baseAnswer = "Answer that it is usually about 5 to 10 minutes.";
+    } else if (sk === "are_you_ai") {
+      baseAnswer = `Answer honestly that you are ${aiName}, a scheduling assistant for ${agentFirst}.`;
+    } else if (sk === "busy") {
+      baseAnswer = "Acknowledge that they are busy and explain that this is quick.";
+    } else if (sk === "send_it" || sk === "send_info") {
+      baseAnswer = `Acknowledge that they want information sent and explain that ${agentFirst} can explain it faster on the quick call than back and forth over text.`;
+    } else if (sk === "how_did_you_get") {
+      baseAnswer = `Explain briefly that their info came through a form submitted online for the ${scope}.`;
+    } else if (sk === "dont_remember") {
+      baseAnswer = `Acknowledge that they may not remember and explain that the ${scope} request came through a little while back.`;
+    } else if (sk === "already_have") {
+      baseAnswer = "Acknowledge that they already have coverage and explain that a quick review can make sure nothing changed or got missed.";
+    } else if (sk === "generic_question") {
+      baseAnswer = `Acknowledge the question and explain that ${agentFirst} can answer it specifically on the call.`;
+    } else {
+      baseAnswer = `Acknowledge the question and explain that ${agentFirst} can cover it clearly on the call.`;
+    }
+    return buildPostCoverageSoftDecision(
+      state,
+      intent,
+      ctx,
+      stepCtx,
+      `post_coverage_${sk || intent.kind}`,
+      "answer_then_return_to_scheduling",
+      baseAnswer
+    );
+  }
+
+  if (selectedTime && (intent.kind === "live_transfer_now" || intent.kind === "unknown")) {
+    const lineToSay = `Perfect — does ${selectedTime} still work for you?`;
+    return {
+      handled: true,
+      routeKind: "post_coverage_exact_time_confirm",
+      responseMode: "exact_script",
+      objective: "confirm_exact_time",
+      lineToSay,
+      requiredClosingPivot: lineToSay,
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || stepCtx.idx) - 1),
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  return buildPostCoverageSoftDecision(
+    state,
+    intent,
+    ctx,
+    stepCtx,
+    "post_coverage_controlled_recovery",
+    "recover_to_current_scheduling_state",
+    "Acknowledge what they said briefly without opening a new topic."
+  );
+}
+
 function buildConversationPolicyDecision(
   intent: TurnIntent,
   state: CallState,
@@ -4637,6 +5170,9 @@ function buildConversationPolicyDecision(
   // All remaining branches only run in in_call phase.
   // Greeting-phase turns that aren't greeting_ack fall through to the existing greeting handler.
   if (state.phase !== "in_call") return NOT_HANDLED;
+
+  const postCoverageDecision = handlePostCoverageSchedulingTurn(state, intent, ctx, stepCtx);
+  if (postCoverageDecision?.handled) return postCoverageDecision;
 
   if (intent.kind === "live_transfer_now") {
     if (!ctx || !(ctx as any)?.liveTransferEnabled || !(ctx as any)?.liveTransferPhone) {
@@ -4959,6 +5495,15 @@ function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): st
   if (decision.responseMode === "exact_script" && decision.lineToSay) {
     return buildExactScriptLineInstruction(decision.lineToSay);
   }
+  if (decision.responseMode === "guided_gpt" && decision.routeKind.startsWith("post_coverage_") && decision.baseAnswer && state.context) {
+    return buildPostCoverageControlledResponseInstruction(state.context, {
+      userText: decision.userText || "",
+      baseAnswer: decision.baseAnswer,
+      requiredClosingPivot: decision.requiredClosingPivot,
+      recentExchanges: state.recentExchanges,
+      forbiddenTopics: decision.forbiddenTopics,
+    });
+  }
   if (decision.responseMode === "guided_gpt" && decision.baseAnswer && state.context) {
     return buildConversationalRebuttalInstruction(state.context, decision.baseAnswer, {
       closingPivot: decision.requiredClosingPivot,
@@ -5142,7 +5687,77 @@ YOUR JOB:
 3. Immediately redirect to the current scheduling objective. Do not linger on their topic.
 4. End with the required closing question above. Do not deviate from it.
 
-KEEP IT SHORT: 2–3 sentences max. No speeches. No over-explaining.
+	KEEP IT SHORT: 2–3 sentences max. No speeches. No over-explaining.
+	`.trim();
+}
+
+function buildPostCoverageControlledResponseInstruction(
+  ctx: AICallContext,
+  opts: {
+    userText: string;
+    baseAnswer: string;
+    requiredClosingPivot: string;
+    recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
+    forbiddenTopics?: string[];
+  }
+): string {
+  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim() || agentRaw;
+  const userText = String(opts.userText || "").trim();
+  const baseAnswer = String(opts.baseAnswer || "").replace(/\s+/g, " ").trim();
+  const requiredClosingPivot = String(opts.requiredClosingPivot || "").replace(/\s+/g, " ").trim();
+  const forbiddenTopics = (opts.forbiddenTopics || []).filter(Boolean);
+  const exchanges = opts.recentExchanges || [];
+
+  let historyBlock = "";
+  if (exchanges.length > 0) {
+    const lines = exchanges.slice(-3).map(e => {
+      const who = e.role === "ai" ? "You said" : "Lead said";
+      return `  ${who}: "${String(e.text || "").replace(/\s+/g, " ").trim()}"`;
+    });
+    historyBlock = `
+RECENT CONVERSATION (context only; do NOT repeat yourself):
+${lines.join("\n")}
+`;
+  }
+
+  const forbiddenBlock = forbiddenTopics.length
+    ? `
+FORBIDDEN TOPICS FOR THIS TURN:
+${forbiddenTopics.map(t => `- ${t}`).join("\n")}
+`
+    : "";
+
+  return `
+You are a natural, calm scheduling assistant on a live phone call.
+
+STRICT POST-COVERAGE RESPONSE CONTRACT:
+- Say exactly 2 sentences maximum.
+- Sentence 1: acknowledge the caller naturally and answer ONLY their current concern using the BASE ANSWER.
+- Sentence 2: MUST include this exact required closing pivot, word-for-word:
+"${requiredClosingPivot}"
+- Do not ask discovery questions.
+- Do not say "tell me more".
+- Do not quote prices, rates, coverage amounts, underwriting, program specifics, or policy details.
+- Do not give third-party advice or tell them to research elsewhere.
+- Do not ramble, explain the product, or change the objective.
+- Do not invent facts.
+- Do not repeat a previous prompt unless the caller clearly asked you to repeat.
+- Sound human, brief, and confident, not canned.
+- If the caller mentioned a day, time, or time window, respect it and use the required closing pivot exactly.
+
+CALL CONTEXT:
+- This is about a ${scope} request.
+- ${agent} is the licensed agent who can answer specifics on the call.
+${historyBlock}${forbiddenBlock}
+WHAT THE CALLER JUST SAID:
+"${userText}"
+
+BASE ANSWER:
+"${baseAnswer}"
+
+Now respond with the 2-sentence contract above.
 `.trim();
 }
 
@@ -8351,6 +8966,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
     if (await handleConversationTurn(state, lastUserText, "main", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause)) return;
+    if (isPostCoverageSchedulingState(state)) {
+      logPostCoverageLegacySuppress(state, "main", "post-policy legacy fallback", lastUserText);
+      return;
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
