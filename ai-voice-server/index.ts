@@ -262,7 +262,7 @@ type CallState = {
   userSpeechStuckWatchdog?: NodeJS.Timeout | null;
   // ✅ If user commits while outbound pacer is still draining (aiSpeaking true), we must NOT drop the turn.
   // We queue it here and replay immediately when pacer drains and aiSpeaking flips to false.
-  pendingCommittedTurn?: { bestTranscript: string; audioMs: number; atMs: number } | null;
+  pendingCommittedTurn?: { bestTranscript: string; audioMs: number; atMs: number; itemId?: string } | null;
 
   // ✅ voicemail skip safety
   voicemailSkipArmed?: boolean;
@@ -283,9 +283,11 @@ type CallState = {
   // ✅ Realtime transcription aggregation (OpenAI events may stream deltas per item_id)
   lastUserTranscriptByItemId?: Record<string, string>;
   lastUserTranscriptPartialByItemId?: Record<string, string>;
+  currentTranscriptItemId?: string;
   lastTranscriptDeltaAtMs?: number;
   lastTranscriptCompletedAtMs?: number;
   deferredTurnTranscript?: string;
+  deferredTurnItemId?: string;
   deferredTurnAtMs?: number;
   deferredTurnSource?: "main" | "replay";
   deferredTurnReason?: string;
@@ -344,6 +346,10 @@ type CallState = {
   // micro anti-spam: last response.create timestamp (prevents rapid double-fires)
   lastResponseCreateAtMs?: number;
   lastHandledTurnKey?: string;
+  lastResponseTurnKey?: string;
+  lastResponseRouteKind?: string;
+  lastResponseUserTextHash?: string;
+  lastResponseAtMs?: number;
   // cost control: throttle silence frames we forward to OpenAI (keep VAD working)
   lastSilenceSentAtMs?: number;
   inputCommitInFlight?: boolean;
@@ -1079,12 +1085,14 @@ async function replayPendingCommittedTurn(
       reason,
       audioMs: restoredAudioMs,
       isFinalTranscript: String(reason || "").toLowerCase().includes("completed"),
+      itemId: pending.itemId || state.currentTranscriptItemId,
     });
     if (turnFinalization.defer) {
       state.pendingCommittedTurn = {
         bestTranscript: turnFinalization.transcript,
         audioMs: restoredAudioMs,
         atMs: Date.now(),
+        itemId: state.currentTranscriptItemId,
       };
       state.lastUserTranscript = turnFinalization.transcript;
       return;
@@ -1165,7 +1173,14 @@ async function replayPendingCommittedTurn(
         turnKey,
       });
 
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: "how_long",
+        reason: "how-long",
+        userText: lastUserText,
+        lineToSay,
+        instructions: instr,
+      })) return;
       state.awaitingUserAnswer = true;
       state.awaitingAnswerForStepIndex = expectedAnswerIdx;
       state.phase = "in_call";
@@ -1245,7 +1260,14 @@ async function replayPendingCommittedTurn(
         lineToSay,
         turnKey,
       });
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: yesNow ? "live_transfer_try" : noLater ? "time_offer" : "live_transfer_availability",
+        reason: yesNow ? "live-transfer try" : "live-transfer later",
+        userText: lastUserText,
+        lineToSay,
+        instructions: instr,
+      })) return;
 
       state.phase = "in_call";
       if (yesNow) {
@@ -1335,7 +1357,15 @@ async function replayPendingCommittedTurn(
             trackResolvedObjection: !!greetingObjKind,
           });
 
-          state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(rebuttalInstr, { temperature: 0.6 })));
+          if (!trySendUserTurnResponse(state, {
+            turnKey,
+            routeKind: "objection",
+            reason: "greeting objection",
+            userText: lastUserText,
+            lineToSay: overrideLine,
+            instructions: rebuttalInstr,
+            options: { temperature: 0.6 },
+          })) return;
 
           // Re-arm stepper so next reply answers Step 1
           state.awaitingUserAnswer = true;
@@ -1380,9 +1410,15 @@ async function replayPendingCommittedTurn(
           turnKey,
         });
 
-        state.openAiWs.send(
-          JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
-        );
+        if (!trySendUserTurnResponse(state, {
+          turnKey,
+          routeKind: "greeting_retry",
+          reason: "greeting retry",
+          userText: lastUserText,
+          lineToSay: retryLine,
+          instructions: retryInstr,
+          options: { temperature: 0.6 },
+        })) return;
 
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = 0;
@@ -1428,9 +1464,15 @@ async function replayPendingCommittedTurn(
         turnKey,
       });
 
-      state.openAiWs.send(
-        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
-      );
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
+        reason: "stepper after greeting",
+        userText: lastUserText,
+        lineToSay: lineToSay2,
+        instructions: perTurnInstr,
+        options: { temperature: 0.6 },
+      })) return;
 
       // ✅ Do NOT advance out of greeting yet.
       // We only advance after the Step 1 audio is done/drained so early caller audio cannot route as a Step 1 answer.
@@ -1526,9 +1568,15 @@ async function replayPendingCommittedTurn(
         trackResolvedObjection: !!objectionKind,
       });
 
-      state.openAiWs.send(
-        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
-      );
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: "objection",
+        reason: "objection",
+        userText: lastUserText,
+        lineToSay,
+        instructions: perTurnInstr,
+        options: { temperature: 0.6 },
+      })) return;
 
       // ✅ Keep stepper alignment: rebuttals end with a booking question.
       // If the rebuttal asked the Step 2 booking question (today vs tomorrow),
@@ -1754,7 +1802,14 @@ async function replayPendingCommittedTurn(
         turnKey,
       });
 
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
+        reason: "replay reprompt",
+        userText: lastUserText,
+        lineToSay: repromptLine,
+        instructions: instr,
+      })) return;
 
       state.phase = "in_call";
       return;
@@ -1839,7 +1894,14 @@ async function replayPendingCommittedTurn(
         });
       } catch {}
 
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: "time_offer",
+        reason: "replay day-choice time offer",
+        userText: lastUserText,
+        lineToSay,
+        instructions: instr,
+      })) return;
       state.phase = "in_call";
       state.awaitingUserAnswer = true;
       state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
@@ -2040,7 +2102,14 @@ async function replayPendingCommittedTurn(
       turnKey,
     });
 
-    state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(perTurnInstr)));
+    if (!trySendUserTurnResponse(state, {
+      turnKey,
+      routeKind: looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step",
+      reason: "replay script step",
+      userText: lastUserText,
+      lineToSay,
+      instructions: perTurnInstr,
+    })) return;
 
     // advance logic (mirror normal path)
     if (canAdvance) {
@@ -2246,7 +2315,137 @@ function markCommittedTurnHandled(state: CallState, turnKey: string, reason: str
   return true;
 }
 
-function mergeDeferredTurnText(previousRaw: string, nextRaw: string): string {
+function isCallerAskingForRepeat(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    t === "what" ||
+    t === "huh" ||
+    t.includes("what was that") ||
+    t.includes("say that again") ||
+    t.includes("repeat that") ||
+    t.includes("couldn t hear") ||
+    t.includes("couldnt hear") ||
+    t.includes("can t hear") ||
+    t.includes("cant hear") ||
+    t.includes("didn t catch") ||
+    t.includes("didnt catch")
+  );
+}
+
+function shouldSuppressRepeatedPromptLine(
+  state: CallState,
+  lineToSayRaw: string,
+  routeKind: string,
+  userTextRaw: string,
+  turnKey: string
+): boolean {
+  const line = String(lineToSayRaw || "").replace(/\s+/g, " ").trim();
+  if (!line) return false;
+  if (routeKind === "policy_repeat" || isCallerAskingForRepeat(userTextRaw)) return false;
+
+  const normalizedLine = line.toLowerCase();
+  const previousLine = String(state.lastPromptLine || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const now = Date.now();
+  const lastPromptAt = Number(state.lastPromptSentAtMs || 0);
+  const lastResponseAt = Number(state.lastResponseAtMs || 0);
+  const currentRouteAlreadyStampedPrompt = lastPromptAt > 0 && lastPromptAt > lastResponseAt;
+  if (!currentRouteAlreadyStampedPrompt && previousLine && normalizedLine === previousLine && lastPromptAt > 0 && now - lastPromptAt < 12000) {
+    console.log("[AI-VOICE][REPEAT-GUARD] suppressed repeated prompt line", {
+      callSid: state.callSid,
+      routeKind,
+      turnHash: hash8(turnKey || normalizeTurnTextForKey(userTextRaw)),
+      promptHash: hash8(normalizedLine),
+      msSincePrompt: now - lastPromptAt,
+    });
+    return true;
+  }
+
+  const recentAiRepeat = (state.recentExchanges || [])
+    .slice(0, -1)
+    .filter((ex) => ex.role === "ai")
+    .slice(-2)
+    .some((ex) => String(ex.text || "").replace(/\s+/g, " ").trim().toLowerCase() === normalizedLine);
+  if (recentAiRepeat) {
+    console.log("[AI-VOICE][REPEAT-GUARD] suppressed recent assistant line repeat", {
+      callSid: state.callSid,
+      routeKind,
+      turnHash: hash8(turnKey || normalizeTurnTextForKey(userTextRaw)),
+      promptHash: hash8(normalizedLine),
+    });
+    return true;
+  }
+
+  const userHash = hash8(normalizeTurnTextForKey(userTextRaw));
+  if (
+    state.lastResponseRouteKind === routeKind &&
+    state.lastResponseUserTextHash === userHash &&
+    Number(state.lastResponseAtMs || 0) > 0 &&
+    now - Number(state.lastResponseAtMs || 0) < 5000
+  ) {
+    console.log("[AI-VOICE][REPEAT-GUARD] suppressed duplicate route/transcript response", {
+      callSid: state.callSid,
+      routeKind,
+      turnHash: hash8(turnKey || normalizeTurnTextForKey(userTextRaw)),
+      msSinceResponse: now - lastResponseAt,
+    });
+    return true;
+  }
+
+  return false;
+}
+
+function trySendUserTurnResponse(
+  state: CallState,
+  args: {
+    turnKey: string;
+    routeKind: string;
+    reason: string;
+    userText?: string;
+    lineToSay: string;
+    instructions: string;
+    options?: { temperature?: number };
+  }
+): boolean {
+  const clearSuppressedAttempt = () => {
+    setWaitingForResponse(state, false, `suppressed response.create (${args.reason})`);
+    setAiSpeaking(state, false, `suppressed response.create (${args.reason})`);
+    setResponseInFlight(state, false, `suppressed response.create (${args.reason})`);
+    state.outboundOpenAiDone = true;
+  };
+  const turnKey = String(args.turnKey || "");
+  if (turnKey && state.lastHandledTurnKey !== turnKey) {
+    if (!markCommittedTurnHandled(state, turnKey, args.reason)) {
+      clearSuppressedAttempt();
+      return false;
+    }
+  }
+
+  if (shouldSuppressRepeatedPromptLine(state, args.lineToSay, args.routeKind, args.userText || "", turnKey)) {
+    clearSuppressedAttempt();
+    return false;
+  }
+
+  setWaitingForResponse(state, true, `response.create (${args.reason})`);
+  setAiSpeaking(state, true, `response.create (${args.reason})`);
+  setResponseInFlight(state, true, `response.create (${args.reason})`);
+  state.outboundOpenAiDone = false;
+  state.lastPromptSentAtMs = Date.now();
+  state.lastPromptLine = args.lineToSay;
+  state.lastResponseCreateAtMs = Date.now();
+  state.lastResponseTurnKey = turnKey || undefined;
+  state.lastResponseRouteKind = args.routeKind;
+  state.lastResponseUserTextHash = hash8(normalizeTurnTextForKey(args.userText || ""));
+  state.lastResponseAtMs = Date.now();
+
+  if (state.openAiWs?.readyState === WebSocket.OPEN) {
+    state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(args.instructions, args.options || {})));
+    return true;
+  }
+  return false;
+}
+
+function mergeTranscriptFragment(previousRaw: string, nextRaw: string): string {
   const previous = String(previousRaw || "").replace(/\s+/g, " ").trim();
   const next = String(nextRaw || "").replace(/\s+/g, " ").trim();
   if (!previous) return next;
@@ -2255,7 +2454,17 @@ function mergeDeferredTurnText(previousRaw: string, nextRaw: string): string {
   const n = next.toLowerCase();
   if (n.includes(p)) return next;
   if (p.includes(n)) return previous;
+  const maxOverlap = Math.min(previous.length, next.length);
+  for (let len = maxOverlap; len >= 3; len--) {
+    if (previous.slice(-len).toLowerCase() === next.slice(0, len).toLowerCase()) {
+      return `${previous}${next.slice(len)}`.replace(/\s+/g, " ").trim();
+    }
+  }
   return `${previous} ${next}`.replace(/\s+/g, " ").trim();
+}
+
+function mergeDeferredTurnText(previousRaw: string, nextRaw: string): string {
+  return mergeTranscriptFragment(previousRaw, nextRaw);
 }
 
 function isHardCompleteTurnIntent(textRaw: string): boolean {
@@ -2312,14 +2521,21 @@ function shouldDeferTurnRouting(
     isFinalTranscript?: boolean;
     reason?: string;
     audioMs?: number;
+    itemId?: string;
   } = {}
 ): { defer: boolean; transcript: string; reason?: string } {
   const incoming = String(transcriptRaw || "").replace(/\s+/g, " ").trim();
-  const merged = mergeDeferredTurnText(state.deferredTurnTranscript || "", incoming);
+  const incomingItemId = String(metadata.itemId || state.currentTranscriptItemId || "").trim();
+  const deferredItemId = String(state.deferredTurnItemId || "").trim();
+  const sameTranscriptItem = !!incomingItemId && !!deferredItemId && incomingItemId === deferredItemId;
+  const merged = sameTranscriptItem && incoming
+    ? incoming
+    : mergeDeferredTurnText(state.deferredTurnTranscript || "", incoming);
   if (!merged) return { defer: false, transcript: incoming };
 
   if (isHardCompleteTurnIntent(merged)) {
     state.deferredTurnTranscript = "";
+    state.deferredTurnItemId = undefined;
     state.deferredTurnAtMs = undefined;
     state.deferredTurnSource = undefined;
     state.deferredTurnReason = undefined;
@@ -2351,6 +2567,7 @@ function shouldDeferTurnRouting(
 
   if (!shouldDefer) {
     state.deferredTurnTranscript = "";
+    state.deferredTurnItemId = undefined;
     state.deferredTurnAtMs = undefined;
     state.deferredTurnSource = undefined;
     state.deferredTurnReason = undefined;
@@ -2358,6 +2575,7 @@ function shouldDeferTurnRouting(
   }
 
   state.deferredTurnTranscript = merged;
+  state.deferredTurnItemId = incomingItemId || undefined;
   state.deferredTurnAtMs = now;
   state.deferredTurnSource = source;
   state.deferredTurnReason =
@@ -5022,7 +5240,15 @@ async function handleConversationTurn(
     turnKey,
   });
 
-  state.openAiWs?.send(JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 })));
+  if (!trySendUserTurnResponse(state, {
+    turnKey,
+    routeKind: decision.routeKind,
+    reason: "policy",
+    userText: text,
+    lineToSay,
+    instructions: instr,
+    options: { temperature: 0.6 },
+  })) return true;
 
   if (!("awaitingUserAnswer" in decision.stateWrites)) {
     state.awaitingUserAnswer = !decision.shouldAdvanceStep;
@@ -7510,6 +7736,9 @@ async function handleOpenAiEvent(
     state.lastUserSpeechStartedAtMs = Date.now();
     state.lastTranscriptDeltaAtMs = undefined;
     state.lastTranscriptCompletedAtMs = undefined;
+    state.currentTranscriptItemId = undefined;
+    state.deferredTurnTranscript = "";
+    state.deferredTurnItemId = undefined;
     (state as any).listenWarmupUntilMs = 0;
 
     // ✅ STUCK-SPEECH FAILSAFE:
@@ -7597,6 +7826,7 @@ async function handleOpenAiEvent(
     state.lastUserTranscript = "";
     try {
       if (state.lastUserTranscriptPartialByItemId) state.lastUserTranscriptPartialByItemId = {};
+      if (state.lastUserTranscriptByItemId) state.lastUserTranscriptByItemId = {};
     } catch {}
     return;
   }
@@ -7668,8 +7898,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         const d = String((event as any)?.delta || "").trim();
         if (itemId && d) {
           state.lastTranscriptDeltaAtMs = Date.now();
+          state.currentTranscriptItemId = itemId;
           const prev = state.lastUserTranscriptPartialByItemId[itemId] || "";
-          const next = (prev + d).replace(/\s+/g, " ").trim();
+          const next = mergeTranscriptFragment(prev, d);
           state.lastUserTranscriptPartialByItemId[itemId] = next;
           state.lastUserTranscript = next;
 
@@ -7689,7 +7920,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
               state.openAiReady &&
               !state.voicemailSkipArmed
             ) {
-              pending.bestTranscript = mergeDeferredTurnText(pending.bestTranscript || state.deferredTurnTranscript || "", got);
+              pending.itemId = itemId;
+              pending.bestTranscript = String(got || "").trim();
               void replayPendingCommittedTurn(twilioWs, state, "transcript delta");
             }
           } catch {}
@@ -7698,6 +7930,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         const tr = String((event as any)?.transcript || "").trim();
         if (itemId && tr) {
           state.lastTranscriptCompletedAtMs = Date.now();
+          state.currentTranscriptItemId = itemId;
           const clean = tr.replace(/\s+/g, " ").trim();
           state.lastUserTranscriptByItemId[itemId] = clean;
           state.lastUserTranscriptPartialByItemId[itemId] = "";
@@ -7718,7 +7951,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
               state.openAiReady &&
               !state.voicemailSkipArmed
             ) {
-              pending.bestTranscript = mergeDeferredTurnText(pending.bestTranscript || state.deferredTurnTranscript || "", got);
+              pending.itemId = itemId;
+              pending.bestTranscript = got;
+              if (state.deferredTurnItemId === itemId) {
+                state.deferredTurnTranscript = "";
+                state.deferredTurnItemId = undefined;
+              }
               void replayPendingCommittedTurn(twilioWs, state, "transcript completed");
             }
           } catch {}
@@ -7960,12 +8198,19 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     try {
       const byId = (state.lastUserTranscriptByItemId || {}) as Record<string,string>;
       const partialById = (state.lastUserTranscriptPartialByItemId || {}) as Record<string,string>;
+      const currentId = String(state.currentTranscriptItemId || "").trim();
 
-      // pick the most recently updated entry (best-effort: last key iteration)
-      const ids = Object.keys(byId);
-      if (ids.length) {
-        const lastId = ids[ids.length - 1];
-        bestTranscript = String(byId[lastId] || "").trim();
+      if (currentId) {
+        bestTranscript = String(byId[currentId] || partialById[currentId] || "").trim();
+      }
+
+      if (!bestTranscript) {
+        // pick the most recently updated entry (best-effort: last key iteration)
+        const ids = Object.keys(byId);
+        if (ids.length) {
+          const lastId = ids[ids.length - 1];
+          bestTranscript = String(byId[lastId] || "").trim();
+        }
       }
 
       if (!bestTranscript) {
@@ -8016,6 +8261,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             bestTranscript: "",
             audioMs: Number(audioMsCommitGate || 0),
             atMs: nowMs,
+            itemId: state.currentTranscriptItemId,
           };
 
           // Safety cleanup: if transcript never arrives, clear the pending after ~2s.
@@ -8060,6 +8306,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             bestTranscript: "",
             audioMs: Number(audioMsCommitGate || 0),
             atMs: nowMs,
+            itemId: state.currentTranscriptItemId,
           };
 
           // Safety cleanup: if transcript never arrives, clear the pending after ~2s.
@@ -8136,6 +8383,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           bestTranscript: String(bestTranscript || state.lastUserTranscript || "").trim(),
           audioMs: fillerAudioMs,
           atMs: Date.now(),
+          itemId: state.currentTranscriptItemId,
         };
 
         // Clear any existing timer and restart (latest commit wins)
@@ -8225,6 +8473,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           bestTranscript: "",
           audioMs: Number(audioMsCommitGate || 0),
           atMs: nowMs,
+          itemId: state.currentTranscriptItemId,
         };
         setTimeout(() => {
           try {
@@ -8246,6 +8495,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         bestTranscript: String(state.lastUserTranscript || bestTranscript || "").trim(),
         audioMs: Number(audioMsCommitGate || 0),
         atMs: Date.now(),
+        itemId: state.currentTranscriptItemId,
       };
       try {
         console.log("[AI-VOICE][TURN-GATE] queued commit while response active", {
@@ -8272,6 +8522,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         bestTranscript: String(state.lastUserTranscript || bestTranscript || "").trim(),
         audioMs: Number(audioMsCommitGate || 0),
         atMs: Date.now(),
+        itemId: state.currentTranscriptItemId,
       };
       try {
         console.log("[AI-VOICE][TURN-GATE] queued commit while aiSpeaking", {
@@ -8310,12 +8561,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     let lastUserText = String(state.lastUserTranscript || "").trim();
     const turnFinalization = shouldDeferTurnRouting(state, lastUserText, "main", {
       audioMs: audioMsCommitGate,
+      itemId: state.currentTranscriptItemId,
     });
     if (turnFinalization.defer) {
       state.pendingCommittedTurn = {
         bestTranscript: turnFinalization.transcript,
         audioMs: Number(audioMsCommitGate || 0),
         atMs: Date.now(),
+        itemId: state.currentTranscriptItemId,
       };
       state.lastUserTranscript = turnFinalization.transcript;
       return;
@@ -8386,7 +8639,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         turnKey,
       });
 
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: "how_long",
+        reason: "how-long",
+        userText: lastUserText,
+        lineToSay,
+        instructions: instr,
+      })) return;
       state.awaitingUserAnswer = true;
       state.awaitingAnswerForStepIndex = expectedAnswerIdx;
       state.phase = "in_call";
@@ -8466,7 +8726,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         lineToSay,
         turnKey,
       });
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: yesNow ? "live_transfer_try" : noLater ? "time_offer" : "live_transfer_availability",
+        reason: yesNow ? "live-transfer try" : "live-transfer later",
+        userText: lastUserText,
+        lineToSay,
+        instructions: instr,
+      })) return;
 
       state.phase = "in_call";
       if (yesNow) {
@@ -8535,9 +8802,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           turnKey,
         });
 
-        state.openAiWs.send(
-          JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
-        );
+        if (!trySendUserTurnResponse(state, {
+          turnKey,
+          routeKind: "greeting_retry",
+          reason: "greeting retry",
+          userText: lastUserText,
+          lineToSay: retryLine,
+          instructions: retryInstr,
+          options: { temperature: 0.6 },
+        })) return;
 
         // ✅ Arm awaitingUserAnswer so audio keeps flowing to OpenAI after retry plays.
         // Without this, the silence gate blocks inbound frames and VAD never fires.
@@ -8612,9 +8885,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         turnKey,
       });
 
-      state.openAiWs.send(
-        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
-      );
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
+        reason: "stepper after greeting",
+        userText: lastUserText,
+        lineToSay: lineToSay2,
+        instructions: perTurnInstr,
+        options: { temperature: 0.6 },
+      })) return;
 
       // ✅ Do NOT advance out of greeting yet.
       // We only advance after the Step 1 audio is done/drained so early caller audio cannot route as a Step 1 answer.
@@ -8721,9 +9000,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       // Push AI rebuttal line to exchange memory
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
 
-      state.openAiWs.send(
-        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
-      );
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: "objection",
+        reason: "rebuttal",
+        userText: lastUserText,
+        lineToSay,
+        instructions: perTurnInstr,
+        options: { temperature: 0.6 },
+      })) return;
 
 
       // ✅ After an objection rebuttal, re-arm the stepper so the next user reply
@@ -8995,7 +9280,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             turnKey,
           });
 
-          if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.75 })));
+          if (!trySendUserTurnResponse(state, {
+            turnKey,
+            routeKind: useFreeResponse ? "free_response" : looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
+            reason: "reprompt/free",
+            userText: lastUserText,
+            lineToSay: repromptLine,
+            instructions: instr,
+            options: { temperature: 0.75 },
+          })) return;
 
         } catch (e) {
           try { console.log("[AI-VOICE] Error sending reprompt/free response.create:", String(e)); } catch {}
@@ -9085,7 +9378,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         });
       } catch {}
 
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
+      if (!trySendUserTurnResponse(state, {
+        turnKey,
+        routeKind: "time_offer",
+        reason: "day-choice time offer",
+        userText: lastUserText,
+        lineToSay,
+        instructions: instr,
+      })) return;
       state.phase = "in_call";
       state.awaitingUserAnswer = true;
       state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
@@ -9307,7 +9607,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
               turnKey,
             });
 
-            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(offTopicInstr, { temperature: 0.75 })));
+            if (!trySendUserTurnResponse(state, {
+              turnKey,
+              routeKind: "open_question_off_topic",
+              reason: "open_question off-topic",
+              userText: lastUserText,
+              lineToSay: offTopicLine,
+              instructions: offTopicInstr,
+              options: { temperature: 0.75 },
+            })) return;
           } catch (e) {
             try { console.log("[AI-VOICE] open_question off-topic error:", String(e)); } catch {}
           }
@@ -9436,9 +9744,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       turnKey,
     });
 
-    state.openAiWs.send(
-      JSON.stringify(buildRealtimeResponseCreate(perTurnInstr))
-    );
+    if (!trySendUserTurnResponse(state, {
+      turnKey,
+      routeKind: looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step",
+      reason: "script step",
+      userText: lastUserText,
+      lineToSay,
+      instructions: perTurnInstr,
+    })) return;
 
     // ✅ Patch 3: only advance when we have a real transcript answer for this step
     if (canAdvance) {
