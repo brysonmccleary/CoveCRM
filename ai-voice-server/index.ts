@@ -2414,7 +2414,7 @@ function buildNonRepeatedStateAwareLine(
     if (dayHint || windowHint || isTimeIndecisionOrAvailability(raw)) {
       const timeStepIndex = Math.max(Number(state.scriptStepIndex || 0), Math.min(2, Math.max(0, (state.scriptSteps || []).length - 1)));
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
-      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+      const n = sameStep ? Number(state.timeOfferCount || 0) + 1 : 1;
       return {
         lineToSay: getTimeOfferLine(ctx, n, dayHint, windowHint, raw),
         routeKind: `${routeKind}_repeat_guard_time_offer`,
@@ -5023,7 +5023,8 @@ function classifyTurnIntent(
   // Priority 3.7: Step 1 coverage subject answer — BEFORE detectObjection/detectQuestion so
   // "just me", "myself", "spouse" etc. are never misclassified as objections or questions.
   try {
-    if (stepCtx.idx === 1 && isStepOneCoverageSubjectAnswer(t)) {
+    const scriptKeyNorm = normalizeScriptKey((state as any)?.context?.scriptKey);
+    if (scriptKeyNorm !== "kayla_signup" && stepCtx.idx === 1 && isStepOneCoverageSubjectAnswer(t)) {
       return { kind: "coverage_subject_answer", raw };
     }
   } catch {}
@@ -6629,10 +6630,159 @@ STOP. WAIT.
  * Rebuttals block — kept minimal. Objections/questions are handled by code policy in real time.
  * GPT never sees specific rebuttal scripts; it falls back to this only if code policy doesn’t fire.
  */
-function getRebuttalsBlock(_ctx: AICallContext): string {
+function getRebuttalsBlock(ctx: AICallContext): string {
+  const scriptKey = normalizeScriptKey(ctx.scriptKey);
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+
+  const COMMON = `
+PRICING QUESTIONS
+If asked how much it costs: "That's a great question — it really depends on what
+you qualify for, how much coverage you want, and what fits your budget.
+${agent} works with a lot of different companies and will find you the best rate.
+I can't give you an exact number because I'm just the scheduling assistant,
+but policies generally range from around $20 to $250 a month depending on
+the coverage. ${agent} will go over everything on the call."
+
+If pushed for a ballpark: give the $20-$250 range and redirect.
+If asked for an exact quote: "I'm not a licensed agent so I can't quote that —
+that's exactly what the call with ${agent} is for."
+
+NO MEDICAL EXAM
+If asked about medical exams: "Good news — there's no medical exam required
+for most of what ${agent} goes over. It's mostly just a few health questions."
+
+LIVING BENEFITS
+If asked about getting paid out for illness or injury:
+"A lot of these policies do come with living benefits — so if you ever get
+diagnosed with a critical, chronic, or terminal illness, the coverage can
+pay out upfront while you're still here. ${agent} will go over exactly
+what applies to your situation."
+
+GENERAL OBJECTIONS
+If not interested: acknowledge genuinely, do not pressure, ask one soft question
+about whether timing is the issue or something else, then offer to schedule anyway.
+If busy: "Totally understand — ${agent} keeps it quick, usually under 10 minutes.
+Does later today or tomorrow work better?"
+If already have coverage: "That's great — a lot of people ${agent} works with
+already have something in place but end up finding gaps or overpaying.
+It's worth a quick look. Does later today or tomorrow work better?"
+If skeptical/scam concern: "Completely fair — this is a state-regulated program
+and ${agent} is a licensed agent. Everything gets explained clearly on the call.
+Does later today or tomorrow work better?"
+
+WHAT YOU ARE
+You are a scheduling assistant. You are not a licensed agent.
+You cannot give quotes, recommendations, or coverage advice.
+Your only job is to get the appointment booked.
+After answering any question — return naturally to scheduling.
+Do not linger. One answer, then back on track.
+`.trim();
+
+  const VERTICAL: Record<string, string> = {
+    mortgage_protection: `
+WHAT IS MORTGAGE PROTECTION
+If asked: "Mortgage protection is a type of coverage that pays off or pays down
+your home in the event of a death or disability — so your family keeps the house
+no matter what happens to you."
+Stay away from calling it "life insurance" directly. It functions similarly but
+leads respond better to the mortgage-specific framing.
+If asked about injury or sickness: reference living benefits (see above).
+Term lengths and coverage amounts vary — ${agent} covers specifics on the call.
+`,
+    final_expense: `
+WHAT IS FINAL EXPENSE
+If asked: "Final expense coverage is designed to cover burial costs, medical bills,
+and end-of-life expenses so your family isn't left with that burden."
+Most policies are whole life — they don't expire and build cash value over time.
+No medical exam required. Some policies are issued same day.
+If asked about term vs whole life: "We work with both — ${agent} will find
+what fits your situation and budget best."
+`,
+    iul_cash_value: `
+WHAT IS AN IUL
+If asked: "An IUL — indexed universal life — is a type of life insurance that
+also builds cash value over time. A lot of people use it to grow money
+tax-advantaged that they can borrow against later, while still having
+the life insurance protection."
+Good for people wanting: tax-free growth, retirement supplement, or
+flexible premium life insurance with upside potential.
+${agent} will go over exactly how it works and what you'd qualify for.
+`,
+    veteran_leads: `
+VETERAN-SPECIFIC KNOWLEDGE
+These programs are specifically designed to serve veterans and their families.
+Many of the companies ${agent} works with offer veteran discounts —
+${agent} will check exactly what you qualify for.
+If asked "are you with the VA?": "We're not directly through the VA,
+but the companies we work with do serve veterans specifically and
+offer immediate coverage — no two-year waiting period like VA life insurance."
+Immediate coverage. Veteran discounts available. ${agent} finds the best fit.
+`,
+    trucker_leads: `
+TRUCKER-SPECIFIC KNOWLEDGE
+These programs are built around the specific needs of truckers and their families.
+Many carriers work directly with truckers and understand the occupational risk —
+meaning better rates than standard life insurance for a lot of drivers.
+If asked about coverage for on-the-road accidents: ${agent} covers what
+applies to their specific situation.
+Immediate coverage. Trucker-specific options. ${agent} finds the best fit.
+`,
+    veteran_iul: `
+VETERAN IUL
+IUL program specifically for veterans — combines life insurance protection
+with cash value growth, designed around veteran needs and qualification.
+Many carriers offer veteran discounts. Immediate coverage. No waiting period.
+${agent} finds the best rate and highest cash value option available.
+`,
+    veteran_mortgage: `
+VETERAN MORTGAGE PROTECTION
+Mortgage protection specifically designed for veterans and their families.
+Works similarly to standard mortgage protection but with veteran-specific
+carriers and rates. Many offer veteran discounts.
+Pays off or pays down the home in the event of death or disability.
+Immediate coverage. No two-year waiting period.
+`,
+    trucker_iul: `
+TRUCKER IUL
+IUL program built for truckers — life insurance that grows cash value,
+structured around trucker occupational needs.
+Carriers that work directly with truckers often offer better rates.
+${agent} finds the best rate and highest cash value available for truckers.
+`,
+    trucker_mortgage: `
+TRUCKER MORTGAGE PROTECTION
+Mortgage protection for truckers — pays off or pays down the home
+in the event of death or disability, with trucker-specific carriers and rates.
+Immediate coverage. Designed for the trucking lifestyle and occupation.
+`,
+    generic_life: `
+LIFE INSURANCE — GENERAL
+We work with all types: term, whole life, IUL, final expense, mortgage protection.
+What fits best depends on what you qualify for and what your goal is.
+${agent} works with multiple carriers to find the best rate and fit.
+No medical exam for most options. Immediate coverage available.
+`
+  };
+
+  const verticalKnowledge = VERTICAL[scriptKey] || VERTICAL["generic_life"];
+
   return `
-REBUTTALS
-All objections and questions are handled in real time by the scheduling assistant. If the lead pushes back, acknowledge naturally in one sentence and immediately return to booking. Do not follow any script for rebuttals — just acknowledge and re-ask the current booking question.
+VERTICAL KNOWLEDGE — USE THIS TO ANSWER PRODUCT QUESTIONS NATURALLY
+${verticalKnowledge}
+
+${COMMON}
+
+HOW TO HANDLE ANY QUESTION
+1. Answer it in 1-2 sentences using the knowledge above.
+2. Do NOT say "the agent will cover that" for basic product questions
+   you can answer from the knowledge above.
+3. Do say "the agent covers specifics like exact pricing and qualification"
+   for anything requiring a real quote or underwriting decision.
+4. After answering — immediately return to scheduling naturally.
+   One smooth sentence back to the booking question.
+5. Never sound like you're reading a list. Sound like a real person
+   who knows this stuff.
 `.trim();
 }
 
@@ -9921,7 +10071,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           if (!lastUserText || lastUserText.trim().length < 8) return false;
 
           // Time/availability is handled by the time ladder — don't free-respond to that
-          if (stepType === "time_question") return false;
           if (isTimeIndecisionOrAvailability(lastUserText)) return false;
 
           // Outbound scheduler: Step 1 open_question must route through the deterministic
@@ -9930,7 +10079,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           const outboundScheduler =
             !shouldUseInboundFlow(state.context) &&
             normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
-          if (outboundScheduler && stepType === "open_question") return false;
 
           // open_question: ALWAYS use free-response for non-answers.
           // GPT will acknowledge what they said and re-ask the question naturally.
