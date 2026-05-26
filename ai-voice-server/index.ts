@@ -465,86 +465,6 @@ function getScopeLabelForScriptKey(scriptKeyRaw: any): string {
   return "life insurance";
 }
 
-function isMortgageProtectionContext(ctx?: AICallContext | null): boolean {
-  const scriptKey = normalizeScriptKey(ctx?.scriptKey);
-  const scope = getScopeLabelForScriptKey(scriptKey).toLowerCase();
-  return (
-    scriptKey === "mortgage_protection" ||
-    scriptKey === "veteran_mortgage" ||
-    scriptKey === "trucker_mortgage" ||
-    scope.includes("mortgage protection")
-  );
-}
-
-function isMortgageProductDefinitionQuestion(textRaw: string, ctx?: AICallContext | null): boolean {
-  if (!isMortgageProtectionContext(ctx)) return false;
-  const t = String(textRaw || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-  if (!t) return false;
-  const mentionsMortgageProtection = t.includes("mortgage protection");
-  return (
-    t.includes("what is mortgage protection") ||
-    t.includes("how does mortgage protection work") ||
-    t.includes("what does mortgage protection cover") ||
-    t.includes("what is this mortgage protection") ||
-    t.includes("what s this mortgage protection") ||
-    (t.includes("what is this for") && mentionsMortgageProtection) ||
-    (mentionsMortgageProtection && t.includes("what does it cover")) ||
-    (mentionsMortgageProtection && t.includes("how does it work"))
-  );
-}
-
-function buildMortgageProtectionProductAnswer(): string {
-  return "Mortgage protection is a type of insurance that pays off or pays down your house in the event of death or disability. If you pass away, it can pay off or down the house, and depending on the policy it can also include living benefits where if you get sick or disabled, it may pay out up front.";
-}
-
-function isAgentNameQuestion(textRaw: string): boolean {
-  const t = String(textRaw || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-  if (!t) return false;
-  return (
-    t.includes("agent name") ||
-    t.includes("who is the agent") ||
-    t.includes("who s the agent") ||
-    t.includes("who am i talking to") ||
-    t.includes("who will i talk to") ||
-    t.includes("who would i talk to") ||
-    t.includes("what is his name") ||
-    t.includes("what s his name") ||
-    t.includes("what is her name") ||
-    t.includes("what s her name") ||
-    t.includes("what is their name") ||
-    t.includes("what s their name")
-  );
-}
-
-function isAgentContactInfoQuestion(textRaw: string): boolean {
-  const t = String(textRaw || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-  if (!t) return false;
-  const asksForContact =
-    t.includes("phone number") ||
-    t.includes("contact info") ||
-    t.includes("contact information") ||
-    t.includes("direct number") ||
-    t.includes("their number") ||
-    t.includes("his number") ||
-    t.includes("her number") ||
-    t.includes("agent number") ||
-    t.includes("call him directly") ||
-    t.includes("call her directly") ||
-    t.includes("call them directly") ||
-    t.includes("can i call him") ||
-    t.includes("can i call her") ||
-    t.includes("can i call them") ||
-    t.includes("give me his number") ||
-    t.includes("give me her number") ||
-    t.includes("give me their number") ||
-    t.includes("give me the number") ||
-    t.includes("send me his number") ||
-    t.includes("send me her number") ||
-    t.includes("send me their number") ||
-    t.includes("send me the number");
-  return asksForContact && (t.includes("agent") || t.includes("him") || t.includes("her") || t.includes("them") || t.includes("number"));
-}
-
 
 /**
  * PCM16 (24k) → μ-law 8k (base64) for Twilio
@@ -2515,28 +2435,17 @@ function buildNonRepeatedStateAwareLine(
   }
 
   const questionKind = (() => {
-    try {
-      if (isAgentContactInfoQuestion(raw)) return "agent_contact_info";
-      if (isAgentNameQuestion(raw)) return "agent_name";
-      if (isMortgageProductDefinitionQuestion(raw, ctx)) return "mortgage_product_definition";
-      return detectQuestionKindForTurn(raw);
-    } catch { return null; }
+    try { return detectQuestionKindForTurn(raw); } catch { return null; }
   })();
   if (questionKind && ctx) {
     const agentFirst = getAgentFirstName(ctx);
     const pivot = getStateAwareClosingPivot(state);
     const answer =
-      questionKind === "mortgage_product_definition"
-        ? buildMortgageProtectionProductAnswer()
-        : questionKind === "agent_name"
-          ? `The licensed agent is ${agentFirst}.`
-          : questionKind === "agent_contact_info"
-            ? `I don't want to give out a number that may not be the best one to use — my job is to get you connected or scheduled with ${agentFirst}.`
-            : questionKind === "how_much"
-              ? `I get why you'd ask — ${agentFirst} covers exact cost on the call.`
-              : questionKind === "what_entails" || isHowLongDurationQuestion(raw)
-                ? "It is usually about 5 to 10 minutes."
-                : `${agentFirst} can answer that clearly on the call.`;
+      questionKind === "how_much"
+        ? `I get why you'd ask — ${agentFirst} covers exact cost on the call.`
+        : questionKind === "what_entails" || isHowLongDurationQuestion(raw)
+          ? "It is usually about 5 to 10 minutes."
+          : `${agentFirst} can answer that clearly on the call.`;
     return {
       lineToSay: `${answer} ${pivot}`,
       routeKind: `${routeKind}_repeat_guard_question`,
@@ -5120,19 +5029,6 @@ function classifyTurnIntent(
     }
   } catch {}
 
-  try {
-    const ctx = (state as any)?.context as AICallContext | undefined;
-    if (isAgentContactInfoQuestion(t)) {
-      return { kind: "question", subKind: "agent_contact_info", raw };
-    }
-    if (isAgentNameQuestion(t)) {
-      return { kind: "question", subKind: "agent_name", raw };
-    }
-    if (isMortgageProductDefinitionQuestion(t, ctx)) {
-      return { kind: "question", subKind: "mortgage_product_definition", raw };
-    }
-  } catch {}
-
   // Priority 4: existing detectors
   try {
     const objKind = detectObjection(t);
@@ -5433,49 +5329,7 @@ function handlePostCoverageSchedulingTurn(
   if (intent.kind === "objection" || intent.kind === "question") {
     const sk = intent.subKind || "";
     let baseAnswer: string;
-    if (sk === "mortgage_product_definition") {
-      const pivot = buildPostCoverageCurrentPivot(state, intent, ctx, stepCtx);
-      const lineToSay = `${buildMortgageProtectionProductAnswer()} ${pivot.pivot}`;
-      return {
-        handled: true,
-        routeKind: "post_coverage_mortgage_product_definition",
-        responseMode: "exact_script",
-        objective: "answer_product_then_return_to_scheduling",
-        lineToSay,
-        requiredClosingPivot: pivot.pivot,
-        forbiddenTopics: [],
-        stateWrites: pivot.stateWrites,
-        shouldAdvanceStep: false,
-      };
-    } else if (sk === "agent_name") {
-      const pivot = buildPostCoverageCurrentPivot(state, intent, ctx, stepCtx);
-      const lineToSay = `The licensed agent is ${agentFirst}. ${pivot.pivot}`;
-      return {
-        handled: true,
-        routeKind: "post_coverage_agent_name",
-        responseMode: "exact_script",
-        objective: "answer_agent_name_then_return_to_scheduling",
-        lineToSay,
-        requiredClosingPivot: pivot.pivot,
-        forbiddenTopics: [],
-        stateWrites: pivot.stateWrites,
-        shouldAdvanceStep: false,
-      };
-    } else if (sk === "agent_contact_info") {
-      const pivot = buildPostCoverageCurrentPivot(state, intent, ctx, stepCtx);
-      const lineToSay = `I don't want to give out a number that may not be the best one to use — my job is to get you connected or scheduled with ${agentFirst}. ${pivot.pivot}`;
-      return {
-        handled: true,
-        routeKind: "post_coverage_agent_contact_info",
-        responseMode: "exact_script",
-        objective: "decline_contact_info_then_return_to_scheduling",
-        lineToSay,
-        requiredClosingPivot: pivot.pivot,
-        forbiddenTopics: [],
-        stateWrites: pivot.stateWrites,
-        shouldAdvanceStep: false,
-      };
-    } else if (sk === "scam") {
+    if (sk === "scam") {
       baseAnswer = `Acknowledge the concern directly and explain that this is just a follow-up on the ${scope} request, and ${agentFirst} is the licensed agent who can verify everything on the call.`;
     } else if (sk === "how_much") {
       baseAnswer = `Acknowledge the cost question and explain that exact cost depends on coverage and qualification, so ${agentFirst} covers that on the call.`;
@@ -5834,13 +5688,7 @@ function buildConversationPolicyDecision(
     const sk = intent.subKind || "";
     let lineToSay: string;
 
-    if (sk === "mortgage_product_definition") {
-      lineToSay = `${buildMortgageProtectionProductAnswer()} ${closingPivot}`;
-    } else if (sk === "agent_name") {
-      lineToSay = `The licensed agent is ${agentFirst}. ${closingPivot}`;
-    } else if (sk === "agent_contact_info") {
-      lineToSay = `I don't want to give out a number that may not be the best one to use — my job is to get you connected or scheduled with ${agentFirst}. ${closingPivot}`;
-    } else if (sk === "scam") {
+    if (sk === "scam") {
       lineToSay = buildDeterministicScamRebuttalLine(state);
     } else if (sk === "how_much") {
       lineToSay = `That depends on the coverage and what you qualify for — ${agentFirst} will walk through the actual options with you on the call. ${closingPivot}`;
