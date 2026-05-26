@@ -5081,6 +5081,28 @@ function classifyTurnIntent(
   return { kind: "unknown", raw };
 }
 
+function getVerticalProductAnswer(ctx: AICallContext): string {
+  const k = normalizeScriptKey(ctx.scriptKey);
+  const agentRaw = (ctx.agentName || "your agent").trim();
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+  if (k === "mortgage_protection" || k === "veteran_mortgage" || k === "trucker_mortgage") {
+    return `So mortgage protection is a type of insurance that pays off or pays down your house in the event of a death or disability — so your family keeps the home. And most of these policies do come with living benefits, so if you get critically ill or disabled, depending on the policy, it can pay out upfront while you're still here. ${agent} will go over exactly what applies to your situation on the call.`;
+  }
+  if (k === "final_expense") {
+    return `Final expense coverage is designed to cover burial costs, medical bills, and end-of-life expenses so your family isn't left with that burden. Most options are whole life — they don't expire and there's no medical exam required. ${agent} will go over what fits your situation best.`;
+  }
+  if (k === "iul_cash_value" || k === "veteran_iul" || k === "trucker_iul") {
+    return `An IUL — indexed universal life — is a type of life insurance that also builds cash value over time. A lot of people use it to grow money tax-advantaged that they can borrow against later, while still having the life insurance protection. ${agent} will walk you through exactly how it works and what you'd qualify for.`;
+  }
+  if (k === "veteran_leads") {
+    return `These programs are specifically designed for veterans — a lot of the companies ${agent} works with offer veteran discounts and immediate coverage, no two-year waiting period like VA life insurance. ${agent} will check exactly what you qualify for.`;
+  }
+  if (k === "trucker_leads") {
+    return `These programs are built around the specific needs of truckers — a lot of carriers work directly with truckers and offer better rates than standard life insurance for drivers. ${agent} will find the best fit for your situation.`;
+  }
+  return `We work with multiple types of coverage — whole life, term, IUL, final expense, mortgage protection. What fits best depends on what you qualify for and what your goal is. ${agent} works with multiple carriers to find you the best rate.`;
+}
+
 function handlePostCoverageSchedulingTurn(
   state: CallState,
   intent: TurnIntent,
@@ -5315,52 +5337,100 @@ function handlePostCoverageSchedulingTurn(
   }
 
   if (intent.kind === "not_interested") {
-    return buildPostCoverageSoftDecision(
-      state,
-      intent,
-      ctx,
-      stepCtx,
-      "post_coverage_not_interested",
-      "soft_recover_to_scheduling",
-      `Acknowledge that they are not interested without pressure, and explain that ${agentFirst} keeps the call quick.`
-    );
+    const lineToSay = enforceBookingOnlyLine(ctx, getRebuttalLine(ctx, "not_interested"));
+    return {
+      handled: true,
+      routeKind: "post_coverage_not_interested",
+      responseMode: "exact_script",
+      objective: "soft_recover_to_scheduling",
+      lineToSay,
+      requiredClosingPivot: lineToSay,
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+      },
+      shouldAdvanceStep: false,
+    };
   }
 
   if (intent.kind === "objection" || intent.kind === "question") {
     const sk = intent.subKind || "";
-    let baseAnswer: string;
+    const closingQ = getStateAwareClosingPivot(state);
+
+    // Scam: deterministic rebuttal
     if (sk === "scam") {
-      baseAnswer = `Acknowledge the concern directly and explain that this is just a follow-up on the ${scope} request, and ${agentFirst} is the licensed agent who can verify everything on the call.`;
-    } else if (sk === "how_much") {
-      baseAnswer = `Acknowledge the cost question and explain that exact cost depends on coverage and qualification, so ${agentFirst} covers that on the call.`;
-    } else if (sk === "what_entails" || isHowLongDurationQuestion(raw)) {
-      baseAnswer = "Answer that it is usually about 5 to 10 minutes.";
-    } else if (sk === "are_you_ai") {
-      baseAnswer = `Answer honestly: "Yes — I’m a virtual assistant helping the agents with scheduling. The licensed agent handles the actual appointment."`;
-    } else if (sk === "busy") {
-      baseAnswer = "Acknowledge that they are busy and explain that this is quick.";
-    } else if (sk === "send_it" || sk === "send_info") {
-      baseAnswer = `Acknowledge that they want information sent and explain that ${agentFirst} can explain it faster on the quick call than back and forth over text.`;
-    } else if (sk === "how_did_you_get") {
-      baseAnswer = `Explain briefly that their info came through a form submitted online for the ${scope}.`;
-    } else if (sk === "dont_remember") {
-      baseAnswer = `Acknowledge that they may not remember and explain that the ${scope} request came through a little while back.`;
-    } else if (sk === "already_have") {
-      baseAnswer = "Acknowledge that they already have coverage and explain that a quick review can make sure nothing changed or got missed.";
-    } else if (sk === "generic_question") {
-      baseAnswer = `Acknowledge the question and explain that ${agentFirst} can answer it specifically on the call.`;
-    } else {
-      baseAnswer = `Acknowledge the question and explain that ${agentFirst} can cover it clearly on the call.`;
+      const lineToSay = buildDeterministicScamRebuttalLine(state);
+      return {
+        handled: true,
+        routeKind: "post_coverage_scam",
+        responseMode: "exact_script",
+        objective: "answer_then_return_to_scheduling",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
+        shouldAdvanceStep: false,
+      };
     }
-    return buildPostCoverageSoftDecision(
-      state,
-      intent,
-      ctx,
-      stepCtx,
-      `post_coverage_${sk || intent.kind}`,
-      "answer_then_return_to_scheduling",
-      baseAnswer
-    );
+
+    // Duration question: answer directly
+    if (sk === "what_entails" || isHowLongDurationQuestion(raw)) {
+      const lineToSay = `Really quick — usually 5 to 10 minutes. ${agentFirst} just covers your ${scope} request, answers your questions, and that’s it. ${closingQ}`;
+      return {
+        handled: true,
+        routeKind: "post_coverage_what_entails",
+        responseMode: "exact_script",
+        objective: "answer_then_return_to_scheduling",
+        lineToSay,
+        requiredClosingPivot: closingQ,
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+
+    // Generic product question: answer using vertical knowledge
+    if (sk === "generic_question") {
+      const lineToSay = `${getVerticalProductAnswer(ctx)} ${closingQ}`;
+      return {
+        handled: true,
+        routeKind: "post_coverage_product_question",
+        responseMode: "exact_script",
+        objective: "answer_product_question_then_schedule",
+        lineToSay,
+        requiredClosingPivot: closingQ,
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+
+    // All other objections: use the actual rebuttal lines
+    const lineToSay = enforceBookingOnlyLine(ctx, getRebuttalLine(ctx, sk || "generic_question"));
+    return {
+      handled: true,
+      routeKind: `post_coverage_${sk || intent.kind}`,
+      responseMode: "exact_script",
+      objective: "answer_then_return_to_scheduling",
+      lineToSay,
+      requiredClosingPivot: closingQ,
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+      },
+      shouldAdvanceStep: false,
+    };
   }
 
   if (selectedTime && (intent.kind === "live_transfer_now" || intent.kind === "unknown")) {
