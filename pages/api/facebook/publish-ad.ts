@@ -434,7 +434,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               "Availability varies by state and carrier. This is a no-obligation review with a licensed agent.",
             consentText:
               String(complianceProfile?.consentText || "").trim() ||
-              "By submitting, you agree to be contacted by phone, text, or email by a licensed insurance agent. Consent is not a condition of purchase.",
+              "By submitting, you agree to be contacted by phone, text/SMS, or email by a licensed insurance agent, including through automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase.",
             privacyUrl: String(complianceProfile?.privacyUrl || "").trim(),
             termsUrl: String(complianceProfile?.termsUrl || "").trim(),
           },

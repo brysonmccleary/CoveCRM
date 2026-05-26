@@ -221,6 +221,7 @@ export default function LeadsPanel() {
 
   // ✅ NEW: user acknowledgement for "unverified app" warning
   const [ackUnverifiedWarning, setAckUnverifiedWarning] = useState<boolean>(false);
+  const [ackSheetLeadConsent, setAckSheetLeadConsent] = useState<boolean>(false);
 
   const [folderScriptKey, setFolderScriptKey] = useState<string>("final_expense");
   const [savingScript, setSavingScript] = useState(false);
@@ -528,6 +529,10 @@ export default function LeadsPanel() {
     // If user tries to connect without acknowledging, fail fast with a clear message.
     if (!ackUnverifiedWarning) {
       setConnectError("Please confirm you understand the 'App not verified' warning is expected.");
+      return;
+    }
+    if (!ackSheetLeadConsent) {
+      setConnectError("Please confirm these Google Sheet leads have consent for outreach.");
       return;
     }
 
@@ -1428,17 +1433,38 @@ const goToAIDialSession = () => {
                       </span>
                     </label>
 
+                    <label className="flex items-start gap-2 text-sm rounded border bg-white dark:bg-zinc-900 p-3">
+                      <input
+                        type="checkbox"
+                        checked={ackSheetLeadConsent}
+                        onChange={(e) => {
+                          setAckSheetLeadConsent(e.target.checked);
+                          setConnectError(null);
+                        }}
+                        className="mt-1"
+                      />
+                      <span className="text-gray-700 dark:text-gray-200">
+                        I confirm that the leads in this Google Sheet have given consent to receive calls, texts, emails, and AI-assisted or virtual assistant outreach.
+                      </span>
+                    </label>
+
                     {connectError && <div className="text-sm text-red-600">{connectError}</div>}
 
                     <button
                       onClick={connectSheetNow}
-                      disabled={connectLoading || !ackUnverifiedWarning}
+                      disabled={connectLoading || !ackUnverifiedWarning || !ackSheetLeadConsent}
                       className={`${
-                        connectLoading || !ackUnverifiedWarning
+                        connectLoading || !ackUnverifiedWarning || !ackSheetLeadConsent
                           ? "bg-gray-400 cursor-not-allowed"
                           : "bg-green-600 hover:bg-green-700"
                       } text-white px-4 py-2 rounded`}
-                      title={!ackUnverifiedWarning ? "Please confirm the unverified warning acknowledgement." : ""}
+                      title={
+                        !ackUnverifiedWarning
+                          ? "Please confirm the unverified warning acknowledgement."
+                          : !ackSheetLeadConsent
+                            ? "Please confirm the Google Sheet lead consent acknowledgement."
+                            : ""
+                      }
                     >
                       {connectLoading ? "Connecting…" : "Connect Sheet"}
                     </button>

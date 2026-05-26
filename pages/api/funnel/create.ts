@@ -80,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       agentEmail: agentEmail || userEmail,
       brandName: brandName || "",
       disclaimerText:
-        "By submitting this form, you agree to be contacted about insurance options by a licensed agent. This is a private insurance service and is not affiliated with any government agency.",
+        "By submitting this form, you agree to be contacted about insurance options by a licensed agent via calls, texts/SMS, and email, including automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase. This is a private insurance service and is not affiliated with any government agency.",
       folderId: (folder as any)._id,
       isActive: true,
     });

@@ -55,7 +55,7 @@ interface Props {
 
 // Consent copy used on the consent step and as footer note.
 const COMPLIANT_CONSENT_TEXT =
-  "By clicking Continue, you agree to be contacted by a licensed insurance agent via call, text, and email, including automated systems. Consent is not a condition of purchase.";
+  "By clicking Continue, you agree to be contacted by a licensed insurance agent via calls, texts/SMS, and email, including automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase.";
 
 const DISCLAIMER_TEXT =
   "Availability varies by state and carrier. This is a no-obligation review with a licensed independent agent.";
