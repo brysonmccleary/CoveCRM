@@ -22,14 +22,27 @@ function hashPrefix(value: any): string {
 }
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { agentPhone, leadName, agentName, scope, key, sessionId, leadId, callSid, exactTimeText, startTimeUtc, leadTimeZone, agentTimeZone, userEmail } = req.query as Record<string, string>;
+  const q = req.query;
+  const agentPhone  = Array.isArray(q.agentPhone)  ? q.agentPhone[0]  : String(q.agentPhone  || "");
+  const leadName    = Array.isArray(q.leadName)    ? q.leadName[0]    : String(q.leadName    || "");
+  const agentName   = Array.isArray(q.agentName)   ? q.agentName[0]   : String(q.agentName   || "");
+  const scope       = Array.isArray(q.scope)       ? q.scope[0]       : String(q.scope       || "");
+  const key         = Array.isArray(q.key)         ? q.key[0]         : String(q.key         || "");
+  const sessionId   = Array.isArray(q.sessionId)   ? q.sessionId[0]   : String(q.sessionId   || "");
+  const leadId      = Array.isArray(q.leadId)      ? q.leadId[0]      : String(q.leadId      || "");
+  const callSid     = Array.isArray(q.callSid)     ? q.callSid[0]     : String(q.callSid     || "");
+  const exactTimeText = Array.isArray(q.exactTimeText) ? q.exactTimeText[0] : String(q.exactTimeText || "");
+  const startTimeUtc  = Array.isArray(q.startTimeUtc)  ? q.startTimeUtc[0]  : String(q.startTimeUtc  || "");
+  const leadTimeZone  = Array.isArray(q.leadTimeZone)  ? q.leadTimeZone[0]  : String(q.leadTimeZone  || "");
+  const agentTimeZone = Array.isArray(q.agentTimeZone) ? q.agentTimeZone[0] : String(q.agentTimeZone || "");
+  const userEmail     = Array.isArray(q.userEmail)     ? q.userEmail[0]     : String(q.userEmail     || "");
 
-  const secret = process.env.COVECRM_API_SECRET || process.env.AI_DIALER_CRON_KEY || "";
-  if (!key || !secret || key !== secret) {
+  const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
+  if (!key || !AI_DIALER_CRON_KEY || key !== AI_DIALER_CRON_KEY) {
     console.warn("[AI-CALLS][TRANSFER_TWIML_AUTH_FAIL]", {
       hasProvidedKey: !!key,
       providedKeyLength: key ? String(key).length : 0,
-      expectedKeyLength: secret ? secret.length : 0,
+      expectedKeyLength: AI_DIALER_CRON_KEY ? AI_DIALER_CRON_KEY.length : 0,
     });
     return res.status(401).send("Unauthorized");
   }
@@ -45,7 +58,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const agentFirst = (agentName || "our agent").split(" ")[0] || "our agent";
 
   const fallbackUrl = new URL("/api/ai-calls/transfer-fallback", COVECRM_BASE_URL);
-  fallbackUrl.searchParams.set("key", secret);
+  fallbackUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
   fallbackUrl.searchParams.set("sessionId", sessionId || "");
   fallbackUrl.searchParams.set("leadId", leadId || "");
   fallbackUrl.searchParams.set("callSid", callSid || "");
