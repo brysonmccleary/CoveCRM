@@ -111,6 +111,13 @@ function pickRowValue(row: Record<string, any>, keys: string[]) {
   return "";
 }
 
+function splitFullNameFallback(raw: any) {
+  const parts = String(raw || "").trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+  if (!parts.length) return { firstName: "", lastName: "" };
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
 function normalizeUsPhoneToE164(raw: any): string {
   const digits = String(raw || "").replace(/\D+/g, "");
   if (digits.length === 10) return `+1${digits}`;
@@ -125,10 +132,16 @@ function isRealisticAge(raw: any): boolean {
   return n >= 18 && n <= 99;
 }
 
+function isBlockedPhoneFallbackKey(key: any): boolean {
+  const normalized = normalizeHeaderKey(key);
+  return new Set(["age", "zip", "zipcode", "postalcode", "dob", "dateofbirth", "birthdate"]).has(normalized);
+}
+
 function recoverSinglePhoneFromRow(row: Record<string, any>) {
   const candidates: Array<{ key: string; value: string; normalized: string }> = [];
 
   for (const [key, value] of Object.entries(row || {})) {
+    if (isBlockedPhoneFallbackKey(key)) continue;
     if (value === undefined || value === null) continue;
     const raw = String(value).trim();
     if (!raw || isRealisticAge(raw)) continue;
@@ -560,10 +573,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
 
     // ✅ Extract common fields (variation-proof)
-    const firstName = pickRowValue(row, ["First Name", "First", "FName", "Given Name", "firstname", "first_name", "first"]);
-    const lastName = pickRowValue(row, ["Last Name", "Last", "LName", "Surname", "lastname", "last_name", "last"]);
-    const phoneRaw = pickRowValue(row, ["Phone", "Phone Number", "Mobile", "Cell", "Primary Phone", "phone", "phoneNumber", "phonenumber", "Phone 1", "Phone1", "phone1"]);
-    const emailRaw = pickRowValue(row, ["Email", "Email Address", "E-mail", "E-mail Address", "email", "emailAddress", "email_address"]);
+    let firstName = pickRowValue(row, ["First Name", "First", "FName", "Given Name", "firstname", "first_name", "first"]);
+    let lastName = pickRowValue(row, ["Last Name", "Last", "LName", "Surname", "lastname", "last_name", "last"]);
+    if (!firstName && !lastName) {
+      const splitName = splitFullNameFallback(pickRowValue(row, ["Full Name", "Name", "Client Name", "Contact Name", "Lead Name"]));
+      firstName = splitName.firstName;
+      lastName = splitName.lastName;
+    }
+    const phoneRaw = pickRowValue(row, ["Phone", "Phone Number", "Mobile", "Cell", "Primary Phone", "phone", "phoneNumber", "phonenumber", "Phone 1", "Phone1", "phone1", "Contact Phone", "Telephone", "Cell Phone"]);
+    const emailRaw = pickRowValue(row, ["Email", "Email Address", "E-mail", "E-mail Address", "email", "emailAddress", "email_address", "Contact Email"]);
     let phoneClean = phoneRaw && /\d{7,}/.test(phoneRaw)
       ? phoneRaw
       : undefined;
@@ -580,11 +598,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const emailClean = emailRaw && emailRaw.includes("@")
       ? emailRaw
       : undefined;
-    const state = pickRowValue(row, ["State", "ST", "state"]);
+    const state = pickRowValue(row, ["State", "ST", "state", "Resident State"]);
     const age = pickRowValue(row, ["Age", "age"]);
     const ageFromRecoveredPhone = recoveredPhone && normalizeHeaderKey(recoveredPhone.key) === "age" && !isRealisticAge(age);
     const safeAge = ageFromRecoveredPhone ? undefined : age;
-    const notes = pickRowValue(row, ["Notes", "Note", "notes", "note"]);
+    const notes = pickRowValue(row, ["Notes", "Note", "notes", "note", "Comments"]);
     const beneficiary = pickRowValue(row, ["Beneficiary", "Beneficiary Name", "beneficiary"]);
     const coverageAmount = pickRowValue(row, ["Coverage Amount", "Coverage", "coverage", "coverageamount"]);
     const leadTypeIn = pickRowValue(row, ["leadType", "Lead Type", "LeadType", "Type", "type"]);

@@ -57,7 +57,7 @@ export default async function handler(
       { new: true, upsert: false },
     );
 
-    return res.redirect("/calendar");
+    return res.redirect("/dashboard?tab=calendar");
   } catch (error) {
     console.error("❌ Google OAuth callback error:", error);
     return res.status(500).json({ message: "Google callback failed" });

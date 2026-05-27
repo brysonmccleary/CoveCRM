@@ -73,14 +73,72 @@ function normalizeEmail(raw: any): string {
   return s.toLowerCase();
 }
 
+function normalizeHeaderKey(k: any): string {
+  return String(k ?? "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]/g, "");
+}
+
 function pickRowValue(row: Record<string, any>, keys: string[]) {
+  if (!row || typeof row !== "object") return "";
+
   for (const k of keys) {
-    if (row && Object.prototype.hasOwnProperty.call(row, k)) {
+    if (Object.prototype.hasOwnProperty.call(row, k)) {
       const v = row[k];
       if (v !== undefined && v !== null && String(v).trim() !== "") return v;
     }
   }
+
+  const want = new Set(keys.map((k) => normalizeHeaderKey(k)));
+  for (const actualKey of Object.keys(row)) {
+    const nk = normalizeHeaderKey(actualKey);
+    if (!nk) continue;
+    if (!want.has(nk)) continue;
+
+    const v = (row as any)[actualKey];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+
   return "";
+}
+
+function splitFullNameFallback(raw: any) {
+  const parts = String(raw || "").trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+  if (!parts.length) return { firstName: "", lastName: "" };
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
+function isRealisticAge(raw: any): boolean {
+  const s = String(raw ?? "").trim();
+  if (!/^\d{1,3}$/.test(s)) return false;
+  const n = Number(s);
+  return n >= 18 && n <= 99;
+}
+
+function isBlockedPhoneFallbackKey(key: any): boolean {
+  const normalized = normalizeHeaderKey(key);
+  return new Set(["age", "zip", "zipcode", "postalcode", "dob", "dateofbirth", "birthdate"]).has(normalized);
+}
+
+function recoverSinglePhoneFromRow(row: Record<string, any>) {
+  const candidates: Array<{ key: string; value: string }> = [];
+
+  for (const [key, value] of Object.entries(row || {})) {
+    if (isBlockedPhoneFallbackKey(key)) continue;
+    if (value === undefined || value === null) continue;
+    const raw = String(value).trim();
+    if (!raw || isRealisticAge(raw)) continue;
+
+    const digits = normalizePhone(raw);
+    const clearPhone = digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+    if (!clearPhone) continue;
+    candidates.push({ key, value: raw });
+  }
+
+  const unique = Array.from(new Map(candidates.map((c) => [normalizePhone(c.value), c])).values());
+  return unique.length === 1 ? unique[0] : null;
 }
 
 function isHexSig(sig: string) {
@@ -343,13 +401,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const row = (item?.row || {}) as Record<string, any>;
       if (!rowNumber || !row || typeof row !== "object") continue;
 
-      const firstName = pickRowValue(row, ["First Name", "firstName", "firstname", "First", "first"]);
-      const lastName = pickRowValue(row, ["Last Name", "lastName", "lastname", "Last", "last"]);
-      const phoneRaw = pickRowValue(row, ["Phone", "phone", "phoneNumber", "Phone Number", "PhoneNumber"]);
-      const emailRaw = pickRowValue(row, ["Email", "email", "Email Address", "EmailAddress"]);
-      const state = pickRowValue(row, ["State", "state"]);
+      let firstName = pickRowValue(row, ["First Name", "firstName", "firstname", "First", "first"]);
+      let lastName = pickRowValue(row, ["Last Name", "lastName", "lastname", "Last", "last"]);
+      if (!firstName && !lastName) {
+        const splitName = splitFullNameFallback(pickRowValue(row, ["Full Name", "Name", "Client Name", "Contact Name", "Lead Name"]));
+        firstName = splitName.firstName;
+        lastName = splitName.lastName;
+      }
+      const mappedPhoneRaw = pickRowValue(row, ["Phone", "phone", "phoneNumber", "Phone Number", "PhoneNumber", "Contact Phone", "Telephone", "Cell Phone"]);
+      const recoveredPhone = mappedPhoneRaw ? null : recoverSinglePhoneFromRow(row);
+      const phoneRaw = mappedPhoneRaw || recoveredPhone?.value || "";
+      const emailRaw = pickRowValue(row, ["Email", "email", "Email Address", "EmailAddress", "Contact Email"]);
+      const state = pickRowValue(row, ["State", "state", "Resident State"]);
       const age = pickRowValue(row, ["Age", "age"]);
-      const notes = pickRowValue(row, ["Notes", "notes", "Note", "note"]);
+      const notes = pickRowValue(row, ["Notes", "notes", "Note", "note", "Comments"]);
       const beneficiary = pickRowValue(row, ["Beneficiary", "beneficiary"]);
       const coverageAmount = pickRowValue(row, ["Coverage Amount", "coverageAmount", "Coverage", "coverage"]);
       const leadTypeIn = pickRowValue(row, ["leadType", "Lead Type", "LeadType", "Type", "type"]);
