@@ -135,9 +135,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 </Response>`);
     }
 
+    const gatherUrl = new URL("/api/ai-calls/transfer-fallback-gather", COVECRM_BASE_URL);
+    gatherUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+    gatherUrl.searchParams.set("leadId", leadId);
+    gatherUrl.searchParams.set("leadName", leadName);
+    gatherUrl.searchParams.set("agentName", agentName);
+    gatherUrl.searchParams.set("userEmail", userEmail);
+    gatherUrl.searchParams.set("sessionId", sessionId);
+    gatherUrl.searchParams.set("callSid", callSid);
+    gatherUrl.searchParams.set("agentTimeZone", agentTimeZone || "America/New_York");
+    const safeGatherUrl = xmlEscape(gatherUrl.toString());
+    const safeLeadName = leadName ? xmlEscape(leadName) : "";
+    const openingLine = safeLeadName
+      ? `Hey ${safeLeadName}, I tried to connect you with ${safeAgentFirst} but it looks like they just stepped into another call.`
+      : `I tried to connect you with ${safeAgentFirst} but it looks like they just stepped into another call.`;
     return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna" rate="90%">${leadName ? xmlEscape(leadName) + ", " : ""}looks like ${safeAgentFirst} just stepped away. They'll give you a call back very shortly. Have a great day!</Say>
+  <Say voice="Polly.Joanna" rate="90%">${openingLine} Would later today or tomorrow work better for ${safeAgentFirst} to give you a call?</Say>
+  <Gather input="speech" action="${safeGatherUrl}" method="POST" speechTimeout="3" timeout="10">
+  </Gather>
+  <Say voice="Polly.Joanna" rate="90%">No problem — ${safeAgentFirst} will be in touch soon. Have a great day!</Say>
   <Hangup/>
 </Response>`);
   } catch (err) {
