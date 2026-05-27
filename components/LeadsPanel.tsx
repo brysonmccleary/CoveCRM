@@ -201,6 +201,9 @@ export default function LeadsPanel() {
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<string>("");
   const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
+  const [showQuickDial, setShowQuickDial] = useState(false);
+  const [quickDialPhone, setQuickDialPhone] = useState("");
+  const [quickDialName, setQuickDialName] = useState("");
 
   // ✅ NEW: Wizard state
   const [showSheetsWizard, setShowSheetsWizard] = useState(false);
@@ -407,6 +410,26 @@ export default function LeadsPanel() {
     }).toString();
 
     router.push(`/dial-session?${q}`);
+  };
+
+  const startQuickDial = () => {
+    const phone = quickDialPhone.trim();
+    if (!phone) {
+      alert("Enter a phone number to call.");
+      return;
+    }
+
+    const q = new URLSearchParams({
+      quickPhone: phone,
+    });
+    const name = quickDialName.trim();
+    if (name) q.set("quickName", name);
+    if (selectedNumber) q.set("fromNumber", selectedNumber);
+
+    setShowQuickDial(false);
+    setQuickDialPhone("");
+    setQuickDialName("");
+    router.push(`/dial-session?${q.toString()}`);
   };
 
   const hasResume =
@@ -754,6 +777,13 @@ const goToAIDialSession = () => {
           Connect Google Sheet
         </button>
 
+        <button
+          onClick={() => setShowQuickDial(true)}
+          className="bg-cyan-600 text-white px-4 py-2 rounded hover:bg-cyan-500 cursor-pointer"
+        >
+          Quick Dial
+        </button>
+
         {isBryson ? (
           <button
             onClick={goToAIDialSession}
@@ -763,6 +793,74 @@ const goToAIDialSession = () => {
           </button>
         ) : null}
 </div>
+
+      {showQuickDial && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Quick Dial</h3>
+              <button
+                onClick={() => setShowQuickDial(false)}
+                className="text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+                aria-label="Close Quick Dial"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                  Phone number
+                </label>
+                <input
+                  value={quickDialPhone}
+                  onChange={(e) => setQuickDialPhone(e.target.value)}
+                  placeholder="(555) 555-1234"
+                  className="w-full rounded border border-gray-300 px-3 py-2 text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                  Name / contact <span className="font-normal text-gray-400">(optional)</span>
+                </label>
+                <input
+                  value={quickDialName}
+                  onChange={(e) => setQuickDialName(e.target.value)}
+                  placeholder="Contact name"
+                  className="w-full rounded border border-gray-300 px-3 py-2 text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                />
+              </div>
+
+              {selectedNumber ? (
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Calling from {selectedNumber}
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  CoveCRM will use your current default calling number.
+                </p>
+              )}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setShowQuickDial(false)}
+                className="rounded border border-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={startQuickDial}
+                className="rounded bg-green-600 px-4 py-2 text-white hover:bg-green-700"
+              >
+                Call Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Global lead search */}
       <LeadSearchInline />

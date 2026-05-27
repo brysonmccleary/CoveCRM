@@ -184,15 +184,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(402).json({ message: billingCheck.reason });
     }
 
-    const leadDoc: any = await Lead.findOne({ _id: leadId, userEmail: email }).lean();
-    if (!leadDoc) return res.status(404).json({ message: "Lead not found or access denied" });
+    let leadDoc: any = null;
+    if (leadId) {
+      leadDoc = await Lead.findOne({ _id: leadId, userEmail: email }).lean();
+      if (!leadDoc) return res.status(404).json({ message: "Lead not found or access denied" });
+    }
 
-    const { allowed, zone } = isCallAllowedForLead(leadDoc);
-    if (!allowed) {
-      return res.status(409).json({
-        message: "Quiet hours — local time for this lead is outside 8am–9pm",
-        zone: zone || null,
-      });
+    if (leadDoc) {
+      const { allowed, zone } = isCallAllowedForLead(leadDoc);
+      if (!allowed) {
+        return res.status(409).json({
+          message: "Quiet hours — local time for this lead is outside 8am–9pm",
+          zone: zone || null,
+        });
+      }
     }
 
     const to = toRaw ? normalizeE164(toRaw) : pickLeadPhoneE164(leadDoc);
@@ -281,7 +286,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       {
         $setOnInsert: {
           userEmail: email,
-          leadId,
+          ...(leadId ? { leadId } : {}),
           callSid: call.sid,
           direction: "outbound",
           to,

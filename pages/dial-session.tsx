@@ -187,6 +187,8 @@ export default function DialSession() {
     leads: leadIdsParam,
     fromNumber: fromNumberParam,
     leadId: singleLeadIdParam,
+    quickPhone,
+    quickName,
     startIndex,
     progressKey,
     serverProgressKey,
@@ -194,6 +196,8 @@ export default function DialSession() {
     leads?: string;
     fromNumber?: string;
     leadId?: string;
+    quickPhone?: string;
+    quickName?: string;
     startIndex?: string;
     progressKey?: string;
     serverProgressKey?: string;
@@ -266,25 +270,41 @@ export default function DialSession() {
   /** ✅ Ringback state machine (ONLY controls play/stop; does not touch conference/streaming) **/
   const ringbackDesiredRef = useRef<boolean>(false);
   const ringbackIsOnRef = useRef<boolean>(false);
+  const ringbackOpSeqRef = useRef<number>(0);
   const lastCallStatusRef = useRef<string>("");
 
   const isTerminalStatus = (s: string) =>
     ["completed", "busy", "failed", "no-answer", "canceled"].includes(String(s || "").toLowerCase());
 
+  const stopRingbackNow = () => {
+    ringbackDesiredRef.current = false;
+    ringbackIsOnRef.current = false;
+    ringbackOpSeqRef.current += 1;
+    try { stopRingback(); } catch {}
+  };
+
   const applyRingbackDesired = async (desired: boolean) => {
+    const opSeq = ringbackOpSeqRef.current + 1;
+    ringbackOpSeqRef.current = opSeq;
     ringbackDesiredRef.current = desired;
 
     if (desired) {
       if (!ringbackIsOnRef.current) {
         ringbackIsOnRef.current = true;
         try { await ensureUnlocked(); } catch {}
-        try { playRingback(); } catch {}
+        if (
+          ringbackOpSeqRef.current !== opSeq ||
+          !ringbackDesiredRef.current ||
+          sessionEndedRef.current ||
+          isPaused
+        ) {
+          if (ringbackOpSeqRef.current === opSeq) stopRingbackNow();
+          return;
+        }
+        try { await playRingback(); } catch {}
       }
     } else {
-      if (ringbackIsOnRef.current) {
-        ringbackIsOnRef.current = false;
-        try { stopRingback(); } catch {}
-      }
+      stopRingbackNow();
     }
   };
 
@@ -362,8 +382,9 @@ export default function DialSession() {
     if (callLoggedRef.current) return;
 
     const current = leadQueue[currentLeadIndex] ?? lead;
+    const isQuickDial = Boolean((current as any)?.quickDial);
     const leadId = (current as any)?.id;
-    if (!leadId) return;
+    if (!leadId && !isQuickDial) return;
 
     let statusLabel =
       opts?.statusOverride ||
@@ -391,6 +412,8 @@ export default function DialSession() {
     } catch {
       // ignore UI failure
     }
+
+    if (isQuickDial || !leadId) return;
 
     // Persist to backend
     try {
@@ -451,7 +474,7 @@ export default function DialSession() {
 
     callOutcomeRef.current = { status: opts.status, source: opts.reason };
     setStatus(opts.status);
-    await applyRingbackDesired(false);
+    stopRingbackNow();
     killAllTimers();
 
     if (opts.hangup) await hangupActiveCall(opts.reason);
@@ -673,6 +696,30 @@ export default function DialSession() {
   // Load leads list + support startIndex/progressKey + SERVER resume
   useEffect(() => {
     const loadLeads = async () => {
+      if (quickPhone) {
+        const phone = String(quickPhone).trim();
+        const name = typeof quickName === "string" ? quickName.trim() : "";
+        if (!phone) {
+          setStatus("Missing quick dial phone");
+          return;
+        }
+        leadAttemptCountsRef.current = {};
+        setLeadQueue([
+          {
+            id: `quick-dial:${phone.replace(/\D/g, "").slice(-10) || Date.now()}`,
+            quickDial: true,
+            quickPhone: phone,
+            Phone: phone,
+            "First Name": name,
+          } as Lead,
+        ]);
+        setCurrentLeadIndex(0);
+        setSessionStarted(true);
+        setReadyToCall(true);
+        setStatus("Ready");
+        return;
+      }
+
       // single lead mode
       if (singleLeadIdParam) {
         try {
@@ -726,7 +773,7 @@ export default function DialSession() {
     };
     loadLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leadIdsParam, singleLeadIdParam, startIndex, progressKey, serverProgressKey]);
+  }, [leadIdsParam, singleLeadIdParam, quickPhone, quickName, startIndex, progressKey, serverProgressKey]);
 
   // Persist local progress on index change
   useEffect(() => {
@@ -919,13 +966,20 @@ export default function DialSession() {
   }, [inboundMode, numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex, callActive]);
 
   /** calling **/
-  const startOutboundCall = async (leadId: string): Promise<{ callSid: string; conferenceName: string }> => {
+  const startOutboundCall = async (leadToCall: Lead): Promise<{ callSid: string; conferenceName: string }> => {
     if (sessionEndedRef.current) throw new Error("Session ended");
+    const isQuickDial = Boolean((leadToCall as any)?.quickDial);
+    const quickDialPhone = String((leadToCall as any)?.quickPhone || (leadToCall as any)?.Phone || "").trim();
+    const leadId = getLeadId(leadToCall);
     const r = await fetch("/api/twilio/voice/call", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // ✅ ONLY CHANGE: send selected fromNumber so backend uses the right caller ID
-      body: JSON.stringify({ leadId, fromNumber, dialKey: serverProgressKey || "" }),
+      body: JSON.stringify(
+        isQuickDial
+          ? { to: quickDialPhone, fromNumber }
+          : { leadId, fromNumber, dialKey: serverProgressKey || "" },
+      ),
     });
     if (!r.ok) {
       let msg = `Failed to start call`;
@@ -965,7 +1019,7 @@ export default function DialSession() {
 
         if (s === "in-progress") {
           // TRUE bridge — stop ringback & timers, mark connected, keep polling
-          await applyRingbackDesired(false);
+          stopRingbackNow();
           clearWatchdog();
           hasConnectedRef.current = true;
           callOutcomeRef.current = { status: "Connected", source: "poll-in-progress" };
@@ -1093,7 +1147,7 @@ export default function DialSession() {
 
       callStartAtRef.current = Date.now();
 
-      const { callSid, conferenceName } = await startOutboundCall(leadId);
+      const { callSid, conferenceName } = await startOutboundCall(leadToCall);
       placingCallRef.current = false;
 
       if (sessionEndedRef.current) {
@@ -1101,7 +1155,7 @@ export default function DialSession() {
         await hangupActiveCall("ended-during-start");
         await leaveIfJoined("ended-during-start");
         setCallActive(false);
-        await applyRingbackDesired(false);
+        stopRingbackNow();
         return;
       }
 
@@ -1136,9 +1190,9 @@ export default function DialSession() {
           safeOn("hangup", () => { markDisconnected("twilio-hangup"); });
 
           // Defensive cuts for non-success paths
-          safeOn("cancel", async () => { await applyRingbackDesired(false); });
-          safeOn("reject", async () => { await applyRingbackDesired(false); });
-          safeOn("error", async () => { await applyRingbackDesired(false); });
+          safeOn("cancel", () => { stopRingbackNow(); });
+          safeOn("reject", () => { stopRingbackNow(); });
+          safeOn("error", () => { stopRingbackNow(); });
         } catch (e) {
           console.warn("Failed to pre-join conference:", e);
         }
@@ -1156,7 +1210,7 @@ export default function DialSession() {
       placingCallRef.current = false;
       activeDialLeadIdRef.current = null;
       setStatus(err?.message || "Call failed");
-      await applyRingbackDesired(false);
+      stopRingbackNow();
       killAllTimers();
       await leaveIfJoined("start-failed");
       setCallActive(false);
@@ -1168,6 +1222,7 @@ export default function DialSession() {
 
   /** notes / dispositions **/
   const handleSaveNote = async () => {
+    if ((lead as any)?.quickDial) return toast.error("Quick Dial calls are not tied to a saved lead");
     if (!notes.trim() || !lead?.id) return toast.error("Cannot save an empty note");
     try {
       const r = await fetch("/api/leads/add-note", {
@@ -1229,6 +1284,10 @@ export default function DialSession() {
   };
 
   const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "Bad Number") => {
+    if ((lead as any)?.quickDial) {
+      toast.error("Quick Dial calls are not tied to a saved lead");
+      return;
+    }
     if (!lead?.id) {
       toast.error("No active lead to disposition");
       return;
@@ -1238,7 +1297,7 @@ export default function DialSession() {
 
     try {
       setStatus(`Saving disposition: ${label}…`);
-      await applyRingbackDesired(false);
+      stopRingbackNow();
       killAllTimers();
       terminalHandledRef.current = true;
       placingCallRef.current = false;
@@ -1280,6 +1339,7 @@ export default function DialSession() {
   /** flow controls **/
   const nextLead = () => {
     if (sessionEndedRef.current) return;
+    stopRingbackNow();
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
     if (nextIndex >= leadQueue.length) return showSessionSummary();
@@ -1291,7 +1351,7 @@ export default function DialSession() {
 
   const disconnectAndNext = () => {
     if (sessionEndedRef.current) return;
-    applyRingbackDesired(false);
+    stopRingbackNow();
     killAllTimers();
     hangupActiveCall("advance-next");
     leaveIfJoined("advance-next");
@@ -1309,7 +1369,7 @@ export default function DialSession() {
   const togglePause = () => {
     setIsPaused((p) => !p);
     if (!isPaused) {
-      applyRingbackDesired(false);
+      stopRingbackNow();
       killAllTimers();
       hangupActiveCall("pause");
       leaveIfJoined("pause");
@@ -1331,7 +1391,7 @@ export default function DialSession() {
     if (!ok) return;
 
     sessionEndedRef.current = true;
-    applyRingbackDesired(false);
+    stopRingbackNow();
     killAllTimers();
     placingCallRef.current = false;
     activeDialLeadIdRef.current = null;
@@ -1353,6 +1413,7 @@ export default function DialSession() {
   };
 
   const showSessionSummary = () => {
+    stopRingbackNow();
     alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
     // ✅ Send to the canonical Leads view
     try {
@@ -1423,7 +1484,7 @@ export default function DialSession() {
             // ✅ Only treat ANSWERED as a real connection; ignore in-progress
             if (s === "answered") {
               setStatus("Connected");
-              await applyRingbackDesired(false);
+              stopRingbackNow();
               clearWatchdog();
               hasConnectedRef.current = true;
               callOutcomeRef.current = { status: "Connected", source: "socket-answered" };
@@ -1451,7 +1512,7 @@ export default function DialSession() {
     return () => {
       mounted = false;
       try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
-      applyRingbackDesired(false);
+      stopRingbackNow();
       killAllTimers();
       leaveIfJoined("unmount");
       clearStatusPoll();
