@@ -728,6 +728,7 @@ export default function Home() {
                 <div className="flex flex-col gap-2">
                   <Link href="/legal/privacy" className="hover:text-white transition">Privacy</Link>
                   <Link href="/legal/terms" className="hover:text-white transition">Terms</Link>
+                  <Link href="/accessibility" className="hover:text-white transition">Accessibility</Link>
                   <a href="mailto:support@covecrm.com" className="hover:text-white transition">Support</a>
                   <Link href="/security" className="hover:text-white transition">Security</Link>
                 </div>
