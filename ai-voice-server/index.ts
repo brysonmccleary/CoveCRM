@@ -5086,7 +5086,7 @@ function getVerticalProductAnswer(ctx: AICallContext): string {
   const agentRaw = (ctx.agentName || "your agent").trim();
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   if (k === "mortgage_protection" || k === "veteran_mortgage" || k === "trucker_mortgage") {
-    return `So mortgage protection is a type of insurance that pays off or pays down your house in the event of a death or disability — so your family keeps the home. And most of these policies do come with living benefits, so if you get critically ill or disabled, depending on the policy, it can pay out upfront while you're still here. ${agent} will go over exactly what applies to your situation on the call.`;
+    return `Yeah — mortgage protection is a type of insurance that pays off or pays down your house in the event of a death or disability. So if something were to happen to you, your family keeps the home. And these policies do come with living benefits too — so if you get sick or disabled, depending on the policy, it can pay out upfront while you're still here. ${agent} will go over exactly what fits your situation on the call.`;
   }
   if (k === "final_expense") {
     return `Final expense coverage is designed to cover burial costs, medical bills, and end-of-life expenses so your family isn't left with that burden. Most options are whole life — they don't expire and there's no medical exam required. ${agent} will go over what fits your situation best.`;
@@ -5346,10 +5346,7 @@ function handlePostCoverageSchedulingTurn(
       lineToSay,
       requiredClosingPivot: lineToSay,
       forbiddenTopics: [],
-      stateWrites: {
-        pendingLiveTransferAvailabilityConfirm: false,
-        pendingLiveTransferAvailabilityAttempts: 0,
-      },
+      stateWrites: {},
       shouldAdvanceStep: false,
     };
   }
@@ -5369,10 +5366,7 @@ function handlePostCoverageSchedulingTurn(
         lineToSay,
         requiredClosingPivot: lineToSay,
         forbiddenTopics: [],
-        stateWrites: {
-          pendingLiveTransferAvailabilityConfirm: false,
-          pendingLiveTransferAvailabilityAttempts: 0,
-        },
+        stateWrites: {},
         shouldAdvanceStep: false,
       };
     }
@@ -5388,10 +5382,7 @@ function handlePostCoverageSchedulingTurn(
         lineToSay,
         requiredClosingPivot: closingQ,
         forbiddenTopics: [],
-        stateWrites: {
-          pendingLiveTransferAvailabilityConfirm: false,
-          pendingLiveTransferAvailabilityAttempts: 0,
-        },
+        stateWrites: {},
         shouldAdvanceStep: false,
       };
     }
@@ -5407,10 +5398,7 @@ function handlePostCoverageSchedulingTurn(
         lineToSay,
         requiredClosingPivot: closingQ,
         forbiddenTopics: [],
-        stateWrites: {
-          pendingLiveTransferAvailabilityConfirm: false,
-          pendingLiveTransferAvailabilityAttempts: 0,
-        },
+        stateWrites: {},
         shouldAdvanceStep: false,
       };
     }
@@ -5425,10 +5413,7 @@ function handlePostCoverageSchedulingTurn(
       lineToSay,
       requiredClosingPivot: closingQ,
       forbiddenTopics: [],
-      stateWrites: {
-        pendingLiveTransferAvailabilityConfirm: false,
-        pendingLiveTransferAvailabilityAttempts: 0,
-      },
+      stateWrites: {},
       shouldAdvanceStep: false,
     };
   }
@@ -6999,6 +6984,7 @@ function buildExactScriptLineInstruction(lineRaw: string): string {
   const line = String(lineRaw || "").trim();
   return `
 Your ONLY job this turn is to say this exact line. Nothing else.
+If the caller asked a question or said anything, ignore it completely. Do not acknowledge it. Do not answer it. Say ONLY the line below.
 
 "${line}"
 
