@@ -18,7 +18,18 @@ function xmlEscape(value: any): string {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { key, sessionId, leadId, callSid, exactTimeText, startTimeUtc, leadTimeZone, agentTimeZone, userEmail, agentName } = req.query as Record<string, string>;
+  const q = req.query;
+  const key           = Array.isArray(q.key)           ? q.key[0]           : String(q.key           || "");
+  const sessionId     = Array.isArray(q.sessionId)     ? q.sessionId[0]     : String(q.sessionId     || "");
+  const leadId        = Array.isArray(q.leadId)        ? q.leadId[0]        : String(q.leadId        || "");
+  const callSid       = Array.isArray(q.callSid)       ? q.callSid[0]       : String(q.callSid       || "");
+  const exactTimeText = Array.isArray(q.exactTimeText) ? q.exactTimeText[0] : String(q.exactTimeText || "");
+  const startTimeUtc  = Array.isArray(q.startTimeUtc)  ? q.startTimeUtc[0]  : String(q.startTimeUtc  || "");
+  const leadTimeZone  = Array.isArray(q.leadTimeZone)  ? q.leadTimeZone[0]  : String(q.leadTimeZone  || "");
+  const agentTimeZone = Array.isArray(q.agentTimeZone) ? q.agentTimeZone[0] : String(q.agentTimeZone || "");
+  const userEmail     = Array.isArray(q.userEmail)     ? q.userEmail[0]     : String(q.userEmail     || "");
+  const agentName     = Array.isArray(q.agentName)     ? q.agentName[0]     : String(q.agentName     || "");
+  const leadName      = Array.isArray(q.leadName)      ? q.leadName[0]      : String(q.leadName      || "");
 
   if (!key || key !== AI_DIALER_CRON_KEY) {
     return res.status(401).send("Unauthorized");
@@ -126,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna" rate="90%">Looks like my agent just stepped into another call. I want to make sure you get taken care of. Someone from our team will follow up with you very shortly. Have a great day.</Say>
+  <Say voice="Polly.Joanna" rate="90%">${leadName ? xmlEscape(leadName) + ", " : ""}looks like ${safeAgentFirst} just stepped away. They'll give you a call back very shortly. Have a great day!</Say>
   <Hangup/>
 </Response>`);
   } catch (err) {

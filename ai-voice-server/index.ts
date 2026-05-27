@@ -2445,7 +2445,9 @@ function buildNonRepeatedStateAwareLine(
         ? `I get why you'd ask — ${agentFirst} covers exact cost on the call.`
         : questionKind === "what_entails" || isHowLongDurationQuestion(raw)
           ? "It is usually about 5 to 10 minutes."
-          : `${agentFirst} can answer that clearly on the call.`;
+          : ctx
+            ? getVerticalProductAnswer(ctx)
+            : `${agentFirst} can answer that clearly on the call.`;
     return {
       lineToSay: `${answer} ${pivot}`,
       routeKind: `${routeKind}_repeat_guard_question`,
@@ -4729,6 +4731,7 @@ function isPostCoverageSchedulingState(state: CallState): boolean {
   return (
     !!state.pendingLiveTransferAvailabilityConfirm ||
     routeKind === "policy_step1_coverage" ||
+    routeKind.startsWith("policy_step1_coverage_") ||
     routeKind === "policy_live_transfer_try" ||
     routeKind === "policy_live_transfer_later" ||
     routeKind === "policy_day_selected" ||
@@ -7843,6 +7846,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     transferUrl.searchParams.set("leadTimeZone", leadTimeZone);
     transferUrl.searchParams.set("agentTimeZone", agentTimeZone);
     transferUrl.searchParams.set("userEmail", ctx.userEmail || "");
+    transferUrl.searchParams.set("leadPhone", ctx.leadPhone || "");
     transferUrl.searchParams.set("leadPhone", ctx.clientPhone || "");
 
     const twilioCallUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls/${state.callSid}.json`;
