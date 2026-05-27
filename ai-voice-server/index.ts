@@ -7834,7 +7834,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     transferUrl.searchParams.set("leadName", leadName);
     transferUrl.searchParams.set("agentName", agentFirst);
     transferUrl.searchParams.set("scope", scope);
-    transferUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+    transferUrl.searchParams.set("key", COVECRM_API_SECRET || AI_DIALER_CRON_KEY);
     transferUrl.searchParams.set("sessionId", ctx.sessionId || "");
     transferUrl.searchParams.set("leadId", ctx.leadId || "");
     transferUrl.searchParams.set("callSid", state.callSid || "");

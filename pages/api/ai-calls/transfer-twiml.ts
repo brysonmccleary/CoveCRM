@@ -4,7 +4,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createHash } from "crypto";
 
-const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
 
 function xmlEscape(value: any): string {
@@ -25,14 +24,12 @@ function hashPrefix(value: any): string {
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const { agentPhone, leadName, agentName, scope, key, sessionId, leadId, callSid, exactTimeText, startTimeUtc, leadTimeZone, agentTimeZone, userEmail } = req.query as Record<string, string>;
 
-  if (!key || key !== AI_DIALER_CRON_KEY) {
+  const secret = process.env.COVECRM_API_SECRET || process.env.AI_DIALER_CRON_KEY || "";
+  if (!key || !secret || key !== secret) {
     console.warn("[AI-CALLS][TRANSFER_TWIML_AUTH_FAIL]", {
       hasProvidedKey: !!key,
       providedKeyLength: key ? String(key).length : 0,
-      expectedKeyLength: AI_DIALER_CRON_KEY ? AI_DIALER_CRON_KEY.length : 0,
-      providedKeyHashPrefix: hashPrefix(key),
-      expectedKeyHashPrefix: hashPrefix(AI_DIALER_CRON_KEY),
-      queryKeysPresent: Object.keys(req.query || {}).sort(),
+      expectedKeyLength: secret ? secret.length : 0,
     });
     return res.status(401).send("Unauthorized");
   }
@@ -48,7 +45,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const agentFirst = (agentName || "our agent").split(" ")[0] || "our agent";
 
   const fallbackUrl = new URL("/api/ai-calls/transfer-fallback", COVECRM_BASE_URL);
-  fallbackUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+  fallbackUrl.searchParams.set("key", secret);
   fallbackUrl.searchParams.set("sessionId", sessionId || "");
   fallbackUrl.searchParams.set("leadId", leadId || "");
   fallbackUrl.searchParams.set("callSid", callSid || "");
