@@ -36,6 +36,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const leadTimeZone  = Array.isArray(q.leadTimeZone)  ? q.leadTimeZone[0]  : String(q.leadTimeZone  || "");
   const agentTimeZone = Array.isArray(q.agentTimeZone) ? q.agentTimeZone[0] : String(q.agentTimeZone || "");
   const userEmail     = Array.isArray(q.userEmail)     ? q.userEmail[0]     : String(q.userEmail     || "");
+  const leadPhone     = Array.isArray(q.leadPhone)     ? q.leadPhone[0]     : String(q.leadPhone     || "");
 
   const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
   if (!key || !AI_DIALER_CRON_KEY || key !== AI_DIALER_CRON_KEY) {
@@ -71,8 +72,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // TwiML: Say hold message, then dial the agent. On no-answer (timeout 25s / 4 rings), redirect to fallback.
   const safeAgentFirst = xmlEscape(agentFirst);
-  const safeCallerId = process.env.TWILIO_PHONE_NUMBER
-    ? ` callerId="${xmlEscape(process.env.TWILIO_PHONE_NUMBER)}"`
+  const safeCallerId = leadPhone
+    ? ` callerId="${xmlEscape(leadPhone)}"`
     : "";
   const safeFallbackUrl = xmlEscape(fallbackUrl.toString());
   const safeE164 = xmlEscape(e164);
