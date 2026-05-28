@@ -5240,6 +5240,28 @@ function handlePostCoverageSchedulingTurn(
     return buildPostCoverageTimeOfferDecision(state, intent, ctx, stepCtx, "post_coverage_time_window", "window_selected");
   }
 
+    // Guard: "right now" misclassified as exact_time → redirect to live transfer
+    if (intent.kind === "exact_time" && liveTransferEnabled && hasImmediateTransferConfirmation(raw)) {
+      return {
+        handled: true,
+        routeKind: "post_coverage_live_transfer_try",
+        responseMode: "exact_script",
+        objective: "start_live_transfer_after_intro",
+        lineToSay: getLiveTransferTryingLine(ctx),
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          liveTransferIntroSpoken: true,
+          pendingLiveTransferAfterLine: true,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+
   if (intent.kind === "exact_time") {
     const timeStepIndex = Math.max(
       Number(state.scriptStepIndex || 0),
