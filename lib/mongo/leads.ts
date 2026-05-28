@@ -2,6 +2,19 @@
 import mongoose, { Schema, model, models, Types } from "mongoose";
 import { extractPhoneFromRow } from "@/lib/leads/phoneMapping";
 
+const normalizeExternalId = (value: any): string | undefined => {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim();
+  return trimmed || undefined;
+};
+
+const omitBlankExternalId = (doc: Record<string, any>): Record<string, any> => {
+  const normalized = normalizeExternalId(doc["externalId"]);
+  if (normalized) doc["externalId"] = normalized;
+  else delete doc["externalId"];
+  return doc;
+};
+
 // -------- Subdocuments --------
 const InteractionSchema = new Schema(
   {
@@ -71,7 +84,7 @@ const LeadSchema = new Schema(
 
     // External import identity (Google Sheets/webhooks)
     source: { type: String, default: "" },
-    externalId: { type: String, default: "", index: true },
+    externalId: { type: String, set: normalizeExternalId, index: true },
     sheetMeta: {
       type: {
         sheetId: { type: String, default: "" },
@@ -233,7 +246,7 @@ export const createLeadsFromCSV = async (
     // never write ownerEmail in new docs
     const { ownerEmail, ...rest } = lead;
 
-    return {
+    return omitBlankExternalId({
       ...rest,
       userEmail,
       folderId: fid,
@@ -243,7 +256,7 @@ export const createLeadsFromCSV = async (
       Email: emailLower,
       email: emailLower2 ?? emailLower, // ✅ ensure lowercase mirror exists
       leadType: sanitizeLeadType(lead.leadType || ""),
-    };
+    });
   });
 
   // ordered:false lets Mongo insert what it can and skip dup key rows
@@ -269,7 +282,7 @@ export const createLeadsFromGoogleSheet = async (
 
     const { ownerEmail, ...rest } = lead;
 
-    return {
+    return omitBlankExternalId({
       ...rest,
       userEmail,
       folderId: fid,
@@ -280,7 +293,7 @@ export const createLeadsFromGoogleSheet = async (
       Email: emailLower,
       email: emailLower2 ?? emailLower, // ✅ ensure lowercase mirror exists
       leadType: sanitizeLeadType(lead.leadType || ""),
-    };
+    });
   });
 
   // ordered:false lets Mongo insert what it can and skip dup key rows
