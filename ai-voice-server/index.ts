@@ -5924,6 +5924,11 @@ function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): st
   if (decision.responseMode === "exact_script" && decision.lineToSay) {
     return buildExactScriptLineInstruction(decision.lineToSay);
   }
+  if (decision.responseMode === "soft_script" && decision.lineToSay && state.context) {
+    return buildConversationalRebuttalInstruction(state.context, decision.lineToSay, {
+      closingPivot: decision.requiredClosingPivot,
+    });
+  }
   if (decision.responseMode === "guided_gpt" && decision.routeKind.startsWith("post_coverage_") && decision.baseAnswer && state.context) {
     return buildPostCoverageControlledResponseInstruction(state.context, {
       userText: decision.userText || "",
