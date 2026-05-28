@@ -238,6 +238,7 @@ export default function TeamPage() {
                           {entry.name !== entry.email && (
                             <div className="text-xs text-gray-500">{entry.email}</div>
                           )}
+                          <div className="text-xs text-indigo-400 mt-0.5">View Profile →</div>
                         </td>
                         <td className="py-3 pr-4 text-right font-bold text-white">{entry.calls}</td>
                         <td className="py-3 pr-4 text-right text-gray-300">
@@ -307,6 +308,7 @@ export default function TeamPage() {
                     <span className="text-xs text-green-400 bg-green-900/30 px-2 py-0.5 rounded-full">
                       Active
                     </span>
+                    <span className="text-xs text-indigo-400">View Profile →</span>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleRemove(m.memberEmail); }}
                       className="text-red-400 hover:text-red-300 text-xs"
