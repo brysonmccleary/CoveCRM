@@ -1,5 +1,5 @@
 // pages/api/team/member-stats.ts
-// GET ?memberEmail=xxx — per-agent performance profile + top objections
+// GET ?memberEmail=xxx&range=today|7days|30days|all — per-agent performance profile + top objections
 // Scope: requesting user must be the team owner of that member, or the member themselves.
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
@@ -31,6 +31,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!member) return res.status(403).json({ error: "Not a member of your team" });
   }
 
+  const rawRange = String(req.query.range || "all");
+  const validRanges = ["today", "7days", "30days", "all"];
+  const rangeKey = validRanges.includes(rawRange) ? rawRange : "all";
+
+  const now = new Date();
+  let cutoff: Date | null = null;
+  if (rangeKey === "today") {
+    cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  } else if (rangeKey === "7days") {
+    cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  } else if (rangeKey === "30days") {
+    cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  }
+  const callDateFilter = cutoff ? { startedAt: { $gte: cutoff } } : {};
+  const createdAtFilter = cutoff ? { createdAt: { $gte: cutoff } } : {};
+
   const [
     totalDials,
     connectedCalls,
@@ -41,16 +57,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     objFromCalls,
     objFromCoach,
   ] = await Promise.all([
-    (Call as any).countDocuments({ userEmail: targetEmail }),
-    (Call as any).countDocuments({ userEmail: targetEmail, duration: { $gt: 30 } }),
+    (Call as any).countDocuments({ userEmail: targetEmail, ...callDateFilter }),
+    (Call as any).countDocuments({ userEmail: targetEmail, duration: { $gt: 30 }, ...callDateFilter }),
     (Call as any).aggregate([
-      { $match: { userEmail: targetEmail, duration: { $gt: 0 } } },
+      { $match: { userEmail: targetEmail, duration: { $gt: 0 }, ...callDateFilter } },
       { $group: { _id: null, total: { $sum: "$duration" }, cnt: { $sum: 1 } } },
     ]),
-    (Booking as any).countDocuments({ agentEmail: targetEmail }).catch(() => 0),
-    (Call as any).countDocuments({ userEmail: targetEmail, aiOverviewReady: true }),
+    (Booking as any).countDocuments({ agentEmail: targetEmail, ...createdAtFilter }).catch(() => 0),
+    (Call as any).countDocuments({ userEmail: targetEmail, aiOverviewReady: true, ...callDateFilter }),
     (Call as any)
-      .find({ userEmail: targetEmail })
+      .find({ userEmail: targetEmail, ...callDateFilter })
       .sort({ startedAt: -1 })
       .limit(10)
       .select("startedAt duration direction answeredBy aiOverview callSid")
@@ -58,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Aggregate objections stored in Call.aiOverview.objections[]
     (Call as any)
       .aggregate([
-        { $match: { userEmail: targetEmail, "aiOverview.objections.0": { $exists: true } } },
+        { $match: { userEmail: targetEmail, "aiOverview.objections.0": { $exists: true }, ...callDateFilter } },
         { $unwind: "$aiOverview.objections" },
         {
           $group: {
@@ -72,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .catch(() => []),
     // Aggregate objections stored in CallCoachReport.objectionsEncountered[]
     CallCoachReport.aggregate([
-      { $match: { userEmail: targetEmail, "objectionsEncountered.0": { $exists: true } } },
+      { $match: { userEmail: targetEmail, "objectionsEncountered.0": { $exists: true }, ...createdAtFilter } },
       { $unwind: "$objectionsEncountered" },
       {
         $group: {

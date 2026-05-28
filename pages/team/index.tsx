@@ -6,6 +6,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import toast from "react-hot-toast";
 
 type Range = "today" | "7days" | "30days";
+type DrawerRange = "today" | "7days" | "30days" | "all";
 
 interface LeaderboardEntry {
   email: string;
@@ -68,6 +69,13 @@ const RANGE_LABELS: Record<Range, string> = {
   "30days": "30 Days",
 };
 
+const DRAWER_RANGE_LABELS: Record<DrawerRange, string> = {
+  today: "Today",
+  "7days": "7 Days",
+  "30days": "30 Days",
+  all: "All Time",
+};
+
 const MEDAL = ["🥇", "🥈", "🥉"];
 
 export default function TeamPage() {
@@ -82,16 +90,27 @@ export default function TeamPage() {
   const [selectedMember, setSelectedMember] = useState<{ email: string; name: string } | null>(null);
   const [agentStats, setAgentStats] = useState<AgentStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(false);
+  const [drawerRange, setDrawerRange] = useState<DrawerRange>("7days");
 
-  const openDrawer = async (email: string, name: string) => {
-    setSelectedMember({ email, name });
+  const fetchAgentStats = async (email: string, r: DrawerRange) => {
     setAgentStats(null);
     setLoadingStats(true);
     try {
-      const res = await fetch(`/api/team/member-stats?memberEmail=${encodeURIComponent(email)}`);
+      const res = await fetch(`/api/team/member-stats?memberEmail=${encodeURIComponent(email)}&range=${r}`);
       if (res.ok) setAgentStats(await res.json());
     } catch {}
     setLoadingStats(false);
+  };
+
+  const openDrawer = (email: string, name: string) => {
+    setSelectedMember({ email, name });
+    setDrawerRange("7days");
+    fetchAgentStats(email, "7days");
+  };
+
+  const handleDrawerRangeChange = (r: DrawerRange) => {
+    setDrawerRange(r);
+    if (selectedMember) fetchAgentStats(selectedMember.email, r);
   };
 
   const fetchLeaderboard = async (r: Range) => {
@@ -379,17 +398,34 @@ export default function TeamPage() {
           />
           <div className="relative w-full max-w-lg bg-[#0f172a] h-full overflow-y-auto shadow-2xl border-l border-white/10 flex flex-col">
             {/* Header */}
-            <div className="sticky top-0 bg-[#0f172a] border-b border-white/10 px-6 py-4 flex items-center justify-between z-10">
-              <div>
-                <p className="text-white font-bold text-base">{selectedMember.name}</p>
-                <p className="text-gray-500 text-xs">{selectedMember.email}</p>
+            <div className="sticky top-0 bg-[#0f172a] border-b border-white/10 px-6 py-4 z-10">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-white font-bold text-base">{selectedMember.name}</p>
+                  <p className="text-gray-500 text-xs">{selectedMember.email}</p>
+                </div>
+                <button
+                  onClick={() => setSelectedMember(null)}
+                  className="text-gray-400 hover:text-white text-2xl leading-none font-light ml-4"
+                >
+                  ×
+                </button>
               </div>
-              <button
-                onClick={() => setSelectedMember(null)}
-                className="text-gray-400 hover:text-white text-2xl leading-none font-light ml-4"
-              >
-                ×
-              </button>
+              <div className="flex gap-1 bg-[#1e293b] rounded-lg p-1 w-fit">
+                {(["today", "7days", "30days", "all"] as DrawerRange[]).map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => handleDrawerRangeChange(r)}
+                    className={`px-3 py-1 rounded-md text-xs font-medium transition ${
+                      drawerRange === r
+                        ? "bg-indigo-600 text-white"
+                        : "text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    {DRAWER_RANGE_LABELS[r]}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Body */}
@@ -401,7 +437,7 @@ export default function TeamPage() {
                   {/* Stats grid */}
                   <div>
                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                      All-Time Performance
+                      {DRAWER_RANGE_LABELS[drawerRange]} Performance
                     </p>
                     <div className="grid grid-cols-2 gap-3">
                       {(
