@@ -308,7 +308,7 @@ export default function TeamPage() {
                       Active
                     </span>
                     <button
-                      onClick={() => handleRemove(m.memberEmail)}
+                      onClick={(e) => { e.stopPropagation(); handleRemove(m.memberEmail); }}
                       className="text-red-400 hover:text-red-300 text-xs"
                     >
                       Remove
