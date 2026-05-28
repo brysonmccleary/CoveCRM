@@ -34,6 +34,34 @@ interface TeamInvite {
   createdAt: string;
 }
 
+interface RecentCall {
+  _id: string;
+  startedAt?: string;
+  duration?: number;
+  direction?: string;
+  answeredBy?: string;
+  aiOverview?: { outcome?: string };
+  callSid?: string;
+}
+
+interface TopObjection {
+  text: string;
+  count: number;
+  lastHeard: string | null;
+}
+
+interface AgentStats {
+  memberEmail: string;
+  totalDials: number;
+  connectedCalls: number;
+  talkTimeMinutes: number;
+  avgCallDurationSec: number;
+  appointmentsBooked: number;
+  aiOverviewCount: number;
+  recentCalls: RecentCall[];
+  topObjections: TopObjection[];
+}
+
 const RANGE_LABELS: Record<Range, string> = {
   today: "Today",
   "7days": "7 Days",
@@ -51,6 +79,20 @@ export default function TeamPage() {
   const [loading, setLoading] = useState(true);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviting, setInviting] = useState(false);
+  const [selectedMember, setSelectedMember] = useState<{ email: string; name: string } | null>(null);
+  const [agentStats, setAgentStats] = useState<AgentStats | null>(null);
+  const [loadingStats, setLoadingStats] = useState(false);
+
+  const openDrawer = async (email: string, name: string) => {
+    setSelectedMember({ email, name });
+    setAgentStats(null);
+    setLoadingStats(true);
+    try {
+      const res = await fetch(`/api/team/member-stats?memberEmail=${encodeURIComponent(email)}`);
+      if (res.ok) setAgentStats(await res.json());
+    } catch {}
+    setLoadingStats(false);
+  };
 
   const fetchLeaderboard = async (r: Range) => {
     setLoading(true);
@@ -183,7 +225,8 @@ export default function TeamPage() {
                     return (
                       <tr
                         key={entry.email}
-                        className={`border-b border-white/5 ${
+                        onClick={() => openDrawer(entry.email, entry.name === "You" ? (session?.user?.name || entry.email) : entry.name)}
+                        className={`border-b border-white/5 cursor-pointer ${
                           isMe ? "bg-indigo-900/20" : "hover:bg-white/5"
                         } transition`}
                       >
@@ -248,7 +291,8 @@ export default function TeamPage() {
               {members.map((m) => (
                 <div
                   key={m._id}
-                  className="flex items-center justify-between bg-[#1e293b] rounded-lg px-4 py-3"
+                  onClick={() => openDrawer(m.memberEmail, m.memberName || m.memberEmail)}
+                  className="flex items-center justify-between bg-[#1e293b] rounded-lg px-4 py-3 cursor-pointer hover:bg-[#263348] transition"
                 >
                   <div>
                     <p className="text-white font-semibold">{m.memberName || m.memberEmail}</p>
@@ -323,6 +367,160 @@ export default function TeamPage() {
           </div>
         )}
       </div>
+
+      {/* Agent Profile Drawer */}
+      {selectedMember && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setSelectedMember(null)}
+          />
+          <div className="relative w-full max-w-lg bg-[#0f172a] h-full overflow-y-auto shadow-2xl border-l border-white/10 flex flex-col">
+            {/* Header */}
+            <div className="sticky top-0 bg-[#0f172a] border-b border-white/10 px-6 py-4 flex items-center justify-between z-10">
+              <div>
+                <p className="text-white font-bold text-base">{selectedMember.name}</p>
+                <p className="text-gray-500 text-xs">{selectedMember.email}</p>
+              </div>
+              <button
+                onClick={() => setSelectedMember(null)}
+                className="text-gray-400 hover:text-white text-2xl leading-none font-light ml-4"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-6 flex-1">
+              {loadingStats ? (
+                <p className="text-gray-400 text-sm">Loading profile...</p>
+              ) : agentStats ? (
+                <>
+                  {/* Stats grid */}
+                  <div>
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                      All-Time Performance
+                    </p>
+                    <div className="grid grid-cols-2 gap-3">
+                      {(
+                        [
+                          { label: "Total Dials", value: agentStats.totalDials },
+                          { label: "Connected", value: agentStats.connectedCalls },
+                          {
+                            label: "Connect Rate",
+                            value:
+                              agentStats.totalDials > 0
+                                ? `${Math.round((agentStats.connectedCalls / agentStats.totalDials) * 100)}%`
+                                : "—",
+                          },
+                          { label: "Talk Time", value: `${agentStats.talkTimeMinutes}m` },
+                          {
+                            label: "Avg Duration",
+                            value:
+                              agentStats.avgCallDurationSec > 0
+                                ? `${Math.floor(agentStats.avgCallDurationSec / 60)}m ${agentStats.avgCallDurationSec % 60}s`
+                                : "—",
+                          },
+                          { label: "Appts Booked", value: agentStats.appointmentsBooked },
+                          { label: "AI Overviews", value: agentStats.aiOverviewCount },
+                        ] as { label: string; value: string | number }[]
+                      ).map(({ label, value }) => (
+                        <div key={label} className="bg-[#1e293b] rounded-lg px-4 py-3">
+                          <p className="text-gray-400 text-xs mb-1">{label}</p>
+                          <p className="text-white font-bold text-lg">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Top Objections */}
+                  {agentStats.topObjections.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                        Top Objections
+                      </p>
+                      <div className="space-y-2">
+                        {agentStats.topObjections.map((obj, i) => (
+                          <div
+                            key={i}
+                            className="bg-[#1e293b] rounded-lg px-3 py-2 flex items-center justify-between gap-3"
+                          >
+                            <p className="text-white text-sm flex-1 capitalize">{obj.text}</p>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <span className="text-xs font-bold text-yellow-400 bg-yellow-900/30 px-2 py-0.5 rounded-full">
+                                {obj.count}×
+                              </span>
+                              {obj.lastHeard && (
+                                <span className="text-xs text-gray-600">
+                                  {new Date(obj.lastHeard).toLocaleDateString()}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Recent Calls */}
+                  {agentStats.recentCalls.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                        Recent Calls
+                      </p>
+                      <div className="space-y-1.5">
+                        {agentStats.recentCalls.map((call) => {
+                          const dur = call.duration || 0;
+                          const durStr =
+                            dur > 0
+                              ? `${Math.floor(dur / 60)}m ${dur % 60}s`
+                              : "0s";
+                          return (
+                            <div
+                              key={call._id}
+                              className="bg-[#1e293b] rounded-lg px-3 py-2 flex items-center justify-between"
+                            >
+                              <div>
+                                <p className="text-white text-xs">
+                                  {call.startedAt
+                                    ? new Date(call.startedAt).toLocaleString(undefined, {
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "numeric",
+                                        minute: "2-digit",
+                                      })
+                                    : "—"}
+                                </p>
+                                {call.aiOverview?.outcome && (
+                                  <p className="text-gray-500 text-xs">{call.aiOverview.outcome}</p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 text-xs text-gray-400">
+                                <span>{durStr}</span>
+                                <span
+                                  className={
+                                    call.direction === "inbound"
+                                      ? "text-green-400"
+                                      : "text-blue-400"
+                                  }
+                                >
+                                  {call.direction === "inbound" ? "↙" : "↗"}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-gray-500 text-sm">Could not load profile.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }
