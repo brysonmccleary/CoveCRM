@@ -8007,6 +8007,10 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   const sessionId = custom.sessionId;
   const leadId = custom.leadId;
   const callDirection = String(custom.callDirection || "").trim().toLowerCase();
+  const rebookingMode = String(custom.rebookingMode || "").trim() === "true";
+  const rebookingLeadName = String(custom.leadName || "").trim();
+  const rebookingAgentRaw = String(custom.agentName || "").trim();
+  const rebookingAgentFirst = (rebookingAgentRaw.split(" ")[0] || "our agent").trim();
 
   console.log(
     `[AI-VOICE] start: callSid=${state.callSid}, streamSid=${state.streamSid}, sessionId=${sessionId}, leadId=${leadId}`
@@ -8041,6 +8045,9 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
       (context as any).callDirection = callDirection;
     }
     state.context = context;
+    (state as any).rebookingMode = rebookingMode;
+    (state as any).rebookingLeadName = rebookingLeadName;
+    (state as any).rebookingAgentFirst = rebookingAgentFirst;
 
     console.log(
       `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId}, scriptKey: ${context.scriptKey}, answeredBy: ${
@@ -9099,9 +9106,26 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         const clientName = (!clientNameRaw || isTestOrPlaceholderName(clientNameRaw)) ? "there" : clientNameRaw;
         const greetingLine = `Hey ${clientName}. This is ${aiName}. Can you hear me alright?`;
         // Greeting instruction: dead simple — say the line, stop, wait. No history/goals scaffolding.
-        const greetingInstr = shouldUseInboundFlow(liveState.context)
-          ? buildInboundGreetingInstructions(liveState.context!)
-          : buildGreetingInstructions(liveState.context!);
+        let greetingInstr: string;
+        if ((liveState as any).rebookingMode) {
+          const rbAgentFirst = String((liveState as any).rebookingAgentFirst || "our agent");
+          const rbLeadName   = String((liveState as any).rebookingLeadName   || "");
+          const rbOpenLine   = rbLeadName
+            ? `Hey ${rbLeadName}, I tried to connect you with ${rbAgentFirst} but it looks like they just stepped into another call.`
+            : `I tried to connect you with ${rbAgentFirst} but it looks like they just stepped into another call.`;
+          greetingInstr = `Say exactly: "${rbOpenLine} Does later today or tomorrow work better for ${rbAgentFirst} to give you a call?" — say this warmly and naturally. After saying it, stop and wait for their response.`;
+          // Put call into post-coverage scheduling state immediately
+          (liveState as any).lastRouteKind        = "policy_step1_coverage";
+          (liveState as any).scriptStepIndex      = 1;
+          (liveState as any).awaitingUserAnswer   = true;
+          if (liveState.context) {
+            (liveState.context as any).liveTransferEnabled = false;
+          }
+        } else {
+          greetingInstr = shouldUseInboundFlow(liveState.context)
+            ? buildInboundGreetingInstructions(liveState.context!)
+            : buildGreetingInstructions(liveState.context!);
+        }
 
         try {
           if (!liveState.debugLoggedResponseCreateGreeting) {
