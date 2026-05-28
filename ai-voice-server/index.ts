@@ -5425,7 +5425,7 @@ function handlePostCoverageSchedulingTurn(
       return {
         handled: true,
         routeKind: "post_coverage_product_question",
-        responseMode: "soft_script",
+        responseMode: "exact_script",
         objective: "answer_product_question_then_schedule",
         lineToSay,
         requiredClosingPivot: closingQ,
