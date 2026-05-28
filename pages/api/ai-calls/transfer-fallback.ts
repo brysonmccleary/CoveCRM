@@ -42,7 +42,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const body = req.body as Record<string, string> | undefined;
   const dialCallStatus = (body?.DialCallStatus || "").toLowerCase();
   const dialCallDuration = parseInt(String(body?.DialCallDuration || "0"), 10);
-  const wasVoicemail = dialCallStatus === "completed" && dialCallDuration < 25;
+  const answeredBy = String(body?.AnsweredBy || "").toLowerCase();
+  const wasVoicemail = answeredBy.includes("machine") || (dialCallStatus === "completed" && dialCallDuration < 25);
 
   res.setHeader("Content-Type", "text/xml");
 
