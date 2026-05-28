@@ -10,7 +10,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna">${safeIntro || "Hey, I have your lead on the line. You are all set."}</Say>
+  <Say voice="Polly.Joanna-Neural">${safeIntro || "Hey, I have your lead on the line. You are all set."}</Say>
 </Response>`;
 
   res.setHeader("Content-Type", "text/xml");

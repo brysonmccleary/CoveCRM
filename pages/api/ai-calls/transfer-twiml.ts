@@ -85,7 +85,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna">Please hold for just a moment while I connect you.</Say>
+  <Say voice="Polly.Joanna-Neural">Please hold for just a moment while I connect you.</Say>
   <Dial timeout="10" answerOnBridge="true"${safeCallerId} action="${safeFallbackUrl}" method="POST">
     <Number statusCallbackEvent="initiated ringing answered completed"
       url="${xmlEscape(agentIntroUrl.toString())}"

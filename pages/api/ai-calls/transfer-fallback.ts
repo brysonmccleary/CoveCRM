@@ -75,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna" rate="90%">Thank you for your time. Have a great day!</Say>
+  <Say voice="Polly.Joanna-Neural" rate="90%">Thank you for your time. Have a great day!</Say>
   <Hangup/>
 </Response>`);
     }
@@ -130,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (booked) {
       return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna" rate="90%">${safeAgentFirst} wasn't available right now, but we've got your appointment scheduled. They'll reach out at the time we discussed. Have a great day!</Say>
+  <Say voice="Polly.Joanna-Neural" rate="90%">${safeAgentFirst} wasn't available right now, but we've got your appointment scheduled. They'll reach out at the time we discussed. Have a great day!</Say>
   <Hangup/>
 </Response>`);
     }
@@ -151,17 +151,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : `I tried to connect you with ${safeAgentFirst} but it looks like they just stepped into another call.`;
     return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna" rate="90%">${openingLine} Would later today or tomorrow work better for ${safeAgentFirst} to give you a call?</Say>
+  <Say voice="Polly.Joanna-Neural" rate="90%">${openingLine} Would later today or tomorrow work better for ${safeAgentFirst} to give you a call?</Say>
   <Gather input="speech" action="${safeGatherUrl}" method="POST" speechTimeout="3" timeout="10">
   </Gather>
-  <Say voice="Polly.Joanna" rate="90%">No problem — ${safeAgentFirst} will be in touch soon. Have a great day!</Say>
+  <Say voice="Polly.Joanna-Neural" rate="90%">No problem — ${safeAgentFirst} will be in touch soon. Have a great day!</Say>
   <Hangup/>
 </Response>`);
   } catch (err) {
     console.error("[TRANSFER-FALLBACK] Uncaught error:", err);
     return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna" rate="90%">Sorry, we'll have someone reach out to you soon.</Say>
+  <Say voice="Polly.Joanna-Neural" rate="90%">Sorry, we'll have someone reach out to you soon.</Say>
   <Hangup/>
 </Response>`);
   }

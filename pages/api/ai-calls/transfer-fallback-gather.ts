@@ -74,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader("Content-Type", "text/xml");
   return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna" rate="90%">${xmlEscape(confirmLine)}</Say>
+  <Say voice="Polly.Joanna-Neural" rate="90%">${xmlEscape(confirmLine)}</Say>
   <Hangup/>
 </Response>`);
 }
