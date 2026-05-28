@@ -43,7 +43,7 @@ async function summarizeWithOpenAI(facts: any[], messages: any[], lastCall: any,
 
   const client = new OpenAI({ apiKey });
   const response = await client.responses.create({
-    model: "gpt-5-mini",
+    model: "gpt-4o-mini",
     input: [
       {
         role: "system",

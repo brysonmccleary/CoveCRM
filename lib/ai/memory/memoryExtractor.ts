@@ -54,7 +54,7 @@ async function extractWithOpenAI(text: string, sourceType: string): Promise<Extr
 
   const client = new OpenAI({ apiKey });
   const response = await client.responses.create({
-    model: "gpt-5-mini",
+    model: "gpt-4o-mini",
     input: [
       {
         role: "system",

@@ -190,7 +190,7 @@ export function queueLeadMemoryHook(args: LeadMemoryHookArgs) {
         source: "lib/ai/memory/queueLeadMemoryHook:extractLeadMemory",
         userEmail,
         leadId,
-        model: "gpt-5-mini",
+        model: "gpt-4o-mini",
         durationMs: Date.now() - extractStartedAt,
       });
 
@@ -200,7 +200,7 @@ export function queueLeadMemoryHook(args: LeadMemoryHookArgs) {
         source: "lib/ai/memory/queueLeadMemoryHook:generateLeadMemorySummary",
         userEmail,
         leadId,
-        model: "gpt-5-mini",
+        model: "gpt-4o-mini",
         durationMs: Date.now() - summaryStartedAt,
       });
     } catch (err) {

@@ -41,11 +41,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Twilio sends DialCallStatus as form-encoded body
   const body = req.body as Record<string, string> | undefined;
   const dialCallStatus = (body?.DialCallStatus || "").toLowerCase();
+  const dialCallDuration = parseInt(String(body?.DialCallDuration || "0"), 10);
+  const wasVoicemail = dialCallStatus === "completed" && dialCallDuration < 25;
 
   res.setHeader("Content-Type", "text/xml");
 
   try {
-    if (dialCallStatus === "completed") {
+    if (dialCallStatus === "completed" && !wasVoicemail) {
       try {
         const agentEmailTo = String(req.query.userEmail || req.body?.userEmail || "");
         if (agentEmailTo) {
