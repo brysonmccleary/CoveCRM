@@ -4709,7 +4709,7 @@ interface TurnIntent {
   raw: string;
 }
 
-type ResponseMode = "exact_script" | "guided_gpt" | "free_response_blocked";
+type ResponseMode = "exact_script" | "soft_script" | "guided_gpt" | "free_response_blocked";
 
 interface PolicyDecision {
   handled: boolean;
