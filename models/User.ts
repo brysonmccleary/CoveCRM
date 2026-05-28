@@ -189,6 +189,10 @@ export interface IUser {
   aiDialerBilledTotalCents?: number;
   aiDialerLastInvoicedAt?: Date;
 
+  aiInsightMinutesUsed?: number;
+  aiInsightCostCents?: number;
+  aiInsightLastResetAt?: Date;
+
   usageBalance?: number;
 
   /**
@@ -479,6 +483,10 @@ const UserSchema = new Schema<IUser>({
   aiDialerAccruedCents: { type: Number, default: 0 },
   aiDialerBilledTotalCents: { type: Number, default: 0 },
   aiDialerLastInvoicedAt: { type: Date, default: null },
+
+  aiInsightMinutesUsed: { type: Number, default: 0 },
+  aiInsightCostCents: { type: Number, default: 0 },
+  aiInsightLastResetAt: { type: Date, default: null },
 
   usageBalance: { type: Number, default: 0 },
 

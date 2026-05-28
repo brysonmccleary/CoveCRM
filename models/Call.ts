@@ -51,6 +51,9 @@ export interface ICall extends Document {
   aiScore?: number;        // 0..100
   aiSentiment?: "positive" | "neutral" | "negative";
   aiProcessing?: "pending" | "done" | "error";
+  aiInsightsProcessedAt?: Date;
+  aiInsightsMinutesBilled?: number;
+  aiInsightsCostCents?: number;
 
   // ✅ Structured AI Call Overview (used by lead middle panel)
   aiOverviewReady?: boolean;
@@ -124,6 +127,9 @@ const CallSchema = new Schema<ICall>(
     aiScore: Number,
     aiSentiment: { type: String, enum: ["positive", "neutral", "negative"] },
     aiProcessing: { type: String, enum: ["pending", "done", "error"], default: undefined },
+    aiInsightsProcessedAt: Date,
+    aiInsightsMinutesBilled: { type: Number, default: 0 },
+    aiInsightsCostCents: { type: Number, default: 0 },
 
     // ✅ AI Call Overview fields (must be in schema or Mongoose will drop them)
     aiOverviewReady: { type: Boolean, default: false },

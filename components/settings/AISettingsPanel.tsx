@@ -13,6 +13,13 @@ interface AISettings {
   newLeadCallDelayMinutes?: number;
 }
 
+interface AIInsightUsage {
+  minutesProcessed: number;
+  estimatedCostCents: number;
+  estimatedCostDollars: number;
+  lastResetAt?: string | null;
+}
+
 function Toggle({
   checked,
   onChange,
@@ -62,13 +69,17 @@ function SettingRow({
 
 export default function AISettingsPanel() {
   const [settings, setSettings] = useState<AISettings>({});
+  const [aiInsightUsage, setAiInsightUsage] = useState<AIInsightUsage | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetch("/api/settings/ai-settings")
       .then((r) => r.json())
-      .then((j) => setSettings(j.settings || {}))
+      .then((j) => {
+        setSettings(j.settings || {});
+        setAiInsightUsage(j.aiInsightUsage || null);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -197,22 +208,34 @@ export default function AISettingsPanel() {
         </div>
         <div className="px-5">
           <SettingRow
-            label="Call Overview"
-            description="Generated automatically when call overview data is available."
+            label="AI Call Insights"
+            description="Automatically generates call overviews from recordings. $0.02/min, rounded up, billed only for calls 20 seconds or longer."
           >
-            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-gray-300">
-              Automatic
-            </span>
+            <Toggle
+              checked={settings.aiCallOverviewEnabled !== false}
+              onChange={(v) => save({ aiCallOverviewEnabled: v })}
+              disabled={saving}
+            />
           </SettingRow>
 
           <SettingRow
-            label="Call Coaching"
-            description="Available from call reports when coaching data is generated."
+            label="AI Coaching"
+            description="Adds coaching reports when enabled. Included in the same AI Call Insights charge."
           >
-            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-gray-300">
-              Automatic
-            </span>
+            <Toggle
+              checked={!!settings.aiCallCoachingEnabled}
+              onChange={(v) => save({ aiCallCoachingEnabled: v })}
+              disabled={saving}
+            />
           </SettingRow>
+
+          <div className="py-4 text-xs text-gray-400">
+            <p className="font-medium text-gray-300">AI Call Insights: $0.02/min</p>
+            <p className="mt-1">
+              Current cycle: {aiInsightUsage?.minutesProcessed || 0} minutes processed · $
+              {(aiInsightUsage?.estimatedCostDollars || 0).toFixed(2)} estimated.
+            </p>
+          </div>
         </div>
       </div>
 

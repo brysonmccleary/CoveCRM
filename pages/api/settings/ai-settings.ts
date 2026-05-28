@@ -15,7 +15,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === "GET") {
     const settings = await AISettings.findOne({ userEmail: email }).lean();
-    return res.status(200).json({ settings: settings || {} });
+    const user = await User.findOne({ email })
+      .select("aiInsightMinutesUsed aiInsightCostCents aiInsightLastResetAt")
+      .lean();
+    const aiInsightUsage = {
+      minutesProcessed: Number((user as any)?.aiInsightMinutesUsed || 0),
+      estimatedCostCents: Number((user as any)?.aiInsightCostCents || 0),
+      estimatedCostDollars: Number((Number((user as any)?.aiInsightCostCents || 0) / 100).toFixed(2)),
+      lastResetAt: (user as any)?.aiInsightLastResetAt || null,
+    };
+    return res.status(200).json({ settings: settings || {}, aiInsightUsage });
   }
 
   if (req.method === "POST") {

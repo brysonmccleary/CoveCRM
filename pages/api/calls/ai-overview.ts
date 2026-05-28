@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
+import AISettings from "@/models/AISettings";
 import { getUserByEmail } from "@/models/User";
 import { generateCallCoachReport } from "@/lib/ai/generateCallCoachReport";
 
@@ -53,8 +54,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, call: null });
     }
 
-    // Fire-and-forget: generate coach report if not already done
-    generateCallCoachReport(String(call._id), requesterEmail).catch(() => {});
+    const settings: any = await AISettings.findOne({ userEmail: String(call.userEmail || requesterEmail).toLowerCase() }).lean();
+    if (settings?.aiCallCoachingEnabled === true) {
+      // Fire-and-forget: generate coach report if not already done
+      generateCallCoachReport(String(call._id), requesterEmail).catch(() => {});
+    }
 
     return res.status(200).json({
       ok: true,
@@ -66,6 +70,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         duration: typeof call.duration === "number" ? call.duration : null,
         aiOverviewReady: !!call.aiOverviewReady,
         aiOverview: call.aiOverview || null,
+        aiInsightsMinutesBilled: Number(call.aiInsightsMinutesBilled || 0),
+        aiInsightsCostCents: Number(call.aiInsightsCostCents || 0),
       },
     });
   } catch (err: any) {

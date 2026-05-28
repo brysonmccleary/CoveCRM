@@ -6,6 +6,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import CallCoachReport from "@/models/CallCoachReport";
+import AISettings from "@/models/AISettings";
 import { generateCallCoachReport } from "@/lib/ai/generateCallCoachReport";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -26,6 +27,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === "POST") {
     const { callId, leadName } = req.body || {};
     if (!callId) return res.status(400).json({ error: "callId required" });
+
+    const settings: any = await AISettings.findOne({ userEmail }).lean();
+    if (settings?.aiCallCoachingEnabled !== true) {
+      return res.status(200).json({ ok: true, skipped: true, reason: "ai_call_coaching_disabled", report: null });
+    }
 
     const result = await generateCallCoachReport(
       String(callId),

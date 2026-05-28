@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import UserModel from "@/models/User";
+import AISettings from "@/models/AISettings";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { getUserByEmail } from "@/models/User";
@@ -18,6 +19,8 @@ const OPENAI_TRANSCRIBE_MODEL = (
 const OPENAI_OVERVIEW_MODEL = (
   process.env.AI_OVERVIEW_MODEL || "gpt-4o-mini"
 ).trim();
+const AI_INSIGHT_COST_CENTS_PER_MINUTE = 2;
+const AI_INSIGHT_MIN_BILLABLE_SECONDS = 20;
 
 // Platform Twilio (fallback for fetching Twilio-protected recordings)
 const PLATFORM_ACCOUNT_SID = (process.env.TWILIO_ACCOUNT_SID || "").trim();
@@ -36,6 +39,16 @@ type Resp =
       transcribedAt: string;
       transcriptChars: number;
       overviewReady: boolean;
+      aiInsightUsage?: {
+        minutesProcessed: number;
+        estimatedCostCents: number;
+        estimatedCostDollars: number;
+      };
+      aiInsightsBilled?: {
+        minutes: number;
+        costCents: number;
+        processed: boolean;
+      };
       skipped?: boolean;
       reason?: string;
     }
@@ -48,6 +61,68 @@ function isNonEmptyString(v: any) {
 function asLowerEmail(v: any): string | null {
   if (!isNonEmptyString(v)) return null;
   return String(v).toLowerCase().trim();
+}
+
+function getBillableInsightMinutes(durationSeconds?: number): number {
+  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) return 0;
+  if (durationSeconds < AI_INSIGHT_MIN_BILLABLE_SECONDS) return 0;
+  return Math.max(1, Math.ceil(durationSeconds / 60));
+}
+
+function formatInsightUsage(user: any) {
+  const estimatedCostCents = Number(user?.aiInsightCostCents || 0);
+  return {
+    minutesProcessed: Number(user?.aiInsightMinutesUsed || 0),
+    estimatedCostCents,
+    estimatedCostDollars: Number((estimatedCostCents / 100).toFixed(2)),
+  };
+}
+
+async function loadInsightUsage(userEmail: string) {
+  const user = await (UserModel as any)
+    .findOne({ email: userEmail })
+    .select("aiInsightMinutesUsed aiInsightCostCents")
+    .lean();
+  return formatInsightUsage(user);
+}
+
+async function markAndBillInsightsOnce(args: {
+  callId: any;
+  userEmail: string;
+  durationSeconds?: number;
+}) {
+  const minutes = getBillableInsightMinutes(args.durationSeconds);
+  const costCents = minutes * AI_INSIGHT_COST_CENTS_PER_MINUTE;
+  const now = new Date();
+
+  const result = await (Call as any).updateOne(
+    {
+      _id: args.callId,
+      $or: [{ aiInsightsProcessedAt: { $exists: false } }, { aiInsightsProcessedAt: null }],
+    },
+    {
+      $set: {
+        aiInsightsProcessedAt: now,
+        aiInsightsMinutesBilled: minutes,
+        aiInsightsCostCents: costCents,
+      },
+    }
+  );
+
+  const processed = Boolean((result as any)?.modifiedCount);
+  if (processed && costCents > 0) {
+    await (UserModel as any).updateOne(
+      { email: args.userEmail },
+      {
+        $inc: {
+          aiInsightMinutesUsed: minutes,
+          aiInsightCostCents: costCents,
+        },
+      }
+    );
+  }
+
+  return { minutes, costCents, processed };
 }
 
 function normalizeRecordingUrl(url: string): string {
@@ -531,6 +606,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
     }
 
+    const callUserEmail = isNonEmptyString(call?.userEmail) ? String(call.userEmail).toLowerCase() : "";
+    const durationSeconds =
+      typeof call.duration === "number"
+        ? call.duration
+        : typeof call.durationSec === "number"
+        ? call.durationSec
+        : typeof call.recordingDuration === "number"
+        ? call.recordingDuration
+        : undefined;
+
+    if (callUserEmail) {
+      const settings: any = await AISettings.findOne({ userEmail: callUserEmail }).lean();
+      if (settings?.aiCallOverviewEnabled === false) {
+        return res.status(200).json({
+          ok: true,
+          callId: String(call._id),
+          callSid: String(call.callSid || ""),
+          transcribedAt: new Date().toISOString(),
+          transcriptChars: String(call.transcript || "").length,
+          overviewReady: !!call.aiOverviewReady,
+          aiInsightUsage: await loadInsightUsage(callUserEmail),
+          skipped: true,
+          reason: "ai_call_overview_disabled",
+        });
+      }
+    }
+
     const alreadyHasOverview =
       call.aiOverviewReady === true && call.aiOverview && typeof call.aiOverview === "object";
     const alreadyHasTranscript = isNonEmptyString(call.transcript);
@@ -544,6 +646,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         transcribedAt: new Date().toISOString(),
         transcriptChars: String(call.transcript || "").length,
         overviewReady: true,
+        aiInsightUsage: callUserEmail ? await loadInsightUsage(callUserEmail) : undefined,
         skipped: true,
         reason: "already_done",
       });
@@ -581,15 +684,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
 
     // Generate structured overview (same schema UI reads)
-    const durationSeconds =
-      typeof call.duration === "number"
-        ? call.duration
-        : typeof call.durationSec === "number"
-        ? call.durationSec
-        : typeof call.recordingDuration === "number"
-        ? call.recordingDuration
-        : undefined;
-
     const overview = await generateCallOverview({
       transcript: transcriptText,
       durationSeconds,
@@ -597,6 +691,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       direction: isNonEmptyString(call.direction) ? String(call.direction) : undefined,
     });
 
+    let aiInsightsBilled: { minutes: number; costCents: number; processed: boolean } | undefined;
     if (overview) {
       call.aiOverview = {
         ...overview,
@@ -609,6 +704,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
 
     await call.save();
+    if (overview && callUserEmail) {
+      aiInsightsBilled = await markAndBillInsightsOnce({
+        callId: call._id,
+        userEmail: callUserEmail,
+        durationSeconds,
+      });
+    }
     if (call.userEmail && call.leadId && transcriptText.trim()) {
       queueLeadMemoryHook({
         userEmail: String(call.userEmail),
@@ -626,6 +728,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       transcribedAt: new Date().toISOString(),
       transcriptChars: transcriptText.length,
       overviewReady: !!call.aiOverviewReady,
+      aiInsightUsage: callUserEmail ? await loadInsightUsage(callUserEmail) : undefined,
+      aiInsightsBilled,
     });
   } catch (err: any) {
     console.error("[calls/transcribe-recording] error:", err?.message || err);
