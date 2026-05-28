@@ -351,7 +351,7 @@ export default async function handler(
     }
   }
 
-  if (leadId) {
+  if (leadId && !existingLeadId) {
     try {
       await sendSms({
         to: normalizedPhone,
