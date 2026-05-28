@@ -5103,6 +5103,12 @@ function getVerticalProductAnswer(ctx: AICallContext): string {
   if (k === "trucker_leads") {
     return `These programs are built around the specific needs of truckers — a lot of carriers work directly with truckers and offer better rates than standard life insurance for drivers. ${agent} will find the best fit for your situation.`;
   }
+  if (k === "kayla_signup") {
+    return `CoveCRM is an AI-powered CRM built specifically for insurance agents. It includes an AI voice agent — what you're talking to right now — that calls your leads and books appointments automatically, an AI text assistant for SMS follow-ups, a power dialer, Facebook lead integration, Google Calendar sync, and a full lead management system. ${agent} can walk you through a full live demo on a quick call.`;
+  }
+  if (k === "generic_life") {
+    return `These are life insurance options — depending on what you qualify for it could be term, whole life, IUL, or a policy with living benefits built in. The right fit depends on your situation, your health, and your goals. ${agent} will go over all the options and find what makes the most sense for you.`;
+  }
   return `We work with multiple types of coverage — whole life, term, IUL, final expense, mortgage protection. What fits best depends on what you qualify for and what your goal is. ${agent} works with multiple carriers to find you the best rate.`;
 }
 
@@ -5412,13 +5418,14 @@ function handlePostCoverageSchedulingTurn(
       };
     }
 
-    // Generic product question: answer using vertical knowledge
+    // Generic product question: guide OpenAI to answer from its vertical knowledge
     if (sk === "generic_question") {
-      const lineToSay = `${getVerticalProductAnswer(ctx)} ${closingQ}`;
+      const productKnowledge = getVerticalProductAnswer(ctx);
+      const lineToSay = `${productKnowledge} ${closingQ}`;
       return {
         handled: true,
         routeKind: "post_coverage_product_question",
-        responseMode: "exact_script",
+        responseMode: "soft_script",
         objective: "answer_product_question_then_schedule",
         lineToSay,
         requiredClosingPivot: closingQ,
@@ -5787,7 +5794,9 @@ function buildConversationPolicyDecision(
     } else if (sk === "how_did_you_get") {
       lineToSay = `Your info came through a form submitted online for ${scope}. ${agentFirst} just wants to make sure you're taken care of. ${closingPivot}`;
     } else if (sk === "generic_question") {
-      lineToSay = `${agentFirst} can answer that much better on the call and make it specific to your ${scope} request. ${closingPivot}`;
+      lineToSay = ctx
+        ? `${getVerticalProductAnswer(ctx)} ${closingPivot}`
+        : `${agentFirst} can answer that on the call. ${closingPivot}`;
     } else {
       return NOT_HANDLED; // unknown subKind — fall through to old rebuttal gate
     }
