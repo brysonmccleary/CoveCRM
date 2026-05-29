@@ -909,6 +909,7 @@ const goToAIDialSession = () => {
                       className="border p-2 rounded w-full cursor-pointer"
                     >
                       <option value="">-- Choose a number --</option>
+                      <option value="LOCAL_PRESENCE">🎯 Local Presence (Auto-Match)</option>
                       {numbers.map((num) => (
                         <option key={num.id} value={num.phoneNumber}>
                           {num.phoneNumber}
@@ -1139,6 +1140,7 @@ const goToAIDialSession = () => {
                       className="border p-2 rounded w-full cursor-pointer"
                     >
                       <option value="">-- Choose a number --</option>
+                      <option value="LOCAL_PRESENCE">🎯 Local Presence (Auto-Match)</option>
                       {numbers.map((num) => (
                         <option key={num.id} value={num.phoneNumber}>
                           {num.phoneNumber}

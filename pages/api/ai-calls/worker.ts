@@ -11,6 +11,7 @@ import { Types } from "mongoose";
 import { stripe } from "@/lib/stripe";
 import { assertBillingAllowed } from "@/lib/billing/assertBillingAllowed";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
+import { selectLocalPresenceNumber } from "@/lib/twilio/localPresence";
 
 const BASE = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -681,7 +682,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const from = normalizeE164(fromNumber);
+    let resolvedFromNumber = fromNumber;
+
+    if (fromNumber === "LOCAL_PRESENCE") {
+      const fallback = normalizeE164(
+        ((userDoc as any)?.numbers || [])[0]?.phoneNumber || ""
+      );
+      const result = selectLocalPresenceNumber(
+        leadDoc || {},
+        (userDoc as any)?.numbers || [],
+        fallback
+      );
+      resolvedFromNumber = result.fromNumber;
+      console.log("[LOCAL_PRESENCE] worker resolved", {
+        matchSource: result.matchSource,
+        matchedState: result.matchedState,
+        resolvedFromNumber,
+        userEmail,
+        leadId: leadIdStr,
+      });
+    }
+
+    const from = normalizeE164(resolvedFromNumber);
     if (!from) {
       console.log("[AI WORKER] invalid fromNumber; marking error", {
         sessionId,

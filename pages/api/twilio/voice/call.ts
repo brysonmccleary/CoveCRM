@@ -9,6 +9,7 @@ import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
+import { selectLocalPresenceNumber } from "@/lib/twilio/localPresence";
 
 const BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
 
@@ -227,11 +228,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const requestedFrom = normalizeE164(fromNumber || from || "");
     const rawRequestedFrom = String(fromNumber || from || "").trim();
 
-    if (rawRequestedFrom && !requestedFrom) {
+    if (rawRequestedFrom && rawRequestedFrom !== "LOCAL_PRESENCE" && !requestedFrom) {
       return res.status(400).json({ message: "Invalid outbound number." });
     }
 
-    const chosenFrom = requestedFrom || resolveConfiguredCallerId(user);
+    const RAW_FROM = String(fromNumber || from || "").trim();
+    let chosenFrom: string;
+
+    if (RAW_FROM === "LOCAL_PRESENCE") {
+      const fallback = resolveConfiguredCallerId(user);
+      const result = selectLocalPresenceNumber(
+        leadDoc || {},
+        (user as any)?.numbers || [],
+        fallback
+      );
+      chosenFrom = result.fromNumber;
+      console.log("[LOCAL_PRESENCE] voice/call resolved", {
+        matchSource: result.matchSource,
+        matchedState: result.matchedState,
+        chosenFrom,
+        userEmail: email,
+        leadId: leadId || null,
+      });
+    } else {
+      chosenFrom = requestedFrom || resolveConfiguredCallerId(user);
+    }
 
     if (!chosenFrom) {
       return res.status(400).json({ message: "No assigned outbound number configured." });
