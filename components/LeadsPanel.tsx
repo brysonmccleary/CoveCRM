@@ -482,6 +482,36 @@ export default function LeadsPanel() {
     }
   };
 
+  const handleExportCSV = async (folderId: string, folderName: string) => {
+    const confirmed = window.confirm(
+      `Export all leads from "${folderName}" to CSV?\n\nThe file will download to your computer.`
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(
+        `/api/leads/export-csv?folderId=${encodeURIComponent(folderId)}`
+      );
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert(j?.message || "Export failed. Please try again.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const safeName = folderName.replace(/[^a-z0-9]/gi, "_").toLowerCase();
+      a.download = `${safeName}_leads.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Export failed. Please try again.");
+    }
+  };
+
   // ✅ NEW: Wizard open (replaces redirect)
   const handleConnectGoogleSheet = () => {
     setShowSheetsWizard(true);
@@ -890,6 +920,13 @@ const goToAIDialSession = () => {
                 </span>
               </button>
               <button
+                onClick={(e) => { e.stopPropagation(); handleExportCSV(folder._id, folder.name); }}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: "0 6px", fontSize: 16, color: "#22c55e" }}
+                title="Export leads to CSV"
+              >
+                ⬇️
+              </button>
+              <button
                 onClick={() => handleDeleteFolder(folder._id)}
                 className="text-red-600 hover:text-red-800 px-2 cursor-pointer"
                 title="Delete Folder"
@@ -1126,6 +1163,13 @@ const goToAIDialSession = () => {
                     {folder.leadCount ?? 0} Leads
                   </span>
                 </span>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleExportCSV(folder._id, folder.name); }}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: "0 6px", fontSize: 16, color: "#22c55e" }}
+                title="Export leads to CSV"
+              >
+                ⬇️
               </button>
             </div>
 
