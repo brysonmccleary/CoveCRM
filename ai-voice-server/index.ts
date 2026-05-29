@@ -2440,14 +2440,18 @@ function buildNonRepeatedStateAwareLine(
   if (questionKind && ctx) {
     const agentFirst = getAgentFirstName(ctx);
     const pivot = getStateAwareClosingPivot(state);
+    const objKindCheck = (() => { try { return detectObjection(raw); } catch { return null; } })();
+    const isIdentityQuestion = objKindCheck === "are_you_ai" || objKindCheck === "confused_identity" || objKindCheck === "scam";
     const answer =
       questionKind === "how_much"
         ? `I get why you'd ask — ${agentFirst} covers exact cost on the call.`
         : questionKind === "what_entails" || isHowLongDurationQuestion(raw)
           ? "It is usually about 5 to 10 minutes."
-          : ctx
-            ? getVerticalProductAnswer(ctx)
-            : `${agentFirst} can answer that clearly on the call.`;
+          : isIdentityQuestion
+            ? `Yes — I'm a virtual assistant helping schedule the appointment. ${agentFirst} is the licensed agent on the call.`
+            : ctx
+              ? getVerticalProductAnswer(ctx)
+              : `${agentFirst} can answer that clearly on the call.`;
     return {
       lineToSay: `${answer} ${pivot}`,
       routeKind: `${routeKind}_repeat_guard_question`,
@@ -4470,7 +4474,10 @@ if (
     t.includes("kind of busy") ||
     t.includes("kinda busy") ||
     t.includes("really busy") ||
-    /don.?t\s+have\s+\w+\s+time/i.test(t) ||
+    /don.?t.*have.*time/i.test(t) ||
+    t.includes("pressed for time") ||
+    t.includes("short on time") ||
+    t.includes("in the middle of") ||
     /not\s+(?:a\s+)?good\s+time/i.test(t) ||
     /(?:really|very|too)\s+busy/i.test(t) ||
     /can.?t\s+(?:really\s+)?talk\s+(?:right\s+)?now/i.test(t)
@@ -5021,6 +5028,10 @@ function classifyTurnIntent(
     "didn't catch", "couldn't hear", "can't hear", "cannot hear",
     "what did you say", "come again", "speak up", "louder",
     "i'm sorry what", "im sorry what",
+    "did you hear me", "did you not hear", "did you just not hear",
+    "are you listening", "are you even listening",
+    "hello are you there", "you there", "can you hear me",
+    "hello?", "hello hello",
   ];
   if (hearingSignals.some(s => t.includes(s)) || t === "what" || t === "huh" || t === "what?") {
     return { kind: "hearing_problem", raw };
@@ -6156,6 +6167,7 @@ HARD RULES (non-negotiable, always):
 - If they ask cost/coverage/details: "${agent} covers all of that on the call."
 - Use the lead name "${leadName}" only if it flows naturally.
 - After you speak, STOP and wait. Do not fill silence.
+- NEVER apologize. NEVER say "I'm sorry", "I apologize", "I missed that", "I didn't catch that", "my mistake", or any apology of any kind. Ever. If they say you didn't hear them or ask if you can hear them, re-engage naturally and warmly — do NOT acknowledge an error.
 - You are a scheduling assistant only. You are not the licensed agent. Do not run the sales call.
 - Never discuss coverage options, plan options, policy details, underwriting, or program information.
 - Never ask discovery questions. Do not open new topics or invite elaboration.
