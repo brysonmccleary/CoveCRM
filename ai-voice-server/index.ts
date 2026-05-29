@@ -4460,7 +4460,20 @@ if (
     t.includes("no time") ||
     t.includes("dont have time") ||
     t.includes("don't have time") ||
-    t.includes("do not have time")
+    t.includes("do not have time") ||
+    t.includes("not much time") ||
+    t.includes("not a good time") ||
+    t.includes("bad time") ||
+    t.includes("can't talk") ||
+    t.includes("cant talk") ||
+    t.includes("in a meeting") ||
+    t.includes("kind of busy") ||
+    t.includes("kinda busy") ||
+    t.includes("really busy") ||
+    /don.?t\s+have\s+\w+\s+time/i.test(t) ||
+    /not\s+(?:a\s+)?good\s+time/i.test(t) ||
+    /(?:really|very|too)\s+busy/i.test(t) ||
+    /can.?t\s+(?:really\s+)?talk\s+(?:right\s+)?now/i.test(t)
   ) {
     // If they are still actively scheduling (e.g. "tomorrow evening" / "what times do you have"),
     // do NOT treat this as an objection — let the stepper offer concrete time options.
@@ -4709,7 +4722,7 @@ interface TurnIntent {
   raw: string;
 }
 
-type ResponseMode = "exact_script" | "soft_script" | "guided_gpt" | "free_response_blocked";
+type ResponseMode = "exact_script" | "soft_script" | "guided_gpt" | "free_response" | "free_response_blocked";
 
 interface PolicyDecision {
   handled: boolean;
@@ -5470,15 +5483,19 @@ function handlePostCoverageSchedulingTurn(
     };
   }
 
-  return buildPostCoverageSoftDecision(
-    state,
-    intent,
-    ctx,
-    stepCtx,
-    "post_coverage_controlled_recovery",
-    "recover_to_current_scheduling_state",
-    "Acknowledge what they said briefly without opening a new topic."
-  );
+  const _unknownPivot = buildPostCoverageCurrentPivot(state, intent, ctx, stepCtx);
+  return {
+    handled: true,
+    routeKind: "post_coverage_unknown_free",
+    responseMode: "free_response",
+    objective: "open_question",
+    userText: intent.raw,
+    lineToSay: _unknownPivot.pivot,
+    requiredClosingPivot: _unknownPivot.pivot,
+    forbiddenTopics: [],
+    stateWrites: { ..._unknownPivot.stateWrites },
+    shouldAdvanceStep: false,
+  };
 }
 
 function buildConversationPolicyDecision(
@@ -5904,9 +5921,10 @@ function buildConversationPolicyDecision(
     return {
       handled: true,
       routeKind: "policy_unknown",
-      responseMode: "exact_script",
-      objective: "return_to_current_objective",
-      lineToSay: `No worries — ${closingPivot}`,
+      responseMode: "free_response",
+      objective: "open_question",
+      userText: intent.raw,
+      lineToSay: closingPivot,
       requiredClosingPivot: closingPivot,
       forbiddenTopics: [],
       stateWrites: {
@@ -5923,6 +5941,14 @@ function buildConversationPolicyDecision(
 function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): string {
   if (decision.responseMode === "exact_script" && decision.lineToSay) {
     return buildExactScriptLineInstruction(decision.lineToSay);
+  }
+  if (decision.responseMode === "free_response" && state.context) {
+    return buildFreeResponseInstruction(state.context, {
+      userText: decision.userText || "",
+      recentExchanges: state.recentExchanges,
+      currentStepLine: decision.requiredClosingPivot || decision.lineToSay || getStateAwareClosingPivot(state),
+      stepType: decision.objective,
+    });
   }
   if (decision.responseMode === "soft_script" && decision.lineToSay && state.context) {
     return buildConversationalRebuttalInstruction(state.context, decision.lineToSay, {
@@ -5966,19 +5992,21 @@ async function handleConversationTurn(
   let lineToSay = decision.lineToSay || getStateAwareClosingPivot(state);
   let routeKindForMemory = decision.routeKind;
   let objectiveForMemory = decision.objective;
-  const repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
-    userText: text,
-    routeKind: decision.routeKind,
-    objective: decision.objective,
-  });
-  lineToSay = repeatGuard.lineToSay;
-  routeKindForMemory = repeatGuard.routeKind;
-  objectiveForMemory = repeatGuard.objective;
-  decision.lineToSay = lineToSay;
-  if (repeatGuard.suppressed) {
-    decision.responseMode = "exact_script";
-    decision.baseAnswer = undefined;
-    decision.requiredClosingPivot = lineToSay;
+  if (decision.responseMode !== "free_response") {
+    const repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
+      userText: text,
+      routeKind: decision.routeKind,
+      objective: decision.objective,
+    });
+    lineToSay = repeatGuard.lineToSay;
+    routeKindForMemory = repeatGuard.routeKind;
+    objectiveForMemory = repeatGuard.objective;
+    decision.lineToSay = lineToSay;
+    if (repeatGuard.suppressed) {
+      decision.responseMode = "exact_script";
+      decision.baseAnswer = undefined;
+      decision.requiredClosingPivot = lineToSay;
+    }
   }
   const instr = buildResponseFromPolicy(decision, state);
 
