@@ -5992,6 +5992,7 @@ async function handleConversationTurn(
   let lineToSay = decision.lineToSay || getStateAwareClosingPivot(state);
   let routeKindForMemory = decision.routeKind;
   let objectiveForMemory = decision.objective;
+  let repeatGuardStateWrites: Record<string, unknown> = {};
   if (decision.responseMode !== "free_response") {
     const repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
       userText: text,
@@ -6002,6 +6003,7 @@ async function handleConversationTurn(
     routeKindForMemory = repeatGuard.routeKind;
     objectiveForMemory = repeatGuard.objective;
     decision.lineToSay = lineToSay;
+    repeatGuardStateWrites = repeatGuard.stateWrites;
     if (repeatGuard.suppressed) {
       decision.responseMode = "exact_script";
       decision.baseAnswer = undefined;
@@ -6013,7 +6015,7 @@ async function handleConversationTurn(
   for (const [k, v] of Object.entries(decision.stateWrites)) {
     (state as any)[k] = v;
   }
-  for (const [k, v] of Object.entries(repeatGuard.stateWrites)) {
+  for (const [k, v] of Object.entries(repeatGuardStateWrites)) {
     (state as any)[k] = v;
   }
 
