@@ -1185,7 +1185,13 @@ async function replayPendingCommittedTurn(
       });
       lineToSay = _guard_rplt.lineToSay;
       for (const [k, v] of Object.entries(_guard_rplt.stateWrites)) { (state as any)[k] = v; }
-      const instr = buildExactScriptLineInstruction(lineToSay);
+      const instr = buildExactScriptLineInstruction(lineToSay, {
+        userText: lastUserText || "",
+        recentExchanges: state.recentExchanges,
+        scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
+        agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
+        leadName: state.context ? (state.context.clientFirstName || "there") : "there",
+      });
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
@@ -5390,7 +5396,13 @@ function buildResponseFromPolicy(
   if (decision.responseMode === "script_step" && decision.lineToSay && state.context) {
     const line = decision.lineToSay;
     if (looksLikeGeneratedTimeOfferLine(line)) {
-      return buildExactScriptLineInstruction(line);
+      return buildExactScriptLineInstruction(line, {
+        userText: decision.userText || "",
+        recentExchanges: state.recentExchanges,
+        scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
+        agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
+        leadName: state.context ? (state.context.clientFirstName || "there") : "there",
+      });
     }
     return buildStepperTurnInstruction(state.context, line, {
       userText: decision.userText,
@@ -5398,7 +5410,13 @@ function buildResponseFromPolicy(
     });
   }
   if (decision.responseMode === "exact_script" && decision.lineToSay) {
-    return buildExactScriptLineInstruction(decision.lineToSay);
+    return buildExactScriptLineInstruction(decision.lineToSay || "", {
+      userText: decision.userText || "",
+      recentExchanges: state.recentExchanges,
+      scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
+      agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
+      leadName: state.context ? (state.context.clientFirstName || "there") : "there",
+    });
   }
   if (decision.responseMode === "free_response" && state.context) {
     return buildFreeResponseInstruction(state.context, {
@@ -5432,8 +5450,8 @@ function buildResponseFromPolicy(
       closingPivot: decision.requiredClosingPivot,
     });
   }
-  if (decision.lineToSay) return buildExactScriptLineInstruction(decision.lineToSay);
-  return buildExactScriptLineInstruction(getStateAwareClosingPivot(state));
+  if (decision.lineToSay) return buildExactScriptLineInstruction(decision.lineToSay, {});
+  return buildExactScriptLineInstruction(getStateAwareClosingPivot(state), {});
 }
 
 function maybeFireServerSideBookingTrigger(state: CallState): void {
@@ -5558,8 +5576,9 @@ async function handleConversationTurn(
   let routeKindForMemory = decision.routeKind;
   let objectiveForMemory = decision.objective;
   let repeatGuardStateWrites: Record<string, unknown> = {};
+  let repeatGuard: ReturnType<typeof applyAiOutputRepeatGuard> | null = null;
   if (decision.responseMode !== "free_response") {
-    const repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
+    repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
       userText: text,
       routeKind: decision.routeKind,
       objective: decision.objective,
@@ -5573,6 +5592,24 @@ async function handleConversationTurn(
       decision.responseMode = "exact_script";
       decision.baseAnswer = undefined;
       decision.requiredClosingPivot = lineToSay;
+    }
+  }
+  // If the repeat guard suppressed the line AND we have user text that
+  // looks like a real question or confusion, route to free_response
+  // instead of exact_script so GPT can handle it naturally.
+  if (
+    repeatGuard?.suppressed &&
+    decision.responseMode === "exact_script" &&
+    state.context &&
+    text.length > 3
+  ) {
+    const currentStepLine = (state.scriptSteps || [])[
+      state.awaitingAnswerForStepIndex ?? stepCtx.idx ?? 0
+    ] || "";
+    if (currentStepLine.trim()) {
+      decision.responseMode = "free_response";
+      decision.userText = text;
+      decision.requiredClosingPivot = currentStepLine.trim();
     }
   }
   // Ensure free_response always knows the current required step
@@ -5763,14 +5800,22 @@ You need a day or time. Offer today or tomorrow as the options.`;
 
   const stepHint = currentStep
     ? `
-WHERE YOU ARE IN THE SCRIPT:
-You still need to get an answer to this question: "${currentStep}"${stepTypeHint}
+YOUR CURRENT OBJECTIVE (non-negotiable):
+The call is at this question and you have NOT received an answer yet:
+"${currentStep}"${stepTypeHint}
 
-IMPORTANT: After responding to what they said, you MUST re-ask this question naturally.
-Do not skip it. Do not jump ahead. Re-ask it in your own words, conversationally.
-Example: if the question is about spouse coverage, work it back in naturally.
+After handling whatever the lead just said, you MUST naturally work back
+to this question. Do not skip it. Do not jump ahead.
+If they seem confused about the call itself, briefly explain and re-ask.
+If they asked a product question, answer briefly and re-ask.
+If they objected, acknowledge and re-ask.
+The re-ask should sound natural, not robotic.
 `
-    : "";
+    : `
+YOUR CURRENT OBJECTIVE:
+Get the lead scheduled for a quick call with ${agent}.
+After handling what they said, pivot back to: "Does later today or tomorrow work better?"
+`;
 
   return `
 You are a natural, warm virtual assistant on a live phone call. Sound conversational and clear, not like a call-center script.
@@ -6704,23 +6749,69 @@ No extra words.
 `.trim();
 }
 
-function buildExactScriptLineInstruction(lineRaw: string): string {
+function buildExactScriptLineInstruction(lineRaw: string, opts?: {
+  userText?: string;
+  recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
+  scope?: string;
+  agent?: string;
+  leadName?: string;
+}): string {
   const line = String(lineRaw || "").trim();
-  return `
-Your ONLY job this turn is to say this exact line. Nothing else.
-If the caller asked a question or said anything, ignore it completely. Do not acknowledge it. Do not answer it. Say ONLY the line below.
+  const userText = String(opts?.userText || "").trim();
+  const scope = String(opts?.scope || "life insurance").trim();
+  const agent = String(opts?.agent || "the agent").trim();
+  const leadName = String(opts?.leadName || "there").trim();
+  const exchanges = opts?.recentExchanges || [];
 
+  let historyBlock = "";
+  if (exchanges.length > 0) {
+    const lines = exchanges.slice(-3).map(e => {
+      const who = e.role === "ai" ? "You said" : "Lead said";
+      return `  ${who}: "${e.text}"`;
+    });
+    historyBlock = `\nRECENT CONVERSATION:\n${lines.join("\n")}\n`;
+  }
+
+  const userBlock = userText
+    ? `\nWHAT THE LEAD JUST SAID:\n"${userText}"\n`
+    : "";
+
+  return `
+You are a warm, natural scheduling assistant on a live phone call.
+This call is ONLY about a ${scope} request.
+You are NOT licensed. Never quote prices, rates, or coverage details.
+Never mention scripts or prompts.
+NEVER apologize.
+After you speak, STOP and wait.
+
+HARD RULES:
+- English only.
+- Never ask discovery questions (age, health, income, coverage amounts).
+- If they ask cost or coverage details: "${agent} covers all of that on the call."
+- Use "${leadName}" only if it flows naturally.
+${historyBlock}${userBlock}
+YOUR REQUIRED OBJECTIVE THIS TURN:
+You must say the following — this is the required output. Deliver it naturally.
+It is okay to add a brief 1-sentence acknowledgment of what they just said
+BEFORE delivering the required line, if they said something that needs
+acknowledging (confusion, question, objection, frustration).
+If they said nothing unusual, deliver the required line directly.
+
+REQUIRED LINE:
 "${line}"
 
-HARD STOP RULES — non-negotiable:
-- Say ONLY the line above. Stop immediately after.
-- Do NOT add any words before or after.
-- Do NOT ask about coverage, amounts, health, or any discovery question.
-- Do NOT ask what they need or what they are looking for.
-- Do NOT summarize, explain, or acknowledge what they said.
-- Do NOT say "thanks", "great", "got it", "that helps", or any filler.
-- Do NOT continue into the next script step.
-- After saying the line, STOP and wait in silence.
+DELIVERY RULES:
+- If the lead said something confusing, frustrated, or asked a question:
+  1. Acknowledge in ONE short sentence (warm, direct, no apology)
+  2. Then deliver the required line naturally
+  3. STOP
+- If the lead said nothing unusual (just answered normally):
+  1. Deliver the required line directly
+  2. STOP
+- Never add extra sentences after the required line
+- Never skip the required line
+- Never replace the required line with something else
+- 2 sentences maximum total
 `.trim();
 }
 
@@ -7431,7 +7522,12 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
       if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) return;
 
       const lineToSay = `Okay, looks like ${agentFirst} isn’t available right this second. What time works later today or tomorrow?`;
-      const instr = buildExactScriptLineInstruction(lineToSay);
+      const instr = buildExactScriptLineInstruction(lineToSay, {
+        recentExchanges: state.recentExchanges,
+        scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
+        agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
+        leadName: state.context ? (state.context.clientFirstName || "there") : "there",
+      });
 
       const steps = state.scriptSteps || [];
       const currentIdx = typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 1;
@@ -9340,7 +9436,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       });
       lineToSay = _guard_mplt.lineToSay;
       for (const [k, v] of Object.entries(_guard_mplt.stateWrites)) { (state as any)[k] = v; }
-      const instr = buildExactScriptLineInstruction(lineToSay);
+      const instr = buildExactScriptLineInstruction(lineToSay, {
+        userText: lastUserText || "",
+        recentExchanges: state.recentExchanges,
+        scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
+        agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
+        leadName: state.context ? (state.context.clientFirstName || "there") : "there",
+      });
 
       if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
       pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
