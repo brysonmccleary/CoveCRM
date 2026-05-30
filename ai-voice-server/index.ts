@@ -1128,63 +1128,10 @@ async function replayPendingCommittedTurn(
     const lastCreateAt = Number(state.lastResponseCreateAtMs || 0);
     if (now - lastCreateAt < 150) return;
 
-    const isGreetingReply = state.phase === "awaiting_greeting_reply";
     const turnKey = buildCommittedTurnKey(state, lastUserText, restoredAudioMs, expectedAnswerIdx);
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
     if (await handleConversationTurn(state, lastUserText, "replay", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause)) return;
-    if (isPostCoverageSchedulingState(state)) {
-      logPostCoverageLegacySuppress(state, "replay", "post-policy legacy fallback", lastUserText);
-      return;
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay how-long")) return;
-      let lineToSay =
-        "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
-      const _guard_rhl = applyAiOutputRepeatGuard(state, lineToSay, {
-        userText: lastUserText,
-        routeKind: "how_long",
-        objective: "ask_day_after_duration",
-      });
-      lineToSay = _guard_rhl.lineToSay;
-      for (const [k, v] of Object.entries(_guard_rhl.stateWrites)) { (state as any)[k] = v; }
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      setWaitingForResponse(state, true, "response.create (how-long)");
-      setAiSpeaking(state, true, "response.create (how-long)");
-      setResponseInFlight(state, true, "response.create (how-long)");
-      state.outboundOpenAiDone = false;
-
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      recordPassiveRouteMemory(state, {
-        source: "replay",
-        routeKind: _guard_rhl.routeKind,
-        routeReason: "duration_question",
-        userText: lastUserText,
-        lineToSay,
-        turnKey,
-      });
-      noteAiOutputSpoken(state, lineToSay);
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-      state.phase = "in_call";
-      return;
-    }
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
       const _ltClearSd = String(state.selectedDay || "").trim().toLowerCase();
@@ -1292,846 +1239,6 @@ async function replayPendingCommittedTurn(
     }
 
 
-    if (isGreetingReply) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay greeting reply")) return;
-      const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
-
-      // ✅ Guard: do NOT treat empty/noisy commits as a greeting reply.
-      // Require real words OR strong audio (fallback) before advancing past greeting.
-      const greetAudioMs = Number(state.userAudioMsBuffered || 0);
-      if (!lastUserText && greetAudioMs < 1400) return;
-
-      // ✅ Objection check: if the lead objects on their very first response
-      // (e.g. "already got it taken care of", "not interested", "remove me"),
-      // route to the rebuttal handler instead of advancing the script.
-      // This catches objections that fire before awaitingUserAnswer is set.
-      const greetingContinue = isConversationalGreetingContinue(lastUserText);
-      const greetingObjKind = !greetingContinue && lastUserText ? detectObjection(lastUserText) : null;
-      const greetingQKind = !greetingContinue && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
-      const greetingObjOrQ = greetingObjKind || greetingQKind;
-      if (greetingObjOrQ) {
-        // Treat exactly like the REBUTTAL-GATE path — just set phase and fall through.
-        // We do this by setting awaitingUserAnswer = true temporarily so the rebuttal
-        // gate fires on the NEXT committed event... but we need to handle it NOW.
-        // Instead: build the rebuttal inline and send it.
-        try {
-          let overrideLine = enforceBookingOnlyLine(
-            state.context!,
-            getRebuttalLine(state.context!, greetingObjOrQ)
-          );
-          const _guard_rgo = applyAiOutputRepeatGuard(state, overrideLine, {
-            userText: lastUserText,
-            routeKind: "objection",
-            objective: `greeting_objection_${greetingObjOrQ}`,
-          });
-          overrideLine = _guard_rgo.lineToSay;
-          for (const [k, v] of Object.entries(_guard_rgo.stateWrites)) { (state as any)[k] = v; }
-          if (lastUserText) pushExchange(state, "user", lastUserText, 0);
-          const rebuttalInstr = buildConversationalRebuttalInstruction(state.context!, overrideLine, {
-            objectionKind: greetingObjOrQ,
-            userText: lastUserText,
-            lastOutboundLine: state.lastPromptLine,
-            lastOutboundAtMs: state.lastPromptSentAtMs,
-            recentExchanges: state.recentExchanges,
-          });
-          pushExchange(state, "ai", overrideLine, 0);
-
-          state.awaitingUserAnswer = false;
-          state.awaitingAnswerForStepIndex = undefined;
-          state.userAudioMsBuffered = 0;
-          state.lastUserTranscript = "";
-          state.lowSignalCommitCount = 0;
-
-          await humanPause();
-
-          setWaitingForResponse(state, true, "response.create (greeting objection)");
-          setAiSpeaking(state, true, "response.create (greeting objection)");
-          setResponseInFlight(state, true, "response.create (greeting objection)");
-          state.outboundOpenAiDone = false;
-
-          state.lastPromptSentAtMs = Date.now();
-          state.lastPromptLine = overrideLine;
-          state.lastResponseCreateAtMs = Date.now();
-          state.lastObjectionKind = greetingObjOrQ;
-          state.objectionRepeatCount = 0;
-          recordPassiveRouteMemory(state, {
-            source: "replay",
-            routeKind: _guard_rgo.routeKind,
-            routeReason: greetingObjOrQ,
-            userText: lastUserText,
-            lineToSay: overrideLine,
-            turnKey,
-            trackResolvedObjection: !!greetingObjKind,
-          });
-          noteAiOutputSpoken(state, overrideLine);
-          state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(rebuttalInstr, { temperature: 0.6 })));
-
-          // Re-arm stepper so next reply answers Step 1
-          state.awaitingUserAnswer = true;
-          state.awaitingAnswerForStepIndex = 0;
-          state.phase = "in_call";
-          return;
-        } catch (e) {
-          try { console.log("[AI-VOICE] greeting objection handler error:", String(e)); } catch {}
-          // fall through to normal greeting reply if something goes wrong
-        }
-      }
-
-      if (isGreetingNegativeHearing(lastUserText)) {
-        const aiName2 = (state.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
-        const clientName2 = (state.context!.clientFirstName || "").trim() || "there";
-        let retryLine = `Okay — can you hear me now, ${clientName2}? This is ${aiName2}.`;
-        const _guard_rgr = applyAiOutputRepeatGuard(state, retryLine, {
-          userText: lastUserText,
-          routeKind: "greeting_retry",
-          objective: "hearing_check",
-        });
-        retryLine = _guard_rgr.lineToSay;
-        for (const [k, v] of Object.entries(_guard_rgr.stateWrites)) { (state as any)[k] = v; }
-        const retryInstr = buildStepperTurnInstruction(state.context!, retryLine);
-
-        state.awaitingUserAnswer = false;
-        state.awaitingAnswerForStepIndex = undefined;
-        state.userAudioMsBuffered = 0;
-        state.lastUserTranscript = "";
-        state.lowSignalCommitCount = 0;
-        state.repromptCountForCurrentStep = 0;
-
-        await humanPause();
-
-        setWaitingForResponse(state, true, "response.create (greeting retry)");
-        setAiSpeaking(state, true, "response.create (greeting retry)");
-        setResponseInFlight(state, true, "response.create (greeting retry)");
-        state.outboundOpenAiDone = false;
-
-        state.lastPromptSentAtMs = Date.now();
-        state.lastPromptLine = retryLine;
-        state.lastResponseCreateAtMs = Date.now();
-        recordPassiveRouteMemory(state, {
-          source: "replay",
-          routeKind: _guard_rgr.routeKind,
-          routeReason: "negative_hearing",
-          userText: lastUserText,
-          lineToSay: retryLine,
-          turnKey,
-        });
-        noteAiOutputSpoken(state, retryLine);
-        state.openAiWs.send(
-          JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
-        );
-
-        state.awaitingUserAnswer = true;
-        state.awaitingAnswerForStepIndex = 0;
-        (state as any).greetingAudioStarted = false;
-        (state as any).greetingAudioDone = false;
-        state.phase = "awaiting_greeting_reply";
-        return;
-      }
-
-      const useInboundOpening = shouldUseInboundFlow(state.context);
-      let lineToSay2 = useInboundOpening ? buildInboundReasonLine(state.context!) : lineToSay;
-      const _guard_rsag = applyAiOutputRepeatGuard(state, lineToSay2, {
-        userText: lastUserText,
-        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
-        objective: "step1_question",
-      });
-      lineToSay2 = _guard_rsag.lineToSay;
-      for (const [k, v] of Object.entries(_guard_rsag.stateWrites)) { (state as any)[k] = v; }
-      const perTurnInstr = useInboundOpening
-        ? buildInboundReasonInstructions(state.context!)
-        : buildExactScriptLineInstruction(lineToSay2);
-
-      // Push greeting exchange to memory
-      if (lastUserText) pushExchange(state, "user", lastUserText, 0);
-      pushExchange(state, "ai", lineToSay2, 0);
-
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      await humanPause();
-
-      setWaitingForResponse(state, true, "response.create (stepper after greeting)");
-      setAiSpeaking(state, true, "response.create (stepper after greeting)");
-      setResponseInFlight(state, true, "response.create (stepper after greeting)");
-      state.outboundOpenAiDone = false;
-
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay2;
-      state.lastResponseCreateAtMs = Date.now();
-      recordPassiveRouteMemory(state, {
-        source: "replay",
-        routeKind: _guard_rsag.routeKind,
-        routeReason: useInboundOpening ? "inbound_reason" : "stepper_after_greeting",
-        userText: lastUserText,
-        lineToSay: lineToSay2,
-        turnKey,
-      });
-      noteAiOutputSpoken(state, lineToSay2);
-      state.openAiWs.send(
-        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
-      );
-
-      // ✅ Do NOT advance out of greeting yet.
-      // We only advance after the Step 1 audio is done/drained so early caller audio cannot route as a Step 1 answer.
-      let nextIdx = steps.length > 1 ? 1 : 0;
-
-      // ✅ Keep stepper alignment: rebuttals end with a booking question.
-      // If the objection happens early (Step 1), we just asked the Step 2 booking question in the rebuttal.
-      // Move scriptStepIndex forward so the NEXT user reply is interpreted as answering Step 2 (not Step 1).
-      try {
-        const lt = String(lineToSay || "").toLowerCase();
-        const askedBookingQ =
-          lt.includes("later today") || lt.includes("today or tomorrow") || lt.includes("tomorrow be better");
-        if (askedBookingQ) {
-          // idx is the NEXT step-to-say; expectedAnswerIdx = idx - 1.
-          // We want expectedAnswerIdx to be Step 2 after this rebuttal, so idx must be 2.
-          if (idx <= 1) {
-            nextIdx = Math.min(2, Math.max(0, (steps.length || 0) - 1));
-          }
-        }
-      } catch {}
-
-      state.greetingAdvancePending = true;
-      state.greetingAdvanceNextIndex = nextIdx;
-      state.greetingAdvanceNextPhase = "in_call";
-
-      // Stay in greeting phase until we see outbound audio actually start.
-      state.phase = "awaiting_greeting_reply";
-      return;
-    }
-
-    try {
-      console.log("[AI-VOICE][REBUTTAL-GATE]", {
-        callSid: state.callSid,
-        phase: state.phase,
-        isGreetingReply,
-        objectionKind,
-        questionKind,
-        objectionOrQuestionKind,
-        lastUserText,
-        awaitingUserAnswer: state.awaitingUserAnswer,
-      });
-    } catch {}
-
-    if (objectionOrQuestionKind) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay objection")) return;
-      // ✅ HARD-LOCK: "How long does it take?" must ALWAYS get the same rebuttal (prevents inconsistent answers).
-      // This does NOT change model, audio format, or session settings. Only the chosen line.
-      let overrideRebuttalLine: string | null = null;
-      try {
-        if (isHowLongDurationQuestion(lastUserText)) {
-          overrideRebuttalLine =
-            "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
-        }
-      } catch {}
-      let lineToSay = enforceBookingOnlyLine(state.context!, overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind));
-      if (objectionOrQuestionKind === "scam") {
-        lineToSay = buildDeterministicScamRebuttalLine(state);
-      }
-      const _guard_ro = applyAiOutputRepeatGuard(state, lineToSay, {
-        userText: lastUserText,
-        routeKind: "objection",
-        objective: `rebuttal_${objectionOrQuestionKind}`,
-      });
-      lineToSay = _guard_ro.lineToSay;
-      for (const [k, v] of Object.entries(_guard_ro.stateWrites)) { (state as any)[k] = v; }
-      const perTurnInstr = objectionOrQuestionKind === "scam"
-        ? buildExactScriptLineInstruction(lineToSay)
-        : buildConversationalRebuttalInstruction(state.context!, lineToSay, {
-            objectionKind: objectionOrQuestionKind,
-            userText: lastUserText,
-            lastOutboundLine: state.lastPromptLine,
-            lastOutboundAtMs: state.lastPromptSentAtMs,
-            closingPivot: getStateAwareClosingPivot(state),
-          });
-
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      await humanPause();
-
-      setWaitingForResponse(state, true, "response.create (objection)");
-      setAiSpeaking(state, true, "response.create (objection)");
-      setResponseInFlight(state, true, "response.create (objection)");
-      state.outboundOpenAiDone = false;
-
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      recordPassiveRouteMemory(state, {
-        source: "replay",
-        routeKind: _guard_ro.routeKind,
-        routeReason: objectionOrQuestionKind,
-        userText: lastUserText,
-        lineToSay,
-        turnKey,
-        trackResolvedObjection: !!objectionKind,
-      });
-      noteAiOutputSpoken(state, lineToSay);
-      state.openAiWs.send(
-        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
-      );
-
-      // ✅ Keep stepper alignment: rebuttals end with a booking question.
-      // If the rebuttal asked the Step 2 booking question (today vs tomorrow),
-      // move scriptStepIndex forward so the NEXT user reply is interpreted as answering Step 2.
-      try {
-        const lt = String(lineToSay || "").toLowerCase();
-        const askedBookingQ =
-          lt.includes("later today") || lt.includes("today or tomorrow") || lt.includes("tomorrow be better");
-        if (askedBookingQ) {
-          if (idx <= 1) {
-            state.scriptStepIndex = Math.min(2, Math.max(0, (steps.length || 0) - 1));
-          }
-        }
-      } catch {}
-
-
-      // ✅ After an objection rebuttal, re-arm the stepper so the next user reply
-      // is treated as answering the last asked step (keeps script flow natural).
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-
-      state.phase = "in_call";
-      return;
-    }
-
-    // Default: continue script step flow — MUST mirror normal commit path (guards + time logic + reprompt).
-    const audioMs = Number(state.userAudioMsBuffered || 0);
-    const hasTranscript = lastUserText.length > 0;
-
-    // don't speak unless transcript OR very strong audio
-    const canSpeak = hasTranscript || audioMs >= 1400;
-
-    const stepLine = String(steps[idx] || "");
-    const exactTimeRequired =
-      stepType === "time_question" && isExactTimeQuestion(stepLine);
-
-    const canAdvance =
-      hasTranscript &&
-      (stepType !== "time_question"
-        ? !isFillerOnly(lastUserText)
-        : isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText));
-
-    const treatAsAnswer = shouldTreatCommitAsRealAnswer(
-      stepType,
-      audioMs,
-      lastUserText
-    );
-
-    // Window-only reply ("afternoon") is NOT valid for broad day/time question unless it includes day reference or exact time.
-    const forceNotAnswer =
-      stepType === "time_question" &&
-      !exactTimeRequired &&
-      hasTranscript &&
-      isTimeWindowMentioned(lastUserText) &&
-      !isDayReferenceMentioned(lastUserText) &&
-      !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText);
-
-    const shouldTriggerLiveTransfer =
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      hasExplicitLiveTransferIntent(lastUserText) &&
-      (
-        hasImmediateTransferConfirmation(lastUserText) ||
-        hasExplicitAgentTransferCommand(lastUserText) ||
-        !isImmediateTransferSchedulingPreference(lastUserText)
-      ) &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone;
-
-    if (
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      hasExplicitLiveTransferIntent(lastUserText) &&
-      isImmediateTransferSchedulingPreference(lastUserText) &&
-      !hasImmediateTransferConfirmation(lastUserText) &&
-      !hasExplicitAgentTransferCommand(lastUserText) &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone
-    ) {
-      try {
-        console.log("[AI-VOICE][DIRECT-TRANSFER-BLOCKED]", {
-          callSid: state.callSid,
-          reason: "scheduling_preference",
-          source: "replay",
-        });
-      } catch {}
-    }
-
-    if (shouldTriggerLiveTransfer) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay explicit live-transfer")) return;
-      if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) {
-        console.log("[AI-VOICE][LIVE-TRANSFER] Replay explicit transfer deferred; response already active", {
-          callSid: state.callSid,
-          waitingForResponse: !!state.waitingForResponse,
-          responseInFlight: !!state.responseInFlight,
-          aiSpeaking: !!state.aiSpeaking,
-        });
-        state.awaitingUserAnswer = true;
-        return;
-      }
-
-      console.log("[AI-VOICE][LIVE-TRANSFER] Replay explicit transfer intent detected — triggering live transfer", {
-        callSid: state.callSid,
-        agentPhone: state.context!.liveTransferPhone,
-      });
-      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-      recordPassiveRouteMemory(state, {
-        source: "replay",
-        routeKind: "live_transfer_direct",
-        routeReason: "explicit_intent",
-        userText: lastUserText,
-        lineToSay: getLiveTransferTryingLine(state.context!),
-        turnKey,
-      });
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      const wsConn = state.openAiWs;
-      if (wsConn) {
-        void performLiveTransfer(wsConn, state);
-      }
-      return;
-    }
-
-    if (!canSpeak) {
-      state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
-      return;
-    }
-
-    if (!treatAsAnswer || forceNotAnswer) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay reprompt")) return;
-
-      // ✅ Guard: if we only got a hesitation fragment, DO NOT reprompt (reprompts cause cut-offs).
-      // Examples: "um", "uh", "uhh", "umm", "probably", "maybe"
-      // Treat this like low-signal and WAIT for the next commit.
-      const hes = String(lastUserText || "").trim().toLowerCase();
-      const isHesitationFragment =
-        isFillerOnly(hes) ||
-        hes === "probably" ||
-        hes === "maybe" ||
-        hes === "i think" ||
-        hes === "not sure";
-      if (hasTranscript && isHesitationFragment) {
-        state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
-        return;
-      }
-
-      // ✅ Guard: do NOT reprompt on filler-only commits (prevents "um" cutoff)
-      try {
-        if (hasTranscript && isFillerOnly(lastUserText) && Number(audioMs || 0) < 1700) {
-          state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
-          return;
-        }
-      } catch {}
-
-      const repromptN = Number(state.repromptCountForCurrentStep || 0);
-      state.repromptCountForCurrentStep = repromptN + 1;
-
-      // ✅ Keep booking ladder stable on replay too.
-      // If the user is clearly talking about times/availability, do NOT reset to "today or tomorrow".
-      let repromptLineRaw = getRepromptLineForStepType(state.context!, stepType, repromptN);
-      try {
-        const wantsTime =
-          stepType === "time_question" ||
-          (hasTranscript && (
-            isTimeIndecisionOrAvailability(lastUserText) ||
-            isTimeMentioned(lastUserText)
-          ));
-        if (wantsTime) {
-            const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-            const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-            repromptLineRaw = getTimeOfferLine(
-              state.context!,
-              n,
-              pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
-              pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
-              lastUserText
-            );
-            state.timeOfferCountForStepIndex = idx;
-            state.timeOfferCount = n + 1;
-          }
-      } catch {}
-
-      const repromptLine = applyDiscoveryCap(state, repromptLineRaw);
-
-      try {
-        console.log("[AI-VOICE][TURN-GATE][REPLAY] not-real-answer -> reprompt", {
-          callSid: state.callSid,
-          streamSid: state.streamSid,
-          stepType,
-          audioMs: Number(audioMs || 0),
-          hasText: !!String(lastUserText || "").trim(),
-          n: repromptN,
-        });
-      } catch {}
-
-      await humanPause();
-
-      const _guard_rrp = applyAiOutputRepeatGuard(state, repromptLine, {
-        userText: lastUserText,
-        routeKind: looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
-        objective: stepType,
-      });
-      const guardedRepromptLine = _guard_rrp.lineToSay;
-      for (const [k, v] of Object.entries(_guard_rrp.stateWrites)) { (state as any)[k] = v; }
-      const instr = looksLikeGeneratedTimeOfferLine(guardedRepromptLine)
-        ? buildExactScriptLineInstruction(guardedRepromptLine)
-        : buildStepperTurnInstruction(state.context!, guardedRepromptLine);
-
-      setWaitingForResponse(state, true, "response.create (replay reprompt)");
-      setAiSpeaking(state, true, "response.create (replay reprompt)");
-      setResponseInFlight(state, true, "response.create (replay reprompt)");
-      state.outboundOpenAiDone = false;
-
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = guardedRepromptLine;
-      state.lastResponseCreateAtMs = Date.now();
-      recordPassiveRouteMemory(state, {
-        source: "replay",
-        routeKind: _guard_rrp.routeKind,
-        routeReason: stepType,
-        userText: lastUserText,
-        lineToSay: guardedRepromptLine,
-        turnKey,
-      });
-      noteAiOutputSpoken(state, guardedRepromptLine);
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-
-      state.phase = "in_call";
-      return;
-    }
-
-    if (shouldRouteDaySelectionToTimeOffer(state, lastUserText, idx, expectedAnswerIdx, steps)) {
-      if (!markCommittedTurnHandled(state, turnKey, "replay day-choice time offer")) return;
-      const explicitDay = extractExplicitDaySelection(lastUserText);
-      const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
-      const rememberedNamedDay = rememberedDay && rememberedDay !== "today" && rememberedDay !== "tomorrow" ? rememberedDay : null;
-      const dayHint: string | null =
-        explicitDay === "today" || explicitDay === "tomorrow"
-          ? explicitDay
-          : rememberedDay === "today" || rememberedDay === "tomorrow"
-            ? rememberedDay
-            : extractNamedWeekday(lastUserText.toLowerCase()) || rememberedNamedDay || null;
-      if (
-        idx === 1 &&
-        !!state.context?.liveTransferEnabled &&
-        !!state.context?.liveTransferPhone &&
-        (explicitDay === "today" || explicitDay === "tomorrow" || rememberedDay === "today" || rememberedDay === "tomorrow")
-      ) {
-        try {
-          console.log("[AI-VOICE][LIVE-TRANSFER-SKIP-DAY-SELECTED]", {
-            source: "replay",
-            selectedDay: state.selectedDay || null,
-            explicitDay: explicitDay || null,
-            idx,
-            expectedAnswerIdx,
-          });
-        } catch {}
-      }
-      const timeStepIndex = idx <= 1 ? Math.min(2, Math.max(0, steps.length - 1)) : idx;
-      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
-      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      let lineToSay = getTimeOfferLine(
-        state.context!,
-        n,
-        dayHint,
-        pickTimeWindowHint(lastUserText, ""),
-        lastUserText
-      );
-      const _guard_rdct = applyAiOutputRepeatGuard(state, lineToSay, {
-        userText: lastUserText,
-        routeKind: "time_offer",
-        objective: "offer_time_slots",
-      });
-      lineToSay = _guard_rdct.lineToSay;
-      for (const [k, v] of Object.entries(_guard_rdct.stateWrites)) { (state as any)[k] = v; }
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      state.timeOfferCountForStepIndex = timeStepIndex;
-      state.timeOfferCount = n + 1;
-      state.scriptStepIndex = timeStepIndex;
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      await humanPause();
-
-      setWaitingForResponse(state, true, "response.create (replay day-choice time offer)");
-      setAiSpeaking(state, true, "response.create (replay day-choice time offer)");
-      setResponseInFlight(state, true, "response.create (replay day-choice time offer)");
-      state.outboundOpenAiDone = false;
-
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      recordPassiveRouteMemory(state, {
-        source: "replay",
-        routeKind: _guard_rdct.routeKind,
-        routeReason: "selected_day",
-        userText: lastUserText,
-        lineToSay,
-        turnKey,
-      });
-      try {
-        console.log("[AI-VOICE][DAY-CHOICE-ROUTE]", {
-          source: "replay",
-          selectedDay: state.selectedDay || null,
-          explicitDay: explicitDay || null,
-          idx,
-          expectedAnswerIdx,
-          scriptStepIndex: state.scriptStepIndex,
-          lastRouteKind: state.lastRouteKind || null,
-          lineHash: hash8(lineToSay),
-        });
-      } catch {}
-      noteAiOutputSpoken(state, lineToSay);
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-      state.phase = "in_call";
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
-      return;
-    }
-
-    let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
-
-    const explicitDayForLiveTransferSkip = extractExplicitDaySelection(lastUserText);
-    const selectedDayForLiveTransferSkip = String(state.selectedDay || "").trim().toLowerCase();
-    const hasDaySelectedForLiveTransferSkip =
-      explicitDayForLiveTransferSkip === "today" ||
-      explicitDayForLiveTransferSkip === "tomorrow" ||
-      selectedDayForLiveTransferSkip === "today" ||
-      selectedDayForLiveTransferSkip === "tomorrow";
-
-    const shouldAskLiveTransferAvailability =
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone &&
-      !hasDaySelectedForLiveTransferSkip &&
-      !isDayReferenceMentioned(lastUserText) &&
-      !isExactClockTimeMentioned(lastUserText) &&
-      isStepOneCoverageSubjectAnswer(lastUserText);
-    if (
-      !shouldAskLiveTransferAvailability &&
-      hasDaySelectedForLiveTransferSkip &&
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone &&
-      !isExactClockTimeMentioned(lastUserText) &&
-      isStepOneCoverageSubjectAnswer(lastUserText)
-    ) {
-      try {
-        console.log("[AI-VOICE][LIVE-TRANSFER-SKIP-DAY-SELECTED]", {
-          source: "replay",
-          selectedDay: state.selectedDay || null,
-          explicitDay: explicitDayForLiveTransferSkip || null,
-          idx,
-          expectedAnswerIdx,
-        });
-      } catch {}
-    }
-    if (shouldAskLiveTransferAvailability) {
-      lineToSay = getLiveTransferAvailabilityLine(state.context!);
-      state.pendingLiveTransferAvailabilityConfirm = true;
-      state.pendingLiveTransferAvailabilityAttempts = 0;
-    }
-
-    // ── STEP 1 HARD ROUTE (replay path mirror) ──
-    // Policy layer (above) is now authoritative for coverage_subject_answer turns via policy_step1_coverage.
-    // Skip entirely if policy_step1_coverage would handle this turn (avoids duplicate booking frame).
-    if (
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      isStepOneCoverageSubjectAnswer(lastUserText)
-    ) {
-      // policy_step1_coverage already handled this above; fall through to day-choice / stepper.
-      return;
-    }
-
-    // ✅ Day-choice answer handling:
-    // If the current step is "today or tomorrow" and they answer with a day ("tomorrow")
-    // but not an exact clock time yet, offer concrete options and HOLD position.
-    if (stepType === "time_question" && hasTranscript) {
-      const stepLineDay = String(steps[idx] || "");
-      const lastPromptDay = String(state.lastPromptLine || "");
-      if ((isDayChoiceQuestion(stepLineDay) || isDayChoiceQuestion(lastPromptDay)) && isDayReferenceMentioned(lastUserText) && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
-        const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-        const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-        lineToSay = getTimeOfferLine(
-          state.context!,
-          n,
-          pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
-          pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
-          lastUserText
-        );
-        state.timeOfferCountForStepIndex = idx;
-        state.timeOfferCount = n + 1;
-      }
-    }
-
-
-    // ✅ hard cap discovery questions (max 2) before sending
-    lineToSay = applyDiscoveryCap(state, lineToSay);
-
-        // Exact-time enforcement (mirror normal path)
-    let forcedExactTimeOffer = false;
-    if (stepType === "time_question") {
-      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-      const prevCount = sameStep ? Number(state.timeOfferCount || 0) : 0;
-
-      const priorAccepted = String(state.lastAcceptedUserText || "");
-      const hasPriorDay = priorAccepted ? isDayReferenceMentioned(priorAccepted) : false;
-
-      const hasDayNow = hasTranscript && isDayReferenceMentioned(lastUserText);
-      const hasWindowNow = hasTranscript && isTimeWindowMentioned(lastUserText);
-
-      // ✅ Do not advance the script on "tomorrow"/"afternoon"/"whenever".
-      // Instead: day -> ask morning/afternoon; window -> offer exact times; indecision -> offer times.
-      if (hasTranscript && !isExactClockTimeMentioned(lastUserText)) {
-        let n = prevCount;
-
-        // If they only gave a day ("tomorrow"), start at the window-choice rung.
-        if (hasDayNow && !hasWindowNow) {
-          n = 0;
-        }
-
-        // If they gave a window ("afternoon") (with or without day), jump to exact-time offers.
-        // Also allow window-only if they previously already picked a day.
-        if (hasWindowNow || (hasPriorDay && isTimeWindowMentioned(lastUserText))) {
-          n = Math.max(n, 1);
-        }
-
-        // If they’re vague ("either / whenever"), keep offering concrete options.
-        if (isTimeIndecisionOrAvailability(lastUserText)) {
-          n = Math.max(n, 1);
-        }
-
-        lineToSay = getTimeOfferLine(
-            state.context!,
-            n,
-            pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
-            pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
-            lastUserText
-          );
-        state.timeOfferCountForStepIndex = idx;
-        state.timeOfferCount = n + 1;
-        forcedExactTimeOffer = true;
-      }
-    }
-
-    // ack prefix based on last accepted step (mirror normal path)
-    const prevIdx = expectedAnswerIdx;
-    if (prevIdx >= 0 && state.lastAcceptedUserText && state.lastAcceptedStepIndex === prevIdx) {
-      const prevLine = steps[prevIdx] || "";
-      const prevType = classifyStepType(prevLine);
-      const ack2 = getHumanAckPrefixForStepAnswer(prevType, state.lastAcceptedUserText);
-      if (ack2) lineToSay = `${ack2} ${lineToSay}`;
-    }
-
-    // anti-loop (mirror normal path)
-    try {
-      const prev = String(state.lastPromptLine || "").replace(/\s+/g, " ").trim().toLowerCase();
-      const next = String(lineToSay || "").replace(/\s+/g, " ").trim().toLowerCase();
-      const lastAt = Number(state.lastPromptSentAtMs || 0);
-      if (prev && next && prev === next && (Date.now() - lastAt) < 10000) {
-        lineToSay = getBookingFallbackLine(state.context!);
-      }
-    } catch {}
-
-    const replayRouteKind = looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step";
-    const replayRepeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
-      userText: lastUserText,
-      routeKind: replayRouteKind,
-      objective: stepType,
-    });
-    lineToSay = replayRepeatGuard.lineToSay;
-    for (const [k, v] of Object.entries(replayRepeatGuard.stateWrites)) {
-      (state as any)[k] = v;
-    }
-
-    const perTurnInstr = looksLikeGeneratedTimeOfferLine(lineToSay)
-      ? buildExactScriptLineInstruction(lineToSay)
-      : buildStepperTurnInstruction(state.context!, lineToSay);
-    try { console.log("[AI-VOICE][STEPPER][REPLAY-SEND]", { callSid: state.callSid, stepIndex: idx, expectedAnswerIdx, stepType, lineToSay }); } catch {}
-    if (!markCommittedTurnHandled(state, turnKey, "replay script step")) return;
-
-    if (lastUserText) {
-      state.lastAcceptedUserText = lastUserText;
-      state.lastAcceptedStepType = stepType;
-      state.lastAcceptedStepIndex = expectedAnswerIdx;
-
-      if (isExactClockTimeMentioned(lastUserText)) {
-        (state as any).lastExactTimeText = lastUserText;
-        (state as any).lastExactTimeAtMs = Date.now();
-      }
-    }
-
-    state.awaitingUserAnswer = false;
-    state.awaitingAnswerForStepIndex = undefined;
-
-    state.userAudioMsBuffered = 0;
-    state.lastUserTranscript = "";
-    state.lowSignalCommitCount = 0;
-    state.repromptCountForCurrentStep = 0;
-
-    await humanPause();
-
-    setWaitingForResponse(state, true, "response.create (replay script step)");
-    setAiSpeaking(state, true, "response.create (replay script step)");
-    setResponseInFlight(state, true, "response.create (replay script step)");
-    state.outboundOpenAiDone = false;
-
-    state.lastPromptSentAtMs = Date.now();
-    state.lastPromptLine = lineToSay;
-    state.lastResponseCreateAtMs = Date.now();
-    recordPassiveRouteMemory(state, {
-      source: "replay",
-      routeKind: replayRepeatGuard.routeKind,
-      routeReason: replayRepeatGuard.objective || stepType,
-      userText: lastUserText,
-      lineToSay,
-      turnKey,
-    });
-    noteAiOutputSpoken(state, lineToSay);
-
-    state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(perTurnInstr)));
-
-    // advance logic (mirror normal path)
-    if (canAdvance) {
-      state.scriptStepIndex = shouldAskLiveTransferAvailability
-        ? idx
-        : Math.min(idx + 1, Math.max(0, steps.length - 1));
-      state.timeOfferCountForStepIndex = undefined;
-      state.timeOfferCount = 0;
-    } else {
-      state.scriptStepIndex = idx;
-    }
-
-    state.phase = "in_call";
-    return;
   } catch (err: any) {
     console.warn("[AI-VOICE][TURN-GATE][REPLAY] failed (non-blocking):", {
       callSid: state.callSid,
@@ -4721,7 +3828,9 @@ type TurnIntentKind =
   | "confusion"
   | "not_interested"
   | "off_topic"
-  | "unknown";
+  | "unknown"
+  | "script_advance"
+  | "reprompt_step";
 
 interface TurnIntent {
   kind: TurnIntentKind;
@@ -4729,7 +3838,7 @@ interface TurnIntent {
   raw: string;
 }
 
-type ResponseMode = "exact_script" | "soft_script" | "guided_gpt" | "free_response" | "free_response_blocked";
+type ResponseMode = "exact_script" | "soft_script" | "guided_gpt" | "free_response" | "free_response_blocked" | "script_step";
 
 interface PolicyDecision {
   handled: boolean;
@@ -4743,6 +3852,7 @@ interface PolicyDecision {
   forbiddenTopics: string[];
   stateWrites: Record<string, unknown>;
   shouldAdvanceStep: boolean;
+  repeatMode?: boolean;
 }
 
 function isPostCoverageSchedulingState(state: CallState): boolean {
@@ -5032,9 +4142,22 @@ function classifyTurnIntent(
     "are you listening", "are you even listening",
     "hello are you there", "you there", "can you hear me",
     "hello?", "hello hello",
+    "breaking up", "cutting out", "static", "too quiet", "barely hear",
+    "hard to hear", "hardly hear",
   ];
   if (hearingSignals.some(s => t.includes(s)) || t === "what" || t === "huh" || t === "what?") {
     return { kind: "hearing_problem", raw };
+  }
+
+  // Priority 3.4: greeting-phase hearing check — short negatives during greeting ("no", "nope")
+  // can mean "I can't hear you." Only fire during awaiting_greeting_reply to avoid
+  // mis-classifying genuine "no" answers during the script.
+  if (state.phase === "awaiting_greeting_reply") {
+    try {
+      if (isGreetingNegativeHearing(t)) {
+        return { kind: "hearing_problem", subKind: "greeting_phase", raw };
+      }
+    } catch {}
   }
 
   // Priority 3.5: greeting ack — user is acknowledging the AI during greeting phase.
@@ -5102,6 +4225,17 @@ function classifyTurnIntent(
     }
     if (isLiveTransferAvailabilityNo(t) || isImmediateTransferSchedulingPreference(t)) {
       return { kind: "live_transfer_later", raw };
+    }
+  } catch {}
+
+  // Priority 7: script advance or reprompt — only when awaiting answer in in_call phase.
+  try {
+    if (state.phase === "in_call" && state.awaitingUserAnswer) {
+      const audioMs = Number(state.userAudioMsBuffered || 0);
+      if (shouldTreatCommitAsRealAnswer(stepCtx.stepType, audioMs, t)) {
+        return { kind: "script_advance", raw };
+      }
+      return { kind: "reprompt_step", raw };
     }
   } catch {}
 
@@ -5392,7 +4526,7 @@ function handlePostCoverageSchedulingTurn(
   }
 
   if (intent.kind === "not_interested") {
-    const lineToSay = enforceBookingOnlyLine(ctx, getRebuttalLine(ctx, "not_interested"));
+    const lineToSay = getRebuttalLine(ctx, "not_interested");
     return {
       handled: true,
       routeKind: "post_coverage_not_interested",
@@ -5460,7 +4594,7 @@ function handlePostCoverageSchedulingTurn(
     }
 
     // All other objections: use the actual rebuttal lines
-    const lineToSay = enforceBookingOnlyLine(ctx, getRebuttalLine(ctx, sk || "generic_question"));
+    const lineToSay = getRebuttalLine(ctx, sk || "generic_question");
     return {
       handled: true,
       routeKind: `post_coverage_${sk || intent.kind}`,
@@ -5562,6 +4696,26 @@ function buildConversationPolicyDecision(
   }
 
   if (intent.kind === "hearing_problem") {
+    if (intent.subKind === "greeting_phase" && ctx) {
+      const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+      const clientName = (ctx.clientFirstName || "").trim() || "there";
+      const lineToSay = `Okay — can you hear me now, ${clientName}? This is ${aiName}.`;
+      return {
+        handled: true,
+        routeKind: "policy_greeting_hearing_retry",
+        responseMode: "exact_script",
+        objective: "hearing_check",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: {
+          phase: "awaiting_greeting_reply",
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: 0,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     const repeatLine = String(state.lastPromptLine || "").trim();
     const lineToSay = repeatLine || "Sure — I was just asking if later today or tomorrow works better.";
     return {
@@ -5619,14 +4773,14 @@ function buildConversationPolicyDecision(
     };
   }
 
-  // All remaining branches only run in in_call phase.
-  // Greeting-phase turns that aren't greeting_ack fall through to the existing greeting handler.
-  if (state.phase !== "in_call") return NOT_HANDLED;
-
-  const postCoverageDecision = handlePostCoverageSchedulingTurn(state, intent, ctx, stepCtx);
-  if (postCoverageDecision?.handled) return postCoverageDecision;
+  // Post-coverage scheduling only runs in in_call phase.
+  if (state.phase === "in_call") {
+    const postCoverageDecision = handlePostCoverageSchedulingTurn(state, intent, ctx, stepCtx);
+    if (postCoverageDecision?.handled) return postCoverageDecision;
+  }
 
   if (intent.kind === "live_transfer_now") {
+    if (state.phase !== "in_call") return NOT_HANDLED;
     if (!ctx || !(ctx as any)?.liveTransferEnabled || !(ctx as any)?.liveTransferPhone) {
       return NOT_HANDLED;
     }
@@ -5656,6 +4810,7 @@ function buildConversationPolicyDecision(
   }
 
   if (intent.kind === "live_transfer_later" || intent.kind === "scheduling_preference") {
+    if (state.phase !== "in_call") return NOT_HANDLED;
     if (!ctx) return NOT_HANDLED;
     const explicitDay = pickDayHint(intent.raw, "");
     const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
@@ -5783,11 +4938,26 @@ function buildConversationPolicyDecision(
   if (intent.kind === "not_interested") {
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
+    const niKind = "not_interested";
+    const niIsRepeat = !!state.lastObjectionKind && state.lastObjectionKind === niKind;
+    const niRepeatCount = niIsRepeat ? (Number(state.objectionRepeatCount ?? 0) + 1) : 1;
+    const niRepeatMode = niIsRepeat && niRepeatCount >= 2;
+    const niStateWrites: Record<string, unknown> = { lastObjectionKind: niKind, objectionRepeatCount: niRepeatCount };
+    if (niRepeatMode) {
+      return {
+        handled: true, routeKind: "policy_not_interested", responseMode: "soft_script",
+        objective: "return_to_booking",
+        lineToSay: getRebuttalLine(ctx, niKind),
+        requiredClosingPivot: closingPivot,
+        forbiddenTopics: [], stateWrites: niStateWrites, shouldAdvanceStep: false,
+        repeatMode: true,
+      };
+    }
     const lineToSay = `Totally fair — and I'm not here to pressure you. Most people who felt that way ended up really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${closingPivot}`;
     return {
       handled: true, routeKind: "policy_not_interested", responseMode: "exact_script",
       objective: "return_to_booking", lineToSay, requiredClosingPivot: closingPivot,
-      forbiddenTopics: [], stateWrites: {}, shouldAdvanceStep: false,
+      forbiddenTopics: [], stateWrites: niStateWrites, shouldAdvanceStep: false,
     };
   }
 
@@ -5826,7 +4996,29 @@ function buildConversationPolicyDecision(
         ? `${getVerticalProductAnswer(ctx)} ${closingPivot}`
         : `${agentFirst} can answer that on the call. ${closingPivot}`;
     } else {
-      return NOT_HANDLED; // unknown subKind — fall through to old rebuttal gate
+      lineToSay = getRebuttalLine(ctx, "generic_question");
+    }
+
+    const objKind = sk || intent.kind;
+    const objIsRepeat = !!state.lastObjectionKind && state.lastObjectionKind === objKind;
+    const objRepeatCount = objIsRepeat ? (Number(state.objectionRepeatCount ?? 0) + 1) : 1;
+    const objRepeatMode = objIsRepeat && objRepeatCount >= 2;
+    const objStateWrites: Record<string, unknown> = { lastObjectionKind: objKind, objectionRepeatCount: objRepeatCount };
+
+    if (objRepeatMode) {
+      const rebuttalBase = getRebuttalLine(ctx, sk) || lineToSay;
+      return {
+        handled: true,
+        routeKind: `policy_${sk || "objection"}`,
+        responseMode: "soft_script",
+        objective: "return_to_booking",
+        lineToSay: rebuttalBase,
+        requiredClosingPivot: closingPivot,
+        forbiddenTopics: [],
+        stateWrites: objStateWrites,
+        shouldAdvanceStep: false,
+        repeatMode: true,
+      };
     }
 
     return {
@@ -5837,13 +5029,13 @@ function buildConversationPolicyDecision(
       lineToSay,
       requiredClosingPivot: closingPivot,
       forbiddenTopics: [],
-      stateWrites: {},
+      stateWrites: objStateWrites,
       shouldAdvanceStep: false,
     };
   }
 
   // ── Branch: explicit day selection (today / tomorrow / any named weekday) ─
-  if (intent.kind === "day_selection") {
+  if (intent.kind === "day_selection" && state.phase === "in_call") {
     const explicitDay = pickDayHint(intent.raw, "");
     const namedDay: string | null = (intent.subKind && intent.subKind !== "today" && intent.subKind !== "tomorrow")
       ? intent.subKind
@@ -5886,7 +5078,7 @@ function buildConversationPolicyDecision(
   // ── Branch: time window when day already known ───────────────────────────
   // User says "morning" / "afternoon" / "evening" and we already have selectedDay.
   // Also handles "neither works" / "no neither" → ask for alternative window.
-  if (intent.kind === "time_window") {
+  if (intent.kind === "time_window" && state.phase === "in_call") {
     // "Neither works" / "none of those" → ask for a different window, not repeat same slots.
     if (intent.subKind === "none_work") {
       return {
@@ -5946,10 +5138,91 @@ function buildConversationPolicyDecision(
     };
   }
 
+  // ── Branch: script advance (lead gave a qualifying answer to current step) ─
+  if (intent.kind === "script_advance") {
+    if (!ctx || state.phase !== "in_call") return NOT_HANDLED;
+    const nextIdx = stepCtx.idx + 1;
+    const nextStep = stepCtx.steps[nextIdx];
+
+    if (!nextStep) {
+      return {
+        handled: true,
+        routeKind: "policy_script_end",
+        responseMode: "exact_script",
+        objective: "return_to_booking",
+        lineToSay: getStateAwareClosingPivot(state),
+        requiredClosingPivot: closingPivot,
+        forbiddenTopics: [],
+        stateWrites: {
+          scriptStepIndex: nextIdx,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+          lastAcceptedUserText: intent.raw,
+          lastAcceptedStepType: stepCtx.stepType,
+          lastAcceptedStepIndex: stepCtx.idx,
+        },
+        shouldAdvanceStep: true,
+      };
+    }
+
+    const ackPrefix = getHumanAckPrefixForStepAnswer(stepCtx.stepType, intent.raw);
+    const fullLine = ackPrefix ? `${ackPrefix} ${nextStep}` : nextStep;
+
+    return {
+      handled: true,
+      routeKind: `policy_script_step_${nextIdx}`,
+      responseMode: "script_step",
+      objective: "script_advance",
+      lineToSay: fullLine,
+      userText: intent.raw,
+      requiredClosingPivot: closingPivot,
+      forbiddenTopics: [],
+      stateWrites: {
+        scriptStepIndex: nextIdx,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: nextIdx,
+        lastAcceptedUserText: intent.raw,
+        lastAcceptedStepType: stepCtx.stepType,
+        lastAcceptedStepIndex: stepCtx.idx,
+      },
+      shouldAdvanceStep: true,
+    };
+  }
+
+  // ── Branch: reprompt step (lead gave insufficient answer) ─────────────────
+  if (intent.kind === "reprompt_step") {
+    if (!ctx || state.phase !== "in_call") return NOT_HANDLED;
+    const repromptN = Number(state.repromptCountForCurrentStep || 0);
+    const lineToSay = getRepromptLineForStepType(ctx, stepCtx.stepType, repromptN);
+    return {
+      handled: true,
+      routeKind: "policy_reprompt",
+      responseMode: "exact_script",
+      objective: "reprompt_step",
+      lineToSay,
+      requiredClosingPivot: closingPivot,
+      forbiddenTopics: [],
+      stateWrites: {
+        repromptCountForCurrentStep: repromptN + 1,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
   return NOT_HANDLED;
 }
 
 function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): string {
+  if (decision.responseMode === "script_step" && decision.lineToSay && state.context) {
+    const line = decision.lineToSay;
+    if (looksLikeGeneratedTimeOfferLine(line)) {
+      return buildExactScriptLineInstruction(line);
+    }
+    return buildStepperTurnInstruction(state.context, line, {
+      userText: decision.userText,
+      recentExchanges: state.recentExchanges,
+    });
+  }
   if (decision.responseMode === "exact_script" && decision.lineToSay) {
     return buildExactScriptLineInstruction(decision.lineToSay);
   }
@@ -5964,6 +5237,8 @@ function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): st
   if (decision.responseMode === "soft_script" && decision.lineToSay && state.context) {
     return buildConversationalRebuttalInstruction(state.context, decision.lineToSay, {
       closingPivot: decision.requiredClosingPivot,
+      repeatMode: decision.repeatMode,
+      recentExchanges: state.recentExchanges,
     });
   }
   if (decision.responseMode === "guided_gpt" && decision.routeKind.startsWith("post_coverage_") && decision.baseAnswer && state.context) {
@@ -5982,6 +5257,108 @@ function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): st
   }
   if (decision.lineToSay) return buildExactScriptLineInstruction(decision.lineToSay);
   return buildExactScriptLineInstruction(getStateAwareClosingPivot(state));
+}
+
+function maybeFireServerSideBookingTrigger(state: CallState): void {
+  try {
+    const newStepIdx = Number(state.scriptStepIndex || 0);
+    const totalSteps = (state.scriptSteps || []).length;
+    const onConfirmStep = newStepIdx >= 3 && totalSteps >= 4;
+    const lastExactTime = String((state as any).lastExactTimeText || "").trim();
+    const lastExactAt = Number((state as any).lastExactTimeAtMs || 0);
+    const hasRecentExactTime =
+      !!lastExactTime &&
+      isExactClockTimeMentioned(lastExactTime) &&
+      lastExactAt > 0 &&
+      (Date.now() - lastExactAt) < 5 * 60 * 1000;
+
+    if (!onConfirmStep || !hasRecentExactTime || state.finalOutcomeSent) return;
+
+    console.log("[AI-VOICE][BOOKING][SERVER-TRIGGER][POLICY]", {
+      callSid: state.callSid,
+      stepIndex: newStepIdx,
+      lastExactTimeText: lastExactTime,
+    });
+    void handleFinalOutcomeIntent(state, {
+      kind: "final_outcome",
+      outcome: "booked",
+      summary: `AI scheduled appointment. Lead confirmed call around ${lastExactTime}.`,
+      notesAppend: `Approximate time confirmed by lead: ${lastExactTime}. Agent should confirm exact slot.`,
+    });
+    state.finalOutcomeSent = true;
+
+    try {
+      const agentTz = String(state.context?.agentTimeZone || "America/Phoenix").trim();
+      const leadTz = String(getLeadTimeZoneHintFromContext(state.context!) || agentTz).trim();
+      const nowInAgentTz = new Date().toLocaleString("en-US", { timeZone: agentTz });
+      const explicitDay =
+        extractExplicitDaySelection(lastExactTime) ||
+        extractExplicitDaySelection(String(state.selectedTimeText || "")) ||
+        extractExplicitDaySelection(String(state.lastAcceptedUserText || ""));
+      const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+      const selectedBookingDay =
+        explicitDay === "today" || explicitDay === "tomorrow"
+          ? explicitDay
+          : rememberedDay === "today" || rememberedDay === "tomorrow"
+            ? rememberedDay
+            : "today";
+      const bookingLocalDate = new Date(nowInAgentTz);
+      if (selectedBookingDay === "tomorrow") bookingLocalDate.setDate(bookingLocalDate.getDate() + 1);
+      const bookingDateStr = bookingLocalDate.toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" });
+
+      const extractSpokenClockForBooking = (raw: string): string => {
+        const t2 = String(raw || "").trim().toLowerCase();
+        const meridiem = t2.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+        if (meridiem) return `${meridiem[1]}${meridiem[2] ? `:${meridiem[2]}` : ""}${meridiem[3]}`;
+        const clock = t2.match(/\b(\d{1,2}:\d{2})\b/);
+        if (clock) return clock[1];
+        const atBare = t2.match(/\b(?:at|around|about|by)\s+(\d{1,2})\b/i);
+        if (atBare) return atBare[1];
+        return String(raw || "").trim();
+      };
+
+      const parseSpokenTime = (raw: string, dateStr: string, tz: string): Date | null => {
+        try {
+          const t2 = raw.trim().toLowerCase();
+          const match = t2.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+          if (!match) return null;
+          let hh = Number(match[1]);
+          const mm = Number(match[2] || "0");
+          const mer = (match[3] || "").toLowerCase();
+          if (mer === "pm" && hh !== 12) hh += 12;
+          if (mer === "am" && hh === 12) hh = 0;
+          if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+          const [mo, da, yr] = dateStr.split("/").map(Number);
+          if (!mo || !da || !yr) return null;
+          const localIso = `${yr}-${String(mo).padStart(2,"0")}-${String(da).padStart(2,"0")}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00`;
+          const approxUtc = new Date(localIso + "Z");
+          const tzParts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(approxUtc);
+          const tzH = Number(tzParts.find(p => p.type === "hour")?.value || 0);
+          const tzM = Number(tzParts.find(p => p.type === "minute")?.value || 0);
+          const diffMinutes = (hh * 60 + mm) - (tzH * 60 + tzM);
+          const result = new Date(approxUtc.getTime() + diffMinutes * 60 * 1000);
+          return isNaN(result.getTime()) ? null : result;
+        } catch { return null; }
+      };
+
+      const timeTextForBooking = extractSpokenClockForBooking(lastExactTime);
+      const startDate = parseSpokenTime(timeTextForBooking, bookingDateStr, agentTz);
+      if (startDate && !isNaN(startDate.getTime())) {
+        const diffMs = startDate.getTime() - Date.now();
+        if (diffMs > -60000 && diffMs < 48 * 60 * 60 * 1000) {
+          void handleBookAppointmentIntent(state, {
+            startTimeUtc: startDate.toISOString(),
+            durationMinutes: 30,
+            leadTimeZone: isValidIanaTimeZone(leadTz) ? leadTz : agentTz,
+            agentTimeZone: isValidIanaTimeZone(agentTz) ? agentTz : "America/Phoenix",
+            notes: `Booked via AI Dialer. Lead said: "${lastExactTime}". Agent should confirm exact slot.`,
+          });
+        }
+      }
+    } catch (bookErr: any) {
+      console.warn("[AI-VOICE][BOOKING][POLICY-TRIGGER] calendar error (non-blocking):", bookErr?.message);
+    }
+  } catch {}
 }
 
 async function handleConversationTurn(
@@ -6028,6 +5405,10 @@ async function handleConversationTurn(
   }
   for (const [k, v] of Object.entries(repeatGuardStateWrites)) {
     (state as any)[k] = v;
+  }
+
+  if (decision.shouldAdvanceStep) {
+    maybeFireServerSideBookingTrigger(state);
   }
 
   pushExchange(state, "user", text, stepCtx.expectedAnswerIdx);
@@ -9642,58 +9023,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
     if (await handleConversationTurn(state, lastUserText, "main", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause)) return;
-    if (isPostCoverageSchedulingState(state)) {
-      logPostCoverageLegacySuppress(state, "main", "post-policy legacy fallback", lastUserText);
-      return;
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    if (lastUserText && isHowLongDurationQuestion(lastUserText)) {
-      if (!markCommittedTurnHandled(state, turnKey, "how-long")) return;
-      let lineToSay =
-        "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
-      const _guard_mhl = applyAiOutputRepeatGuard(state, lineToSay, {
-        userText: lastUserText,
-        routeKind: "how_long",
-        objective: "ask_day_after_duration",
-      });
-      lineToSay = _guard_mhl.lineToSay;
-      for (const [k, v] of Object.entries(_guard_mhl.stateWrites)) { (state as any)[k] = v; }
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      setWaitingForResponse(state, true, "response.create (how-long)");
-      setAiSpeaking(state, true, "response.create (how-long)");
-      setResponseInFlight(state, true, "response.create (how-long)");
-      state.outboundOpenAiDone = false;
-
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      recordPassiveRouteMemory(state, {
-        source: "main",
-        routeKind: _guard_mhl.routeKind,
-        routeReason: "duration_question",
-        userText: lastUserText,
-        lineToSay,
-        turnKey,
-      });
-      noteAiOutputSpoken(state, lineToSay);
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-      state.phase = "in_call";
-      return;
-    }
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
       const _ltClearSd = String(state.selectedDay || "").trim().toLowerCase();
@@ -9801,1196 +9130,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     }
 
 
-    if (isGreetingReply) {
-      if (!markCommittedTurnHandled(state, turnKey, "greeting reply")) return;
-      const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
-      const greetingContinue = isConversationalGreetingContinue(lastUserText);
-
-      // Also treat a bare greeting response ("hello", "hi") the same as negative hearing —
-      // they didn't acknowledge us, just said hello back. Re-ask the hearing check.
-      // ✅ Only retry on actual hearing failure signals — NOT on "hi"/"hey" greetings
-      if (isGreetingNegativeHearing(lastUserText)) {
-        // If they couldn't hear or just echoed hello back, re-ask hearing check instead of advancing steps.
-        const aiName2 = (state.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
-        const clientNameRaw2 = (state.context!.clientFirstName || "").trim();
-        const clientName2 = (!clientNameRaw2 || isTestOrPlaceholderName(clientNameRaw2)) ? "there" : clientNameRaw2;
-        let retryLine = `Okay — can you hear me now, ${clientName2}? This is ${aiName2}.`;
-        const _guard_mgr = applyAiOutputRepeatGuard(state, retryLine, {
-          userText: lastUserText,
-          routeKind: "greeting_retry",
-          objective: "hearing_check",
-        });
-        retryLine = _guard_mgr.lineToSay;
-        for (const [k, v] of Object.entries(_guard_mgr.stateWrites)) { (state as any)[k] = v; }
-        const retryInstr = buildStepperTurnInstruction(state.context!, retryLine);
-
-        // consume awaitingUserAnswer ONLY when we are about to speak
-        state.awaitingUserAnswer = false;
-        state.awaitingAnswerForStepIndex = undefined;
-
-        state.userAudioMsBuffered = 0;
-        state.lastUserTranscript = "";
-        state.lowSignalCommitCount = 0;
-        state.repromptCountForCurrentStep = 0;
-
-        await humanPause();
-
-        setWaitingForResponse(state, true, "response.create (greeting retry)");
-        setAiSpeaking(state, true, "response.create (greeting retry)");
-        setResponseInFlight(state, true, "response.create (greeting retry)");
-        state.outboundOpenAiDone = false;
-
-        state.lastPromptSentAtMs = Date.now();
-        state.lastPromptLine = retryLine;
-        state.lastResponseCreateAtMs = Date.now();
-        recordPassiveRouteMemory(state, {
-          source: "main",
-          routeKind: _guard_mgr.routeKind,
-          routeReason: "negative_hearing",
-          userText: lastUserText,
-          lineToSay: retryLine,
-          turnKey,
-        });
-        noteAiOutputSpoken(state, retryLine);
-        state.openAiWs.send(
-          JSON.stringify(buildRealtimeResponseCreate(retryInstr, { temperature: 0.6 }))
-        );
-
-        // ✅ Arm awaitingUserAnswer so audio keeps flowing to OpenAI after retry plays.
-        // Without this, the silence gate blocks inbound frames and VAD never fires.
-        state.awaitingUserAnswer = true;
-        state.awaitingAnswerForStepIndex = 0;
-        // Reset both flags so the retry commit is gated on retry audio finishing.
-        (state as any).greetingAudioStarted = false;
-        (state as any).greetingAudioDone = false;
-        // Stay in greeting phase; do NOT advance steps.
-        state.phase = "awaiting_greeting_reply";
-        return;
-      }
-
-      const useInboundOpening = shouldUseInboundFlow(state.context);
-      let lineToSay2 = useInboundOpening ? buildInboundReasonLine(state.context!) : lineToSay;
-      const _guard_msag = applyAiOutputRepeatGuard(state, lineToSay2, {
-        userText: lastUserText,
-        routeKind: greetingContinue ? "greeting_continue" : "greeting_reply",
-        objective: "step1_question",
-      });
-      lineToSay2 = _guard_msag.lineToSay;
-      for (const [k, v] of Object.entries(_guard_msag.stateWrites)) { (state as any)[k] = v; }
-      const perTurnInstr = useInboundOpening
-        ? buildInboundReasonInstructions(state.context!)
-        : buildExactScriptLineInstruction(lineToSay2);
-
-      // ✅ consume awaitingUserAnswer ONLY when we are about to speak
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      await humanPause();
-
-      setWaitingForResponse(
-        state,
-        true,
-        "response.create (stepper after greeting)"
-      );
-      setAiSpeaking(state, true, "response.create (stepper after greeting)");
-      setResponseInFlight(
-        state,
-        true,
-        "response.create (stepper after greeting)"
-      );
-      state.outboundOpenAiDone = false;
-
-      try {
-        if (!state.debugLoggedResponseCreateUserTurn) {
-          state.debugLoggedResponseCreateUserTurn = true;
-          console.log("[AI-VOICE][RESPONSE-CREATE][USER-TURN]", {
-            callSid: state.callSid,
-            streamSid: state.streamSid,
-            scriptKey: normalizeScriptKey(state.context?.scriptKey),
-            phase: state.phase,
-            isGreetingReply: true,
-            mode: "script_step",
-            stepIndex: 0,
-            stepsCount: steps.length,
-            instructionLen: perTurnInstr.length,
-            hasUserTranscript: !!lastUserText,
-            objectionKind: objectionKind || "(none)",
-          });
-        }
-      } catch {}
-
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay2;
-      state.lastResponseCreateAtMs = Date.now();
-      recordPassiveRouteMemory(state, {
-        source: "main",
-        routeKind: _guard_msag.routeKind,
-        routeReason: useInboundOpening ? "inbound_reason" : "stepper_after_greeting",
-        userText: lastUserText,
-        lineToSay: lineToSay2,
-        turnKey,
-      });
-      noteAiOutputSpoken(state, lineToSay2);
-      state.openAiWs.send(
-        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
-      );
-
-      // ✅ Do NOT advance out of greeting yet.
-      // We only advance after the Step 1 audio is done/drained so early caller audio cannot route as a Step 1 answer.
-      state.greetingAdvancePending = true;
-      state.greetingAdvanceNextIndex = steps.length > 1 ? 1 : 0;
-      state.greetingAdvanceNextPhase = "in_call";
-
-      // ✅ Pre-arm awaitingUserAnswer so barge-in audio is still forwarded; commit routing stays blocked by greetingAudioDone.
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = 0;
-
-      // Stay in greeting phase until we see outbound audio actually start.
-      state.phase = "awaiting_greeting_reply";
-      return;
-    }
-
-    try {
-      console.log("[AI-VOICE][REBUTTAL-GATE]", {
-        callSid: state.callSid,
-        phase: state.phase,
-        isGreetingReply,
-        objectionKind,
-        questionKind,
-        objectionOrQuestionKind,
-        lastUserText,
-        awaitingUserAnswer: state.awaitingUserAnswer,
-      });
-    } catch {}
-
-    if (objectionOrQuestionKind) {
-      if (!markCommittedTurnHandled(state, turnKey, "objection")) return;
-      // ✅ HARD-LOCK: "How long does it take?" must ALWAYS get the same rebuttal (prevents inconsistent answers).
-      // This does NOT change model, audio format, or session settings. Only the chosen line.
-      let overrideRebuttalLine: string | null = null;
-      try {
-        if (isHowLongDurationQuestion(lastUserText)) {
-          overrideRebuttalLine =
-            "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
-        }
-      } catch {}
-      let lineToSay = enforceBookingOnlyLine(
-        state.context!,
-        overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind)
-      );
-      if (objectionOrQuestionKind === "scam") {
-        lineToSay = buildDeterministicScamRebuttalLine(state);
-      }
-
-      // ── Repeat-objection tracking ──
-      const isRepeatObjection =
-        !!state.lastObjectionKind &&
-        state.lastObjectionKind === objectionOrQuestionKind;
-      if (isRepeatObjection) {
-        state.objectionRepeatCount = (state.objectionRepeatCount || 0) + 1;
-      } else {
-        state.lastObjectionKind = objectionOrQuestionKind;
-        state.objectionRepeatCount = 0;
-      }
-      const repeatMode = isRepeatObjection && (state.objectionRepeatCount || 0) >= 1;
-
-      const _guard_mo = applyAiOutputRepeatGuard(state, lineToSay, {
-        userText: lastUserText,
-        routeKind: "objection",
-        objective: `rebuttal_${objectionOrQuestionKind}`,
-      });
-      lineToSay = _guard_mo.lineToSay;
-      for (const [k, v] of Object.entries(_guard_mo.stateWrites)) { (state as any)[k] = v; }
-
-      // Push user turn to exchange memory before building instruction
-      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-
-      const perTurnInstr = objectionOrQuestionKind === "scam"
-        ? buildExactScriptLineInstruction(lineToSay)
-        : buildConversationalRebuttalInstruction(state.context!, lineToSay, {
-            objectionKind: objectionOrQuestionKind,
-            userText: lastUserText,
-            lastOutboundLine: state.lastPromptLine,
-            lastOutboundAtMs: state.lastPromptSentAtMs,
-            repeatMode,
-            recentExchanges: state.recentExchanges,
-            closingPivot: getStateAwareClosingPivot(state),
-          });
-
-      // ✅ consume awaitingUserAnswer ONLY when we are about to speak
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-
-      await humanPause();
-
-      setWaitingForResponse(state, true, "response.create (rebuttal)");
-      setAiSpeaking(state, true, "response.create (rebuttal)");
-      setResponseInFlight(state, true, "response.create (rebuttal)");
-      state.outboundOpenAiDone = false;
-
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      recordPassiveRouteMemory(state, {
-        source: "main",
-        routeKind: _guard_mo.routeKind,
-        routeReason: objectionOrQuestionKind,
-        userText: lastUserText,
-        lineToSay,
-        turnKey,
-        trackResolvedObjection: !!objectionKind,
-      });
-
-      // Push AI rebuttal line to exchange memory
-      pushExchange(state, "ai", lineToSay, expectedAnswerIdx);
-      noteAiOutputSpoken(state, lineToSay);
-      state.openAiWs.send(
-        JSON.stringify(buildRealtimeResponseCreate(perTurnInstr, { temperature: 0.6 }))
-      );
-
-
-      // ✅ After an objection rebuttal, re-arm the stepper so the next user reply
-      // is treated as answering the last asked step (keeps script flow natural).
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
-
-      state.phase = "in_call";
-      return;
-    }
-
-    const audioMs = Number(state.userAudioMsBuffered || 0);
-
-    const hasTranscript = lastUserText.length > 0;
-
-    // ✅ Patch 3: don't respond/advance on low-signal commits unless we have transcript OR very strong audio.
-    const canSpeak = hasTranscript || audioMs >= 1400;
-
-    // ✅ Patch 3: ONLY advance when we have transcript.
-    // For time_question:
-    // - Broad time questions (today vs tomorrow, daytime vs evening) can advance on "tomorrow"/"afternoon"/etc.
-    // - Exact-time questions MUST have an exact clock time (e.g., 2pm) before advancing.
-    const stepLine = String(steps[idx] || "");
-    const exactTimeRequired =
-      stepType === "time_question" && isExactTimeQuestion(stepLine);
-
-    const canAdvance =
-      hasTranscript &&
-      (stepType !== "time_question"
-        ? !isFillerOnly(lastUserText)
-        : exactTimeRequired
-          ? isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)
-          : (
-              // Booking Step 2 (later today vs tomorrow): HOLD and present options until an exact clock time is selected.
-              isDayChoiceQuestion(stepLine)
-                ? isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)
-                : (isDayReferenceMentioned(lastUserText) || isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText))));
-
-    const treatAsAnswer = shouldTreatCommitAsRealAnswer(
-      stepType,
-      audioMs,
-      lastUserText
-    );
-
-    // ✅ Guard: For broad time questions (Step 2 like "later today or tomorrow"),
-    // a window-only reply ("afternoon") is NOT a valid answer unless it includes a day reference ("tomorrow afternoon")
-    // or an exact clock time. Window-only should reprompt Step 2.
-    const forceNotAnswer =
-      stepType === "time_question" &&
-      !exactTimeRequired &&
-      hasTranscript &&
-      isTimeWindowMentioned(lastUserText) &&
-      !isDayReferenceMentioned(lastUserText) &&
-      !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText);
-
-    const shouldTriggerLiveTransfer =
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      hasExplicitLiveTransferIntent(lastUserText) &&
-      (
-        hasImmediateTransferConfirmation(lastUserText) ||
-        hasExplicitAgentTransferCommand(lastUserText) ||
-        !isImmediateTransferSchedulingPreference(lastUserText)
-      ) &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone &&
-      state.phase !== "ended";
-
-    if (
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      hasExplicitLiveTransferIntent(lastUserText) &&
-      isImmediateTransferSchedulingPreference(lastUserText) &&
-      !hasImmediateTransferConfirmation(lastUserText) &&
-      !hasExplicitAgentTransferCommand(lastUserText) &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone &&
-      state.phase !== "ended"
-    ) {
-      try {
-        console.log("[AI-VOICE][DIRECT-TRANSFER-BLOCKED]", {
-          callSid: state.callSid,
-          reason: "scheduling_preference",
-        });
-      } catch {}
-    }
-
-    if (shouldTriggerLiveTransfer) {
-      if (!markCommittedTurnHandled(state, turnKey, "explicit live-transfer")) return;
-      if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) {
-        console.log("[AI-VOICE][LIVE-TRANSFER] Explicit transfer deferred; response already active", {
-          callSid: state.callSid,
-          waitingForResponse: !!state.waitingForResponse,
-          responseInFlight: !!state.responseInFlight,
-          aiSpeaking: !!state.aiSpeaking,
-        });
-        state.awaitingUserAnswer = true;
-        return;
-      }
-
-      console.log("[AI-VOICE][LIVE-TRANSFER] Explicit transfer intent detected — triggering live transfer", {
-        callSid: state.callSid,
-        agentPhone: state.context!.liveTransferPhone,
-      });
-      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-      recordPassiveRouteMemory(state, {
-        source: "main",
-        routeKind: "live_transfer_direct",
-        routeReason: "explicit_intent",
-        userText: lastUserText,
-        lineToSay: getLiveTransferTryingLine(state.context!),
-        turnKey,
-      });
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      const wsConn = state.openAiWs;
-      if (wsConn) {
-        void performLiveTransfer(wsConn, state);
-      }
-      return;
-    }
-
-
-
-    // ✅ Patch 3: if we can't confidently speak yet, treat it as low-signal and wait/reprompt later.
-    if (!canSpeak) {
-      state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
-      state.awaitingUserAnswer = true;
-      return;
-    }
-
-    if (!treatAsAnswer || forceNotAnswer) {
-      if (!markCommittedTurnHandled(state, turnKey, "reprompt")) return;
-      // ✅ HOTFIX: Never go silent after a committed user turn.
-      // If we didn't accept it as a real answer, immediately reprompt — or use free-response.
-      const repromptN = Number(state.repromptCountForCurrentStep || 0);
-      state.repromptCountForCurrentStep = repromptN + 1;
-
-      // ✅ Keep booking ladder stable:
-      // If the user is clearly talking about availability/times (e.g. "what times do you have tomorrow evening"),
-      // do NOT reset to "today or tomorrow" — offer concrete options and hold position.
-      let repromptLine = getRepromptLineForStepType(state.context!, stepType, repromptN);
-      try {
-        if (hasTranscript) {
-          const wantsTime =
-            stepType === "time_question" ||
-            isTimeIndecisionOrAvailability(lastUserText) ||
-            isTimeMentioned(lastUserText);
-          if (wantsTime) {
-            const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-            const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-            repromptLine = getTimeOfferLine(
-              state.context!,
-              n,
-              pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
-              pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
-              lastUserText
-            );
-            state.timeOfferCountForStepIndex = idx;
-            state.timeOfferCount = n + 1;
-          }
-        }
-      } catch {}
-
-      // ── Free-response branch ──
-      // If the lead said something substantive that doesn't fit the time ladder or reprompt patterns,
-      // use a freeform GPT response instead of a canned reprompt line.
-      // Criteria: has real transcript + not a time/availability statement + repromptLine is the generic fallback.
-      const useFreeResponse = (() => {
-        try {
-          if (!hasTranscript) return false;
-          // Raised from 4 to 8: blocks stale 4-char fillers ("yeah","sure","okay") from reaching GPT
-          if (!lastUserText || lastUserText.trim().length < 8) return false;
-
-          // Time/availability is handled by the time ladder — don't free-respond to that
-          if (isTimeIndecisionOrAvailability(lastUserText)) return false;
-
-          // Outbound scheduler: Step 1 open_question must route through the deterministic
-          // isStepOneCoverageSubjectAnswer / shouldAskLiveTransferAvailability path, never GPT.
-          // Stale filler transcripts (race condition) must not produce free-form sales responses.
-          const outboundScheduler =
-            !shouldUseInboundFlow(state.context) &&
-            normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
-
-          // open_question: ALWAYS use free-response for non-answers.
-          // GPT will acknowledge what they said and re-ask the question naturally.
-          // This is the "handles anything" path — no canned reprompts for open questions.
-          if (stepType === "open_question") return true;
-
-          // yesno_question: use free-response when they said something real but ambiguous
-          if (stepType === "yesno_question" && repromptN >= 1) return true;
-
-          // Generic fallback: use free-response when reprompt line is just the booking default
-          const fallback = getBookingFallbackLine(state.context!).toLowerCase();
-          if (repromptLine.toLowerCase().includes(fallback.slice(0, 40))) return true;
-
-          return false;
-        } catch { return false; }
-      })();
-
-      try {
-        console.log("[AI-VOICE][TURN-GATE] not-real-answer ->", useFreeResponse ? "free-response" : "reprompt", {
-          callSid: state.callSid,
-          streamSid: state.streamSid,
-          stepType,
-          audioMs: Number(audioMs || 0),
-          hasText: !!String(lastUserText || "").trim(),
-          n: repromptN,
-          useFreeResponse,
-        });
-      } catch {}
-
-      if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-
-      (async () => {
-        try {
-          // Free-response turns skip the artificial pause — respond immediately.
-          // Script reprompt turns keep it to sound natural.
-          if (!useFreeResponse) await humanPause();
-        } catch {}
-
-        try {
-          const _guard_mrp = applyAiOutputRepeatGuard(state, repromptLine, {
-            userText: lastUserText,
-            routeKind: useFreeResponse ? "free_response" : looksLikeGeneratedTimeOfferLine(repromptLine) ? "time_offer" : "reprompt",
-            objective: stepType,
-          });
-          const guardedRepromptLine = _guard_mrp.lineToSay;
-          for (const [k, v] of Object.entries(_guard_mrp.stateWrites)) { (state as any)[k] = v; }
-
-          let instr: string;
-          let lineForMemory: string;
-
-          if (useFreeResponse) {
-            instr = buildFreeResponseInstruction(state.context!, {
-              userText: lastUserText,
-              recentExchanges: state.recentExchanges,
-              currentStepLine: steps[idx] || "",
-              stepType: stepType,
-            });
-            lineForMemory = `[free-response to: "${lastUserText.slice(0, 60)}"]`;
-          } else {
-            instr = looksLikeGeneratedTimeOfferLine(guardedRepromptLine)
-              ? buildExactScriptLineInstruction(guardedRepromptLine)
-              : buildStepperTurnInstruction(state.context!, guardedRepromptLine, {
-                  userText: lastUserText,
-                  recentExchanges: state.recentExchanges,
-                });
-            lineForMemory = guardedRepromptLine;
-          }
-
-          pushExchange(state, "ai", lineForMemory);
-
-          setWaitingForResponse(state, true, "response.create (reprompt/free)");
-          setAiSpeaking(state, true, "response.create (reprompt/free)");
-          setResponseInFlight(state, true, "response.create (reprompt/free)");
-          state.outboundOpenAiDone = false;
-
-          state.lastPromptSentAtMs = Date.now();
-          state.lastPromptLine = guardedRepromptLine;
-          state.lastResponseCreateAtMs = Date.now();
-          recordPassiveRouteMemory(state, {
-            source: "main",
-            routeKind: _guard_mrp.routeKind,
-            routeReason: stepType,
-            userText: lastUserText,
-            lineToSay: guardedRepromptLine,
-            turnKey,
-          });
-          noteAiOutputSpoken(state, guardedRepromptLine);
-          if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.75 })));
-
-        } catch (e) {
-          try { console.log("[AI-VOICE] Error sending reprompt/free response.create:", String(e)); } catch {}
-        }
-      })();
-
-      return;
-    }
-
-
-    if (shouldRouteDaySelectionToTimeOffer(state, lastUserText, idx, expectedAnswerIdx, steps)) {
-      if (!markCommittedTurnHandled(state, turnKey, "day-choice time offer")) return;
-      const explicitDay = extractExplicitDaySelection(lastUserText);
-      const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
-      const rememberedNamedDay = rememberedDay && rememberedDay !== "today" && rememberedDay !== "tomorrow" ? rememberedDay : null;
-      const dayHint: string | null =
-        explicitDay === "today" || explicitDay === "tomorrow"
-          ? explicitDay
-          : rememberedDay === "today" || rememberedDay === "tomorrow"
-            ? rememberedDay
-            : extractNamedWeekday(lastUserText.toLowerCase()) || rememberedNamedDay || null;
-      if (
-        idx === 1 &&
-        !!state.context?.liveTransferEnabled &&
-        !!state.context?.liveTransferPhone &&
-        (explicitDay === "today" || explicitDay === "tomorrow" || rememberedDay === "today" || rememberedDay === "tomorrow")
-      ) {
-        try {
-          console.log("[AI-VOICE][LIVE-TRANSFER-SKIP-DAY-SELECTED]", {
-            source: "main",
-            selectedDay: state.selectedDay || null,
-            explicitDay: explicitDay || null,
-            idx,
-            expectedAnswerIdx,
-          });
-        } catch {}
-      }
-      const timeStepIndex = idx <= 1 ? Math.min(2, Math.max(0, steps.length - 1)) : idx;
-      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
-      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      let lineToSay = getTimeOfferLine(
-        state.context!,
-        n,
-        dayHint,
-        pickTimeWindowHint(lastUserText, ""),
-        lastUserText
-      );
-      const _guard_mdct = applyAiOutputRepeatGuard(state, lineToSay, {
-        userText: lastUserText,
-        routeKind: "time_offer",
-        objective: "offer_time_slots",
-      });
-      lineToSay = _guard_mdct.lineToSay;
-      for (const [k, v] of Object.entries(_guard_mdct.stateWrites)) { (state as any)[k] = v; }
-      const instr = buildExactScriptLineInstruction(lineToSay);
-
-      state.timeOfferCountForStepIndex = timeStepIndex;
-      state.timeOfferCount = n + 1;
-      state.scriptStepIndex = timeStepIndex;
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-      state.userAudioMsBuffered = 0;
-      state.lastUserTranscript = "";
-      state.lowSignalCommitCount = 0;
-      state.repromptCountForCurrentStep = 0;
-
-      await humanPause();
-
-      setWaitingForResponse(state, true, "response.create (day-choice time offer)");
-      setAiSpeaking(state, true, "response.create (day-choice time offer)");
-      setResponseInFlight(state, true, "response.create (day-choice time offer)");
-      state.outboundOpenAiDone = false;
-
-      state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
-      state.lastResponseCreateAtMs = Date.now();
-      recordPassiveRouteMemory(state, {
-        source: "main",
-        routeKind: _guard_mdct.routeKind,
-        routeReason: "selected_day",
-        userText: lastUserText,
-        lineToSay,
-        turnKey,
-      });
-      try {
-        console.log("[AI-VOICE][DAY-CHOICE-ROUTE]", {
-          source: "main",
-          selectedDay: state.selectedDay || null,
-          explicitDay: explicitDay || null,
-          idx,
-          expectedAnswerIdx,
-          scriptStepIndex: state.scriptStepIndex,
-          lastRouteKind: state.lastRouteKind || null,
-          lineHash: hash8(lineToSay),
-        });
-      } catch {}
-      noteAiOutputSpoken(state, lineToSay);
-      state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
-      state.phase = "in_call";
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
-      return;
-    }
-
-    let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
-
-    const explicitDayForLiveTransferSkip = extractExplicitDaySelection(lastUserText);
-    const selectedDayForLiveTransferSkip = String(state.selectedDay || "").trim().toLowerCase();
-    const hasDaySelectedForLiveTransferSkip =
-      explicitDayForLiveTransferSkip === "today" ||
-      explicitDayForLiveTransferSkip === "tomorrow" ||
-      selectedDayForLiveTransferSkip === "today" ||
-      selectedDayForLiveTransferSkip === "tomorrow";
-
-    const shouldAskLiveTransferAvailability =
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone &&
-      !hasDaySelectedForLiveTransferSkip &&
-      !isDayReferenceMentioned(lastUserText) &&
-      !isExactClockTimeMentioned(lastUserText) &&
-      isStepOneCoverageSubjectAnswer(lastUserText);
-    if (
-      !shouldAskLiveTransferAvailability &&
-      hasDaySelectedForLiveTransferSkip &&
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      !!state.context?.liveTransferEnabled &&
-      !!state.context?.liveTransferPhone &&
-      !isExactClockTimeMentioned(lastUserText) &&
-      isStepOneCoverageSubjectAnswer(lastUserText)
-    ) {
-      try {
-        console.log("[AI-VOICE][LIVE-TRANSFER-SKIP-DAY-SELECTED]", {
-          source: "main",
-          selectedDay: state.selectedDay || null,
-          explicitDay: explicitDayForLiveTransferSkip || null,
-          idx,
-          expectedAnswerIdx,
-        });
-      } catch {}
-    }
-    if (shouldAskLiveTransferAvailability) {
-      lineToSay = getLiveTransferAvailabilityLine(state.context!);
-      state.pendingLiveTransferAvailabilityConfirm = true;
-      state.pendingLiveTransferAvailabilityAttempts = 0;
-    }
-
-    // ── STEP 1 HARD ROUTE ──
-    // Policy layer (above) is now authoritative for coverage_subject_answer turns via policy_step1_coverage.
-    // Skip entirely if policy_step1_coverage would handle this turn (avoids duplicate booking frame).
-    if (
-      canAdvance &&
-      idx === 1 &&
-      hasTranscript &&
-      isStepOneCoverageSubjectAnswer(lastUserText)
-    ) {
-      // policy_step1_coverage already handled this above; fall through to day-choice / stepper.
-      return;
-    }
-
-    // ✅ Day-choice answer handling:
-    // If the current step is "today or tomorrow" and they answer with a day ("tomorrow")
-    // but not an exact clock time yet, offer concrete options and HOLD position.
-    if (stepType === "time_question" && hasTranscript) {
-      const stepLineDay = String(steps[idx] || "");
-      const lastPromptDay = String(state.lastPromptLine || "");
-      if ((isDayChoiceQuestion(stepLineDay) || isDayChoiceQuestion(lastPromptDay)) && isDayReferenceMentioned(lastUserText) && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
-        const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-        const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-        lineToSay = getTimeOfferLine(
-          state.context!,
-          n,
-          pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
-          pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
-          lastUserText
-        );
-        state.timeOfferCountForStepIndex = idx;
-        state.timeOfferCount = n + 1;
-      }
-    }
-
-
-    // ✅ Exact-time enforcement:
-    // If the current line is an exact-time question ("what time works best?") and the user answers with
-    // a window ("afternoon") or day reference ("tomorrow") WITHOUT an exact clock time, we must offer
-    // exact options and HOLD position (never finalize from a window).
-    let forcedExactTimeOffer = false;
-    if (stepType === "time_question") {
-      const stepLine2 = String(steps[idx] || "");
-      const exactRequired2 = isExactTimeQuestion(stepLine2);
-
-      if (exactRequired2 && hasTranscript && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
-        if (
-          isTimeWindowMentioned(lastUserText) ||
-          isDayReferenceMentioned(lastUserText) ||
-          looksLikeTimeAnswer(lastUserText)
-        ) {
-          const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-          const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-          lineToSay = getTimeOfferLine(
-        state.context!,
-        n,
-        pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
-        pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
-        lastUserText
-      );
-          state.timeOfferCountForStepIndex = idx;
-          state.timeOfferCount = n + 1;
-          forcedExactTimeOffer = true;
-        }
-      }
-    }
-
-    // ✅ Broad day+window answer to a broad time question (e.g. "tomorrow afternoon"):
-    // Offer concrete exact options and HOLD position (do not advance).
-    if (
-      !forcedExactTimeOffer &&
-      stepType === "time_question" &&
-      hasTranscript &&
-      !isExactTimeQuestion(String(steps[idx] || "")) &&
-      isDayReferenceMentioned(lastUserText) &&
-      isTimeWindowMentioned(lastUserText) &&
-      !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)
-    ) {
-      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      lineToSay = getTimeOfferLine(
-        state.context!,
-        n,
-        pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
-        pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
-        lastUserText
-      );
-      state.timeOfferCountForStepIndex = idx;
-      state.timeOfferCount = n + 1;
-      forcedExactTimeOffer = true;
-    }
-
-    // ✅ Time indecision: user asked "what do you have available" / "you pick" etc.
-    // We should answer with options, but NOT advance the script step until a real time is given.
-    if (!forcedExactTimeOffer && stepType === "time_question" && isTimeIndecisionOrAvailability(lastUserText)) {
-      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")), pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")), lastUserText);
-      state.timeOfferCountForStepIndex = idx;
-      state.timeOfferCount = n + 1;
-    }
-    // ✅ open_question relevance gate: if the user's reply doesn't address
-    // the current question at all, fire free-response (GPT re-asks naturally)
-    // instead of advancing the stepper blindly.
-    // Examples that should NOT advance:
-    //   "Yeah, what's up?" to "Was this for yourself or a spouse?"
-    //   "What do you mean?" to any open_question
-    //   "Okay" / "Sure" — filler, not a real answer
-    // Examples that SHOULD advance:
-    //   "Just me", "Both of us", "Me and my wife", "Myself"
-    if (stepType === "open_question" && hasTranscript && lastUserText) {
-      const openQText = lastUserText.trim().toLowerCase();
-      // ✅ Time-availability questions should get time offers, not off-topic handling.
-      if (!isTimeIndecisionOrAvailability(openQText) && !isTimeMentioned(openQText)) {
-      // Signals that indicate the user is NOT answering but reacting
-      const isOffTopic =
-        /what('?s| is)?\s+(this|that|up|going on)/i.test(openQText) ||
-        /what do you\s+(mean|want|need)/i.test(openQText) ||
-        /why (are you|is this)/i.test(openQText) ||
-        /who (is this|are you|am i)/i.test(openQText) ||
-        /how did you/i.test(openQText) ||
-        (isFillerOnly(openQText) && openQText.length < 15) ||
-        /^(yeah|yep|yes|yup|sure|okay|ok|hi|hello)[,.]?\s*(what'?s? up|what do you (want|need)|what is (this|it)|huh)\??$/i.test(openQText);
-
-      if (isOffTopic) {
-        // Don't advance — re-ask the current step.
-        // Outbound scheduler: use deterministic reprompt so GPT cannot drift into sales-call mode.
-        // If shouldAskLiveTransferAvailability already set a transfer line above, preserve it.
-        // Non-outbound (inbound, kayla): use free-response so GPT re-asks conversationally.
-        const isOutboundScheduler =
-          !shouldUseInboundFlow(state.context) &&
-          normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
-
-        // For outbound: use whichever line was already chosen (transfer availability or step line).
-        // For inbound/kayla: use free-response GPT.
-        const offTopicLine = isOutboundScheduler
-          ? lineToSay  // already set by shouldAskLiveTransferAvailability or enforceBookingOnlyLine above
-          : getRepromptLineForStepType(state.context!, stepType, 0);
-
-        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-
-        const offTopicInstr = isOutboundScheduler
-          ? buildExactScriptLineInstruction(offTopicLine)
-          : buildFreeResponseInstruction(state.context!, {
-              userText: lastUserText,
-              currentStepLine: offTopicLine,
-              stepType,
-              recentExchanges: state.recentExchanges,
-            });
-
-        (async () => {
-          try {
-            const _guard_oqot = applyAiOutputRepeatGuard(state, offTopicLine, {
-              userText: lastUserText,
-              routeKind: "open_question_off_topic",
-              objective: isOutboundScheduler ? "deterministic_reask" : "free_response",
-            });
-            const guardedOffTopicLine = _guard_oqot.lineToSay;
-            for (const [k, v] of Object.entries(_guard_oqot.stateWrites)) { (state as any)[k] = v; }
-            const guardedOffTopicInstr = isOutboundScheduler
-              ? buildExactScriptLineInstruction(guardedOffTopicLine)
-              : buildFreeResponseInstruction(state.context!, {
-                  userText: lastUserText,
-                  currentStepLine: guardedOffTopicLine,
-                  stepType,
-                  recentExchanges: state.recentExchanges,
-                });
-
-            setWaitingForResponse(state, true, "response.create (open_question off-topic)");
-            setAiSpeaking(state, true, "response.create (open_question off-topic)");
-            setResponseInFlight(state, true, "response.create (open_question off-topic)");
-            state.outboundOpenAiDone = false;
-
-            state.lastPromptSentAtMs = Date.now();
-            state.lastPromptLine = guardedOffTopicLine;
-            state.lastResponseCreateAtMs = Date.now();
-            recordPassiveRouteMemory(state, {
-              source: "main",
-              routeKind: _guard_oqot.routeKind,
-              routeReason: isOutboundScheduler ? "deterministic_reask" : "free_response",
-              userText: lastUserText,
-              lineToSay: guardedOffTopicLine,
-              turnKey,
-            });
-            noteAiOutputSpoken(state, guardedOffTopicLine);
-            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(guardedOffTopicInstr, { temperature: 0.75 })));
-          } catch (e) {
-            try { console.log("[AI-VOICE] open_question off-topic error:", String(e)); } catch {}
-          }
-        })();
-        return;
-      }
-      } // end time-availability bypass
-    }
-
-    const prevIdx = expectedAnswerIdx;
-
-
-    if (
-
-
-      prevIdx >= 0 &&
-
-
-      state.lastAcceptedUserText &&
-
-
-      state.lastAcceptedStepIndex === prevIdx
-
-
-    ) {
-
-
-      const prevLine = steps[prevIdx] || "";
-
-
-      const prevType = classifyStepType(prevLine);
-
-
-      const ack2 = getHumanAckPrefixForStepAnswer(prevType, state.lastAcceptedUserText);
-
-
-      if (ack2) lineToSay = `${ack2} ${lineToSay}`;
-    }
-
-    // ✅ Anti-loop: do not repeat the exact same outbound line back-to-back.
-    // If we detect a duplicate within a short window, force a booking-only fallback question.
-    try {
-      const prev = String(state.lastPromptLine || "").replace(/\s+/g, " ").trim().toLowerCase();
-      const next = String(lineToSay || "").replace(/\s+/g, " ").trim().toLowerCase();
-      const lastAt = Number(state.lastPromptSentAtMs || 0);
-      if (prev && next && prev === next && (Date.now() - lastAt) < 10000) {
-        lineToSay = getBookingFallbackLine(state.context!);
-      }
-    } catch {}
-
-    // Push user answer to exchange memory before building instruction
-    if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
-
-    const mainRouteKind = looksLikeGeneratedTimeOfferLine(lineToSay) ? "time_offer" : "script_step";
-    const mainRepeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
-      userText: lastUserText,
-      routeKind: mainRouteKind,
-      objective: stepType,
-    });
-    lineToSay = mainRepeatGuard.lineToSay;
-    for (const [k, v] of Object.entries(mainRepeatGuard.stateWrites)) {
-      (state as any)[k] = v;
-    }
-
-    const perTurnInstr = looksLikeGeneratedTimeOfferLine(lineToSay)
-      ? buildExactScriptLineInstruction(lineToSay)
-      : buildStepperTurnInstruction(state.context!, lineToSay, {
-          userText: lastUserText,
-          recentExchanges: state.recentExchanges,
-        });
-    try { console.log("[AI-VOICE][STEPPER][SEND]", { callSid: state.callSid, stepIndex: idx, expectedAnswerIdx, stepType, lineToSay }); } catch {}
-    if (!markCommittedTurnHandled(state, turnKey, "script step")) return;
-    // ✅ Patch 3: remember what we accepted from the user BEFORE clearing transcript
-    if (lastUserText) {
-      state.lastAcceptedUserText = lastUserText;
-      state.lastAcceptedStepType = stepType;
-      state.lastAcceptedStepIndex = expectedAnswerIdx;
-
-      // ✅ Track last exact clock time (for booking control that triggers on the confirm "yes")
-      if (isExactClockTimeMentioned(lastUserText)) {
-        (state as any).lastExactTimeText = lastUserText;
-        (state as any).lastExactTimeAtMs = Date.now();
-      }
-    }
-
-    // ✅ consume awaitingUserAnswer ONLY when we are about to speak
-    state.awaitingUserAnswer = false;
-    state.awaitingAnswerForStepIndex = undefined;
-
-    state.userAudioMsBuffered = 0;
-    state.lastUserTranscript = "";
-    state.lowSignalCommitCount = 0;
-    state.repromptCountForCurrentStep = 0;
-
-    await humanPause();
-
-    setWaitingForResponse(state, true, "response.create (script step)");
-    setAiSpeaking(state, true, "response.create (script step)");
-    setResponseInFlight(state, true, "response.create (script step)");
-    state.outboundOpenAiDone = false;
-
-    // Push AI line to exchange memory
-    pushExchange(state, "ai", lineToSay, idx);
-
-    try { console.log("[AI-VOICE][RESPONSE-CREATE][SCRIPT]", { callSid: state.callSid, phase: state.phase, waitingForResponse: !!state.waitingForResponse, responseInFlight: !!state.responseInFlight, aiSpeaking: !!state.aiSpeaking, stepIndex: idx, stepType, lineHash: hash8(lineToSay), instructionLen: perTurnInstr.length }); } catch {}
-
-    try {
-      if (!state.debugLoggedResponseCreateUserTurn) {
-        state.debugLoggedResponseCreateUserTurn = true;
-        console.log("[AI-VOICE][RESPONSE-CREATE][USER-TURN]", {
-          callSid: state.callSid,
-          streamSid: state.streamSid,
-          scriptKey: normalizeScriptKey(state.context?.scriptKey),
-          phase: state.phase,
-          isGreetingReply: false,
-          mode: "script_step",
-          stepIndex: idx,
-          stepsCount: steps.length,
-          instructionLen: perTurnInstr.length,
-          hasUserTranscript: !!lastUserText,
-          objectionKind: "(none)",
-          stepType,
-          audioMs,
-        });
-      }
-    } catch {}
-
-    state.lastPromptSentAtMs = Date.now();
-    state.lastPromptLine = lineToSay;
-    state.lastResponseCreateAtMs = Date.now();
-    recordPassiveRouteMemory(state, {
-      source: "main",
-      routeKind: mainRepeatGuard.routeKind,
-      routeReason: mainRepeatGuard.objective || stepType,
-      userText: lastUserText,
-      lineToSay,
-      turnKey,
-    });
-    noteAiOutputSpoken(state, lineToSay);
-
-    state.openAiWs.send(
-      JSON.stringify(buildRealtimeResponseCreate(perTurnInstr))
-    );
-
-    // ✅ Patch 3: only advance when we have a real transcript answer for this step
-    if (canAdvance) {
-      state.scriptStepIndex = shouldAskLiveTransferAvailability
-        ? idx
-        : Math.min(idx + 1, Math.max(0, steps.length - 1));
-      // reset time offer ladder once we actually received a real time
-      state.timeOfferCountForStepIndex = undefined;
-      state.timeOfferCount = 0;
-    } else {
-      // hold position; next turn will reprompt / ask again
-      state.scriptStepIndex = idx;
-    }
-
-    // SERVER-SIDE BOOKING TRIGGER
-    // When the stepper reaches the confirm step (Step 4) and we have a real exact time,
-    // trigger the booking without waiting for the model to emit a control signal.
-    try {
-      const newStepIdx = state.scriptStepIndex;
-      const totalSteps = (state.scriptSteps || []).length;
-      const onConfirmStep = newStepIdx >= 3 && totalSteps >= 4;
-      const lastExactTime = String((state as any).lastExactTimeText || "").trim();
-      const lastExactAt = Number((state as any).lastExactTimeAtMs || 0);
-      const hasRecentExactTime =
-        !!lastExactTime &&
-        isExactClockTimeMentioned(lastExactTime) &&
-        lastExactAt > 0 &&
-        (Date.now() - lastExactAt) < 5 * 60 * 1000;
-
-      if (onConfirmStep && hasRecentExactTime && !state.finalOutcomeSent) {
-        console.log("[AI-VOICE][BOOKING][SERVER-TRIGGER]", {
-          callSid: state.callSid,
-          stepIndex: newStepIdx,
-          lastExactTimeText: lastExactTime,
-        });
-void handleFinalOutcomeIntent(state, {
-          kind: "final_outcome",
-          outcome: "booked",
-          summary: `AI scheduled appointment. Lead confirmed call around ${lastExactTime}.`,
-          notesAppend: `Approximate time confirmed by lead: ${lastExactTime}. Agent should confirm exact slot.`,
-        });
-        state.finalOutcomeSent = true;
-
-        // ✅ Also trigger Google Calendar booking
-        // Parse the exact time string into a UTC ISO string using agent timezone.
-        // We use a best-effort parse: today's date + the spoken time.
-        try {
-          const agentTz = String(state.context?.agentTimeZone || "America/Phoenix").trim();
-          const leadTz = String(getLeadTimeZoneHintFromContext(state.context!) || agentTz).trim();
-
-          // Build a date string in agent timezone, preserving today/tomorrow memory from the lead.
-          const nowInAgentTz = new Date().toLocaleString("en-US", { timeZone: agentTz });
-          const explicitDay =
-            extractExplicitDaySelection(lastExactTime) ||
-            extractExplicitDaySelection(String(state.selectedTimeText || "")) ||
-            extractExplicitDaySelection(String(state.lastAcceptedUserText || ""));
-          const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
-          const selectedBookingDay =
-            explicitDay === "today" || explicitDay === "tomorrow"
-              ? explicitDay
-              : rememberedDay === "today" || rememberedDay === "tomorrow"
-                ? rememberedDay
-                : "today";
-          const bookingLocalDate = new Date(nowInAgentTz);
-          if (selectedBookingDay === "tomorrow") {
-            bookingLocalDate.setDate(bookingLocalDate.getDate() + 1);
-          }
-          const bookingDateStr = bookingLocalDate.toLocaleDateString("en-US", {
-            year: "numeric", month: "2-digit", day: "2-digit"
-          }); // MM/DD/YYYY
-
-          const extractSpokenClockForBooking = (raw: string): string => {
-            const t = String(raw || "").trim().toLowerCase();
-            const meridiem = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
-            if (meridiem) return `${meridiem[1]}${meridiem[2] ? `:${meridiem[2]}` : ""}${meridiem[3]}`;
-            const clock = t.match(/\b(\d{1,2}:\d{2})\b/);
-            if (clock) return clock[1];
-            const atBare = t.match(/\b(?:at|around|about|by)\s+(\d{1,2})\b/i);
-            if (atBare) return atBare[1];
-            const dayBare = t.match(/\b(?:today|tomorrow|tonight|morning|afternoon|evening)\s+(?:at\s+)?(\d{1,2})\b/i);
-            if (dayBare) return dayBare[1];
-            return String(raw || "").trim();
-          };
-
-          // Parse spoken time like "3pm", "3:30pm", "3:30" into a Date
-          const parseSpokenTime = (raw: string, dateStr: string, tz: string): Date | null => {
-            try {
-              const t = raw.trim().toLowerCase();
-              const match = t.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
-              if (!match) return null;
-              let hh = Number(match[1]);
-              const mm = Number(match[2] || "0");
-              const meridiem = (match[3] || "").toLowerCase();
-              if (meridiem === "pm" && hh !== 12) hh += 12;
-              if (meridiem === "am" && hh === 12) hh = 0;
-              if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
-              const [mo, da, yr] = dateStr.split("/").map(Number);
-              if (!mo || !da || !yr) return null;
-              // Build a date string that Intl can interpret in the target timezone
-              // by using a reference UTC date and then finding the offset
-              const localIso = `${yr}-${String(mo).padStart(2,"0")}-${String(da).padStart(2,"0")}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00`;
-              // Find UTC offset for this timezone at approximately this time
-              const approxUtc = new Date(localIso + "Z");
-              const tzParts = new Intl.DateTimeFormat("en-US", {
-                timeZone: tz,
-                hour12: false,
-                year: "numeric", month: "2-digit", day: "2-digit",
-                hour: "2-digit", minute: "2-digit", second: "2-digit"
-              }).formatToParts(approxUtc);
-              const tzH = Number(tzParts.find(p => p.type === "hour")?.value || 0);
-              const tzM = Number(tzParts.find(p => p.type === "minute")?.value || 0);
-              const localH = hh;
-              const localM = mm;
-              const diffMinutes = (localH * 60 + localM) - (tzH * 60 + tzM);
-              const result = new Date(approxUtc.getTime() + diffMinutes * 60 * 1000);
-              if (isNaN(result.getTime())) return null;
-              return result;
-            } catch { return null; }
-          };
-
-          const timeTextForBooking = extractSpokenClockForBooking(lastExactTime);
-          const startDate = parseSpokenTime(timeTextForBooking, bookingDateStr, agentTz);
-          try {
-            console.log("[AI-VOICE][BOOKING-DATE-MEMORY]", {
-              callSid: state.callSid,
-              selectedDay: rememberedDay || null,
-              explicitDay: explicitDay || null,
-              selectedTimeText: state.selectedTimeText ? "[captured]" : null,
-              finalDateIso: startDate && !isNaN(startDate.getTime()) ? startDate.toISOString() : null,
-            });
-          } catch {}
-
-          if (startDate && !isNaN(startDate.getTime())) {
-            // Sanity check: must be in the future (within 48 hours)
-            const diffMs = startDate.getTime() - Date.now();
-            const validFuture = diffMs > -60000 && diffMs < 48 * 60 * 60 * 1000;
-
-            if (validFuture) {
-              console.log("[AI-VOICE][BOOKING][AUTO-TRIGGER]", {
-                callSid: state.callSid,
-                lastExactTime,
-                startTimeUtc: startDate.toISOString(),
-                agentTz,
-                leadTz,
-              });
-
-              void handleBookAppointmentIntent(state, {
-                startTimeUtc: startDate.toISOString(),
-                durationMinutes: 30,
-                leadTimeZone: isValidIanaTimeZone(leadTz) ? leadTz : agentTz,
-                agentTimeZone: isValidIanaTimeZone(agentTz) ? agentTz : "America/Phoenix",
-                notes: `Booked via AI Dialer. Lead said: "${lastExactTime}". Agent should confirm exact slot.`,
-              });
-            } else {
-              console.log("[AI-VOICE][BOOKING][AUTO-TRIGGER] time outside valid window — skipping calendar", {
-                callSid: state.callSid,
-                lastExactTime,
-                diffMs,
-              });
-            }
-          } else {
-            console.log("[AI-VOICE][BOOKING][AUTO-TRIGGER] could not parse time — skipping calendar", {
-              callSid: state.callSid,
-              lastExactTime,
-            });
-          }
-        } catch (bookErr: any) {
-          console.warn("[AI-VOICE][BOOKING][AUTO-TRIGGER] calendar booking error (non-blocking):", bookErr?.message);
-        }
-      }
-    } catch {}
-    state.phase = "in_call";
-    // ✅ Re-arm awaitingUserAnswer so next user turn hits the stepper, not the rebuttal path.
-    state.awaitingUserAnswer = true;
-    state.awaitingAnswerForStepIndex = canAdvance
-      ? Math.min(idx + 1, Math.max(0, steps.length - 1))
-      : idx;
-    return;
   }
 
 
