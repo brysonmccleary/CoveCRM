@@ -43,26 +43,6 @@ const FEATURES = [
   },
 ];
 
-const TESTIMONIALS = [
-  {
-    quote: "I closed 3 policies in my first week from the recruiting leads. The AI follow-up texting is unreal — leads were responding at midnight while I was asleep.",
-    name: "Marcus T.",
-    role: "Final Expense Agent · Texas",
-    stat: "Avg Call Score: 8.2",
-  },
-  {
-    quote: "The AI call coach helped me stop losing deals on the 'need to think about it' objection. My close rate went up within the first two weeks.",
-    name: "Jennifer K.",
-    role: "Mortgage Protection Agent · Florida",
-    stat: "60+ leads/week automated",
-  },
-  {
-    quote: "I was spending $800/month on leads. Now I run my own Facebook ads for $149/month and own every lead. The attribution report shows exactly what's working.",
-    name: "David R.",
-    role: "Insurance Agency Owner · Georgia",
-    stat: "4-agent downline",
-  },
-];
 
 export default function Home() {
   const homepageTitle = "Cove CRM – CRM for Insurance Agents, AI Dialer, SMS & Facebook Leads";

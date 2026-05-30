@@ -3709,6 +3709,9 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
 
   if (kind === "scam") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+      return `Totally fair to ask. This is CoveCRM's AI — this call is the demo. Nothing to buy right now, I just want to make sure you got a real sense of how it works. Want me to text you the signup link?`;
+    }
     return `I completely understand the concern — and that's a fair reaction. This is just a scheduling call for the ${scope} request that came through. ${agent} is a licensed agent and everything is explained on the call. Does later today or tomorrow work better?`;
   }
 
@@ -3728,6 +3731,9 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
 
   if (kind === "are_you_ai") {
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+    if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+      return `Yes — and that’s exactly the point. What you’re hearing right now is what your leads would hear. This is the CoveCRM AI running live. What else can I answer for you?`;
+    }
     return `Yes — I’m a virtual assistant helping the agents with scheduling. The licensed agent handles the actual appointment. ${agent} is the licensed agent who handles everything on the actual call. Does later today or tomorrow work better?`;
   }
 
@@ -3739,6 +3745,9 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
 
   if (kind === "what_entails") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+      return `Sure — CoveCRM's AI calls through your lead list, handles objections like this one, and either books appointments directly or hands off warm leads to you live. There's also automated SMS follow-up and call scoring built in. Which part would be most useful for your setup?`;
+    }
     const lines = [
       `So it's really quick — usually 5 to 10 minutes. ${agent} just goes over the ${scope} request, answers any questions you have, and makes sure everything makes sense for your situation. No pressure at all. Does later today or tomorrow work better?`,
       `Yeah it's short — ${agent} keeps it to about 5 minutes. Just goes over the ${scope} request and answers your questions. That's really it. Does later today or tomorrow work better?`,
@@ -3749,6 +3758,14 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
 
   if (kind === "generic_question") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+      const lines = [
+        `I want to make sure I answer this clearly — what specifically is on your mind? Pricing, how the dialer works, the Facebook lead flow, something else?`,
+        `Fair enough. What exactly would help? I can break down pricing, the AI dialer, the lead integrations, the call coaching — whatever's most relevant to your situation.`,
+        `Good question. What part would be most useful to dig into — how the AI handles calls, the cost, how leads come in, or something else?`,
+      ];
+      return lines[Math.floor(Math.random() * lines.length)];
+    }
     const lines = [
       `I completely understand. That's a fair question. ${agent} can answer that much better on the quick call and make it specific to your ${scope} request. Does later today or tomorrow work better?`,
       `Yeah, totally. I hear what you're asking. ${agent} covers that on the call so you get a clear answer for your situation, and it only takes about 5 minutes. Does later today or tomorrow work better?`,
@@ -3806,6 +3823,7 @@ function buildDeterministicScamRebuttalLine(state: CallState): string {
 
 function getStateAwareClosingPivot(state: CallState): string {
   try {
+    if (normalizeScriptKey(state.context?.scriptKey) === "kayla_signup") return "";
     const selectedTime = String((state as any).lastExactTimeText || "").trim();
     const selectedDay = String(state.selectedDay || "").trim().toLowerCase();
     if (selectedTime) {

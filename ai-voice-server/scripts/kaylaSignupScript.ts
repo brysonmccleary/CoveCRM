@@ -44,7 +44,7 @@ LEAD MANAGEMENT:
 - Prebuilt drip campaigns for most lead types
 - Custom drip campaign builder with Ask Kayla assistance
 - Client retention drips: birthday drips, holiday drips, referral collection —
-  agents using these see 10-15% higher client retention
+  designed to keep existing clients engaged and generate referrals
 - Call recordings: every call recorded and available to review
 - Google Calendar sync for appointments
 
@@ -55,8 +55,8 @@ TEAM AND AGENCY FEATURES:
   everything — and monitors performance so agents know which ads to
   scale and which to cut (currently going through Meta review,
   available very soon)
-- Average Facebook lead cost through CoveCRM: $15-20 vs $35-40+
-  through lead vendors
+- Facebook ads run through CoveCRM can reduce per-lead cost compared to
+  buying from lead vendors — actual cost depends on targeting, vertical, and market
 
 TECHNICAL:
 - A2P 10DLC: automated submission — if it fails, CoveCRM tells you why,
