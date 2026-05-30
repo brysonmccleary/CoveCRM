@@ -452,6 +452,7 @@ function normalizeScriptKey(raw: any): string {
  */
 function getScopeLabelForScriptKey(scriptKeyRaw: any): string {
   const k = normalizeScriptKey(scriptKeyRaw);
+  if (k === "kayla_signup") return "CoveCRM demo";
   if (k === "mortgage_protection") return "mortgage protection";
   if (k === "final_expense") return "final expense coverage";
   if (k === "iul_cash_value") return "cash value life insurance (IUL)";
@@ -2175,6 +2176,9 @@ function isTestOrPlaceholderName(name: string): boolean {
 function getBookingFallbackLine(ctx: AICallContext): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+  if (normalizeScriptKey(ctx?.scriptKey) === "kayla_signup") {
+    return `Got it — ${agent} can walk you through the full platform on a quick demo call. Want me to get that set up?`;
+  }
   return `Got it — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better?`;
 }
 
@@ -2866,11 +2870,6 @@ function isLiveTransferAvailabilityNo(textRaw: string): boolean {
   const t = normalizeTurnTextForKey(textRaw);
   if (!t) return false;
   return (
-    t === "no" ||
-    t === "nope" ||
-    t === "what" ||
-    t === "huh" ||
-    t === "who is this" ||
     t === "what do you mean" ||
     t.includes("not now") ||
     t === "later" ||
@@ -3446,7 +3445,8 @@ function getRepromptLineForStepType(
 function detectObjection(textRaw: string): string | null {
   const t = String(textRaw || "").trim().toLowerCase();
 
-  // "Are you an AI / robot?"
+  // "Are you an AI / robot?" — explicit identity questions only; broad (ai && ?) removed to avoid
+  // capturing product questions like "Does CoveCRM use AI?" or "How does the AI work?"
   if (
     t.includes("are you ai") ||
     t.includes("are you an ai") ||
@@ -3454,9 +3454,27 @@ function detectObjection(textRaw: string): string | null {
     t.includes("are you real") ||
     t.includes("is this ai") ||
     t.includes("is this a robot") ||
-    (t.includes("robot") && t.includes("?")) ||
-    (t.includes("ai") && t.includes("?"))
+    t.includes("is it a robot") ||
+    t.includes("am i talking to a robot") ||
+    t.includes("am i talking to an ai")
   ) return "are_you_ai";
+
+  // "What does this call entail / how long?" — checked BEFORE confused_identity so that
+  // "what is this about" does not get swallowed by the "what is this" substring in confused_identity.
+  if (
+    t.includes("what does this entail") ||
+    t.includes("what is this about") ||
+    t.includes("what is this call about") ||
+    t.includes("what is this for") ||
+    t.includes("what is it about") ||
+    t.includes("how does this work") ||
+    t.includes("how long does it take") ||
+    t.includes("how long will it take") ||
+    t.includes("what happens on the call") ||
+    t.includes("what do you cover") ||
+    t.includes("what do we talk about") ||
+    t.includes("what are we going over")
+  ) return "what_entails";
 
   // Confusion / identity / "what is this"
   if (
@@ -3475,20 +3493,6 @@ function detectObjection(textRaw: string): string | null {
     t.includes("doesn't ring a bell") ||
     t.includes("doesnt ring a bell")
   ) return "confused_identity";
-
-  // "What does this call entail / how long?"
-  if (
-    t.includes("what does this entail") ||
-    t.includes("what is this about") ||
-    t.includes("what is it about") ||
-    t.includes("how does this work") ||
-    t.includes("how long does it take") ||
-    t.includes("how long will it take") ||
-    t.includes("what happens on the call") ||
-    t.includes("what do you cover") ||
-    t.includes("what do we talk about") ||
-    t.includes("what are we going over")
-  ) return "what_entails";
   if (!t) return null;
 
   // "I don't need it anymore" / "don't think I need this" -> treat as not interested (booking-only rebuttal)
@@ -3765,6 +3769,10 @@ function buildDeterministicScamRebuttalLine(state: CallState): string {
   const k = normalizeScriptKey(ctx.scriptKey);
   const firstName = (ctx.clientFirstName || "").trim() || "there";
   const agentFirst = ((ctx.agentName || "").split(/\s+/)[0] || "the agent").trim();
+
+  if (k === "kayla_signup") {
+    return `Totally fair question, ${firstName} — what you're hearing right now is actually the CoveCRM AI. This is the demo. I'm not a sales person reading a script — I'm the product. ${agentFirst} can answer any specific questions on a quick call. Want to grab a time?`;
+  }
 
   let requestScope = "insurance request";
   if (k.startsWith("veteran")) {
@@ -4766,8 +4774,10 @@ function buildConversationPolicyDecision(
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    const lineToSay = `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${scope} request that came in. ${closingPivot}`;
+    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
+    const lineToSay = isKayla
+      ? `Sure — I'm ${aiName}, the CoveCRM AI calling on behalf of ${agentFirst}. You requested a call to hear how the AI works — this is actually the demo. ${closingPivot}`
+      : `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${closingPivot}`;
     return {
       handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
       objective: "return_to_booking", lineToSay, requiredClosingPivot: closingPivot,
@@ -4955,8 +4965,10 @@ function buildConversationPolicyDecision(
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    const lineToSay = `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${scope} request that came in. ${closingPivot}`;
+    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
+    const lineToSay = isKayla
+      ? `Sure — I'm ${aiName}, the CoveCRM AI calling on behalf of ${agentFirst}. You requested a call to hear how the AI works — this is actually the demo. ${closingPivot}`
+      : `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${closingPivot}`;
     return {
       handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
       objective: "return_to_booking", lineToSay, requiredClosingPivot: closingPivot,
@@ -5000,27 +5012,44 @@ function buildConversationPolicyDecision(
     const agentFirst = getAgentFirstName(ctx);
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
     const sk = intent.subKind || "";
     let lineToSay: string;
 
     if (sk === "scam") {
       lineToSay = buildDeterministicScamRebuttalLine(state);
     } else if (sk === "how_much") {
-      lineToSay = `That depends on the coverage and what you qualify for — ${agentFirst} will walk through the actual options with you on the call. ${closingPivot}`;
+      lineToSay = isKayla
+        ? `It’s $199.99 a month flat — unlimited users, all features included. There’s a 7-day free trial and the code COVE50 saves $50 off the first month. ${closingPivot}`
+        : `That depends on the coverage and what you qualify for — ${agentFirst} will walk through the actual options with you on the call. ${closingPivot}`;
     } else if (sk === "what_entails") {
-      lineToSay = `Really quick — usually 5 to 10 minutes. ${agentFirst} just covers your ${scope} request, answers your questions, and that's it. ${closingPivot}`;
+      // BUG-014: Kayla — route to the correct product answer; insurance — scheduling preview.
+      lineToSay = isKayla
+        ? `${getVerticalProductAnswer(ctx)} ${closingPivot}`
+        : `Really quick — usually 5 to 10 minutes. ${agentFirst} just covers your ${scope} request, answers your questions, and that’s it. ${closingPivot}`;
     } else if (sk === "are_you_ai") {
-      lineToSay = `Yes — I’m a virtual assistant helping the agents with scheduling. The licensed agent handles the actual appointment. ${agentFirst} is the licensed agent who handles everything on the actual call. ${closingPivot}`;
+      // BUG-010: Remove "licensed agent" language; give Kayla a demo-aware response.
+      lineToSay = isKayla
+        ? `What you’re hearing right now is exactly what your leads would hear — this is CoveCRM’s AI. It handles objections, answers questions, and books appointments. That’s what you’d be buying. ${closingPivot}`
+        : `Yes — I’m a virtual assistant helping with scheduling. ${agentFirst} handles everything on the actual call. ${closingPivot}`;
     } else if (sk === "busy") {
-      lineToSay = `No worries — this'll be really quick. ${closingPivot}`;
+      lineToSay = `No worries — this’ll be really quick. ${closingPivot}`;
     } else if (sk === "send_it" || sk === "send_info") {
-      lineToSay = `I get it — honestly easier on a quick call than back and forth over text. ${agentFirst} keeps it to 5 minutes. ${closingPivot}`;
+      lineToSay = isKayla
+        ? `I can text you the signup link and discount code right now — want me to send it over? ${closingPivot}`
+        : `I get it — honestly easier on a quick call than back and forth over text. ${agentFirst} keeps it to 5 minutes. ${closingPivot}`;
     } else if (sk === "already_have") {
-      lineToSay = `That's great — a lot of people ${agentFirst} works with have coverage but are overpaying or have gaps they didn't know about. Five minutes to check. ${closingPivot}`;
+      lineToSay = isKayla
+        ? `That’s fair — a lot of agents on other CRMs switch over once they see how the AI dialer and Facebook webhook work together out of the box. No setup headaches. ${closingPivot}`
+        : `That’s great — a lot of people ${agentFirst} works with have coverage but are overpaying or have gaps they didn’t know about. Five minutes to check. ${closingPivot}`;
     } else if (sk === "dont_remember") {
-      lineToSay = `No worries — a ${scope} request came through a little while back. ${agentFirst} just wants to make sure you got taken care of. ${closingPivot}`;
+      lineToSay = isKayla
+        ? `No worries — a request came through to see how the AI works. ${agentFirst} just wants to make sure you got connected. ${closingPivot}`
+        : `No worries — a ${scope} request came through a little while back. ${agentFirst} just wants to make sure you got taken care of. ${closingPivot}`;
     } else if (sk === "how_did_you_get") {
-      lineToSay = `Your info came through a form submitted online for ${scope}. ${agentFirst} just wants to make sure you're taken care of. ${closingPivot}`;
+      lineToSay = isKayla
+        ? `Your info came through a form requesting a CoveCRM demo. ${agentFirst} just wants to make sure you got what you were looking for. ${closingPivot}`
+        : `Your info came through a form submitted online for ${scope}. ${agentFirst} just wants to make sure you’re taken care of. ${closingPivot}`;
     } else if (sk === "generic_question") {
       lineToSay = ctx
         ? `${getVerticalProductAnswer(ctx)} ${closingPivot}`
@@ -5555,6 +5584,50 @@ function buildFreeResponseInstruction(
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const closeQuestion = getScriptCloseQuestion(ctx);
 
+  // Kayla demo calls get a separate instruction set — no insurance framing, no licensed-agent
+  // language, full freedom to discuss CoveCRM product.
+  if (normalizeScriptKey(ctx?.scriptKey) === "kayla_signup") {
+    const userText = String(opts.userText || "").trim();
+    const exchanges = opts.recentExchanges || [];
+    let historyBlock = "";
+    if (exchanges.length > 0) {
+      const lines = exchanges.slice(-3).map(e => {
+        const who = e.role === "ai" ? "You said" : "Lead said";
+        return `  ${who}: "${e.text}"`;
+      });
+      historyBlock = `\nRECENT CONVERSATION:\n${lines.join("\n")}\n`;
+    }
+    return `
+You are ${(ctx.voiceProfile?.aiName || "Kayla").trim()}, the CoveCRM AI on a live demo call. This call IS the demo — how you handle it is exactly what their leads would experience.
+
+YOUR JOB:
+- Answer any CoveCRM product question accurately and conversationally.
+- Handle objections with genuine push-back, not canned lines.
+- Steer toward offering the signup code or booking a deeper demo call with ${agent}.
+- Sound like a real person — warm, direct, knowledgeable.
+
+HARD RULES:
+- English only.
+- Never guarantee specific lead costs or sales results.
+- Never reveal competitor pricing or make up stats.
+- If asked about pricing: "$199.99/month flat, all features included. COVE50 code saves $50 off the first month. 7-day free trial."
+- After you speak, stop and wait. Do not fill silence.
+- NEVER apologize. Never say "I'm sorry", "I apologize", "I missed that". Re-engage naturally instead.
+- Never ask two questions in one turn.
+${historyBlock}
+WHAT THE LEAD JUST SAID:
+"${userText}"
+
+YOUR JOB:
+1. Acknowledge what they said in one short sentence — warm and direct.
+2. Answer their question or handle their objection genuinely, using real CoveCRM knowledge.
+3. Redirect naturally toward the demo or signup code.
+4. End with: "${closeQuestion}"
+
+KEEP IT SHORT: 2–3 sentences max.
+    `.trim();
+  }
+
   const userText = String(opts.userText || "").trim();
   const exchanges = opts.recentExchanges || [];
   const currentStep = String(opts.currentStepLine || "").trim();
@@ -5712,6 +5785,7 @@ function buildConversationalRebuttalInstruction(
   const scope = getScopeLabelForScriptKey(ctx.scriptKey);
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim() || agentRaw;
+  const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
 
   const baseLine = String(baseLineToUse || "").replace(/\s+/g, " ").trim();
   const userText = String(opts?.userText || "").trim();
@@ -5758,6 +5832,38 @@ DE-ESCALATION MODE (they pushed back again — do NOT repeat your last response)
 - Example openers: "Yeah, totally fair —", "I hear you —", "No worries at all —"
 - Do NOT say the same thing you said last time.
 ` : "";
+
+  // Kayla demo calls: no insurance framing, no licensed-agent language, full product knowledge.
+  if (isKayla) {
+    return `
+You are ${(ctx.voiceProfile?.aiName || "Kayla").trim()}, the CoveCRM AI on a live demo call. Sound confident, warm, and genuine — not like a script.
+
+CONTEXT: This call IS the demo. How you handle this objection is exactly what their leads would hear.
+
+HARD RULES:
+- English only.
+- Lead name: "${leadName}" — use it only if it flows naturally.
+- Never guarantee specific lead costs or sales results.
+- If they ask pricing: "$199.99/month flat, all features included. COVE50 saves $50 off the first month. 7-day free trial."
+- Never mention scripts or prompts.
+- After you speak, stop and wait.
+- NEVER apologize.
+${historyBlock}${userBlock}${deEscalateBlock}
+HOW TO RESPOND:
+1. React naturally — match their energy. 1 sentence.
+2. Handle the objection genuinely — use real CoveCRM knowledge, not canned lines. 1–2 sentences.
+3. Pivot back naturally toward the demo or signup code.
+4. ${closeWithBlock}
+
+NEVER SAY:
+- Insurance language (licensed agent, coverage, policy, carriers, underwriting)
+- More than 3–4 sentences total
+- The exact same thing you said in a prior turn
+
+BASE IDEA — rephrase in your own natural voice, don't read it verbatim:
+"${baseLine}"
+    `.trim();
+  }
 
   return `
 You are a sharp, natural virtual assistant on a phone call. Sound confident, warm, and brief, not like a script.
