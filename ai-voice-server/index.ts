@@ -2254,6 +2254,16 @@ function looksLikeUserQuestion(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
 
+  // Short confusion/surprise reactions are NOT real questions even if they have "?"
+  const confusionPhrases = [
+    "wait what", "wait, what", "wait what?", "wait, what?",
+    "huh?", "huh", "what?", "what??",
+    "i m sorry what", "im sorry what", "sorry what",
+    "excuse me", "pardon", "come again",
+  ];
+  if (confusionPhrases.some(p => t === p || t === p + "?" || t === p + "!")) return false;
+  if (t.length < 10 && t.includes("what") && !t.includes("what is") && !t.includes("what are") && !t.includes("what does") && !t.includes("what do")) return false;
+
   // Explicit question mark is strongest signal
   if (t.includes("?")) return true;
 
@@ -2757,29 +2767,37 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
     t.includes("right now")
   ) return false;
 
-  return (
-    [
-      "yeah",
-      "yep",
-      "yes",
-      "okay",
-      "ok",
-      "sure",
-      "go ahead",
-      "what s up",
-      "whats up",
-      "speaking",
-      "this is he",
-      "this is him",
-      "this is she",
-      "hello",
-      "hi",
-      "who is this",
-      "what is this about",
-      "what can i do for you",
-    ].includes(t) ||
-    /^(yeah|yes|yep|yup|ok|okay|sure|hi|hello)\s+(what s up|whats up)$/.test(t)
-  );
+  // Exact bare matches
+  const exactMatches = [
+    "yeah", "yep", "yes", "okay", "ok", "sure", "go ahead",
+    "what s up", "whats up", "speaking", "this is he", "this is him",
+    "this is she", "hello", "hi", "who is this",
+    "what is this about", "what can i do for you",
+    "yes i can", "yes i can hear you", "yes i can hear",
+    "yeah i can", "yeah i can hear you", "yep i can",
+    "yep i can hear you", "i can hear you", "i can hear",
+    "loud and clear", "loud and clear yes",
+  ];
+
+  if (exactMatches.includes(t)) return true;
+
+  // "yes/yeah/yep/ok/sure/hello" followed by anything that isn't a hard exclusion
+  if (
+    t.startsWith("yes ") ||
+    t.startsWith("yeah ") ||
+    t.startsWith("yep ") ||
+    t.startsWith("yup ") ||
+    t.startsWith("ok ") ||
+    t.startsWith("okay ") ||
+    t.startsWith("sure ") ||
+    t.startsWith("hi ") ||
+    t.startsWith("hello ")
+  ) return true;
+
+  // Regex for combined ack patterns
+  if (/^(yeah|yes|yep|yup|ok|okay|sure|hi|hello)\s+(what s up|whats up)$/.test(t)) return true;
+
+  return false;
 }
 
 function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
@@ -5197,6 +5215,7 @@ function buildConversationPolicyDecision(
   }
 
   if (intent.kind === "unknown" || intent.kind === "off_topic") {
+    if (state.phase === "awaiting_greeting_reply") return NOT_HANDLED;
     if (!ctx) return NOT_HANDLED;
     return {
       handled: true,
@@ -5205,7 +5224,10 @@ function buildConversationPolicyDecision(
       objective: "open_question",
       userText: intent.raw,
       lineToSay: closingPivot,
-      requiredClosingPivot: closingPivot,
+      requiredClosingPivot: (() => {
+        const currentStep = (stepCtx?.steps || [])[stepCtx?.idx ?? 0];
+        return (currentStep && currentStep.trim()) ? currentStep.trim() : closingPivot;
+      })(),
       forbiddenTopics: [],
       stateWrites: {
         pendingLiveTransferAvailabilityConfirm: false,
@@ -8426,6 +8448,9 @@ async function handleOpenAiEvent(
     state.lastUserTranscript = "";
     try {
       if (state.lastUserTranscriptPartialByItemId) state.lastUserTranscriptPartialByItemId = {};
+    } catch {}
+    try {
+      if ((state as any).lastUserTranscriptByItemId) (state as any).lastUserTranscriptByItemId = {};
     } catch {}
     return;
   }
