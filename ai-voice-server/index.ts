@@ -3810,6 +3810,29 @@ function getStateAwareClosingPivot(state: CallState): string {
   return "Does later today or tomorrow work better?";
 }
 
+/**
+ * Returns the canonical close question for the current script type.
+ * Used in GPT instruction builders so the AI closes with a line that fits the script —
+ * insurance appointment, live-transfer, or Kayla demo/signup.
+ */
+function getScriptCloseQuestion(ctx: AICallContext): string {
+  const k = normalizeScriptKey(ctx?.scriptKey);
+  const agentRaw = (ctx?.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim() || agentRaw;
+  const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
+
+  if (k === "kayla_signup") {
+    return liveTransferEnabled
+      ? `Does right now work for a quick demo with ${agent}, or would later today or tomorrow be better?`
+      : `Would later today or tomorrow work for a quick demo with ${agent}?`;
+  }
+
+  // All insurance verticals (appointment or transfer)
+  return liveTransferEnabled
+    ? `Does right now work for a quick call with ${agent}, or would later today or tomorrow be better?`
+    : `Would later today or tomorrow work better for a quick call with ${agent}?`;
+}
+
 // ── Conversation Policy Layer ──────────────────────────────────────────────────
 
 type TurnIntentKind =
@@ -4717,7 +4740,12 @@ function buildConversationPolicyDecision(
       };
     }
     const repeatLine = String(state.lastPromptLine || "").trim();
-    const lineToSay = repeatLine || "Sure — I was just asking if later today or tomorrow works better.";
+    const greetingFallback = (() => {
+      const n = (ctx?.voiceProfile?.aiName || "Alex").trim() || "Alex";
+      return `Sorry — can you hear me okay? This is ${n}.`;
+    })();
+    const lineToSay = repeatLine ||
+      (state.phase === "awaiting_greeting_reply" ? greetingFallback : "Sure — I was just asking if later today or tomorrow works better.");
     return {
       handled: true,
       routeKind: "policy_repeat",
@@ -4726,7 +4754,9 @@ function buildConversationPolicyDecision(
       lineToSay,
       requiredClosingPivot: lineToSay,
       forbiddenTopics: [],
-      stateWrites: {},
+      stateWrites: state.phase === "awaiting_greeting_reply"
+        ? { phase: "awaiting_greeting_reply", awaitingUserAnswer: true, awaitingAnswerForStepIndex: 0 }
+        : {},
       shouldAdvanceStep: false,
     };
   }
@@ -5209,6 +5239,32 @@ function buildConversationPolicyDecision(
     };
   }
 
+  // ── Greeting-phase catch-all ─────────────────────────────────────────────
+  // day_selection, live_transfer_now/later, time_window, and unknown intents
+  // all fall through the phase-gated branches above without a handler.
+  // Rather than silencing the call, repeat the last prompt or use a hearing retry.
+  if (state.phase === "awaiting_greeting_reply") {
+    const aiName = (ctx?.voiceProfile?.aiName || "Alex").trim() || "Alex";
+    const clientName = (ctx?.clientFirstName || "").trim() || "there";
+    const repeatLine = String(state.lastPromptLine || "").trim();
+    const lineToSay = repeatLine || `Sorry about that — can you hear me okay, ${clientName}? This is ${aiName}.`;
+    return {
+      handled: true,
+      routeKind: "policy_greeting_fallback",
+      responseMode: "exact_script",
+      objective: "greeting_retry",
+      lineToSay,
+      requiredClosingPivot: lineToSay,
+      forbiddenTopics: [],
+      stateWrites: {
+        phase: "awaiting_greeting_reply",
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 0,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
   return NOT_HANDLED;
 }
 
@@ -5497,6 +5553,7 @@ function buildFreeResponseInstruction(
   const scope = getScopeLabelForScriptKey(ctx.scriptKey);
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+  const closeQuestion = getScriptCloseQuestion(ctx);
 
   const userText = String(opts.userText || "").trim();
   const exchanges = opts.recentExchanges || [];
@@ -5553,7 +5610,7 @@ HARD RULES (non-negotiable, always):
 - Never discuss coverage options, plan options, policy details, underwriting, or program information.
 - Never ask discovery questions. Do not open new topics or invite elaboration.
 - Never say or imply: "tell me more", "what would you like to start with", "let's go through the details", "step by step", "cover options", "coverage options", "coverage you're looking for", "I'm here to help with that", "I'll walk you through", "we can discuss", "explore your options".
-- End ONLY with one of these: "Would later today or tomorrow be better?" or "Does right now work for you?" or the exact current step question. Nothing else.
+- End ONLY with the required close question or the current step question: "${closeQuestion}". Nothing else.
 ${historyBlock}${stepHint}
 WHAT THE LEAD JUST SAID:
 "${userText}"
@@ -5665,18 +5722,11 @@ function buildConversationalRebuttalInstruction(
   const repeatMode = !!opts?.repeatMode;
   const exchanges = opts?.recentExchanges || [];
 
-  const bookingPrompts: string[] = [
-    "Would later today or tomorrow be better?",
-    "Do you want to do later today or tomorrow?",
-    "What works better for you — later today or tomorrow?",
-    `Is later today or tomorrow better for a quick call with ${agent}?`,
-  ];
-
+  const scriptClose = getScriptCloseQuestion(ctx);
   const recentlyRepeated = !!lastLine && !!baseLine && (now - lastAt) < 10000 && lastLine === baseLine.toLowerCase();
-  const bookingQ = recentlyRepeated ? bookingPrompts[1] : bookingPrompts[0];
   const closeWithBlock = opts?.closingPivot
     ? `CLOSE WITH THIS EXACT LINE — do not vary it:\n"${opts.closingPivot}"`
-    : `CLOSE WITH one of these (vary it):\n- "What works better — later today or tomorrow?"\n- "Does later today or tomorrow work for you?"\n- "Would today or tomorrow be easier?"\n- "${bookingQ}"`;
+    : `CLOSE WITH the required close question (vary the phrasing slightly, keep the intent):\n"${scriptClose}"\nAlternate phrasings OK; always end with the same scheduling offer.`;
 
   // Build recent-exchange block
   let historyBlock = "";
