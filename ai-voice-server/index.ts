@@ -2255,14 +2255,18 @@ function looksLikeUserQuestion(textRaw: string): boolean {
   if (!t) return false;
 
   // Short confusion/surprise reactions are NOT real questions even if they have "?"
-  const confusionPhrases = [
+  const rawLower = t;
+  const normalized = t.replace(/[^a-z0-9]/g, "");
+  const confusionExact = [
     "wait what", "wait, what", "wait what?", "wait, what?",
-    "huh?", "huh", "what?", "what??",
+    "huh", "huh?", "what?", "what??",
     "i m sorry what", "im sorry what", "sorry what",
     "excuse me", "pardon", "come again",
   ];
-  if (confusionPhrases.some(p => t === p || t === p + "?" || t === p + "!")) return false;
-  if (t.length < 10 && t.includes("what") && !t.includes("what is") && !t.includes("what are") && !t.includes("what does") && !t.includes("what do")) return false;
+  const confusionNormalized = ["waitwhat", "huh", "imsorry", "sorryabout"];
+  if (confusionExact.includes(rawLower)) return false;
+  if (confusionNormalized.some(p => normalized.startsWith(p))) return false;
+  if (normalized.length < 10 && normalized.includes("wait") && normalized.includes("what")) return false;
 
   // Explicit question mark is strongest signal
   if (t.includes("?")) return true;
@@ -4757,6 +4761,7 @@ function buildConversationPolicyDecision(
         greetingAdvanceNextPhase: "in_call",
         awaitingUserAnswer: true,
         awaitingAnswerForStepIndex: 0,
+        scriptStepIndex: 0,
       },
       shouldAdvanceStep: false,
     };
