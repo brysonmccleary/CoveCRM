@@ -1587,6 +1587,32 @@ function buildNonRepeatedStateAwareLine(
     };
   }
 
+  // If the current script step has not been answered yet,
+  // re-ask it instead of falling back to scheduling.
+  try {
+    const stepIdx = Number(
+      state.awaitingAnswerForStepIndex ??
+      (state.scriptStepIndex || 0)
+    );
+    const steps = state.scriptSteps || [];
+    const unansweredStep = steps[stepIdx];
+    if (
+      unansweredStep &&
+      unansweredStep.trim() &&
+      state.awaitingUserAnswer === true
+    ) {
+      return {
+        lineToSay: unansweredStep.trim(),
+        routeKind: `${routeKind}_step_reask`,
+        objective: "reask_current_step",
+        stateWrites: {
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: stepIdx,
+        },
+      };
+    }
+  } catch {}
+
   return {
     lineToSay: "What works best for you?",
     routeKind: `${routeKind}_repeat_guard_clarify`,
@@ -3545,7 +3571,21 @@ function detectObjection(textRaw: string): string | null {
     t.includes("not interested") ||
     t.includes("stop calling") ||
     t.includes("remove") ||
-    t.includes("do not call")
+    t.includes("do not call") ||
+    t === "nah" ||
+    t === "nope" ||
+    t === "not really" ||
+    t === "i m good" ||
+    t === "im good" ||
+    t === "i m all good" ||
+    t === "im all good" ||
+    t === "i m fine" ||
+    t === "im fine" ||
+    t === "not interested" ||
+    t.startsWith("nah ") ||
+    t.startsWith("not really") ||
+    (t.includes("good") && t.includes("i m") && t.length < 20) ||
+    (t.includes("fine") && t.length < 15)
   ) {
     return "not_interested";
   }
@@ -5342,7 +5382,11 @@ function buildConversationPolicyDecision(
   return NOT_HANDLED;
 }
 
-function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): string {
+function buildResponseFromPolicy(
+  decision: PolicyDecision,
+  state: CallState,
+  stepCtx?: { idx: number; steps: string[]; stepType: StepType; expectedAnswerIdx?: number }
+): string {
   if (decision.responseMode === "script_step" && decision.lineToSay && state.context) {
     const line = decision.lineToSay;
     if (looksLikeGeneratedTimeOfferLine(line)) {
@@ -5360,8 +5404,11 @@ function buildResponseFromPolicy(decision: PolicyDecision, state: CallState): st
     return buildFreeResponseInstruction(state.context, {
       userText: decision.userText || "",
       recentExchanges: state.recentExchanges,
-      currentStepLine: decision.requiredClosingPivot || decision.lineToSay || getStateAwareClosingPivot(state),
-      stepType: decision.objective,
+      currentStepLine: decision.requiredClosingPivot ||
+        (state.scriptSteps || [])[
+          state.awaitingAnswerForStepIndex ?? state.scriptStepIndex ?? 0
+        ] || "",
+      stepType: stepCtx?.stepType,
     });
   }
   if (decision.responseMode === "soft_script" && decision.lineToSay && state.context) {
@@ -5528,7 +5575,14 @@ async function handleConversationTurn(
       decision.requiredClosingPivot = lineToSay;
     }
   }
-  const instr = buildResponseFromPolicy(decision, state);
+  // Ensure free_response always knows the current required step
+  if (decision.responseMode === "free_response" && state.context) {
+    const currentStepLine = (state.scriptSteps || [])[
+      state.awaitingAnswerForStepIndex ?? stepCtx.idx ?? 0
+    ] || "";
+    decision.requiredClosingPivot = currentStepLine.trim() || decision.requiredClosingPivot;
+  }
+  const instr = buildResponseFromPolicy(decision, state, stepCtx);
 
   for (const [k, v] of Object.entries(decision.stateWrites)) {
     (state as any)[k] = v;
@@ -5675,7 +5729,14 @@ KEEP IT SHORT: 2–3 sentences max.
 
   const userText = String(opts.userText || "").trim();
   const exchanges = opts.recentExchanges || [];
-  const currentStep = String(opts.currentStepLine || "").trim();
+  const currentStep = (() => {
+    if (opts.currentStepLine && opts.currentStepLine.trim()) {
+      return opts.currentStepLine.trim();
+    }
+    // Fall back to reading the step directly from state via context
+    // This ensures the step is always passed even if caller forgot opts
+    return "";
+  })();
 
   let historyBlock = "";
   if (exchanges.length > 0) {
