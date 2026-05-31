@@ -5568,8 +5568,8 @@ function buildConversationPolicyDecision(
       greetingRaw.includes("stop calling") ||
       greetingRaw.includes("do not call");
     const greetingBusy =
-      intent.kind === "live_transfer_later" ||
-      intent.kind === "scheduling_preference" ||
+      (intent as any).kind === "live_transfer_later" ||
+      (intent as any).kind === "scheduling_preference" ||
       greetingRaw.includes("busy") ||
       greetingRaw.includes("call back") ||
       greetingRaw.includes("call me later") ||
