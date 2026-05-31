@@ -1553,17 +1553,19 @@ function buildNonRepeatedStateAwareLine(
   })();
   if (questionKind && ctx) {
     const agentFirst = getAgentFirstName(ctx);
-    const pivot = getStateAwareClosingPivot(state);
+    const pivot = getRequiredCurrentObjectiveLine(state);
     const objKindCheck = (() => { try { return detectObjection(raw); } catch { return null; } })();
     const isIdentityQuestion = objKindCheck === "are_you_ai" || objKindCheck === "confused_identity" || objKindCheck === "scam";
     const answer =
-      questionKind === "how_much"
-        ? `I get why you'd ask — ${agentFirst} covers exact cost on the call.`
-        : questionKind === "what_entails" || isHowLongDurationQuestion(raw)
-          ? "It is usually about 5 to 10 minutes."
-          : isIdentityQuestion
-            ? `Yes — I'm a virtual assistant helping schedule the appointment. ${agentFirst} is the licensed agent on the call.`
-            : ctx
+      objKindCheck === "call_purpose_confusion" || objKindCheck === "source_memory" || objKindCheck === "permission_to_ask"
+        ? getRebuttalLine(ctx, objKindCheck)
+        : questionKind === "how_much"
+          ? `I get why you'd ask — ${agentFirst} covers exact cost on the call.`
+          : questionKind === "what_entails" || isHowLongDurationQuestion(raw)
+            ? "It is usually about 5 to 10 minutes."
+            : isIdentityQuestion
+              ? `Yes — I'm a virtual assistant helping schedule the appointment. ${agentFirst} is the licensed agent on the call.`
+              : ctx
               ? getVerticalProductAnswer(ctx)
               : `${agentFirst} can answer that clearly on the call.`;
     return {
@@ -1620,12 +1622,14 @@ function buildNonRepeatedStateAwareLine(
   } catch {}
 
   return {
-    lineToSay: "What works best for you?",
-    routeKind: `${routeKind}_repeat_guard_clarify`,
-    objective: objective || "clarify_current_objective",
+    lineToSay: getRequiredCurrentObjectiveLine(state),
+    routeKind: `${routeKind}_step_reask`,
+    objective: "reask_current_step",
     stateWrites: {
       awaitingUserAnswer: true,
-      awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || 1) - 1),
+      awaitingAnswerForStepIndex: typeof state.awaitingAnswerForStepIndex === "number"
+        ? state.awaitingAnswerForStepIndex
+        : 0,
     },
   };
 }
@@ -3513,6 +3517,47 @@ function detectObjection(textRaw: string): string | null {
     t.includes("am i talking to an ai")
   ) return "are_you_ai";
 
+  // Call purpose confusion — "what are you calling about" / "why are you calling"
+  // This is different from product questions — the lead is confused about
+  // the purpose of the call itself, not asking about the product.
+  if (
+    t.includes("what are you calling about") ||
+    t.includes("what is this call about") ||
+    t.includes("what is this regarding") ||
+    t.includes("what are you calling me about") ||
+    t.includes("why are you calling me") ||
+    t.includes("what is the purpose of this call") ||
+    t.includes("what are you calling for")
+  ) return "call_purpose_confusion";
+
+  // Source memory — "when did I fill this out" / "I don't remember filling anything out"
+  // The lead needs to be reminded how the request came through.
+  if (
+    (t.includes("when did i") && (t.includes("fill") || t.includes("sign") || t.includes("request"))) ||
+    t.includes("i dont remember filling") ||
+    t.includes("i don't remember filling") ||
+    t.includes("never filled") ||
+    t.includes("didn't fill") ||
+    t.includes("i dont remember signing") ||
+    t.includes("i don't remember signing") ||
+    t.includes("when did i do this") ||
+    t.includes("when did this happen")
+  ) return "source_memory";
+
+  // Permission to ask — "can I ask a question" / "can you answer something"
+  // This is a preface, not the question itself. Do not treat it as generic_question.
+  if (
+    t === "can i ask a question" ||
+    t === "can i ask you something" ||
+    t === "can you answer a question" ||
+    t === "can you answer something" ||
+    t === "can i ask something" ||
+    t.startsWith("can i ask") ||
+    t.startsWith("can you answer a question") ||
+    (t.includes("can i ask") && t.length < 30) ||
+    (t.includes("have a question") && t.length < 30)
+  ) return "permission_to_ask";
+
   // "What does this call entail / how long?" — checked BEFORE confused_identity so that
   // "what is this about" does not get swallowed by the "what is this" substring in confused_identity.
   if (
@@ -3842,6 +3887,20 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return lines[Math.floor(Math.random() * lines.length)];
   }
 
+  if (kind === "call_purpose_confusion") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Yeah — I was just reaching out about the ${scope} request that came through. My job is just to get you scheduled real quick with ${agent}. `;
+  }
+
+  if (kind === "source_memory") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Yeah, most people fill these out online and go through it pretty quick so they don't always remember. This is just about the ${scope} request — ${agent} wants to make sure you got taken care of. `;
+  }
+
+  if (kind === "permission_to_ask") {
+    return `Of course — go ahead. `;
+  }
+
   if (kind === "redirect") {
     return getBookingFallbackLine(ctx);
   }
@@ -3882,11 +3941,36 @@ function buildDeterministicScamRebuttalLine(state: CallState): string {
     nextStepLine = getTimeOfferLine(ctx, 0, selectedDay, null, "");
   } else if (selectedDay) {
     nextStepLine = getTimeOfferLine(ctx, 0, selectedDay, null, "");
+  } else if (state.awaitingUserAnswer && typeof state.awaitingAnswerForStepIndex === "number") {
+    nextStepLine = getRequiredCurrentObjectiveLine(state);
   } else {
     nextStepLine = "Does later today or tomorrow work better?";
   }
 
   return `I completely understand the concern, ${firstName}. This is a state-regulated ${requestScope}, and ${agentFirst} is licensed through the state. Everything is explained clearly on the call through licensed carriers. ${nextStepLine}`;
+}
+
+function getRequiredCurrentObjectiveLine(
+  state: CallState,
+  stepCtx?: { idx: number; steps: string[]; stepType: StepType }
+): string {
+  // If we are waiting for an answer to a specific step, ALWAYS return that step.
+  // Never return scheduling fallback when a script step is unanswered.
+  try {
+    const stepIdx =
+      typeof state.awaitingAnswerForStepIndex === "number"
+        ? state.awaitingAnswerForStepIndex
+        : typeof state.scriptStepIndex === "number"
+        ? Math.max(0, state.scriptStepIndex - 1)
+        : stepCtx?.idx ?? 0;
+    const steps = state.scriptSteps || stepCtx?.steps || [];
+    const unansweredStep = steps[stepIdx];
+    if (unansweredStep && unansweredStep.trim()) {
+      return unansweredStep.trim();
+    }
+  } catch {}
+  // Only fall back to scheduling when no script step is pending
+  return getStateAwareClosingPivot(state);
 }
 
 function getStateAwareClosingPivot(state: CallState): string {
@@ -4301,6 +4385,9 @@ function classifyTurnIntent(
     const objKind = detectObjection(t);
     if (objKind === "not_interested") return { kind: "not_interested", subKind: objKind, raw };
     if (objKind === "confused_identity") return { kind: "confusion", subKind: objKind, raw };
+    if (objKind === "call_purpose_confusion") return { kind: "objection", subKind: "call_purpose_confusion", raw };
+    if (objKind === "source_memory") return { kind: "objection", subKind: "source_memory", raw };
+    if (objKind === "permission_to_ask") return { kind: "objection", subKind: "permission_to_ask", raw };
     if (objKind) return { kind: "objection", subKind: objKind, raw };
   } catch {}
 
@@ -4777,7 +4864,17 @@ function buildConversationPolicyDecision(
   };
 
   const closingPivot = getStateAwareClosingPivot(state);
+  const requiredObjective = getRequiredCurrentObjectiveLine(state, stepCtx);
   const ctx = state.context!;
+  const preserveCurrentStepState = () => ({
+    awaitingUserAnswer: true,
+    awaitingAnswerForStepIndex: typeof state.awaitingAnswerForStepIndex === "number"
+      ? state.awaitingAnswerForStepIndex
+      : 0,
+    scriptStepIndex: typeof state.scriptStepIndex === "number"
+      ? state.scriptStepIndex
+      : 0,
+  });
 
   // Strip "Got it — " prefix so time-offer body can be embedded mid-sentence.
   function offerBody(line: string): string {
@@ -4841,20 +4938,20 @@ function buildConversationPolicyDecision(
     })();
     const lineToSay = repeatLine ||
       (state.phase === "awaiting_greeting_reply" ? greetingFallback : "Sure — I was just asking if later today or tomorrow works better.");
-    return {
-      handled: true,
-      routeKind: "policy_repeat",
-      responseMode: "exact_script",
-      objective: "repeat_last_prompt",
-      lineToSay,
-      requiredClosingPivot: lineToSay,
-      forbiddenTopics: [],
-      stateWrites: state.phase === "awaiting_greeting_reply"
-        ? { phase: "awaiting_greeting_reply", awaitingUserAnswer: true, awaitingAnswerForStepIndex: 0 }
-        : {},
-      shouldAdvanceStep: false,
-    };
-  }
+	    return {
+	      handled: true,
+	      routeKind: "policy_repeat",
+	      responseMode: "exact_script",
+	      objective: "repeat_last_prompt",
+	      lineToSay,
+	      requiredClosingPivot: lineToSay,
+	      forbiddenTopics: [],
+	      stateWrites: state.phase === "awaiting_greeting_reply"
+	        ? { phase: "awaiting_greeting_reply", awaitingUserAnswer: true, awaitingAnswerForStepIndex: 0, scriptStepIndex: 0 }
+	        : preserveCurrentStepState(),
+	      shouldAdvanceStep: false,
+	    };
+	  }
 
   // Identity recovery must work even before the call has fully advanced into in_call.
   if (intent.kind === "confusion" && intent.subKind === "confused_identity") {
@@ -4863,12 +4960,12 @@ function buildConversationPolicyDecision(
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
     const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
     const lineToSay = isKayla
-      ? `Sure — I'm ${aiName}, the CoveCRM AI calling on behalf of ${agentFirst}. You requested a call to hear how the AI works — this is actually the demo. ${closingPivot}`
-      : `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${closingPivot}`;
+      ? `Sure — I'm ${aiName}, the CoveCRM AI calling on behalf of ${agentFirst}. You requested a call to hear how the AI works — this is actually the demo. ${requiredObjective}`
+      : `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${requiredObjective}`;
     return {
       handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
-      objective: "return_to_booking", lineToSay, requiredClosingPivot: closingPivot,
-      forbiddenTopics: [], stateWrites: {}, shouldAdvanceStep: false,
+      objective: "return_to_booking", lineToSay, requiredClosingPivot: requiredObjective,
+      forbiddenTopics: [], stateWrites: preserveCurrentStepState(), shouldAdvanceStep: false,
     };
   }
 
@@ -4996,13 +5093,13 @@ function buildConversationPolicyDecision(
       routeKind: "angry_soft",
       responseMode: "exact_script",
       objective: "return_to_booking",
-      lineToSay: `I hear you — I'm sorry about that. ${closingPivot}`,
-      requiredClosingPivot: closingPivot,
-      forbiddenTopics: [],
-      stateWrites: {},
-      shouldAdvanceStep: false,
-    };
-  }
+	      lineToSay: `I hear you — I'm sorry about that. ${requiredObjective}`,
+	      requiredClosingPivot: requiredObjective,
+	      forbiddenTopics: [],
+	      stateWrites: preserveCurrentStepState(),
+	      shouldAdvanceStep: false,
+	    };
+	  }
 
   // ── Branch: "I just said" correction ─────────────────────────────────────
   if (intent.kind === "confusion" && intent.subKind === "i_just_said") {
@@ -5027,24 +5124,27 @@ function buildConversationPolicyDecision(
           const offer = getTimeOfferLine(ctx, 0, sd as "today" | "tomorrow", null, "");
           lineToSay = `You're right — sorry about that. ${ucFirst(offerBody(offer))}`;
         } catch {
-          lineToSay = `You're right — sorry about that. ${closingPivot}`;
-        }
-      } else {
-        lineToSay = `You're right — sorry about that. ${closingPivot}`;
-      }
-    }
+	          lineToSay = `You're right — sorry about that. ${requiredObjective}`;
+	        }
+	      } else {
+	        lineToSay = `You're right — sorry about that. ${requiredObjective}`;
+	      }
+	    }
     return {
       handled: true,
       routeKind: "correction",
       responseMode: "exact_script",
       objective: "return_to_booking",
       lineToSay,
-      requiredClosingPivot: closingPivot,
-      forbiddenTopics: [],
-      stateWrites,
-      shouldAdvanceStep: false,
-    };
-  }
+	      requiredClosingPivot: requiredObjective,
+	      forbiddenTopics: [],
+	      stateWrites: {
+	        ...stateWrites,
+	        ...preserveCurrentStepState(),
+	      },
+	      shouldAdvanceStep: false,
+	    };
+	  }
 
   // ── Branch: confused identity ─────────────────────────────────────────────
   // "Who is this?" / "Who are you?" — introduce AI name + agent + scope, return to booking.
@@ -5052,16 +5152,16 @@ function buildConversationPolicyDecision(
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
-    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
-    const lineToSay = isKayla
-      ? `Sure — I'm ${aiName}, the CoveCRM AI calling on behalf of ${agentFirst}. You requested a call to hear how the AI works — this is actually the demo. ${closingPivot}`
-      : `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${closingPivot}`;
-    return {
-      handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
-      objective: "return_to_booking", lineToSay, requiredClosingPivot: closingPivot,
-      forbiddenTopics: [], stateWrites: {}, shouldAdvanceStep: false,
-    };
-  }
+	    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
+	    const lineToSay = isKayla
+	      ? `Sure — I'm ${aiName}, the CoveCRM AI calling on behalf of ${agentFirst}. You requested a call to hear how the AI works — this is actually the demo. ${requiredObjective}`
+	      : `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${requiredObjective}`;
+	    return {
+	      handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
+	      objective: "return_to_booking", lineToSay, requiredClosingPivot: requiredObjective,
+	      forbiddenTopics: [], stateWrites: preserveCurrentStepState(), shouldAdvanceStep: false,
+	    };
+	  }
 
   // ── Branch: not interested ────────────────────────────────────────────────
   if (intent.kind === "not_interested") {
@@ -5072,23 +5172,29 @@ function buildConversationPolicyDecision(
     const niRepeatCount = niIsRepeat ? (Number(state.objectionRepeatCount ?? 0) + 1) : 1;
     const niRepeatMode = niIsRepeat && niRepeatCount >= 2;
     const niStateWrites: Record<string, unknown> = { lastObjectionKind: niKind, objectionRepeatCount: niRepeatCount };
-    if (niRepeatMode) {
-      return {
-        handled: true, routeKind: "policy_not_interested", responseMode: "soft_script",
-        objective: "return_to_booking",
-        lineToSay: getRebuttalLine(ctx, niKind),
-        requiredClosingPivot: closingPivot,
-        forbiddenTopics: [], stateWrites: niStateWrites, shouldAdvanceStep: false,
-        repeatMode: true,
-      };
-    }
-    const lineToSay = `Totally fair — and I'm not here to pressure you. Most people who felt that way ended up really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${closingPivot}`;
-    return {
-      handled: true, routeKind: "policy_not_interested", responseMode: "exact_script",
-      objective: "return_to_booking", lineToSay, requiredClosingPivot: closingPivot,
-      forbiddenTopics: [], stateWrites: niStateWrites, shouldAdvanceStep: false,
-    };
-  }
+	    if (niRepeatMode) {
+	      return {
+	        handled: true, routeKind: "policy_not_interested", responseMode: "soft_script",
+	        objective: "return_to_booking",
+	        lineToSay: getRebuttalLine(ctx, niKind),
+	        requiredClosingPivot: requiredObjective,
+	        forbiddenTopics: [], stateWrites: {
+	          ...niStateWrites,
+	          ...preserveCurrentStepState(),
+	        }, shouldAdvanceStep: false,
+	        repeatMode: true,
+	      };
+	    }
+	    const lineToSay = `Totally fair — and I'm not here to pressure you. Most people who felt that way ended up really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${requiredObjective}`;
+	    return {
+	      handled: true, routeKind: "policy_not_interested", responseMode: "exact_script",
+	      objective: "return_to_booking", lineToSay, requiredClosingPivot: requiredObjective,
+	      forbiddenTopics: [], stateWrites: {
+	        ...niStateWrites,
+	        ...preserveCurrentStepState(),
+	      }, shouldAdvanceStep: false,
+	    };
+	  }
 
   // ── Branch: all objections and questions ──────────────────────────────────
   // Policy is the single brain for every named objection/question kind.
@@ -5103,46 +5209,48 @@ function buildConversationPolicyDecision(
     const sk = intent.subKind || "";
     let lineToSay: string;
 
-    if (sk === "scam") {
+    if (sk === "call_purpose_confusion" || sk === "source_memory" || sk === "permission_to_ask") {
+      lineToSay = `${getRebuttalLine(ctx, sk)}${requiredObjective}`;
+    } else if (sk === "scam") {
       lineToSay = buildDeterministicScamRebuttalLine(state);
     } else if (sk === "how_much") {
       lineToSay = isKayla
-        ? `It’s $199.99 a month flat — unlimited users, all features included. There’s a 7-day free trial and the code COVE50 saves $50 off the first month. ${closingPivot}`
-        : `That depends on the coverage and what you qualify for — ${agentFirst} will walk through the actual options with you on the call. ${closingPivot}`;
+        ? `It’s $199.99 a month flat — unlimited users, all features included. There’s a 7-day free trial and the code COVE50 saves $50 off the first month. ${requiredObjective}`
+        : `That depends on the coverage and what you qualify for — ${agentFirst} will walk through the actual options with you on the call. ${requiredObjective}`;
     } else if (sk === "what_entails") {
       // BUG-014: Kayla — route to the correct product answer; insurance — scheduling preview.
       lineToSay = isKayla
-        ? `${getVerticalProductAnswer(ctx)} ${closingPivot}`
-        : `Really quick — usually 5 to 10 minutes. ${agentFirst} just covers your ${scope} request, answers your questions, and that’s it. ${closingPivot}`;
+        ? `${getVerticalProductAnswer(ctx)} ${requiredObjective}`
+        : `Really quick — usually 5 to 10 minutes. ${agentFirst} just covers your ${scope} request, answers your questions, and that’s it. ${requiredObjective}`;
     } else if (sk === "are_you_ai") {
       // BUG-010: Remove "licensed agent" language; give Kayla a demo-aware response.
       lineToSay = isKayla
-        ? `What you’re hearing right now is exactly what your leads would hear — this is CoveCRM’s AI. It handles objections, answers questions, and books appointments. That’s what you’d be buying. ${closingPivot}`
-        : `Yes — I’m a virtual assistant helping with scheduling. ${agentFirst} handles everything on the actual call. ${closingPivot}`;
+        ? `What you’re hearing right now is exactly what your leads would hear — this is CoveCRM’s AI. It handles objections, answers questions, and books appointments. That’s what you’d be buying. ${requiredObjective}`
+        : `Yes — I’m a virtual assistant helping with scheduling. ${agentFirst} handles everything on the actual call. ${requiredObjective}`;
     } else if (sk === "busy") {
-      lineToSay = `No worries — this’ll be really quick. ${closingPivot}`;
+      lineToSay = `No worries — this’ll be really quick. ${requiredObjective}`;
     } else if (sk === "send_it" || sk === "send_info") {
       lineToSay = isKayla
-        ? `I can text you the signup link and discount code right now — want me to send it over? ${closingPivot}`
-        : `I get it — honestly easier on a quick call than back and forth over text. ${agentFirst} keeps it to 5 minutes. ${closingPivot}`;
+        ? `I can text you the signup link and discount code right now — want me to send it over? ${requiredObjective}`
+        : `I get it — honestly easier on a quick call than back and forth over text. ${agentFirst} keeps it to 5 minutes. ${requiredObjective}`;
     } else if (sk === "already_have") {
       lineToSay = isKayla
-        ? `That’s fair — a lot of agents on other CRMs switch over once they see how the AI dialer and Facebook webhook work together out of the box. No setup headaches. ${closingPivot}`
-        : `That’s great — a lot of people ${agentFirst} works with have coverage but are overpaying or have gaps they didn’t know about. Five minutes to check. ${closingPivot}`;
+        ? `That’s fair — a lot of agents on other CRMs switch over once they see how the AI dialer and Facebook webhook work together out of the box. No setup headaches. ${requiredObjective}`
+        : `That’s great — a lot of people ${agentFirst} works with have coverage but are overpaying or have gaps they didn’t know about. Five minutes to check. ${requiredObjective}`;
     } else if (sk === "dont_remember") {
       lineToSay = isKayla
-        ? `No worries — a request came through to see how the AI works. ${agentFirst} just wants to make sure you got connected. ${closingPivot}`
-        : `No worries — a ${scope} request came through a little while back. ${agentFirst} just wants to make sure you got taken care of. ${closingPivot}`;
+        ? `No worries — a request came through to see how the AI works. ${agentFirst} just wants to make sure you got connected. ${requiredObjective}`
+        : `No worries — a ${scope} request came through a little while back. ${agentFirst} just wants to make sure you got taken care of. ${requiredObjective}`;
     } else if (sk === "how_did_you_get") {
       lineToSay = isKayla
-        ? `Your info came through a form requesting a CoveCRM demo. ${agentFirst} just wants to make sure you got what you were looking for. ${closingPivot}`
-        : `Your info came through a form submitted online for ${scope}. ${agentFirst} just wants to make sure you’re taken care of. ${closingPivot}`;
+        ? `Your info came through a form requesting a CoveCRM demo. ${agentFirst} just wants to make sure you got what you were looking for. ${requiredObjective}`
+        : `Your info came through a form submitted online for ${scope}. ${agentFirst} just wants to make sure you’re taken care of. ${requiredObjective}`;
     } else if (sk === "generic_question") {
       lineToSay = ctx
-        ? `${getVerticalProductAnswer(ctx)} ${closingPivot}`
-        : `${agentFirst} can answer that on the call. ${closingPivot}`;
+        ? `${getVerticalProductAnswer(ctx)} ${requiredObjective}`
+        : `${agentFirst} can answer that on the call. ${requiredObjective}`;
     } else {
-      lineToSay = getRebuttalLine(ctx, "generic_question");
+      lineToSay = `${agentFirst} can answer that on the call. ${requiredObjective}`;
     }
 
     const objKind = sk || intent.kind;
@@ -5152,16 +5260,19 @@ function buildConversationPolicyDecision(
     const objStateWrites: Record<string, unknown> = { lastObjectionKind: objKind, objectionRepeatCount: objRepeatCount };
 
     if (objRepeatMode) {
-      const rebuttalBase = getRebuttalLine(ctx, sk) || lineToSay;
+      const rebuttalBase = lineToSay;
       return {
         handled: true,
         routeKind: `policy_${sk || "objection"}`,
         responseMode: "soft_script",
         objective: "return_to_booking",
         lineToSay: rebuttalBase,
-        requiredClosingPivot: closingPivot,
+        requiredClosingPivot: requiredObjective,
         forbiddenTopics: [],
-        stateWrites: objStateWrites,
+        stateWrites: {
+          ...objStateWrites,
+          ...preserveCurrentStepState(),
+        },
         shouldAdvanceStep: false,
         repeatMode: true,
       };
@@ -5173,9 +5284,12 @@ function buildConversationPolicyDecision(
       responseMode: "exact_script",
       objective: "return_to_booking",
       lineToSay,
-      requiredClosingPivot: closingPivot,
+      requiredClosingPivot: requiredObjective,
       forbiddenTopics: [],
-      stateWrites: objStateWrites,
+      stateWrites: {
+        ...objStateWrites,
+        ...preserveCurrentStepState(),
+      },
       shouldAdvanceStep: false,
     };
   }
@@ -5268,24 +5382,22 @@ function buildConversationPolicyDecision(
   if (intent.kind === "unknown" || intent.kind === "off_topic") {
     if (state.phase === "awaiting_greeting_reply") return NOT_HANDLED;
     if (!ctx) return NOT_HANDLED;
-    return {
-      handled: true,
-      routeKind: "policy_unknown",
-      responseMode: "free_response",
-      objective: "open_question",
-      userText: intent.raw,
-      lineToSay: closingPivot,
-      requiredClosingPivot: (() => {
-        const currentStep = (stepCtx?.steps || [])[stepCtx?.idx ?? 0];
-        return (currentStep && currentStep.trim()) ? currentStep.trim() : closingPivot;
-      })(),
-      forbiddenTopics: [],
-      stateWrites: {
-        pendingLiveTransferAvailabilityConfirm: false,
-        pendingLiveTransferAvailabilityAttempts: 0,
-      },
-      shouldAdvanceStep: false,
-    };
+	    return {
+	      handled: true,
+	      routeKind: "policy_unknown",
+	      responseMode: "free_response",
+	      objective: "open_question",
+	      userText: intent.raw,
+	      lineToSay: requiredObjective,
+	      requiredClosingPivot: requiredObjective,
+	      forbiddenTopics: [],
+	      stateWrites: {
+	        pendingLiveTransferAvailabilityConfirm: false,
+	        pendingLiveTransferAvailabilityAttempts: 0,
+	        ...preserveCurrentStepState(),
+	      },
+	      shouldAdvanceStep: false,
+	    };
   }
 
   // ── Branch: script advance (lead gave a qualifying answer to current step) ─
@@ -5376,11 +5488,12 @@ function buildConversationPolicyDecision(
       lineToSay,
       requiredClosingPivot: lineToSay,
       forbiddenTopics: [],
-      stateWrites: {
-        phase: "awaiting_greeting_reply",
-        awaitingUserAnswer: true,
-        awaitingAnswerForStepIndex: 0,
-      },
+	      stateWrites: {
+	        phase: "awaiting_greeting_reply",
+	        awaitingUserAnswer: true,
+	        awaitingAnswerForStepIndex: 0,
+	        scriptStepIndex: 0,
+	      },
       shouldAdvanceStep: false,
     };
   }
