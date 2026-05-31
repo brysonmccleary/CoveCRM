@@ -2,7 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
-import twilioClient from "@/lib/twilioClient";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 type HangResult = {
   sid: string;
@@ -12,18 +12,18 @@ type HangResult = {
   error?: string;
 };
 
-async function endBySid(sid: string): Promise<HangResult> {
+async function endBySid(client: any, sid: string): Promise<HangResult> {
   try {
-    const call = await twilioClient.calls(sid).fetch();
+    const call = await client.calls(sid).fetch();
     const prev = (call.status || "").toLowerCase();
 
     // Twilio statuses: queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
     if (prev === "queued" || prev === "ringing" || prev === "pending") {
-      await twilioClient.calls(sid).update({ status: "canceled" as any });
+      await client.calls(sid).update({ status: "canceled" as any });
       return { sid, previousStatus: prev, finalStatus: "canceled", ok: true };
     }
     if (prev === "in-progress" || prev === "bridged") {
-      await twilioClient.calls(sid).update({ status: "completed" as any });
+      await client.calls(sid).update({ status: "completed" as any });
       return { sid, previousStatus: prev, finalStatus: "completed", ok: true };
     }
 
@@ -34,11 +34,11 @@ async function endBySid(sid: string): Promise<HangResult> {
 
     // Fallback attempt: try completed then canceled
     try {
-      await twilioClient.calls(sid).update({ status: "completed" as any });
+      await client.calls(sid).update({ status: "completed" as any });
       return { sid, previousStatus: prev, finalStatus: "completed", ok: true };
     } catch {
       try {
-        await twilioClient.calls(sid).update({ status: "canceled" as any });
+        await client.calls(sid).update({ status: "canceled" as any });
         return { sid, previousStatus: prev, finalStatus: "canceled", ok: true };
       } catch (err2: any) {
         return {
@@ -71,9 +71,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sids = (Array.isArray(callSids) ? callSids : []).concat(callSid ? [callSid] : []).filter(Boolean) as string[];
   if (sids.length === 0) return res.status(400).json({ message: "Missing callSid/callSids" });
 
+  const { client } = await getClientForUser(String(session.user.email).toLowerCase());
   const results: HangResult[] = [];
   for (const sid of sids) {
-    const r = await endBySid(sid);
+    const r = await endBySid(client, sid);
     results.push(r);
   }
 

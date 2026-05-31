@@ -11,8 +11,6 @@ import { getSocket } from "@/lib/socketClient";
 
 import { useInlineLeadCall } from "@/lib/dial/useInlineLeadCall";
 
-const CallCoachReport = dynamic(() => import("@/components/CallCoachReport"), { ssr: false });
-
 const CallPanelClose = dynamic<{
   leadId: string;
   userHasAI: boolean;
@@ -1350,6 +1348,9 @@ export default function LeadProfileDial() {
               <option value="Booked Appointment">Booked Appointment</option>
               <option value="Not Interested">Not Interested</option>
               <option value="Bad Number">Bad Number</option>
+              <option value="No Answer">No Answer</option>
+              <option value="No Show">No Show</option>
+              <option value="Do Not Contact">Do Not Contact</option>
             </select>
           </div>
 
@@ -1439,16 +1440,6 @@ export default function LeadProfileDial() {
               </div>
             )}
           </div>
-
-          {/* AI Call Coach Report */}
-          {latestOverviewCall?.id && (
-            <CallCoachReport
-              callId={String(latestOverviewCall.id)}
-              leadName={leadName}
-              userHasAI={userHasAI}
-              key={String(latestOverviewCall.id)}
-            />
-          )}
 
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold mb-2">Interaction History</h3>
