@@ -1132,7 +1132,50 @@ async function replayPendingCommittedTurn(
     const turnKey = buildCommittedTurnKey(state, lastUserText, restoredAudioMs, expectedAnswerIdx);
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
-    if (await handleConversationTurn(state, lastUserText, "replay", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause)) return;
+    const handledReplay = await handleConversationTurn(state, lastUserText, "replay", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause);
+    if (handledReplay) return;
+
+    if (!handledReplay && lastUserText && lastUserText.trim().length > 0) {
+      if (!state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking) {
+        const currentStepLine = (state.scriptSteps || [])[
+          typeof state.awaitingAnswerForStepIndex === "number"
+            ? state.awaitingAnswerForStepIndex
+            : typeof state.scriptStepIndex === "number"
+            ? Math.max(0, state.scriptStepIndex - 1)
+            : 0
+        ] || "";
+        const instr = buildFreeResponseInstruction(
+          state.context || ({} as any),
+          {
+            userText: lastUserText,
+            recentExchanges: state.recentExchanges,
+            currentStepLine,
+            stepType: stepType,
+          }
+        );
+        console.log("[AI-VOICE][FALLBACK] handleConversationTurn returned false — free_response fallback", {
+          callSid: state.callSid,
+          text: lastUserText,
+          currentStepLine,
+          phase: state.phase,
+        });
+        setWaitingForResponse(state, true, "response.create (unhandled fallback)");
+        setAiSpeaking(state, true, "response.create (unhandled fallback)");
+        setResponseInFlight(state, true, "response.create (unhandled fallback)");
+        state.outboundOpenAiDone = false;
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = currentStepLine || lastUserText;
+        state.lastResponseCreateAtMs = Date.now();
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex =
+          typeof state.awaitingAnswerForStepIndex === "number"
+            ? state.awaitingAnswerForStepIndex
+            : 0;
+        state.openAiWs?.send(
+          JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 }))
+        );
+      }
+    }
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
       const _ltClearSd = String(state.selectedDay || "").trim().toLowerCase();
@@ -1384,11 +1427,13 @@ function buildCommittedTurnKey(
 ): string {
   const transcript = normalizeTurnTextForKey(transcriptRaw);
   const audioBucket = Math.floor(Math.max(0, Number(audioMsRaw || 0)) / 500);
+  const turnSeq = typeof state.routeSequenceId === "number" ? state.routeSequenceId : 0;
   return [
     state.phase || "",
     String(expectedAnswerIdx),
     transcript || "(no-text)",
     String(audioBucket),
+    `seq${turnSeq}`,
   ].join("|");
 }
 
@@ -9496,7 +9541,50 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     const turnKey = buildCommittedTurnKey(state, lastUserText, audioMsCommitGate, expectedAnswerIdx);
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
 
-    if (await handleConversationTurn(state, lastUserText, "main", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause)) return;
+    const handledMain = await handleConversationTurn(state, lastUserText, "main", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause);
+    if (handledMain) return;
+
+    if (!handledMain && lastUserText && lastUserText.trim().length > 0) {
+      if (!state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking) {
+        const currentStepLine = (state.scriptSteps || [])[
+          typeof state.awaitingAnswerForStepIndex === "number"
+            ? state.awaitingAnswerForStepIndex
+            : typeof state.scriptStepIndex === "number"
+            ? Math.max(0, state.scriptStepIndex - 1)
+            : 0
+        ] || "";
+        const instr = buildFreeResponseInstruction(
+          state.context || ({} as any),
+          {
+            userText: lastUserText,
+            recentExchanges: state.recentExchanges,
+            currentStepLine,
+            stepType: stepType,
+          }
+        );
+        console.log("[AI-VOICE][FALLBACK] handleConversationTurn returned false — free_response fallback", {
+          callSid: state.callSid,
+          text: lastUserText,
+          currentStepLine,
+          phase: state.phase,
+        });
+        setWaitingForResponse(state, true, "response.create (unhandled fallback)");
+        setAiSpeaking(state, true, "response.create (unhandled fallback)");
+        setResponseInFlight(state, true, "response.create (unhandled fallback)");
+        state.outboundOpenAiDone = false;
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = currentStepLine || lastUserText;
+        state.lastResponseCreateAtMs = Date.now();
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex =
+          typeof state.awaitingAnswerForStepIndex === "number"
+            ? state.awaitingAnswerForStepIndex
+            : 0;
+        state.openAiWs?.send(
+          JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 }))
+        );
+      }
+    }
 
     if (state.pendingLiveTransferAvailabilityConfirm) {
       const _ltClearSd = String(state.selectedDay || "").trim().toLowerCase();
