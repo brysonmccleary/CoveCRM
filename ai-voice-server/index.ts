@@ -377,6 +377,8 @@ type CallState = {
 
   // silence watchdog: arms after greeting or each AI turn; cancelled on speech_started
   silenceWatchdog?: NodeJS.Timeout | null;
+  // greeting audio fallback: fires after 8s if OpenAI never sends audio
+  greetingTimeoutId?: NodeJS.Timeout | null;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -804,6 +806,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
             calls.get(twilioWs) === live &&
             twilioWs.readyState === WebSocket.OPEN
           ) {
+            if (live.greetingTimeoutId) { clearTimeout(live.greetingTimeoutId); live.greetingTimeoutId = null; }
             (live as any).greetingAudioDone = true;
             finalizeGreetingAdvance(live, "pacer drained greeting empty");
             live.awaitingUserAnswer = true;
@@ -853,6 +856,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
             calls.get(twilioWs) === live &&
             twilioWs.readyState === WebSocket.OPEN
           ) {
+            if (live.greetingTimeoutId) { clearTimeout(live.greetingTimeoutId); live.greetingTimeoutId = null; }
             (live as any).greetingAudioDone = true;
             finalizeGreetingAdvance(live, "pacer drained greeting");
             live.awaitingUserAnswer = true;
@@ -1130,13 +1134,47 @@ async function replayPendingCommittedTurn(
     if (now - lastCreateAt < 150) return;
 
     const turnKey = buildCommittedTurnKey(state, lastUserText, restoredAudioMs, expectedAnswerIdx);
-    if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
+    if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) {
+      if (
+        lastUserText && lastUserText.trim().length > 0 &&
+        state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN &&
+        !state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking
+      ) {
+        const _dupStepLine = (state.scriptSteps || [])[
+          typeof state.awaitingAnswerForStepIndex === "number"
+            ? state.awaitingAnswerForStepIndex
+            : typeof state.scriptStepIndex === "number"
+            ? Math.max(0, state.scriptStepIndex - 1)
+            : 0
+        ] || "";
+        const _dupInstr = buildFreeResponseInstruction(
+          state.context || ({} as any),
+          { userText: lastUserText, recentExchanges: state.recentExchanges, currentStepLine: _dupStepLine, stepType }
+        );
+        console.log("[AI-VOICE][FALLBACK] dup-guard skipped — free_response fallback", {
+          callSid: state.callSid, text: lastUserText, phase: state.phase,
+        });
+        setWaitingForResponse(state, true, "response.create (dup-guard fallback)");
+        setAiSpeaking(state, true, "response.create (dup-guard fallback)");
+        setResponseInFlight(state, true, "response.create (dup-guard fallback)");
+        state.outboundOpenAiDone = false;
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = _dupStepLine || lastUserText;
+        state.lastResponseCreateAtMs = Date.now();
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex =
+          typeof state.awaitingAnswerForStepIndex === "number" ? state.awaitingAnswerForStepIndex : 0;
+        state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_dupInstr, { temperature: 0.6 })));
+      }
+      return;
+    }
 
     const handledReplay = await handleConversationTurn(state, lastUserText, "replay", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause);
     if (handledReplay) return;
 
     if (!handledReplay && lastUserText && lastUserText.trim().length > 0) {
-      if (!state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking) {
+      if (!state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking &&
+          state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN) {
         const currentStepLine = (state.scriptSteps || [])[
           typeof state.awaitingAnswerForStepIndex === "number"
             ? state.awaitingAnswerForStepIndex
@@ -1171,7 +1209,7 @@ async function replayPendingCommittedTurn(
           typeof state.awaitingAnswerForStepIndex === "number"
             ? state.awaitingAnswerForStepIndex
             : 0;
-        state.openAiWs?.send(
+        state.openAiWs.send(
           JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 }))
         );
       }
@@ -2201,10 +2239,11 @@ function getHumanAckPrefixForStepAnswer(
 function isGreetingNegativeHearing(userTextRaw: string): boolean {
   const t = String(userTextRaw || "").trim().toLowerCase();
   if (!t) return false;
+  // Bare "no" without any hearing-related context is not a hearing problem
+  if (t === "no") return false;
 
   // Strong "can't hear" signals
   if (
-    t === "no" ||
     t === "nope" ||
     t === "nah" ||
     t.includes("can't hear") ||
@@ -2888,9 +2927,9 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
 function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
   const t = normalizeTurnTextForKey(textRaw);
   if (!t) return false;
-  if (["me", "myself", "my self", "just me", "for me", "spouse", "both", "both of us"].includes(t)) return true;
+  if (["me", "myself", "my self", "just me", "for me", "spouse", "both", "both of us", "my partner", "the two of us", "us both"].includes(t)) return true;
   return (
-    /\b(myself|my self|just me|for me|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i)\b/.test(t)
+    /\b(myself|my self|just me|for me|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner)\b/.test(t)
   );
 }
 
@@ -5514,6 +5553,53 @@ function buildConversationPolicyDecision(
       },
       shouldAdvanceStep: false,
     };
+  }
+
+  // ── Greeting-phase: disengagement intercept ─────────────────────────────
+  // live_transfer_later/scheduling_preference return NOT_HANDLED above (gated to in_call).
+  // Catch "busy", "redirect", and plain-text "not interested" signals before the
+  // catch-all so they get a proper response instead of "can you hear me?".
+  if (state.phase === "awaiting_greeting_reply" && ctx) {
+    const greetingRaw = String(intent.raw || "").toLowerCase().trim();
+    const greetingNI =
+      greetingRaw.includes("not interested") ||
+      greetingRaw === "no thanks" ||
+      greetingRaw === "no thank you" ||
+      greetingRaw.includes("stop calling") ||
+      greetingRaw.includes("do not call");
+    const greetingBusy =
+      intent.kind === "live_transfer_later" ||
+      intent.kind === "scheduling_preference" ||
+      greetingRaw.includes("busy") ||
+      greetingRaw.includes("call back") ||
+      greetingRaw.includes("call me later") ||
+      greetingRaw.includes("not a good time") ||
+      greetingRaw.includes("bad time") ||
+      greetingRaw.includes("can't talk") ||
+      greetingRaw.includes("cant talk") ||
+      greetingRaw.includes("in a meeting") ||
+      greetingRaw.includes("driving");
+    if (greetingNI || greetingBusy) {
+      const agentFirst = getAgentFirstName(ctx);
+      const lineToSay = greetingBusy && !greetingNI
+        ? `No problem — can ${agentFirst} try you back at a better time? Would later today or tomorrow work?`
+        : `Totally fair — I'm not here to pressure you. Most people are really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${requiredObjective}`;
+      return {
+        handled: true,
+        routeKind: "policy_greeting_objection",
+        responseMode: "exact_script",
+        objective: greetingBusy ? "greeting_reschedule" : "greeting_not_interested",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: {
+          phase: "awaiting_greeting_reply",
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: 0,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
   }
 
   // ── Greeting-phase catch-all ─────────────────────────────────────────────
@@ -9104,6 +9190,25 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           JSON.stringify(buildRealtimeResponseCreate(greetingInstr))
         );
 
+        // 8-second fallback: if OpenAI never sends audio, force greeting advance so the call doesn't stall
+        liveState.greetingTimeoutId = setTimeout(() => {
+          try {
+            const current = calls.get(twilioWs);
+            if (
+              current !== liveState ||
+              (current as any).greetingAudioDone ||
+              current.phase !== "awaiting_greeting_reply"
+            ) return;
+            console.log("[AI-VOICE][GREETING-TIMEOUT] no greeting audio in 8s — forcing advance", { callSid: current.callSid });
+            if (current.greetingTimeoutId) { clearTimeout(current.greetingTimeoutId); current.greetingTimeoutId = null; }
+            (current as any).greetingAudioDone = true;
+            finalizeGreetingAdvance(current, "greeting_timeout_8s");
+            current.awaitingUserAnswer = true;
+            current.awaitingAnswerForStepIndex = 0;
+            armSilenceWatchdog(twilioWs, current, POST_GREETING_SILENCE_MS, "greeting_timeout_8s");
+          } catch {}
+        }, 8000);
+
       })();
     }
 
@@ -9539,13 +9644,47 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     const lastCreateAt = Number(state.lastResponseCreateAtMs || 0);
     if (now - lastCreateAt < 150) return;
     const turnKey = buildCommittedTurnKey(state, lastUserText, audioMsCommitGate, expectedAnswerIdx);
-    if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) return;
+    if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) {
+      if (
+        lastUserText && lastUserText.trim().length > 0 &&
+        state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN &&
+        !state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking
+      ) {
+        const _dupStepLine = (state.scriptSteps || [])[
+          typeof state.awaitingAnswerForStepIndex === "number"
+            ? state.awaitingAnswerForStepIndex
+            : typeof state.scriptStepIndex === "number"
+            ? Math.max(0, state.scriptStepIndex - 1)
+            : 0
+        ] || "";
+        const _dupInstr = buildFreeResponseInstruction(
+          state.context || ({} as any),
+          { userText: lastUserText, recentExchanges: state.recentExchanges, currentStepLine: _dupStepLine, stepType }
+        );
+        console.log("[AI-VOICE][FALLBACK] dup-guard skipped — free_response fallback", {
+          callSid: state.callSid, text: lastUserText, phase: state.phase,
+        });
+        setWaitingForResponse(state, true, "response.create (dup-guard fallback)");
+        setAiSpeaking(state, true, "response.create (dup-guard fallback)");
+        setResponseInFlight(state, true, "response.create (dup-guard fallback)");
+        state.outboundOpenAiDone = false;
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = _dupStepLine || lastUserText;
+        state.lastResponseCreateAtMs = Date.now();
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex =
+          typeof state.awaitingAnswerForStepIndex === "number" ? state.awaitingAnswerForStepIndex : 0;
+        state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_dupInstr, { temperature: 0.6 })));
+      }
+      return;
+    }
 
     const handledMain = await handleConversationTurn(state, lastUserText, "main", { idx, steps, stepType, expectedAnswerIdx }, turnKey, humanPause);
     if (handledMain) return;
 
     if (!handledMain && lastUserText && lastUserText.trim().length > 0) {
-      if (!state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking) {
+      if (!state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking &&
+          state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN) {
         const currentStepLine = (state.scriptSteps || [])[
           typeof state.awaitingAnswerForStepIndex === "number"
             ? state.awaitingAnswerForStepIndex
@@ -9580,7 +9719,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           typeof state.awaitingAnswerForStepIndex === "number"
             ? state.awaitingAnswerForStepIndex
             : 0;
-        state.openAiWs?.send(
+        state.openAiWs.send(
           JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 }))
         );
       }
@@ -9806,6 +9945,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       const userTurnFired = !!state.debugLoggedResponseCreateUserTurn;
       const inGreetingPhase = greetingFired && !userTurnFired;
       if (inGreetingPhase && !(state as any).greetingAudioDone) {
+        if (state.greetingTimeoutId) { clearTimeout(state.greetingTimeoutId); state.greetingTimeoutId = null; }
         (state as any).greetingAudioDone = true;
         finalizeGreetingAdvance(state, `OpenAI ${t}`);
         state.awaitingUserAnswer = true;
@@ -9843,6 +9983,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
       // ✅ Force greetingAudioDone on <1 frame path too
       if (state.phase === "awaiting_greeting_reply" && !(state as any).greetingAudioDone) {
+        if (state.greetingTimeoutId) { clearTimeout(state.greetingTimeoutId); state.greetingTimeoutId = null; }
         (state as any).greetingAudioDone = true;
         finalizeGreetingAdvance(state, `OpenAI ${t} (<1frame path)`);
         state.awaitingUserAnswer = true;
