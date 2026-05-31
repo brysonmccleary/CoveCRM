@@ -286,16 +286,35 @@ async function ensureSubaccountTwimlAppForUser(args: {
     (fresh as any)?.twilio?.twimlAppSid ||
     "";
 
-  if (existing && String(existing).startsWith("AP")) {
-    return { twimlAppSid: String(existing) };
-  }
-
   const client = buildTwilioClient({ accountSid: subSid, apiKeySid, apiKeySecret });
+  const voiceUrl = "https://www.covecrm.com/api/voice/agent-join";
 
-  const baseUrl = String(args.baseUrl || "").replace(/\/$/, "");
-  const voiceUrl =
-    (process.env.TWILIO_VOICE_APP_URL || "").trim() ||
-    `${baseUrl}/api/voice/agent-join`;
+  if (existing && String(existing).startsWith("AP")) {
+    try {
+      const app = await (client as any).applications(String(existing)).fetch();
+      if (String(app?.voiceUrl || "") !== voiceUrl || String(app?.voiceMethod || "").toUpperCase() !== "POST") {
+        await (client as any).applications(String(existing)).update({
+          voiceUrl,
+          voiceMethod: "POST",
+        });
+      }
+
+      (fresh as any).twimlAppSid = String(existing);
+      (fresh as any).twilio = (fresh as any).twilio || {};
+      (fresh as any).twilio.twimlAppSid = String(existing);
+      await fresh.save();
+
+      return { twimlAppSid: String(existing) };
+    } catch (e: any) {
+      console.warn(JSON.stringify({
+        msg: "ensureSubaccountTwimlAppForUser: stored TwiML App invalid for subaccount; recreating",
+        email: normalizedEmail,
+        subSidMasked: maskSid(subSid),
+        twimlAppSidMasked: maskSid(String(existing)),
+        error: e?.message || String(e),
+      }));
+    }
+  }
 
   const friendlyName = `CoveCRM Browser - ${normalizedEmail}`;
 
@@ -530,16 +549,22 @@ export async function getClientForUser(
     );
 
     // NOTE: usingPersonal=false here (still platform-billed, just isolated)
-    // ✅ Ensure TwiML App exists in this user's subaccount for browser calling
-    await ensureSubaccountTwimlAppForUser({
+    // ✅ Ensure TwiML App exists in this user's subaccount for browser calling.
+    // Merge returned SID into user so voice/token gets the live (possibly healed) value.
+    const { twimlAppSid: healedAppSid } = await ensureSubaccountTwimlAppForUser({
       email: normalizedEmail,
       baseUrl,
       subSid,
       apiKeySid,
       apiKeySecret,
     });
+    const userWithApp = {
+      ...user,
+      twimlAppSid: healedAppSid,
+      twilio: { ...(user?.twilio || {}), twimlAppSid: healedAppSid },
+    };
 
-    return { client, accountSid: subSid, usingPersonal: false, user, auth };
+    return { client, accountSid: subSid, usingPersonal: false, user: userWithApp, auth };
   }
 
   // ---------- SUBACCOUNT via PLATFORM CREDS (SID only on user) ----------
@@ -580,16 +605,22 @@ export async function getClientForUser(
       }),
     );
 
-    // ✅ Ensure TwiML App exists in this user's subaccount for browser calling
-    await ensureSubaccountTwimlAppForUser({
+    // ✅ Ensure TwiML App exists in this user's subaccount for browser calling.
+    // Merge returned SID into user so voice/token gets the live (possibly healed) value.
+    const { twimlAppSid: healedAppSid } = await ensureSubaccountTwimlAppForUser({
       email: normalizedEmail,
       baseUrl,
       subSid,
       apiKeySid,
       apiKeySecret,
     });
+    const userWithApp = {
+      ...user,
+      twimlAppSid: healedAppSid,
+      twilio: { ...(user?.twilio || {}), twimlAppSid: healedAppSid },
+    };
 
-    return { client, accountSid: subSid, usingPersonal: false, user, auth };
+    return { client, accountSid: subSid, usingPersonal: false, user: userWithApp, auth };
   }
 
   // ---------- PLATFORM (shared master account) ----------

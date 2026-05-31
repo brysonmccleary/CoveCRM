@@ -35,19 +35,105 @@ function getSubScopedClient(subAccountSid: string): Twilio {
   return twilio(auth.apiKeySid, auth.apiKeySecret, { accountSid: subAccountSid });
 }
 
+const PROVISION_LOCK_TTL_MS = 60_000;
+
 async function ensureSubaccount(master: Twilio, user: any) {
+  // Fast path: already provisioned.
   if (user?.twilio?.accountSid) {
     console.log("[TWILIO] Using existing subaccount:", user.twilio.accountSid);
     return { sid: user.twilio.accountSid };
   }
 
-  const sub = await master.api.accounts.create({
-    friendlyName: `CoveCRM - ${user.email}`,
-  });
+  const now = new Date();
+  const lockExpiry = new Date(now.getTime() - PROVISION_LOCK_TTL_MS);
 
-  user.twilio = user.twilio || {};
-  user.twilio.accountSid = sub.sid;
-  await user.save();
+  // Atomically claim the provisioning lock.
+  // Claim succeeds only when no accountSid is set AND no live lock exists (or the lock is stale).
+  const claimed = await User.findOneAndUpdate(
+    {
+      _id: (user as any)._id,
+      $or: [
+        { "twilio.accountSid": { $exists: false } },
+        { "twilio.accountSid": null },
+        { "twilio.accountSid": "" },
+      ],
+      $and: [
+        {
+          $or: [
+            { "twilio.provisioningLock": { $exists: false } },
+            { "twilio.provisioningLock": null },
+            { "twilio.provisioningLock": { $lt: lockExpiry } },
+          ],
+        },
+      ],
+    },
+    { $set: { "twilio.provisioningLock": now } },
+    { new: false },
+  );
+
+  if (!claimed) {
+    // Another process holds a live lock. Wait briefly then check if it finished.
+    await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+    const reloaded = await User.findById((user as any)._id).lean<any>();
+    const concurrent = String(reloaded?.twilio?.accountSid || "").trim();
+    if (concurrent) {
+      console.log("[TWILIO] Using subaccount created by concurrent process:", concurrent);
+      user.twilio = user.twilio || {};
+      user.twilio.accountSid = concurrent;
+      return { sid: concurrent };
+    }
+    throw new Error(
+      `ensureSubaccount: lock held and no SID found after wait (email=${user.email})`,
+    );
+  }
+
+  // Lock claimed. Create the Twilio subaccount.
+  let sub: any;
+  try {
+    sub = await master.api.accounts.create({
+      friendlyName: `CoveCRM - ${user.email}`,
+    });
+  } catch (createErr: any) {
+    // Release lock so future attempts can retry.
+    await User.updateOne(
+      { _id: (user as any)._id },
+      { $set: { "twilio.provisioningLock": null } },
+    ).catch(() => {});
+    throw createErr;
+  }
+
+  // Persist SID and release lock atomically.
+  try {
+    await User.findOneAndUpdate(
+      { _id: (user as any)._id },
+      {
+        $set: { "twilio.accountSid": sub.sid, "twilio.provisioningLock": null },
+      },
+    );
+    user.twilio = user.twilio || {};
+    user.twilio.accountSid = sub.sid;
+  } catch (saveErr: any) {
+    // DB write failed after Twilio account was created — suspend the orphan.
+    console.error(
+      "[TWILIO] DB write failed after subaccount creation; suspending orphan:",
+      sub.sid,
+      saveErr?.message || saveErr,
+    );
+    try {
+      await (master as any).api.accounts(sub.sid).update({ status: "suspended" });
+    } catch (suspendErr: any) {
+      console.error(
+        "[TWILIO] Failed to suspend orphaned subaccount:",
+        sub.sid,
+        suspendErr?.message || suspendErr,
+      );
+    }
+    await User.updateOne(
+      { _id: (user as any)._id },
+      { $set: { "twilio.provisioningLock": null } },
+    ).catch(() => {});
+    throw saveErr;
+  }
 
   return sub;
 }

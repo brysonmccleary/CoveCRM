@@ -219,6 +219,10 @@ export function selectLocalPresenceNumber(
     }
   }
 
-  // Step 3: Fallback — existing selected/default number unchanged
-  return { fromNumber: fallbackFromNumber, matchSource: "fallback" };
+  // Step 3: Fallback — prefer configured number; if none, use first active number.
+  // Never return an empty fromNumber when owned numbers exist.
+  if (fallbackFromNumber) {
+    return { fromNumber: fallbackFromNumber, matchSource: "fallback" };
+  }
+  return { fromNumber: activeNumbers[0].phoneNumber, matchSource: "fallback" };
 }
