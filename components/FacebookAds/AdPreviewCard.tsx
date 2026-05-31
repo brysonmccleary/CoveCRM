@@ -6,6 +6,14 @@ const PAGE_NAMES: Record<string, string> = {
   iul: "IUL Education Center",
 };
 
+const LEAD_TYPE_LABELS: Record<string, string> = {
+  veteran: "Veteran Coverage",
+  trucker: "Trucker Coverage",
+  final_expense: "Final Expense",
+  mortgage_protection: "Mortgage Protection",
+  iul: "IUL Education",
+};
+
 const PAGE_ACCENTS: Record<string, string> = {
   veteran: "#1a2744",
   trucker: "#00bcd4",
@@ -1058,6 +1066,74 @@ function FinishedCreativeRenderer({
   overlay: ReturnType<typeof getOverlay>;
 }) {
   return renderTemplateFamily(buildCreativeState(draft, leadType, overlay));
+}
+
+export function ProductionFeedCreative({
+  draft,
+  creativeRef,
+}: {
+  draft: any;
+  creativeRef?: React.RefObject<HTMLDivElement | null>;
+}) {
+  const overlay = getOverlay(draft);
+  const leadType = cleanText(draft?.leadType || "final_expense");
+  const accent = PAGE_ACCENTS[leadType] || "#1d4ed8";
+  const headline = cleanText(overlay.headline || draft?.headline);
+  const subheadline = cleanText(overlay.subheadline || draft?.description);
+  const ctaStrip = cleanText(overlay.ctaStrip || draft?.cta || "Learn more");
+  const bullets = cleanList(overlay.benefitBullets || draft?.bulletPoints).slice(0, 3);
+
+  return (
+    <div
+      ref={creativeRef}
+      style={{
+        width: 540,
+        height: 675,
+        position: "relative",
+        overflow: "hidden",
+        background: "#ffffff",
+        fontFamily:
+          "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+      }}
+    >
+      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, #f8fafc 0%, #ffffff 46%, #eef2ff 100%)" }} />
+      <div style={{ position: "absolute", inset: 42, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 24 }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minHeight: 34, padding: "0 18px", borderRadius: 999, background: `${accent}18`, color: accent, border: `1.5px solid ${accent}55`, fontSize: 17, fontWeight: 900, letterSpacing: 0.4, textTransform: "uppercase" }}>
+            {LEAD_TYPE_LABELS[leadType] || PAGE_NAMES[leadType] || "Coverage Review"}
+          </div>
+          <div style={{ color: "#0f172a", fontSize: 48, fontWeight: 950, lineHeight: 1.02, marginTop: 26 }}>
+            {headline}
+          </div>
+          {subheadline && (
+            <div style={{ color: "#334155", fontSize: 22, fontWeight: 700, lineHeight: 1.25, marginTop: 18 }}>
+              {subheadline}
+            </div>
+          )}
+        </div>
+
+        <div style={{ position: "relative", minHeight: 0, borderRadius: 28, overflow: "hidden", boxShadow: "0 22px 50px rgba(15,23,42,0.18)", border: "1px solid rgba(15,23,42,0.08)" }}>
+          <FinishedCreativeRenderer draft={draft} leadType={leadType} overlay={overlay} />
+        </div>
+
+        <div style={{ display: "grid", gap: 14 }}>
+          {bullets.length > 0 && (
+            <div style={{ display: "grid", gap: 8 }}>
+              {bullets.map((bullet) => (
+                <div key={bullet} style={{ display: "flex", alignItems: "center", gap: 10, color: "#0f172a", fontSize: 19, fontWeight: 800, lineHeight: 1.15 }}>
+                  <span style={{ width: 22, height: 22, borderRadius: 999, background: accent, color: "#ffffff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 950, flexShrink: 0 }}>✓</span>
+                  <span>{bullet}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ height: 58, borderRadius: 999, background: accent, color: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 950, boxShadow: `0 16px 34px ${accent}44` }}>
+            {ctaStrip.replace(/\s*→\s*$/, "")}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function pickTemplate(fingerprint: string, leadType: string): number {

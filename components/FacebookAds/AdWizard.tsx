@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toPng } from "html-to-image";
-import AdPreviewCard from "@/components/FacebookAds/AdPreviewCard";
+import AdPreviewCard, { ProductionFeedCreative } from "@/components/FacebookAds/AdPreviewCard";
 import StateSelector from "@/components/FacebookAds/StateSelector";
 import { US_STATES } from "@/lib/facebook/geo/usStates";
 
@@ -63,6 +63,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
   const [selectedMetaAdAccountId, setSelectedMetaAdAccountId] = useState("");
   const creativeRef = useRef<HTMLDivElement>(null);
+  const productionCreativeRef = useRef<HTMLDivElement>(null);
 
   const stateLabel = useMemo(() => {
     const labels = states.map((code) => US_STATES.find((state) => state.code === code)?.name || code);
@@ -192,14 +193,14 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     try {
       const selectedDraft = drafts[0] || draft;
 
-      // Capture the CSS-rendered square creative as a PNG
+      // Capture the production 4:5 feed creative as a PNG
       let renderedCreativeDataUrl = "";
-      if (!creativeRef.current) {
+      if (!productionCreativeRef.current) {
         setError("Ad preview capture failed. Please try again.");
         return;
       }
       try {
-        renderedCreativeDataUrl = await toPng(creativeRef.current, {
+        renderedCreativeDataUrl = await toPng(productionCreativeRef.current, {
           quality: 0.92,
           pixelRatio: 2,
           cacheBust: true,
@@ -432,11 +433,16 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
       )}
 
 	      {(step === 3 || step === 4) && draft && (
-	        <div
-            className="space-y-3"
-            style={step === 4 ? { position: "absolute", left: -10000, top: 0, width: 375, opacity: 0, pointerEvents: "none" } : undefined}
-          >
-	          <div className="flex items-center justify-between gap-3 flex-wrap">
+		        <div
+	            className="space-y-3"
+	            style={step === 4 ? { position: "absolute", left: -10000, top: 0, width: 375, pointerEvents: "none" } : undefined}
+	          >
+              {step === 4 && (drafts[0] || draft) && (
+                <div style={{ position: "absolute", left: -12000, top: 0, width: 540, height: 675, pointerEvents: "none" }}>
+                  <ProductionFeedCreative draft={drafts[0] || draft} creativeRef={productionCreativeRef} />
+                </div>
+              )}
+		          <div className="flex items-center justify-between gap-3 flex-wrap">
 	            <div>
               <p className="text-white font-semibold">Generated Ad Versions</p>
               <p className="text-sm text-gray-400">Review the selected test set before launch.</p>
