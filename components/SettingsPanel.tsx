@@ -1,5 +1,6 @@
 // /components/settingspanel.tsx
 import { useEffect, useState } from "react";
+import { signOut } from "next-auth/react";
 import A2PVerificationForm from "@/components/A2PVerificationForm";
 import AffiliateProgramPanel from "@/components/settings/AffiliateProgramPanel";
 import BillingPanel from "@/components/settings/BillingPanel";
@@ -135,7 +136,8 @@ export default function SettingsPanel() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to update email");
 
-      toast.success("Email updated!");
+      toast.success("Email updated. Signing you out…");
+      setTimeout(() => signOut({ callbackUrl: "/auth/signin" }), 1500);
     } catch (err: any) {
       toast.error(err.message || "Failed to update email.");
     }

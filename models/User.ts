@@ -3,6 +3,7 @@ import mongoose, { Schema } from "mongoose";
 
 export interface IUser {
   email: string;
+  previousEmails?: string[];
   password?: string;
   name?: string;
   role?: "user" | "admin";
@@ -337,6 +338,7 @@ const DialProgressSchema = new Schema(
 
 const UserSchema = new Schema<IUser>({
   email: { type: String, required: true },
+  previousEmails: { type: [String], default: [] },
   password: { type: String },
   name: { type: String },
   firstName: { type: String, default: "" },
