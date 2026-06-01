@@ -820,7 +820,7 @@ export default async function handler(
               callSid: CallSid,
             });
           } else {
-            if (!hasMoreLeads && s.status !== "completed") {
+            if (isTerminal && !hasMoreLeads && s.status !== "completed") {
               await AICallSession.updateOne(
                 { _id: aiCallSessionId, status: { $ne: "completed" } },
                 {

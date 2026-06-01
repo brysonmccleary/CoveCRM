@@ -18,6 +18,8 @@ export interface IAICallRecording extends Document {
   recordingSid?: string | null;
   recordingUrl?: string | null;
   durationSec?: number | null;
+  transferRebootPending?: boolean;
+  transferRebootedAt?: Date | null;
   outcome: AICallOutcome;
   notes?: string | null;
 
@@ -49,6 +51,8 @@ const AICallRecordingSchema = new Schema<IAICallRecording>(
     recordingSid: { type: String, default: null },
     recordingUrl: { type: String, default: null },
     durationSec: { type: Number, default: null },
+    transferRebootPending: { type: Boolean, default: false },
+    transferRebootedAt: { type: Date, default: null },
     outcome: {
       type: String,
       enum: [

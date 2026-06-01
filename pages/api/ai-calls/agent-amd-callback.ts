@@ -99,7 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (leadCallSid) {
         try {
           await mongooseConnect();
-          await AICallRecording.updateOne(
+          const result = await AICallRecording.updateOne(
             { callSid: leadCallSid },
             {
               $set: {
@@ -108,6 +108,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               },
             }
           );
+          console.log("[AGENT-AMD] transferRebootPending write result", {
+            leadCallSid,
+            matchedCount: result.matchedCount,
+            modifiedCount: result.modifiedCount,
+          });
           console.log("[AGENT-AMD] marked transferRebootPending on lead call record", {
             leadCallSid,
           });
