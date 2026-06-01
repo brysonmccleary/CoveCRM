@@ -48,7 +48,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader("Content-Type", "text/xml");
 
   try {
-    if (dialCallStatus === "completed" && !wasVoicemail) {
+    if (dialCallStatus === "completed" && dialCallDuration > 25 && !wasVoicemail) {
       try {
         const agentEmailTo = String(req.query.userEmail || req.body?.userEmail || "");
         if (agentEmailTo) {
