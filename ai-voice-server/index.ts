@@ -8456,7 +8456,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       // Keep a tiny ring buffer (~200ms) so we don't lose their first words
       const ring = state.bargeInFrames || [];
       ring.push(payload);
-      while (ring.length > 10) ring.shift(); // 10 * 20ms = 200ms
+      while (ring.length > 50) ring.shift(); // 50 * 20ms = 1000ms
       state.bargeInFrames = ring;
 
       const now = Date.now();
@@ -8560,6 +8560,12 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
           })
         );
       }
+      // Commit the flushed barge-in audio so OpenAI transcribes it
+      state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      console.log("[AI-VOICE][BARGE-IN] flushed and committed barge-in frames", {
+        callSid: state.callSid,
+        frameCount: frames.length,
+      });
       return; // we already appended the ring buffer including this frame
     }
 
