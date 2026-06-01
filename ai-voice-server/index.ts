@@ -100,7 +100,7 @@ function buildRealtimeResponseCreate(
     instructions,
     audio: {
       output: {
-        format: { type: "audio/pcmu" },
+        format: { type: OPENAI_REALTIME_AUDIO_FORMAT },
       },
     },
   };
@@ -8843,7 +8843,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         output_modalities: ["audio"],
         audio: {
           input: {
-            format: { type: "audio/pcmu" },
+            format: { type: OPENAI_REALTIME_AUDIO_FORMAT },
             transcription: {
               model: "gpt-4o-mini-transcribe",
               language: "en",
@@ -8864,7 +8864,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           },
           output: {
             voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
-            format: { type: "audio/pcmu" },
+            format: { type: OPENAI_REALTIME_AUDIO_FORMAT },
           },
         },
       },
@@ -8875,8 +8875,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         openAiVoiceId: state.context!.voiceProfile.openAiVoiceId,
         model: OPENAI_REALTIME_MODEL,
         apiShape: "ga",
-        inputAudioFormat: "audio/pcmu",
-        outputAudioFormat: "audio/pcmu",
+        inputAudioFormat: OPENAI_REALTIME_AUDIO_FORMAT,
+        outputAudioFormat: OPENAI_REALTIME_AUDIO_FORMAT,
       });
       openAiWs.send(JSON.stringify(sessionUpdate));
     } catch (err: any) {
