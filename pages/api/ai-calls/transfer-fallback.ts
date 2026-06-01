@@ -3,6 +3,8 @@
 // Attempts to book the appointment automatically, then says an appropriate message.
 import type { NextApiRequest, NextApiResponse } from "next";
 import { sendEmail } from "@/lib/email";
+import mongooseConnect from "@/lib/mongooseConnect";
+import AICallRecording from "@/models/AICallRecording";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
@@ -66,6 +68,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     res.setHeader("Content-Type", "text/xml");
     return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+  }
+
+  // Fresh DB check — works across serverless instances, unlike the in-memory map.
+  // agent-amd-callback writes transferRebootPending=true before redirecting the lead.
+  // If it's set, hold the lead alive with <Pause> instead of re-redirecting.
+  try {
+    await mongooseConnect();
+    const recording = await AICallRecording.findOne({ callSid: leadCallSid || callSid }).lean();
+    const isRebootPending = !!(recording as any)?.transferRebootPending;
+
+    if (isRebootPending) {
+      console.log("[TRANSFER-FALLBACK] transferRebootPending in DB — returning pause to keep lead alive", {
+        leadCallSid: leadCallSid || callSid,
+      });
+      res.setHeader("Content-Type", "text/xml");
+      return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Pause length="30"/>
+</Response>`);
+    }
+  } catch (dbErr) {
+    console.warn("[TRANSFER-FALLBACK] DB check for transferRebootPending failed (non-blocking)", dbErr);
   }
 
   const agentFirst = (agentName || "our agent").split(" ")[0] || "our agent";
@@ -170,8 +194,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 </Response>`);
     }
 
-    if (amdRebooted || hasAmdRebooted(leadCallSid || callSid)) {
-      console.log("[TRANSFER-FALLBACK] AMD already rebooted lead — returning pause to keep call alive", {
+    // Note: amdRebooted is always false here (handled above); hasAmdRebooted removed — DB check is
+    // the authoritative gate now. This block is kept only in case amdRebooted arrives on this path.
+    if (amdRebooted) {
+      console.log("[TRANSFER-FALLBACK] amdRebooted flag set — returning pause to keep call alive", {
         leadCallSid,
       });
       return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
