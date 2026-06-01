@@ -8605,6 +8605,8 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
     const isInboundSilence = isLikelySilenceMulawBase64(payload);
     const isInboundSpeechLike = !isInboundSilence;
+    const warmupUntil = Number((state as any).listenWarmupUntilMs || 0);
+    const inListenWarmup = warmupUntil > 0 && nowMs <= warmupUntil;
 
     if (isInboundSpeechLike) {
       (state as any).lastLocalSpeechActivityAtMs = nowMs;
@@ -8630,6 +8632,17 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
         state.userSpeechInProgress = false;
       }
     } catch {}
+
+    if (inListenWarmup) {
+      recordInboundForwardMeter(state, "appended", isInboundSpeechLike, activeSpeechWindow, trailingSpeechWindow);
+      state.openAiWs.send(
+        JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: payload,
+        })
+      );
+      return;
+    }
 
     if (!activeSpeechWindow && !trailingSpeechWindow) {
       recordInboundForwardMeter(state, "droppedIdleSilence", isInboundSpeechLike, activeSpeechWindow, trailingSpeechWindow);
