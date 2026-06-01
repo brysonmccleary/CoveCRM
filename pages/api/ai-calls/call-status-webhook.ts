@@ -286,8 +286,6 @@ export default async function handler(
       }
     }
 
-    const isTransferReboot = !!(recDoc as any)?.transferRebootPending;
-
     // ─────────────────────────────────────────────────────────────────────────────
     // ✅ Voicemail fast-skip (LAUNCH-SAFE):
     // Only end the call if:
@@ -433,9 +431,16 @@ export default async function handler(
             // End call immediately (non-audio)
             await hangupCallIfPossible(userEmail, CallSid);
 
+            // Re-fetch recording to get latest transferRebootPending state
+            let isTransferRebootFreshVoicemail = false;
+            try {
+              const freshRecordingVoicemail = await AICallRecording.findOne({ callSid: CallSid }).lean();
+              isTransferRebootFreshVoicemail = !!(freshRecordingVoicemail as any)?.transferRebootPending;
+            } catch {}
+
             // Chain next lead immediately (CallSid-level dedupe)
-            if (isTransferReboot) {
-              console.log("[AI Dialer] Skipping voicemail fast-skip worker kick — transfer reboot in progress", {
+            if (isTransferRebootFreshVoicemail) {
+              console.log("[AI Dialer] Skipping voicemail fast-skip worker kick — transfer reboot in progress (fresh check)", {
                 callSid: CallSid,
               });
             } else if (!AI_DIALER_DISABLED) {
@@ -801,11 +806,18 @@ export default async function handler(
 
           const hasMoreLeads = leadCount > 0 && lastIndex < leadCount - 1;
 
+          // Re-fetch recording to get latest transferRebootPending state
+          // agent-amd-callback may have written this flag after our initial load
+          let isTransferRebootFresh = false;
+          try {
+            const freshRecording = await AICallRecording.findOne({ callSid: CallSid }).lean();
+            isTransferRebootFresh = !!(freshRecording as any)?.transferRebootPending;
+          } catch {}
+
           // mark session completed if we truly reached the end
-          if (isTransferReboot) {
-            console.log("[AI Dialer] Skipping session completion — transfer reboot in progress", {
+          if (isTransferRebootFresh) {
+            console.log("[AI Dialer] Skipping session completion — transfer reboot in progress (fresh check)", {
               callSid: CallSid,
-              leadCallSid: CallSid,
             });
           } else {
             if (!hasMoreLeads && s.status !== "completed") {
@@ -841,8 +853,15 @@ export default async function handler(
           // - call ended (terminal status)
           // - session is still active (queued/running)
           // - session has more leads
-          if (isTransferReboot) {
-            console.log("[AI Dialer] Skipping worker kick — transfer reboot in progress", {
+          // Re-fetch recording to get latest transferRebootPending state
+          let isTransferRebootFreshKick = false;
+          try {
+            const freshRecordingKick = await AICallRecording.findOne({ callSid: CallSid }).lean();
+            isTransferRebootFreshKick = !!(freshRecordingKick as any)?.transferRebootPending;
+          } catch {}
+
+          if (isTransferRebootFreshKick) {
+            console.log("[AI Dialer] Skipping worker kick — transfer reboot in progress (fresh check)", {
               callSid: CallSid,
             });
           } else if (
