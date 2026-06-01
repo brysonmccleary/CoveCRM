@@ -301,6 +301,7 @@ type CallState = {
   timeOfferCount?: number;
 
   // Passive durable conversation memory (diagnostics only; no routing decisions read these yet)
+  coverageSubject?: string;
   selectedDay?: "today" | "tomorrow" | string;
   selectedTimeText?: string;
   selectedWindow?: TimeWindowHint;
@@ -1147,10 +1148,24 @@ async function replayPendingCommittedTurn(
             ? Math.max(0, state.scriptStepIndex - 1)
             : 0
         ] || "";
-        const _dupInstr = buildFreeResponseInstruction(
-          state.context || ({} as any),
-          { userText: lastUserText, recentExchanges: state.recentExchanges, currentStepLine: _dupStepLine, stepType }
+        const _obj = resolveConversationObjective(
+          { kind: "unknown", raw: lastUserText },
+          state,
+          { idx, steps, stepType, expectedAnswerIdx }
         );
+        const _dupInstr = state.context
+          ? buildControlledGptInstruction({
+              userText: lastUserText,
+              intent: "unknown",
+              requiredObjectiveLine: _obj.requiredStepLine || _dupStepLine,
+              stepType,
+              recentExchanges: state.recentExchanges,
+              ctx: state.context,
+            })
+          : buildFreeResponseInstruction(
+              state.context || ({} as any),
+              { userText: lastUserText, recentExchanges: state.recentExchanges, currentStepLine: _dupStepLine, stepType }
+            );
         console.log("[AI-VOICE][FALLBACK] dup-guard skipped — free_response fallback", {
           callSid: state.callSid, text: lastUserText, phase: state.phase,
         });
@@ -1182,15 +1197,24 @@ async function replayPendingCommittedTurn(
             ? Math.max(0, state.scriptStepIndex - 1)
             : 0
         ] || "";
-        const instr = buildFreeResponseInstruction(
-          state.context || ({} as any),
-          {
-            userText: lastUserText,
-            recentExchanges: state.recentExchanges,
-            currentStepLine,
-            stepType: stepType,
-          }
+        const _obj = resolveConversationObjective(
+          { kind: "unknown", raw: lastUserText },
+          state,
+          { idx, steps, stepType, expectedAnswerIdx }
         );
+        const instr = state.context
+          ? buildControlledGptInstruction({
+              userText: lastUserText,
+              intent: "unknown",
+              requiredObjectiveLine: _obj.requiredStepLine || currentStepLine,
+              stepType,
+              recentExchanges: state.recentExchanges,
+              ctx: state.context,
+            })
+          : buildFreeResponseInstruction(
+              state.context || ({} as any),
+              { userText: lastUserText, recentExchanges: state.recentExchanges, currentStepLine, stepType }
+            );
         console.log("[AI-VOICE][FALLBACK] handleConversationTurn returned false — free_response fallback", {
           callSid: state.callSid,
           text: lastUserText,
@@ -2901,6 +2925,9 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
     "yeah i can", "yeah i can hear you", "yep i can",
     "yep i can hear you", "i can hear you", "i can hear",
     "loud and clear", "loud and clear yes",
+    "what s up", "whats up", "yeah whats up", "yeah what s up",
+    "yep whats up", "what up", "sup", "go on", "im here",
+    "i m here", "here", "listening", "talk to me",
   ];
 
   if (exactMatches.includes(t)) return true;
@@ -2915,7 +2942,9 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
     t.startsWith("okay ") ||
     t.startsWith("sure ") ||
     t.startsWith("hi ") ||
-    t.startsWith("hello ")
+    t.startsWith("hello ") ||
+    t.startsWith("what ") ||
+    t.startsWith("sup ")
   ) return true;
 
   // Regex for combined ack patterns
@@ -4931,6 +4960,56 @@ function handlePostCoverageSchedulingTurn(
   };
 }
 
+function resolveConversationObjective(
+  intent: { kind: string; subKind?: string; raw: string },
+  state: CallState,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType; expectedAnswerIdx: number }
+): {
+  objective: string;
+  requiredStepLine: string;
+  inSchedulingPhase: boolean;
+} {
+  void intent;
+  const steps = state.scriptSteps || stepCtx.steps || [];
+  const stepIdx = typeof state.awaitingAnswerForStepIndex === "number"
+    ? state.awaitingAnswerForStepIndex
+    : typeof state.scriptStepIndex === "number"
+    ? Math.max(0, state.scriptStepIndex - 1)
+    : 0;
+  const requiredStepLine = (steps[stepIdx] || "").trim();
+
+  // If step 1 (coverage subject) has not been answered, that is ALWAYS the objective
+  const step1Unanswered =
+    state.awaitingUserAnswer === true &&
+    typeof state.awaitingAnswerForStepIndex === "number" &&
+    state.awaitingAnswerForStepIndex === 0 &&
+    !(state as any).coverageSubject;
+
+  if (step1Unanswered) {
+    return { objective: "ask_coverage_subject", requiredStepLine, inSchedulingPhase: false };
+  }
+
+  // Scheduling phase
+  const inSchedulingPhase =
+    !!(state as any).coverageSubject &&
+    !state.selectedDay &&
+    state.phase === "in_call";
+
+  if (inSchedulingPhase) {
+    return { objective: "ask_booking_day_or_transfer", requiredStepLine, inSchedulingPhase: true };
+  }
+
+  if (state.selectedDay && !state.selectedTimeText && state.phase === "in_call") {
+    return { objective: "offer_time_slots", requiredStepLine, inSchedulingPhase: true };
+  }
+
+  if (state.selectedDay && state.selectedTimeText && !(state as any).confirmedAppointment && state.phase === "in_call") {
+    return { objective: "confirm_exact_time", requiredStepLine, inSchedulingPhase: true };
+  }
+
+  return { objective: "general", requiredStepLine, inSchedulingPhase: false };
+}
+
 function buildConversationPolicyDecision(
   intent: TurnIntent,
   state: CallState,
@@ -4972,7 +5051,20 @@ function buildConversationPolicyDecision(
   // "yep", "yeah", "what's up", etc. → advance to first script step, never reprompt.
   if (intent.kind === "greeting_ack") {
     if (!ctx) return NOT_HANDLED;
-    const lineToSay = stepCtx.steps[0] || getBookingFallbackLine(ctx);
+    const _greetingStep =
+      stepCtx.steps[0] ||
+      (state.scriptSteps || [])[0] ||
+      getBookingFallbackLine(ctx);
+    const lineToSay = (_greetingStep || "").trim() || getBookingFallbackLine(ctx);
+    if (!lineToSay) {
+      console.warn("[AI-VOICE][GREETING-ACK] no step line available — falling to universal fallback", {
+        callSid: state.callSid,
+        scriptKey: ctx.scriptKey,
+        stepCtxSteps: stepCtx.steps.length,
+        scriptSteps: (state.scriptSteps || []).length,
+      });
+      return NOT_HANDLED;
+    }
     return {
       handled: true,
       routeKind: "greeting_ack",
@@ -5072,6 +5164,7 @@ function buildConversationPolicyDecision(
       requiredClosingPivot: closingPivot,
       forbiddenTopics: [],
       stateWrites: {
+        coverageSubject: normalizeTurnTextForKey(intent.raw) || intent.raw,
         pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
         pendingLiveTransferAvailabilityAttempts: 0,
         // Advance past Step 1 when no live-transfer pending; keep at Step 1 while waiting for availability answer.
@@ -5813,6 +5906,31 @@ async function handleConversationTurn(
 
   const intent = classifyTurnIntent(text, state, stepCtx);
   const decision = buildConversationPolicyDecision(intent, state, stepCtx);
+  // CURRENT STEP INVARIANT:
+  // If Step 1 is unanswered, no decision is allowed to advance past it.
+  // Objections, confusion, questions — all must return to Step 1.
+  const step1Sacred =
+    state.awaitingUserAnswer === true &&
+    typeof state.awaitingAnswerForStepIndex === "number" &&
+    state.awaitingAnswerForStepIndex === 0 &&
+    !(state as any).coverageSubject &&
+    state.phase === "in_call";
+
+  if (step1Sacred && decision.handled && decision.shouldAdvanceStep) {
+    // The decision tried to advance past unanswered Step 1 — block it
+    const requiredStep1Line = (state.scriptSteps || [])[0] || stepCtx.steps[0] || "";
+    if (requiredStep1Line.trim()) {
+      decision.shouldAdvanceStep = false;
+      decision.lineToSay = decision.lineToSay;
+      decision.requiredClosingPivot = requiredStep1Line;
+      decision.stateWrites = {
+        ...decision.stateWrites,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 0,
+        scriptStepIndex: typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0,
+      };
+    }
+  }
   if (!decision.handled) return false;
   if (!markCommittedTurnHandled(state, turnKey, `${source} policy`)) return true;
 
@@ -5949,6 +6067,57 @@ async function handleConversationTurn(
  * or a question — but we still need to respond rather than go silent.
  * Hard rules apply. Always steers back to booking. No discovery. No underwriting.
  */
+function buildControlledGptInstruction(opts: {
+  userText: string;
+  intent: string;
+  requiredObjectiveLine: string;
+  stepType?: string;
+  recentExchanges?: Array<{ role: "ai" | "user"; text: string }>;
+  ctx: AICallContext;
+}): string {
+  const { userText, intent, requiredObjectiveLine, stepType, recentExchanges, ctx } = opts;
+  const agent = (ctx.agentName || "the agent").split(" ")[0];
+  const leadName = (ctx.clientFirstName || "there").trim();
+  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+
+  let exchanges = "";
+  if (recentExchanges && recentExchanges.length > 0) {
+    const lines = recentExchanges.slice(-2).map(e =>
+      `${e.role === "ai" ? "You" : "Lead"}: "${e.text}"`
+    );
+    exchanges = `\nRECENT CONTEXT:\n${lines.join("\n")}\n`;
+  }
+
+  return `
+You are a warm, natural scheduling assistant named Kayla on a live phone call for ${agent}.
+This call is ONLY about a ${scope} request.
+You are speaking with ${leadName}.
+You are NOT licensed. Never quote prices, rates, or coverage details.
+NEVER apologize. After you speak, STOP and wait.
+English only.
+${exchanges}
+WHAT THE LEAD JUST SAID:
+"${userText}"
+
+DETECTED INTENT: ${intent}
+${stepType ? `CURRENT STEP TYPE: ${stepType}\n` : ""}
+YOUR REQUIRED OBJECTIVE THIS TURN:
+You must return to this exact question after handling what they said:
+"${requiredObjectiveLine}"
+
+RULES:
+- Acknowledge what they said in ONE sentence maximum
+- If they asked something you can answer briefly, answer in ONE sentence
+- Then IMMEDIATELY return to the required objective above
+- Do not skip the required objective
+- Do not ask a different question
+- Do not jump to scheduling unless the required objective IS scheduling
+- Do not mention pricing, coverage amounts, or underwriting details
+- 2 sentences maximum total
+- Sound warm and natural, not robotic
+`.trim();
+}
+
 function buildFreeResponseInstruction(
   ctx: AICallContext,
   opts: {
@@ -8360,6 +8529,21 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     return;
   }
 
+  // Never forward audio when:
+  // 1. Call is ended or transferred
+  // 2. AI is speaking (except for barge-in detection window)
+  // 3. Phase is ended
+  // 4. Transfer is in progress
+  const shouldForwardAudio =
+    state.openAiWs &&
+    state.openAiWs.readyState === WebSocket.OPEN &&
+    state.phase !== "ended" &&
+    !state.transferInProgress &&
+    !state.transferStarting &&
+    (state as any).phase !== "transferred";
+
+  if (!shouldForwardAudio) return; // drop this frame
+
   /**
    * If we just barged-in and cancelled, flush the tiny buffered frames first,
    * then continue with normal appends. This prevents losing the first words.
@@ -9657,10 +9841,24 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             ? Math.max(0, state.scriptStepIndex - 1)
             : 0
         ] || "";
-        const _dupInstr = buildFreeResponseInstruction(
-          state.context || ({} as any),
-          { userText: lastUserText, recentExchanges: state.recentExchanges, currentStepLine: _dupStepLine, stepType }
+        const _obj = resolveConversationObjective(
+          { kind: "unknown", raw: lastUserText },
+          state,
+          { idx, steps, stepType, expectedAnswerIdx }
         );
+        const _dupInstr = state.context
+          ? buildControlledGptInstruction({
+              userText: lastUserText,
+              intent: "unknown",
+              requiredObjectiveLine: _obj.requiredStepLine || _dupStepLine,
+              stepType,
+              recentExchanges: state.recentExchanges,
+              ctx: state.context,
+            })
+          : buildFreeResponseInstruction(
+              state.context || ({} as any),
+              { userText: lastUserText, recentExchanges: state.recentExchanges, currentStepLine: _dupStepLine, stepType }
+            );
         console.log("[AI-VOICE][FALLBACK] dup-guard skipped — free_response fallback", {
           callSid: state.callSid, text: lastUserText, phase: state.phase,
         });
@@ -9692,15 +9890,24 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             ? Math.max(0, state.scriptStepIndex - 1)
             : 0
         ] || "";
-        const instr = buildFreeResponseInstruction(
-          state.context || ({} as any),
-          {
-            userText: lastUserText,
-            recentExchanges: state.recentExchanges,
-            currentStepLine,
-            stepType: stepType,
-          }
+        const _obj = resolveConversationObjective(
+          { kind: "unknown", raw: lastUserText },
+          state,
+          { idx, steps, stepType, expectedAnswerIdx }
         );
+        const instr = state.context
+          ? buildControlledGptInstruction({
+              userText: lastUserText,
+              intent: "unknown",
+              requiredObjectiveLine: _obj.requiredStepLine || currentStepLine,
+              stepType,
+              recentExchanges: state.recentExchanges,
+              ctx: state.context,
+            })
+          : buildFreeResponseInstruction(
+              state.context || ({} as any),
+              { userText: lastUserText, recentExchanges: state.recentExchanges, currentStepLine, stepType }
+            );
         console.log("[AI-VOICE][FALLBACK] handleConversationTurn returned false — free_response fallback", {
           callSid: state.callSid,
           text: lastUserText,
