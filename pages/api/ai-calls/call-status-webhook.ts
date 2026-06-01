@@ -286,6 +286,8 @@ export default async function handler(
       }
     }
 
+    const isTransferReboot = !!(recDoc as any)?.transferRebootPending;
+
     // ─────────────────────────────────────────────────────────────────────────────
     // ✅ Voicemail fast-skip (LAUNCH-SAFE):
     // Only end the call if:
@@ -432,7 +434,11 @@ export default async function handler(
             await hangupCallIfPossible(userEmail, CallSid);
 
             // Chain next lead immediately (CallSid-level dedupe)
-            if (!AI_DIALER_DISABLED) {
+            if (isTransferReboot) {
+              console.log("[AI Dialer] Skipping voicemail fast-skip worker kick — transfer reboot in progress", {
+                callSid: CallSid,
+              });
+            } else if (!AI_DIALER_DISABLED) {
               const aiCallSessionId = recDoc.aiCallSessionId as Types.ObjectId;
 
               const sessionKick = await AICallSession.updateOne(
@@ -796,39 +802,50 @@ export default async function handler(
           const hasMoreLeads = leadCount > 0 && lastIndex < leadCount - 1;
 
           // mark session completed if we truly reached the end
-          if (!hasMoreLeads && s.status !== "completed") {
-            await AICallSession.updateOne(
-              { _id: aiCallSessionId, status: { $ne: "completed" } },
-              {
-                $set: {
-                  status: "completed",
-                  completedAt: new Date(),
-                  updatedAt: new Date(),
-                },
-              }
-            ).exec();
+          if (isTransferReboot) {
+            console.log("[AI Dialer] Skipping session completion — transfer reboot in progress", {
+              callSid: CallSid,
+              leadCallSid: CallSid,
+            });
+          } else {
+            if (!hasMoreLeads && s.status !== "completed") {
+              await AICallSession.updateOne(
+                { _id: aiCallSessionId, status: { $ne: "completed" } },
+                {
+                  $set: {
+                    status: "completed",
+                    completedAt: new Date(),
+                    updatedAt: new Date(),
+                  },
+                }
+              ).exec();
 
-            console.log(
-              "[AI Dialer] Marked AI session completed from call-status-webhook",
-              {
-                sessionId: String(aiCallSessionId),
-                userEmail,
-                total,
-                leadCount,
-                lastIndex,
-                callSid: CallSid,
-                callStatus: CallStatus,
-              }
-            );
+              console.log(
+                "[AI Dialer] Marked AI session completed from call-status-webhook",
+                {
+                  sessionId: String(aiCallSessionId),
+                  userEmail,
+                  total,
+                  leadCount,
+                  lastIndex,
+                  callSid: CallSid,
+                  callStatus: CallStatus,
+                }
+              );
 
-            return res.status(200).end();
+              return res.status(200).end();
+            }
           }
 
           // ✅ Chain the next call ONLY when:
           // - call ended (terminal status)
           // - session is still active (queued/running)
           // - session has more leads
-          if (
+          if (isTransferReboot) {
+            console.log("[AI Dialer] Skipping worker kick — transfer reboot in progress", {
+              callSid: CallSid,
+            });
+          } else if (
             isTerminal &&
             hasMoreLeads &&
             (s.status === "queued" || s.status === "running")

@@ -1,6 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import AICallRecording from "@/models/AICallRecording";
+import mongooseConnect from "@/lib/mongooseConnect";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
@@ -95,6 +97,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await client.calls(agentCallSid).update({ status: "completed" }).catch(() => {});
       }
       if (leadCallSid) {
+        try {
+          await mongooseConnect();
+          await AICallRecording.updateOne(
+            { callSid: leadCallSid },
+            {
+              $set: {
+                transferRebootPending: true,
+                transferRebootedAt: new Date(),
+              },
+            }
+          );
+          console.log("[AGENT-AMD] marked transferRebootPending on lead call record", {
+            leadCallSid,
+          });
+        } catch (err) {
+          console.warn("[AGENT-AMD] could not mark transferRebootPending", err);
+        }
+
         await redirectLeadToReboot({
           leadCallSid,
           leadId,
