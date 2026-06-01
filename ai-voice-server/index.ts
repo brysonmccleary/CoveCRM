@@ -10182,6 +10182,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         finalizeGreetingAdvance(state, `OpenAI ${t}`);
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = 0;
+        (state as any).lastListenEnabledAtMs = Date.now();
+        (state as any).listenWarmupUntilMs = Date.now() + 2500;
         console.log("[AI-VOICE] greetingAudioDone = true | awaitingUserAnswer armed | commits now unblocked", {
           callSid: state.callSid,
           phase: state.phase,
@@ -10194,6 +10196,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     setWaitingForResponse(state, false, `OpenAI ${t}`);
     setResponseInFlight(state, false, `OpenAI ${t}`);
     state.outboundOpenAiDone = true;
+    if (
+      isAudioDone &&
+      state.awaitingUserAnswer === true &&
+      (state.phase === "awaiting_greeting_reply" || state.phase === "in_call")
+    ) {
+      (state as any).lastListenEnabledAtMs = Date.now();
+      (state as any).listenWarmupUntilMs = Date.now() + 2500;
+    }
 
     const buffered = state.outboundMuLawBuffer?.length || 0;
 
