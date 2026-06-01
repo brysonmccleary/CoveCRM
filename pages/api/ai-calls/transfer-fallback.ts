@@ -7,6 +7,8 @@ import { sendEmail } from "@/lib/email";
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
+const amdRebootedLeadCalls = new Map<string, number>();
+const AMD_REBOOTED_TTL_MS = 5 * 60 * 1000;
 
 function xmlEscape(value: any): string {
   return String(value ?? "")
@@ -17,12 +19,32 @@ function xmlEscape(value: any): string {
     .replace(/'/g, "&apos;");
 }
 
+function markAmdRebooted(callSid: string) {
+  if (!callSid) return;
+  const now = Date.now();
+  amdRebootedLeadCalls.set(callSid, now + AMD_REBOOTED_TTL_MS);
+}
+
+function hasAmdRebooted(callSid: string) {
+  if (!callSid) return false;
+  const expiresAt = amdRebootedLeadCalls.get(callSid) || 0;
+  if (!expiresAt) return false;
+  if (expiresAt < Date.now()) {
+    amdRebootedLeadCalls.delete(callSid);
+    return false;
+  }
+  return true;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const q = req.query;
+  const body = req.body as Record<string, string> | undefined;
   const key           = Array.isArray(q.key)           ? q.key[0]           : String(q.key           || "");
   const sessionId     = Array.isArray(q.sessionId)     ? q.sessionId[0]     : String(q.sessionId     || "");
   const leadId        = Array.isArray(q.leadId)        ? q.leadId[0]        : String(q.leadId        || "");
   const callSid       = Array.isArray(q.callSid)       ? q.callSid[0]       : String(q.callSid       || "");
+  const leadCallSid   = Array.isArray(q.leadCallSid)   ? q.leadCallSid[0]   : String(q.leadCallSid   || "");
+  const conferenceName = Array.isArray(q.conferenceName) ? q.conferenceName[0] : String(q.conferenceName || "");
   const exactTimeText = Array.isArray(q.exactTimeText) ? q.exactTimeText[0] : String(q.exactTimeText || "");
   const startTimeUtc  = Array.isArray(q.startTimeUtc)  ? q.startTimeUtc[0]  : String(q.startTimeUtc  || "");
   const leadTimeZone  = Array.isArray(q.leadTimeZone)  ? q.leadTimeZone[0]  : String(q.leadTimeZone  || "");
@@ -30,16 +52,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userEmail     = Array.isArray(q.userEmail)     ? q.userEmail[0]     : String(q.userEmail     || "");
   const agentName     = Array.isArray(q.agentName)     ? q.agentName[0]     : String(q.agentName     || "");
   const leadName      = Array.isArray(q.leadName)      ? q.leadName[0]      : String(q.leadName      || "");
+  const amdRebooted = String(q.amdRebooted || body?.amdRebooted || "").toLowerCase() === "true";
 
   if (!key || key !== AI_DIALER_CRON_KEY) {
     return res.status(401).send("Unauthorized");
+  }
+
+  if (amdRebooted && leadCallSid) {
+    markAmdRebooted(leadCallSid);
+    console.log("[TRANSFER-FALLBACK] marked AMD rebooted lead", {
+      leadCallSid,
+      conferenceName,
+    });
+    res.setHeader("Content-Type", "text/xml");
+    return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
   }
 
   const agentFirst = (agentName || "our agent").split(" ")[0] || "our agent";
   const safeAgentFirst = xmlEscape(agentFirst);
 
   // Twilio sends DialCallStatus as form-encoded body
-  const body = req.body as Record<string, string> | undefined;
   const dialCallStatus = (body?.DialCallStatus || "").toLowerCase();
   const dialCallDuration = parseInt(String(body?.DialCallDuration || "0"), 10);
   const answeredBy = String(body?.AnsweredBy || "").toLowerCase();
@@ -136,6 +168,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   <Say voice="Polly.Joanna-Neural" rate="90%">${safeAgentFirst} wasn't available right now, but we've got your appointment scheduled. They'll reach out at the time we discussed. Have a great day!</Say>
   <Hangup/>
 </Response>`);
+    }
+
+    if (amdRebooted || hasAmdRebooted(leadCallSid || callSid)) {
+      console.log("[TRANSFER-FALLBACK] AMD already rebooted lead — skipping duplicate redirect", {
+        leadCallSid,
+        conferenceName,
+      });
+      return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
     }
 
     const rebootUrl = new URL("/api/ai-calls/transfer-reboot-twiml", COVECRM_BASE_URL);

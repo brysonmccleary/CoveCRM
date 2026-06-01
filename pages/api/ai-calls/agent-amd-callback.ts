@@ -104,6 +104,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           sessionId,
           agentTimeZone,
         });
+
+        // Mark lead as already rebooted so transfer-fallback skips its redirect
+        try {
+          const markUrl = new URL("/api/ai-calls/transfer-fallback", COVECRM_BASE_URL);
+          markUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+          markUrl.searchParams.set("amdRebooted", "true");
+          markUrl.searchParams.set("leadCallSid", leadCallSid);
+          markUrl.searchParams.set("conferenceName", conferenceName);
+          // Fire and forget — just a signal, not critical
+          fetch(markUrl.toString(), { method: "POST" }).catch(() => {});
+        } catch {}
       }
       console.log("[AGENT-AMD] machine/failed/unknown — redirecting lead to reboot", {
         conferenceName,

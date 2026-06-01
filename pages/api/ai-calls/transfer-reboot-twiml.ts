@@ -1,7 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
-const AI_VOICE_WSS_URL = process.env.AI_VOICE_WSS_URL || "";
+const AI_VOICE_WSS_URL =
+  process.env.AI_VOICE_WSS_URL ||
+  process.env.AI_VOICE_STREAM_URL ||
+  "";
 
 function xmlEscape(value: any): string {
   return String(value ?? "")
