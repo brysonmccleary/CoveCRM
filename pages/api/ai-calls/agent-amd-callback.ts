@@ -5,7 +5,6 @@ import AICallRecording from "@/models/AICallRecording";
 import mongooseConnect from "@/lib/mongooseConnect";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
-const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
 
 function getQueryValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] || "" : String(value || "");
@@ -27,32 +26,6 @@ async function resolveTwilioClient(userEmail: string) {
   };
 }
 
-async function redirectLeadToReboot(params: {
-  leadCallSid: string;
-  leadId: string;
-  leadName: string;
-  agentName: string;
-  userEmail: string;
-  sessionId: string;
-  agentTimeZone: string;
-}) {
-  const { client } = await resolveTwilioClient(params.userEmail);
-  const rebootUrl = new URL("/api/ai-calls/transfer-reboot-twiml", COVECRM_BASE_URL);
-  rebootUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
-  rebootUrl.searchParams.set("leadId", params.leadId);
-  rebootUrl.searchParams.set("leadName", params.leadName);
-  rebootUrl.searchParams.set("agentName", params.agentName);
-  rebootUrl.searchParams.set("userEmail", params.userEmail);
-  rebootUrl.searchParams.set("sessionId", params.sessionId);
-  rebootUrl.searchParams.set("callSid", params.leadCallSid);
-  rebootUrl.searchParams.set("agentTimeZone", params.agentTimeZone || "America/New_York");
-
-  await client.calls(params.leadCallSid).update({
-    url: rebootUrl.toString(),
-    method: "POST",
-  });
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const key = getQueryValue(req.query.key);
   if (!key || !AI_DIALER_CRON_KEY || key !== AI_DIALER_CRON_KEY) {
@@ -67,12 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const conferenceName = getQueryValue(req.query.conferenceName);
   const leadCallSid = getQueryValue(req.query.leadCallSid);
-  const sessionId = getQueryValue(req.query.sessionId);
-  const leadId = getQueryValue(req.query.leadId);
   const userEmail = getQueryValue(req.query.userEmail).toLowerCase();
-  const agentName = getQueryValue(req.query.agentName);
-  const leadName = getQueryValue(req.query.leadName);
-  const agentTimeZone = getQueryValue(req.query.agentTimeZone) || "America/New_York";
 
   const isHuman = answeredBy === "human";
   const isFailed =
@@ -120,28 +88,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.warn("[AGENT-AMD] could not mark transferRebootPending", err);
         }
 
-        await redirectLeadToReboot({
-          leadCallSid,
-          leadId,
-          leadName,
-          agentName,
-          userEmail,
-          sessionId,
-          agentTimeZone,
-        });
-
-        // Mark lead as already rebooted so transfer-fallback skips its redirect
-        try {
-          const markUrl = new URL("/api/ai-calls/transfer-fallback", COVECRM_BASE_URL);
-          markUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
-          markUrl.searchParams.set("amdRebooted", "true");
-          markUrl.searchParams.set("leadCallSid", leadCallSid);
-          markUrl.searchParams.set("conferenceName", conferenceName);
-          // Fire and forget — just a signal, not critical
-          fetch(markUrl.toString(), { method: "POST" }).catch(() => {});
-        } catch {}
       }
-      console.log("[AGENT-AMD] machine/failed/unknown — redirecting lead to reboot", {
+      console.log("[AGENT-AMD] machine/failed/unknown — marked transfer reboot pending", {
         conferenceName,
         leadCallSid,
         agentCallSid,
@@ -150,7 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         dialCallStatus,
       });
     } catch (err: any) {
-      console.error("[AGENT-AMD] failed to redirect lead to reboot:", err?.message || err);
+      console.error("[AGENT-AMD] failed to mark transfer reboot pending:", err?.message || err);
     }
     return res.status(200).send("");
   }

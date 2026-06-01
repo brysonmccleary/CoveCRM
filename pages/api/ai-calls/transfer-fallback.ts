@@ -79,13 +79,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const isRebootPending = !!(recording as any)?.transferRebootPending;
 
     if (isRebootPending) {
-      console.log("[TRANSFER-FALLBACK] transferRebootPending in DB — returning pause to keep lead alive", {
+      const rebootUrl = new URL("/api/ai-calls/transfer-reboot-twiml", COVECRM_BASE_URL);
+      rebootUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+      rebootUrl.searchParams.set("leadId", leadId);
+      rebootUrl.searchParams.set("leadName", leadName);
+      rebootUrl.searchParams.set("agentName", agentName);
+      rebootUrl.searchParams.set("userEmail", userEmail);
+      rebootUrl.searchParams.set("sessionId", sessionId);
+      rebootUrl.searchParams.set("callSid", leadCallSid || callSid);
+      rebootUrl.searchParams.set("agentTimeZone", agentTimeZone || "America/New_York");
+      console.log("[TRANSFER-FALLBACK] transferRebootPending in DB — redirecting to reboot", {
         leadCallSid: leadCallSid || callSid,
       });
       res.setHeader("Content-Type", "text/xml");
       return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Pause length="30"/>
+  <Redirect method="POST">${xmlEscape(rebootUrl.toString())}</Redirect>
 </Response>`);
     }
   } catch (dbErr) {
