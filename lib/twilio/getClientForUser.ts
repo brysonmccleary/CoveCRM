@@ -91,6 +91,44 @@ function basicAuthHeader(username: string, password: string) {
   return `Basic ${token}`;
 }
 
+function getTwilioErrorCode(e: any): string {
+  return String(e?.code || e?.status || e?.statusCode || "").trim();
+}
+
+function isTwilioAuthError(e: any): boolean {
+  const code = getTwilioErrorCode(e);
+  const message = String(e?.message || e || "").toLowerCase();
+  return code === "401" || code === "20003" || message.includes("authenticate");
+}
+
+function isTwilioNotFoundError(e: any): boolean {
+  const code = getTwilioErrorCode(e);
+  const message = String(e?.message || e || "").toLowerCase();
+  return code === "404" || code === "20404" || message.includes("not found");
+}
+
+function getPlatformAuthForSubaccountRepair(args: {
+  platformAccountSid: string;
+  platformAuthToken: string;
+  platformApiKeySid: string;
+  platformApiKeySecret: string;
+}): { username: string; password: string } {
+  const {
+    platformAccountSid,
+    platformAuthToken,
+    platformApiKeySid,
+    platformApiKeySecret,
+  } = args;
+
+  if (platformAuthToken) {
+    return { username: platformAccountSid, password: platformAuthToken };
+  }
+  if (platformApiKeySid && platformApiKeySecret) {
+    return { username: platformApiKeySid, password: platformApiKeySecret };
+  }
+  throw new Error("Missing platform Twilio credentials for subaccount repair.");
+}
+
 /**
  * ✅ NEW (minimal + surgical):
  * Create a subaccount API Key via RAW REST (not the Twilio SDK).
@@ -252,6 +290,54 @@ async function ensureSubaccountApiKeyForUser(args: {
   return created;
 }
 
+async function validateSubaccountApiKey(args: {
+  subSid: string;
+  apiKeySid: string;
+  apiKeySecret: string;
+}): Promise<void> {
+  const client = buildTwilioClient({
+    accountSid: args.subSid,
+    apiKeySid: args.apiKeySid,
+    apiKeySecret: args.apiKeySecret,
+  });
+  await (client as any).applications.list({ limit: 1 });
+}
+
+async function rotateSubaccountApiKeyForUser(args: {
+  normalizedEmail: string;
+  subSid: string;
+  platformAuth: { username: string; password: string };
+}): Promise<{ apiKeySid: string; apiKeySecret: string; user: any }> {
+  const { normalizedEmail, subSid, platformAuth } = args;
+  const friendlyName = `CoveCRM Subaccount Key - ${normalizedEmail}`;
+
+  const created = await createSubaccountApiKeyRaw({
+    subSid,
+    friendlyName,
+    platformAuth,
+  });
+
+  const fresh = await User.findOne({ email: normalizedEmail });
+  if (!fresh) {
+    throw new Error(`rotateSubaccountApiKeyForUser: user not found: ${normalizedEmail}`);
+  }
+
+  (fresh as any).twilio = (fresh as any).twilio || {};
+  (fresh as any).twilio.accountSid = subSid;
+  (fresh as any).twilio.apiKeySid = created.apiKeySid;
+  (fresh as any).twilio.apiKeySecret = created.apiKeySecret;
+  await fresh.save();
+
+  console.log(JSON.stringify({
+    msg: "rotated_subaccount_api_key",
+    email: normalizedEmail,
+    subSidMasked: maskSid(subSid),
+    apiKeySidMasked: maskSid(created.apiKeySid),
+  }));
+
+  return { ...created, user: fresh.toObject ? fresh.toObject() : fresh };
+}
+
 /**
  * Ensure the user's PLATFORM subaccount has an Outgoing TwiML App SID.
  * This is REQUIRED for Twilio Voice JS (browser) calling to bridge correctly.
@@ -304,8 +390,32 @@ async function ensureSubaccountTwimlAppForUser(args: {
       (fresh as any).twilio.twimlAppSid = String(existing);
       await fresh.save();
 
+      console.log(JSON.stringify({
+        msg: "twiml_app_validated",
+        email: normalizedEmail,
+        subSidMasked: maskSid(subSid),
+        twimlAppSidMasked: maskSid(String(existing)),
+        voiceUrl,
+      }));
+
       return { twimlAppSid: String(existing) };
     } catch (e: any) {
+      if (isTwilioAuthError(e)) {
+        console.error(JSON.stringify({
+          msg: "credential_auth_failed",
+          email: normalizedEmail,
+          subSidMasked: maskSid(subSid),
+          apiKeySidMasked: maskSid(apiKeySid),
+          operation: "twiml_app_fetch",
+          error: e?.message || String(e),
+          code: e?.code || null,
+          status: e?.status || null,
+        }));
+        throw e;
+      }
+      if (!isTwilioNotFoundError(e)) {
+        throw e;
+      }
       console.warn(JSON.stringify({
         msg: "ensureSubaccountTwimlAppForUser: stored TwiML App invalid for subaccount; recreating",
         email: normalizedEmail,
@@ -317,6 +427,51 @@ async function ensureSubaccountTwimlAppForUser(args: {
   }
 
   const friendlyName = `CoveCRM Browser - ${normalizedEmail}`;
+  try {
+    const apps = await (client as any).applications.list({ friendlyName, limit: 20 });
+    const reusable = Array.isArray(apps)
+      ? apps.find((candidate: any) => String(candidate?.sid || "").startsWith("AP"))
+      : null;
+    if (reusable?.sid) {
+      if (String(reusable?.voiceUrl || "") !== voiceUrl || String(reusable?.voiceMethod || "").toUpperCase() !== "POST") {
+        await (client as any).applications(String(reusable.sid)).update({
+          voiceUrl,
+          voiceMethod: "POST",
+        });
+      }
+
+      const sid = String(reusable.sid);
+      (fresh as any).twimlAppSid = sid;
+      (fresh as any).twilio = (fresh as any).twilio || {};
+      (fresh as any).twilio.twimlAppSid = sid;
+      await fresh.save();
+
+      console.log(JSON.stringify({
+        msg: "twiml_app_reused",
+        email: normalizedEmail,
+        subSidMasked: maskSid(subSid),
+        twimlAppSidMasked: maskSid(sid),
+        voiceUrl,
+      }));
+
+      return { twimlAppSid: sid };
+    }
+  } catch (e: any) {
+    if (isTwilioAuthError(e)) {
+      console.error(JSON.stringify({
+        msg: "credential_auth_failed",
+        email: normalizedEmail,
+        subSidMasked: maskSid(subSid),
+        apiKeySidMasked: maskSid(apiKeySid),
+        operation: "twiml_app_list",
+        error: e?.message || String(e),
+        code: e?.code || null,
+        status: e?.status || null,
+      }));
+      throw e;
+    }
+    throw e;
+  }
 
   const app = await (client as any).applications.create({
     friendlyName,
@@ -337,7 +492,7 @@ async function ensureSubaccountTwimlAppForUser(args: {
   await fresh.save();
 
   console.log(JSON.stringify({
-    msg: "ensureSubaccountTwimlAppForUser: created TwiML App in subaccount",
+    msg: "twiml_app_created",
     email: normalizedEmail,
     subSidMasked: maskSid(subSid),
     twimlAppSidMasked: maskSid(sid),
@@ -518,12 +673,69 @@ export async function getClientForUser(
   // ---------- SUBACCOUNT (platform-billed per user, with their own API keys) ----------
   if (!FORCE_PLATFORM && hasSubaccountCreds(user)) {
     const subSid = sanitizeId(user.twilio.accountSid);
-    const apiKeySid = sanitizeId(user.twilio.apiKeySid);
-    const apiKeySecret = String(user.twilio.apiKeySecret || "").trim();
+    let apiKeySid = sanitizeId(user.twilio.apiKeySid);
+    let apiKeySecret = String(user.twilio.apiKeySecret || "").trim();
 
     if (!subSid.startsWith("AC")) throw new Error("User subaccountSid invalid.");
     if (!apiKeySid.startsWith("SK") || !apiKeySecret)
       throw new Error("User subaccount API key invalid.");
+
+    try {
+      await validateSubaccountApiKey({ subSid, apiKeySid, apiKeySecret });
+    } catch (e: any) {
+      if (!isTwilioAuthError(e)) {
+        throw e;
+      }
+
+      console.error(JSON.stringify({
+        msg: "credential_auth_failed",
+        email: normalizedEmail,
+        subSidMasked: maskSid(subSid),
+        apiKeySidMasked: maskSid(apiKeySid),
+        operation: "subaccount_api_key_validate",
+        error: e?.message || String(e),
+        code: e?.code || null,
+        status: e?.status || null,
+      }));
+
+      try {
+        const platformAuth = getPlatformAuthForSubaccountRepair({
+          platformAccountSid,
+          platformAuthToken,
+          platformApiKeySid,
+          platformApiKeySecret,
+        });
+        const rotated = await rotateSubaccountApiKeyForUser({
+          normalizedEmail,
+          subSid,
+          platformAuth,
+        });
+        apiKeySid = rotated.apiKeySid;
+        apiKeySecret = rotated.apiKeySecret;
+        user = {
+          ...(user || {}),
+          ...(rotated.user || {}),
+          twilio: {
+            ...((user || {}).twilio || {}),
+            ...((rotated.user || {}).twilio || {}),
+            accountSid: subSid,
+            apiKeySid,
+            apiKeySecret,
+          },
+        };
+        await validateSubaccountApiKey({ subSid, apiKeySid, apiKeySecret });
+      } catch (repairErr: any) {
+        console.error(JSON.stringify({
+          msg: "twilio_account_repair_failed",
+          email: normalizedEmail,
+          subSidMasked: maskSid(subSid),
+          error: repairErr?.message || String(repairErr),
+          code: repairErr?.code || null,
+          status: repairErr?.status || null,
+        }));
+        throw new Error("Twilio account repair failed. Please contact support.");
+      }
+    }
 
     const client = buildTwilioClient({
       accountSid: subSid,
@@ -551,17 +763,33 @@ export async function getClientForUser(
     // NOTE: usingPersonal=false here (still platform-billed, just isolated)
     // ✅ Ensure TwiML App exists in this user's subaccount for browser calling.
     // Merge returned SID into user so voice/token gets the live (possibly healed) value.
-    const { twimlAppSid: healedAppSid } = await ensureSubaccountTwimlAppForUser({
-      email: normalizedEmail,
-      baseUrl,
-      subSid,
-      apiKeySid,
-      apiKeySecret,
-    });
+    let healedAppSid = "";
+    try {
+      const healed = await ensureSubaccountTwimlAppForUser({
+        email: normalizedEmail,
+        baseUrl,
+        subSid,
+        apiKeySid,
+        apiKeySecret,
+      });
+      healedAppSid = healed.twimlAppSid;
+    } catch (e: any) {
+      console.error(JSON.stringify({
+        msg: "twilio_account_repair_failed",
+        email: normalizedEmail,
+        subSidMasked: maskSid(subSid),
+        operation: "twiml_app_ensure",
+        error: e?.message || String(e),
+        code: e?.code || null,
+        status: e?.status || null,
+      }));
+      throw new Error("Twilio account repair failed. Please contact support.");
+    }
+
     const userWithApp = {
       ...user,
       twimlAppSid: healedAppSid,
-      twilio: { ...(user?.twilio || {}), twimlAppSid: healedAppSid },
+      twilio: { ...(user?.twilio || {}), accountSid: subSid, apiKeySid, apiKeySecret, twimlAppSid: healedAppSid },
     };
 
     return { client, accountSid: subSid, usingPersonal: false, user: userWithApp, auth };
