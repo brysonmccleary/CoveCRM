@@ -8316,7 +8316,7 @@ function isLikelySilenceMulawBase64(payloadB64: string): boolean {
     const quietRatio = quiet / buf.length;
 
     // Basic silence only. Avoid aggressive comfort-noise heuristics that starve soft speech.
-    return avgAbs < 900 && quietRatio >= 0.85;
+    return avgAbs < 300 && quietRatio >= 0.90;
   } catch {
     // COST SAFETY: if silence detection fails on a frame, treat it as silence.
     // Otherwise we can end up streaming continuous "non-silence" to OpenAI and costs explode.
