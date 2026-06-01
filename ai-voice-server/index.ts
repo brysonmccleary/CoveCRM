@@ -8855,8 +8855,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
               // Short enough to not hang on pauses, long enough to not cut off natural speech
               silence_duration_ms: 400,
 
-              // Balanced threshold — rejects comfort noise but catches real speech
-              threshold: 0.85,
+              // Locked proven VAD threshold for Twilio μ-law phone audio.
+              threshold: 0.55,
 
               // Capture speech from the very start of each user turn
               prefix_padding_ms: 300,
