@@ -8415,6 +8415,12 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     (!!state.outboundOpenAiDone === false && !!state.outboundPacerTimer);
 
   const recentlyCancelled = (Date.now() - Number(state.lastCancelAtMs || 0)) < 1500;
+  const allowPostResponseDrainListen =
+    state.outboundOpenAiDone === true &&
+    state.responseInFlight !== true &&
+    state.waitingForResponse !== true &&
+    state.awaitingUserAnswer === true &&
+    (state.phase === "awaiting_greeting_reply" || state.phase === "in_call");
 
   /**
    * ✅ CRITICAL FIX:
@@ -8425,9 +8431,9 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
    * - after cancel, forward audio normally
    */
     const blockedByAiTurn =
-    ((state.aiSpeaking === true) && !recentlyCancelled) ||
+    ((state.aiSpeaking === true) && !recentlyCancelled && !allowPostResponseDrainListen) ||
     state.waitingForResponse === true ||
-    outboundInProgress;
+    (outboundInProgress && !allowPostResponseDrainListen);
 
   if (blockedByAiTurn) {
     const isSilence = isLikelySilenceMulawBase64(payload);
@@ -8496,6 +8502,12 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
   try {
     const isSilenceForGate = isLikelySilenceMulawBase64(payload);
     if (!isSilenceForGate) {
+      if (
+        state.awaitingUserAnswer === true &&
+        (state.phase === "awaiting_greeting_reply" || state.phase === "in_call")
+      ) {
+        clearSilenceWatchdog(state, "local user speech");
+      }
       state.userAudioMsBuffered = Math.min(
         3000,
         (state.userAudioMsBuffered || 0) + 20
@@ -8571,7 +8583,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     const isListening =
       !state.waitingForResponse &&
       !(state as any).responseInFlight &&
-      !state.aiSpeaking;
+      (!state.aiSpeaking || allowPostResponseDrainListen);
     if (!isListening) {
       return;
     }
