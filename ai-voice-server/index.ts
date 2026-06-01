@@ -8541,21 +8541,6 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     return;
   }
 
-  // Never forward audio when:
-  // 1. Call is ended or transferred
-  // 2. AI is speaking (except for barge-in detection window)
-  // 3. Phase is ended
-  // 4. Transfer is in progress
-  const shouldForwardAudio =
-    state.openAiWs &&
-    state.openAiWs.readyState === WebSocket.OPEN &&
-    state.phase !== "ended" &&
-    !state.transferInProgress &&
-    !state.transferStarting &&
-    (state as any).phase !== "transferred";
-
-  if (!shouldForwardAudio) return; // drop this frame
-
   /**
    * If we just barged-in and cancelled, flush the tiny buffered frames first,
    * then continue with normal appends. This prevents losing the first words.
