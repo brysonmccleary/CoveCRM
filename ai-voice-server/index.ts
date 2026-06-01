@@ -70,7 +70,7 @@ const AI_DIALER_VENDOR_COST_PER_MIN_USD = Number(
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_REALTIME_MODEL =
   process.env.OPENAI_REALTIME_MODEL || "gpt-realtime-mini";
-const OPENAI_REALTIME_AUDIO_FORMAT = "g711_ulaw";
+const OPENAI_REALTIME_AUDIO_FORMAT = "audio/pcmu";
 
 console.log("[AI-VOICE] Realtime model resolved:", OPENAI_REALTIME_MODEL, "(env:", process.env.OPENAI_REALTIME_MODEL ? "set" : "default", ")");
 console.log("[AI-VOICE] Realtime GA session mode enabled");
