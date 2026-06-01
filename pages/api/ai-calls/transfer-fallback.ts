@@ -171,11 +171,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (amdRebooted || hasAmdRebooted(leadCallSid || callSid)) {
-      console.log("[TRANSFER-FALLBACK] AMD already rebooted lead — skipping duplicate redirect", {
+      console.log("[TRANSFER-FALLBACK] AMD already rebooted lead — returning pause to keep call alive", {
         leadCallSid,
-        conferenceName,
       });
-      return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+      return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Pause length="30"/>
+</Response>`);
     }
 
     const rebootUrl = new URL("/api/ai-calls/transfer-reboot-twiml", COVECRM_BASE_URL);
