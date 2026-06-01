@@ -585,10 +585,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           { type: "CUSTOM", label: "Who would be your beneficiary?" },
         ];
 
+        const storedComplianceProfile = (campaign as any).complianceProfile || {};
+        const storedDisclaimerText = String(
+          storedComplianceProfile.disclaimerText ||
+          complianceProfile?.disclaimerText ||
+          "Availability varies by state and carrier. This is a no-obligation review with a licensed agent."
+        ).trim();
+        const storedConsentText = String(
+          storedComplianceProfile.consentText ||
+          complianceProfile?.consentText ||
+          "By submitting, you agree to be contacted by phone, text/SMS, or email by a licensed insurance agent, including through automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase."
+        ).trim();
+        const privacyUrl = String(
+          storedComplianceProfile.privacyUrl ||
+          complianceProfile?.privacyUrl ||
+          "https://www.covecrm.com/privacy"
+        ).trim();
+        // Meta Instant Forms support privacy_policy and custom_disclaimer.
+        // There is no separate supported termsUrl field here, so termsUrl stays stored internally on FBLeadCampaign.
+        const customDisclaimer = {
+          title: "Consent and Important Disclosures",
+          body: {
+            text: storedDisclaimerText,
+          },
+          checkboxes: [
+            {
+              is_required: true,
+              is_checked_by_default: false,
+              key: "covecrm_contact_consent",
+              text: storedConsentText,
+            },
+          ],
+        };
+
         const metaFormParams = new URLSearchParams();
         metaFormParams.set("name", `${safeName} Lead Form ${Date.now()}`);
         metaFormParams.set("locale", "en_US");
-        metaFormParams.set("privacy_policy", JSON.stringify({ url: "https://www.covecrm.com/privacy", link_text: "Privacy Policy" }));
+        metaFormParams.set("privacy_policy", JSON.stringify({ url: privacyUrl || "https://www.covecrm.com/privacy", link_text: "Privacy Policy" }));
+        metaFormParams.set("custom_disclaimer", JSON.stringify(customDisclaimer));
         metaFormParams.set("follow_up_action_url", "https://www.covecrm.com/thank-you");
         metaFormParams.set("questions", JSON.stringify(questions));
         metaFormParams.set("access_token", accessToken);

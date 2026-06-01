@@ -63,7 +63,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
   const [selectedMetaAdAccountId, setSelectedMetaAdAccountId] = useState("");
   const creativeRef = useRef<HTMLDivElement>(null);
-  const productionCreativeRef = useRef<HTMLDivElement>(null);
+  const productionCreativeRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const stateLabel = useMemo(() => {
     const labels = states.map((code) => US_STATES.find((state) => state.code === code)?.name || code);
@@ -193,27 +193,48 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     try {
       const selectedDraft = drafts[0] || draft;
 
-      // Capture the production 4:5 feed creative as a PNG
-      let renderedCreativeDataUrl = "";
-      if (!productionCreativeRef.current) {
-        setError("Ad preview capture failed. Please try again.");
-        return;
-      }
-      try {
-        renderedCreativeDataUrl = await toPng(productionCreativeRef.current, {
-          quality: 0.92,
-          pixelRatio: 2,
-          cacheBust: true,
+      // Capture one production 4:5 feed creative PNG for each generated draft.
+      const launchDrafts = [];
+      for (let index = 0; index < drafts.length; index++) {
+        const currentDraft = drafts[index] || {};
+        const node = productionCreativeRefs.current[index];
+        if (!node) {
+          setError("Ad preview capture failed. Please try again.");
+          return;
+        }
+        let renderedCreativeDataUrl = "";
+        try {
+          renderedCreativeDataUrl = await toPng(node, {
+            quality: 0.92,
+            pixelRatio: 2,
+            cacheBust: true,
+          });
+        } catch (captureErr) {
+          console.warn("[AdWizard] CSS capture failed:", captureErr);
+          setError("Ad preview capture failed. Please try again.");
+          return;
+        }
+        if (!renderedCreativeDataUrl) {
+          setError("Ad preview capture failed. Please try again.");
+          return;
+        }
+        launchDrafts.push({
+          leadType: currentDraft.leadType || leadType,
+          primaryText: currentDraft.primaryText,
+          headline: currentDraft.headline,
+          description: currentDraft.description || "",
+          cta: currentDraft.cta || "LEARN_MORE",
+          renderedCreativeDataUrl,
+          creativeArchetype: currentDraft.creativeArchetype || currentDraft.archetype || "",
+          winningFamilyId: currentDraft.winningFamilyId,
+          variationType: currentDraft.variationType,
+          uniquenessFingerprint: currentDraft.uniquenessFingerprint,
+          vendorStyleTag: currentDraft.vendorStyleTag,
+          landingPageConfig: currentDraft.landingPageConfig,
         });
-      } catch (captureErr) {
-        console.warn("[AdWizard] CSS capture failed:", captureErr);
-        setError("Ad preview capture failed. Please try again.");
-        return;
       }
-      if (!renderedCreativeDataUrl) {
-        setError("Ad preview capture failed. Please try again.");
-        return;
-      }
+
+      const renderedCreativeDataUrl = launchDrafts[0]?.renderedCreativeDataUrl || "";
 
       const response = await fetch("/api/facebook/publish-ad", {
         method: "POST",
@@ -241,6 +262,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           variationType: selectedDraft.variationType,
           uniquenessFingerprint: selectedDraft.uniquenessFingerprint,
           vendorStyleTag: selectedDraft.vendorStyleTag,
+          landingPageConfig: selectedDraft.landingPageConfig,
+          drafts: launchDrafts,
           ...(selectedMetaPageId ? { facebookPageId: selectedMetaPageId } : {}),
           ...(selectedMetaAdAccountId ? { adAccountId: selectedMetaAdAccountId } : {}),
         }),
@@ -437,11 +460,17 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	            className="space-y-3"
 	            style={step === 4 ? { position: "absolute", left: -10000, top: 0, width: 375, pointerEvents: "none" } : undefined}
 	          >
-              {step === 4 && (drafts[0] || draft) && (
-                <div style={{ position: "absolute", left: -12000, top: 0, width: 540, height: 675, pointerEvents: "none" }}>
-                  <ProductionFeedCreative draft={drafts[0] || draft} creativeRef={productionCreativeRef} />
+              {step === 4 && drafts.map((currentDraft, index) => (
+                <div
+                  key={`production-${currentDraft.uniquenessFingerprint || index}`}
+                  ref={(el) => {
+                    productionCreativeRefs.current[index] = el;
+                  }}
+                  style={{ position: "absolute", left: -12000 - index * 700, top: 0, width: 540, height: 675, pointerEvents: "none" }}
+                >
+                  <ProductionFeedCreative draft={currentDraft} />
                 </div>
-              )}
+              ))}
 		          <div className="flex items-center justify-between gap-3 flex-wrap">
 	            <div>
               <p className="text-white font-semibold">Generated Ad Versions</p>

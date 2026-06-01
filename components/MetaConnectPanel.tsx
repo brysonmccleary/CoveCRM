@@ -31,14 +31,6 @@ interface MetaAdAccount {
   selected?: boolean;
 }
 
-const PAGE_NAME_RECOMMENDATIONS: Record<string, string[]> = {
-  veteran: ["Veteran Benefits Center", "Veteran Coverage Help", "Veteran Family Benefits"],
-  mortgage_protection: ["Mortgage Protection Network", "Family Mortgage Protection", "Home Coverage Help"],
-  final_expense: ["Final Expense Support", "Family Burial Coverage", "Legacy Coverage Help"],
-  iul: ["Cash Value Coverage Center", "Indexed Life Benefits", "Retirement Coverage Help"],
-  trucker: ["Trucker Benefits Center", "Driver Coverage Help", "CDL Family Protection"],
-};
-
 const LEAD_TYPE_LABELS: Record<string, string> = {
   veteran: "Veteran",
   mortgage_protection: "Mortgage Protection",
@@ -64,15 +56,10 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
   const [selectedAdAccount, setSelectedAdAccount] = useState("");
   const [savingAssets, setSavingAssets] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [selectedRecommendedName, setSelectedRecommendedName] = useState("");
   const pageSelectorRef = useRef<HTMLDivElement>(null);
   const adAccountSelectorRef = useRef<HTMLDivElement>(null);
 
-  const recommendedNames = leadType ? PAGE_NAME_RECOMMENDATIONS[leadType] || [] : [];
   const selectedPageRecord = pages.find((p) => p.id === selectedPage) || null;
-  const recommendedNameMatch = selectedRecommendedName
-    ? pages.find((p) => p.name.trim().toLowerCase() === selectedRecommendedName.trim().toLowerCase()) || null
-    : null;
   const createPageUrl = "https://www.facebook.com/pages/create";
   const setupSteps = status?.connected
     ? [
@@ -82,38 +69,29 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
           complete: status.connected === true,
         },
         {
-          title: "Select a Facebook Page",
+          title: "Choose Facebook Page",
           helper: "Choose the Facebook Page your ads will run from.",
           complete: Boolean(String(status.pageId || "").trim()),
-          actionLabel: "Select Page →",
+          actionLabel: "Choose Page →",
           onAction: async () => {
             if (!pages.length) await loadAssets();
             setTimeout(() => pageSelectorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
           },
         },
         {
-          title: "Select an Ad Account",
+          title: "Choose Ad Account",
           helper: "Choose the ad account that will be billed for your campaigns.",
           complete: Boolean(String(status.adAccountId || "").trim()),
-          actionLabel: "Select Ad Account →",
+          actionLabel: "Choose Ad Account →",
           onAction: async () => {
             if (!adAccounts.length) await loadAssets();
             setTimeout(() => adAccountSelectorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
           },
         },
         {
-          title: "Add Payment Method",
-          helper: "Your ad account needs a valid payment method to run ads.",
-          complete: Boolean(String(status.adAccountId || "").trim()) && status.hasPaymentMethod === true,
-          actionLabel: "Add Payment Method →",
-          href: "https://business.facebook.com/billing",
-        },
-        {
-          title: "Accept Lead Ads Terms of Service",
-          helper: "Required by Meta to run lead generation ads.",
-          complete: status.leadAdsTermsAccepted === true,
-          actionLabel: "Accept Terms →",
-          href: "https://www.facebook.com/ads/leadgen/tos",
+          title: "Ready to Launch",
+          helper: "Generate your ad, review it, and launch when you are ready.",
+          complete: Boolean(String(status.pageId || "").trim()) && Boolean(String(status.adAccountId || "").trim()),
         },
       ]
     : [];
@@ -199,7 +177,7 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
       if (!res.ok) {
         setSyncMsg(data?.error || "Failed to save selected assets.");
       } else {
-        setSyncMsg("Saved selected Meta assets.");
+        setSyncMsg("Saved selected Facebook Page and Ad Account.");
       }
       await fetchStatus();
     } finally {
@@ -235,12 +213,10 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
   }, [leadType]);
 
   useEffect(() => {
-    if (recommendedNames.length > 0) {
-      setSelectedRecommendedName(recommendedNames[0]);
-    } else {
-      setSelectedRecommendedName("");
+    if (expanded && status?.connected && pages.length === 0 && adAccounts.length === 0 && !loadingAssets) {
+      loadAssets();
     }
-  }, [leadType]);
+  }, [expanded, status?.connected]);
 
   if (loading) {
     return (
@@ -387,26 +363,6 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                               {step.helper}
                             </div>
                           </div>
-                          {!step.complete && step.href && (
-                            <a
-                              href={step.href}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{
-                                background: "#0ea5e9",
-                                color: "#ffffff",
-                                border: "none",
-                                borderRadius: 7,
-                                padding: "6px 10px",
-                                fontSize: 12,
-                                fontWeight: 600,
-                                textDecoration: "none",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {step.actionLabel}
-                            </a>
-                          )}
                           {!step.complete && step.onAction && (
                             <button
                               type="button"
@@ -432,103 +388,36 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                   </div>
                 )}
 
-                <div className="space-y-3 pt-2">
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                    {["Choose Facebook Page", "Confirm Ad Account", "Generate Ads", "Launch Campaign"].map((label, index) => (
-                      <div key={label} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2">
-                        <p className="text-[11px] uppercase tracking-wide text-gray-500">Step {index + 1}</p>
-                        <p className="text-xs font-semibold text-white">{label}</p>
+	                <div className="space-y-3 pt-2">
+	                  <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+	                    {["Connect Facebook", "Choose Page", "Choose Ad Account", "Ready to Launch"].map((label, index) => (
+	                      <div key={label} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+	                        <p className="text-[11px] uppercase tracking-wide text-gray-500">Step {index + 1}</p>
+	                        <p className="text-xs font-semibold text-white">{label}</p>
                       </div>
                     ))}
                   </div>
 
-                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 space-y-4">
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div>
-                        <h4 className="text-sm font-semibold text-white">Step 1: Choose your Facebook Page</h4>
-                        <p className="text-xs text-gray-400 mt-1 max-w-2xl">
-                          This is the Facebook Page your ads and lead form will run from. Pick an existing Page from Meta, or create one if you do not have a matching Page yet.
-                        </p>
-                      </div>
-                      <button
-                        onClick={loadAssets}
-                        disabled={loadingAssets}
-                        className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg disabled:opacity-60"
-                      >
-                        {loadingAssets ? "Refreshing..." : "Refresh connected assets"}
-                      </button>
-                    </div>
+	                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 space-y-4">
+	                    <div className="flex items-start justify-between gap-3 flex-wrap">
+	                      <div>
+	                        <h4 className="text-sm font-semibold text-white">Step 1: Choose your Facebook Page</h4>
+	                        <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+	                          This is the Facebook Page your ads and lead form will run from.
+	                        </p>
+	                      </div>
+	                      <button
+	                        onClick={loadAssets}
+	                        disabled={loadingAssets}
+	                        className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg disabled:opacity-60"
+	                      >
+	                        {loadingAssets ? "Refreshing..." : "Refresh Pages and Ad Accounts"}
+	                      </button>
+		                    </div>
 
-                    {leadType && recommendedNames.length > 0 && (
-                      <div className="rounded-lg border border-blue-800/40 bg-blue-950/20 p-4 space-y-3">
-                        <div className="flex items-center justify-between gap-3 flex-wrap">
-                          <div>
-                            <p className="text-xs font-semibold text-blue-300 uppercase tracking-wide">
-                              Suggested Page names
-                            </p>
-                            <p className="text-xs text-blue-200/80">
-                              Pick a name that fits this campaign type, then choose the matching Page below.
-                            </p>
-                          </div>
-                          <a
-                            href={createPageUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-lg"
-                          >
-                            Create Page
-                          </a>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2">
-                          {recommendedNames.map((name) => (
-                            <button
-                              key={name}
-                              type="button"
-                              onClick={() => setSelectedRecommendedName(name)}
-                              className={`text-xs px-3 py-1.5 rounded-full border transition ${
-                                selectedRecommendedName === name
-                                  ? "bg-blue-600 text-white border-blue-500"
-                                  : "bg-white/5 text-gray-300 border-white/10 hover:border-blue-500/40"
-                              }`}
-                            >
-                              {name}
-                            </button>
-                          ))}
-                        </div>
-
-                        {selectedRecommendedName && (
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <code className="bg-[#1e293b] border border-white/10 text-blue-200 text-xs px-3 py-2 rounded-lg">
-                              {selectedRecommendedName}
-                            </code>
-                            <button
-                              type="button"
-                              onClick={() => navigator.clipboard.writeText(selectedRecommendedName).catch(() => {})}
-                              className="text-xs text-gray-300 hover:text-white bg-white/5 border border-white/10 px-3 py-2 rounded-lg"
-                            >
-                              Copy name
-                            </button>
-                          </div>
-                        )}
-
-                        {selectedRecommendedName && !recommendedNameMatch && (
-                          <p className="text-xs text-yellow-300">
-                            No matching Page found yet. Create this Page in Meta, then click Refresh connected assets.
-                          </p>
-                        )}
-
-                        {recommendedNameMatch && (
-                          <p className="text-xs text-emerald-300">
-                            Matching Page found: {recommendedNameMatch.name}
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {pages.length > 0 && (
-                      <div ref={pageSelectorRef}>
-                        <label className="text-xs text-gray-400 block mb-1">Facebook Page</label>
+		                    {pages.length > 0 && (
+	                      <div ref={pageSelectorRef}>
+	                        <label className="text-xs text-gray-400 block mb-1">Facebook Page</label>
                         <select
                           value={selectedPage}
                           onChange={(e) => setSelectedPage(e.target.value)}
@@ -544,10 +433,29 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
 
                     {selectedPageRecord && (
                       <p className="text-xs text-gray-400">
-                        Selected Page: <span className="text-white">{selectedPageRecord.name}</span>
-                      </p>
-                    )}
-                  </div>
+	                        Selected Page: <span className="text-white">{selectedPageRecord.name}</span>
+	                      </p>
+	                    )}
+
+	                    {!loadingAssets && pages.length === 0 && (
+	                      <div className="rounded-lg border border-yellow-700/40 bg-yellow-950/20 p-4 flex items-start justify-between gap-3 flex-wrap">
+	                        <div>
+	                          <p className="text-sm font-semibold text-yellow-200">No Facebook Pages found</p>
+	                          <p className="text-xs text-yellow-100/80 mt-1">
+	                            Create a Facebook Page in Meta, then come back and refresh Pages and Ad Accounts.
+	                          </p>
+	                        </div>
+	                        <a
+	                          href={createPageUrl}
+	                          target="_blank"
+	                          rel="noreferrer"
+	                          className="text-xs bg-yellow-600 hover:bg-yellow-500 text-white px-3 py-2 rounded-lg"
+	                        >
+	                          Create a Facebook Page
+	                        </a>
+	                      </div>
+	                    )}
+	                  </div>
 
                   <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 space-y-3">
                     <div>
@@ -581,37 +489,44 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                           onClick={saveAssets}
                           disabled={savingAssets || (!selectedPage && !selectedAdAccount)}
                           className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg disabled:opacity-60"
-                        >
-                          {savingAssets
-                            ? "Saving..."
-                            : leadType
-                              ? `Save Asset Selection for ${LEAD_TYPE_LABELS[leadType] || leadType}`
-                              : "Save Asset Selection"}
-                        </button>
-                      </>
-                    )}
-                  </div>
+	                        >
+	                          {savingAssets
+	                            ? "Saving..."
+	                            : leadType
+	                              ? `Save Page and Ad Account for ${LEAD_TYPE_LABELS[leadType] || leadType}`
+	                              : "Save Page and Ad Account"}
+	                        </button>
+	                      </>
+		                    )}
+		                  </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
-                      <h4 className="text-sm font-semibold text-white">Step 3: Generate Ads</h4>
-                      <p className="text-xs text-gray-400 mt-1">
-                        Create ad copy, creative, and lead forms for this campaign.
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
-                      <h4 className="text-sm font-semibold text-white">Step 4: Launch Campaign</h4>
-                      <p className="text-xs text-gray-400 mt-1">
-                        Review everything, then launch when you are ready.
-                      </p>
-                    </div>
-                  </div>
+		                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+	                    <h4 className="text-sm font-semibold text-white">Ready to Launch</h4>
+	                    <p className="text-xs text-gray-400 mt-1">
+	                      Once your Page and Ad Account are saved, generate your ad, review it, and launch.
+	                    </p>
+	                  </div>
 
-                  {pages.length === 0 && adAccounts.length === 0 && (
-                    <p className="text-xs text-gray-500">
-                      Click Refresh connected assets to load your available Pages and ad accounts.
-                    </p>
-                  )}
+	                  <div className="rounded-lg border border-yellow-700/30 bg-yellow-950/10 p-4 space-y-2">
+	                    <h4 className="text-xs font-semibold text-yellow-300 uppercase tracking-wide">Meta preflight checks</h4>
+	                    <p className="text-xs text-yellow-100/80">
+	                      Meta may require a payment method and Lead Ads Terms acceptance before campaigns can run.
+	                    </p>
+	                    <div className="flex flex-wrap gap-2">
+	                      <a href="https://business.facebook.com/billing" target="_blank" rel="noreferrer" className="text-xs text-yellow-100 hover:text-white underline">
+	                        Check payment method
+	                      </a>
+	                      <a href="https://www.facebook.com/ads/leadgen/tos" target="_blank" rel="noreferrer" className="text-xs text-yellow-100 hover:text-white underline">
+	                        Accept Lead Ads Terms
+	                      </a>
+		                    </div>
+		                  </div>
+
+		                  {pages.length === 0 && adAccounts.length === 0 && (
+	                    <p className="text-xs text-gray-500">
+	                      Click Refresh Pages and Ad Accounts to load your available Facebook Pages and ad accounts.
+	                    </p>
+	                  )}
 
                   {syncMsg && (
                     <p className="text-xs text-emerald-400">{syncMsg}</p>

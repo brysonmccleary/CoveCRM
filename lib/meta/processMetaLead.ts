@@ -96,20 +96,42 @@ export async function processMetaLead(
     leadData.email
   );
 
-  const folderName = `FB: ${(campaign as any).campaignName}`;
   const aiScriptKey = FB_LEAD_TYPE_TO_AI_SCRIPT_KEY[(campaign as any).leadType] || "final_expense";
-  let folder: any = await Folder.findOne({ userEmail, name: folderName }).lean();
+  let folder: any = null;
+
+  if ((campaign as any).folderId) {
+    try {
+      folder = await Folder.findOne({
+        _id: (campaign as any).folderId,
+        userEmail,
+      }).lean();
+    } catch {}
+  }
+
   if (!folder) {
-    folder = await Folder.create({
-      name: folderName,
-      userEmail,
-      assignedDrips: [],
-      aiFirstCallEnabled: true,
-      aiContactEnabled: true,
-      aiRealTimeOnly: true,
-      aiScriptKey,
-    });
-  } else if (!(folder as any).aiScriptKey) {
+    const folderName = `FB: ${(campaign as any).campaignName}`;
+    folder = await Folder.findOne({ userEmail, name: folderName }).lean();
+    if (!folder) {
+      folder = await Folder.create({
+        name: folderName,
+        userEmail,
+        assignedDrips: [],
+        aiFirstCallEnabled: true,
+        aiContactEnabled: true,
+        aiRealTimeOnly: true,
+        aiScriptKey,
+      });
+    }
+
+    if ((folder as any)?._id) {
+      await FBLeadCampaign.updateOne(
+        { _id: (campaign as any)._id, userEmail },
+        { $set: { folderId: (folder as any)._id } }
+      );
+    }
+  }
+
+  if (folder && !(folder as any).aiScriptKey) {
     await Folder.updateOne({ _id: (folder as any)._id }, { $set: { aiScriptKey } });
     folder = await Folder.findOne({ _id: (folder as any)._id }).lean();
   }

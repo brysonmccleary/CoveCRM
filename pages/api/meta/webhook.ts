@@ -7,6 +7,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { createHmac, timingSafeEqual } from "crypto";
 import mongooseConnect from "@/lib/mongooseConnect";
 import { processMetaLead } from "@/lib/meta/processMetaLead";
+import MetaLeadWebhookEvent from "@/models/MetaLeadWebhookEvent";
 
 export const config = { api: { bodyParser: false } };
 
@@ -92,45 +93,102 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true });
     }
 
+    const leadgenEvents: Array<{
+      leadgenId: string;
+      pageId: string;
+      formId: string;
+      adId: string;
+      adsetId: string;
+      metaCampaignId: string;
+      createdTime: any;
+      rawEntry: any;
+      rawChange: any;
+    }> = [];
+
+    for (const entry of body?.entry ?? []) {
+      for (const change of entry?.changes ?? []) {
+        if (change?.field !== "leadgen") continue;
+
+        const value = change.value || {};
+        const leadgenId = String(value.leadgen_id || "");
+        if (!leadgenId) continue;
+
+        leadgenEvents.push({
+          leadgenId,
+          pageId: String(value.page_id || ""),
+          formId: String(value.form_id || ""),
+          adId: String(value.ad_id || ""),
+          adsetId: String(value.adset_id || ""),
+          metaCampaignId: String(value.campaign_id || ""),
+          createdTime: value.created_time || "",
+          rawEntry: entry,
+          rawChange: change,
+        });
+      }
+    }
+
+    try {
+      if (leadgenEvents.length > 0) {
+        await mongooseConnect();
+        const now = new Date();
+        await Promise.all(
+          leadgenEvents.map((event) =>
+            MetaLeadWebhookEvent.updateOne(
+              { leadgenId: event.leadgenId },
+              {
+                $setOnInsert: {
+                  leadgenId: event.leadgenId,
+                  receivedAt: now,
+                  processingStatus: "received",
+                  attemptCount: 0,
+                  deliveryCount: 0,
+                },
+                $set: {
+                  pageId: event.pageId,
+                  formId: event.formId,
+                  adId: event.adId,
+                  adsetId: event.adsetId,
+                  metaCampaignId: event.metaCampaignId,
+                  createdTime: event.createdTime,
+                  rawPayload: body,
+                  rawEntry: event.rawEntry,
+                  rawChange: event.rawChange,
+                  lastReceivedAt: now,
+                },
+                $inc: { deliveryCount: 1 },
+              },
+              { upsert: true }
+            )
+          )
+        );
+      }
+    } catch (err: any) {
+      console.error("[meta-webhook] Failed to persist webhook event before ack:", err?.message);
+      return res.status(500).json({ ok: false, error: "webhook_persist_failed" });
+    }
+
     // Return 200 immediately — process async
     res.status(200).json({ ok: true });
 
     // Process all leadgen events
     try {
-      await mongooseConnect();
-
       if (body?.object !== "page" && body?.object !== "leadgen") {
         // Accept both page and leadgen object types
       }
 
-      for (const entry of body?.entry ?? []) {
-        for (const change of entry?.changes ?? []) {
-          if (change?.field !== "leadgen") continue;
-
-          const value = change.value || {};
-          const leadgenId = String(value.leadgen_id || "");
-          const pageId = String(value.page_id || "");
-          const formId = String(value.form_id || "");
-          const adId = String(value.ad_id || "");
-          const adsetId = String(value.adset_id || "");
-          const metaCampaignId = String(value.campaign_id || "");
-          const createdTime = value.created_time || "";
-
-          if (!leadgenId) continue;
-
-          // Fire async — do not await
-          processMetaLead(
-            leadgenId,
-            pageId,
-            formId,
-            adId,
-            adsetId,
-            metaCampaignId,
-            createdTime
-          ).catch((err: any) => {
-            console.error("[meta-webhook] processMetaLead error:", err?.message || err);
-          });
-        }
+      for (const event of leadgenEvents) {
+        // Fire async — do not await
+        processMetaLead(
+          event.leadgenId,
+          event.pageId,
+          event.formId,
+          event.adId,
+          event.adsetId,
+          event.metaCampaignId,
+          event.createdTime
+        ).catch((err: any) => {
+          console.error("[meta-webhook] processMetaLead error:", err?.message || err);
+        });
       }
     } catch (err: any) {
       console.error("[meta-webhook] Processing error:", err?.message || err);

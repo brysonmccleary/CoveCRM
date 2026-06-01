@@ -11,6 +11,8 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
 import { buildLeadSheetPayload } from "@/lib/facebook/sheets/mapLeadToSheetRow";
+import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 
 const LEAD_TYPE_MAP: Record<string, string> = {
   final_expense: "Final Expense",
@@ -213,6 +215,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch (sheetErr: any) {
         console.warn("[funnel-submit] sheet write failed:", sheetErr?.message);
       }
+    }
+
+    try {
+      if (phone && folderId) {
+        triggerAIFirstCall(
+          String((lead as any)._id),
+          String(folderId),
+          userEmail
+        ).catch(() => {});
+      }
+    } catch {}
+
+    try {
+      await enrollOnNewLeadIfWatched({
+        userEmail,
+        folderId: String(folderId),
+        leadId: String((lead as any)._id),
+        startMode: "now",
+        source: "manual-lead",
+      });
+    } catch (enrollErr: any) {
+      console.warn("[funnel-submit] enrollOnNewLeadIfWatched failed (non-blocking):", enrollErr?.message);
     }
 
     return res.status(200).json({ ok: true, leadId: String(lead._id) });

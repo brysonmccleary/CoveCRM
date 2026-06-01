@@ -3,14 +3,37 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
-import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 
+async function updateMetaObjectStatus(
+  objectId: string,
+  status: "ACTIVE" | "PAUSED",
+  accessToken: string,
+  objectType: "campaign" | "adset" | "ad"
+) {
+  const metaParams = new URLSearchParams();
+  metaParams.set("status", status);
+  metaParams.set("access_token", accessToken);
+  const metaResp = await fetch(`https://graph.facebook.com/v21.0/${objectId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: metaParams.toString(),
+  });
+  const metaJson = await metaResp.json().catch(() => ({}));
+  if (!metaResp.ok) {
+    throw {
+      objectType,
+      objectId,
+      metaError: metaJson,
+    };
+  }
+  return metaJson;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
-  if (!isExperimentalAdminEmail(session?.user?.email)) return res.status(403).json({ error: 'Forbidden' });
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
   const { id } = req.query as { id: string };
@@ -48,6 +71,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (requestedMetaStatus === "ACTIVE" || requestedMetaStatus === "PAUSED") {
       const metaCampaignId = String((campaign as any).metaCampaignId || "").trim();
       if (!metaCampaignId) return res.status(400).json({ error: "Campaign is missing metaCampaignId" });
+      const metaAdsetId = String((campaign as any).metaAdsetId || "").trim();
+      if (!metaAdsetId) return res.status(400).json({ error: "Campaign is missing metaAdsetId" });
+      const currentAds = Array.isArray((campaign as any).ads) ? [ ...(campaign as any).ads ] : [];
+      const metaAdIds = Array.from(
+        new Set(
+          [
+            ...currentAds.map((ad: any) => String(ad?.metaAdId || "").trim()),
+            ...(currentAds.length === 0 ? [String((campaign as any).metaAdId || "").trim()] : []),
+          ].filter(Boolean)
+        )
+      );
+      if (!metaAdIds.length) return res.status(400).json({ error: "Campaign is missing metaAdId" });
 
       const user = await User.findOne({ email: session.user.email.toLowerCase() })
         .select("metaSystemUserToken metaAccessToken")
@@ -55,21 +90,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const accessToken = String(user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
       if (!accessToken) return res.status(400).json({ error: "Meta access token missing" });
 
-      const metaParams = new URLSearchParams();
-      metaParams.set("status", requestedMetaStatus);
-      metaParams.set("access_token", accessToken);
-      const metaResp = await fetch(`https://graph.facebook.com/v21.0/${metaCampaignId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: metaParams.toString(),
-      });
-      const metaJson = await metaResp.json();
-      if (!metaResp.ok) {
-        return res.status(500).json({ error: "Meta status update failed", metaError: metaJson });
+      try {
+        if (requestedMetaStatus === "ACTIVE") {
+          await updateMetaObjectStatus(metaAdsetId, "ACTIVE", accessToken, "adset");
+          for (const metaAdId of metaAdIds) {
+            await updateMetaObjectStatus(metaAdId, "ACTIVE", accessToken, "ad");
+          }
+          await updateMetaObjectStatus(metaCampaignId, "ACTIVE", accessToken, "campaign");
+        } else {
+          await updateMetaObjectStatus(metaCampaignId, "PAUSED", accessToken, "campaign");
+          await updateMetaObjectStatus(metaAdsetId, "PAUSED", accessToken, "adset");
+          for (const metaAdId of metaAdIds) {
+            await updateMetaObjectStatus(metaAdId, "PAUSED", accessToken, "ad");
+          }
+        }
+      } catch (err: any) {
+        const failure = {
+          objectType: err?.objectType || "unknown",
+          objectId: err?.objectId || "",
+          metaError: err?.metaError || err?.message || "Meta status update failed",
+        };
+        await FBLeadCampaign.updateOne(
+          { _id: campaign._id },
+          {
+            $set: {
+              metaObjectHealth: "sync_failed",
+              metaSyncStatus: "sync_failed",
+              metaSyncError: JSON.stringify(failure).slice(0, 1000),
+              metaLastSyncedAt: new Date(),
+            },
+          }
+        ).catch(() => {});
+        return res.status(500).json({
+          ok: false,
+          error: "Meta status update failed",
+          failedObject: failure,
+        });
       }
       updates.status = requestedMetaStatus === "ACTIVE" ? "active" : "paused";
       updates.metaConfiguredStatus = requestedMetaStatus;
       updates.metaObjectHealth = requestedMetaStatus === "ACTIVE" ? "healthy" : "paused_on_meta";
+      updates.metaSyncStatus = "synced";
+      updates.metaSyncError = "";
+      updates.metaLastSyncedAt = new Date();
+      updates.ads = currentAds.map((ad: any) => ({
+        ...(typeof ad?.toObject === "function" ? ad.toObject() : ad),
+        status: requestedMetaStatus,
+      }));
     } else if (status !== undefined) {
       updates.status = status;
     }
