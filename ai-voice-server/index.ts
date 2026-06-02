@@ -3427,6 +3427,7 @@ function buildGreetingFirstTurnDecision(
 
   const aiName = (ctx.voiceProfile?.aiName || "Kayla").trim() || "Kayla";
   const agentFirst = getAgentFirstName(ctx);
+  const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
   let lineToSay = step1Line;
   let routeKind = "greeting_ack";
 
@@ -3435,7 +3436,7 @@ function buildGreetingFirstTurnDecision(
     lineToSay = `Sorry about that — ${step1Line}`;
   } else if (intent.kind === "not_interested") {
     routeKind = "greeting_not_interested_soft_rebuttal";
-    lineToSay = `I hear you — most people say that before they realize what the request was for. ${step1Line}`;
+    lineToSay = getRebuttalLine(ctx, "not_interested");
   } else if (identityQuestion) {
     routeKind = "greeting_identity_recover";
     if (
@@ -3476,8 +3477,14 @@ function buildGreetingFirstTurnDecision(
       greetingAdvanceNextIndex: undefined,
       greetingAdvanceNextPhase: undefined,
       awaitingUserAnswer: true,
-      awaitingAnswerForStepIndex: 0,
-      scriptStepIndex: 0,
+      awaitingAnswerForStepIndex: routeKind === "greeting_not_interested_soft_rebuttal" ? 2 : 0,
+      scriptStepIndex: routeKind === "greeting_not_interested_soft_rebuttal" ? 2 : 0,
+      ...(routeKind === "greeting_not_interested_soft_rebuttal"
+        ? {
+            pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
+            pendingLiveTransferAvailabilityAttempts: 0,
+          }
+        : {}),
     },
     shouldAdvanceStep: false,
   };
@@ -4286,13 +4293,27 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
   if (kind === "not_interested") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    const lines = [
-      `I completely understand — and I'm not here to pressure you at all. A lot of people feel that way before they see what's actually available for their situation. ${agent}'s call is literally just 5 minutes, no obligation. Does later today or tomorrow work better?`,
-      `Yeah, totally fair. I hear you. The thing is, ${agent} just wants to make sure the ${scope} request didn't fall through the cracks — it's a free 5-minute call, nothing more. Does later today or tomorrow work better?`,
-      `That makes total sense, and I respect that. I'll just say — most people who felt that way ended up really glad they took the 5 minutes. ${agent} keeps it quick and simple. Does later today or tomorrow work better?`,
-    ];
-    return lines[Math.floor(Math.random() * lines.length)];
+    const scriptKey = normalizeScriptKey(ctx.scriptKey);
+    const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
+    const requestReason = (() => {
+      if (scriptKey === "mortgage_protection" || scriptKey === "veteran_mortgage" || scriptKey === "trucker_mortgage") {
+        return "get a quote, cover the mortgage, or see what options are available";
+      }
+      if (scriptKey === "veteran_leads" || scriptKey === "veteran_iul") {
+        return "look into veteran life insurance information, benefits, or programs";
+      }
+      if (scriptKey === "final_expense") {
+        return "look into burial or final expense coverage";
+      }
+      if (scriptKey === "iul_cash_value" || scriptKey === "trucker_iul") {
+        return "look into life insurance, cash value, or retirement-style options";
+      }
+      return "get a quote, get more information, or see what options are available";
+    })();
+    const close = liveTransferEnabled
+      ? `Would later today or tomorrow work better, or did you want me to try ${agent} right now?`
+      : "Would later today or tomorrow work better?";
+    return `I hear you — most people say that before they realize what the request was for. Usually when this comes through, someone was just looking to ${requestReason}. ${agent} is the licensed agent who can cover the details, and it usually only takes about five minutes. ${close}`;
   }
 
   if (kind === "already_have") {
@@ -6615,9 +6636,9 @@ After handling whatever the lead just said, you MUST naturally work back
 to this question. Do not skip it. Do not jump ahead.
 If they seem confused about the call itself, briefly explain and re-ask.
 If they asked a product question, answer briefly and re-ask.
-If they objected, acknowledge and re-ask.
-The re-ask should sound natural, not robotic.
-`
+	If they objected, use the objection framework below and re-ask.
+	The re-ask should sound natural, not robotic.
+	`
     : `
 YOUR CURRENT OBJECTIVE:
 Get the lead scheduled for a quick call with ${agent}.
@@ -6640,19 +6661,22 @@ HARD RULES (non-negotiable, always):
 - You are a scheduling assistant only. You are not the licensed agent. Do not run the sales call.
 - Never discuss coverage options, plan options, policy details, underwriting, or program information.
 - Never ask discovery questions. Do not open new topics or invite elaboration.
-- Never say or imply: "tell me more", "what would you like to start with", "let's go through the details", "step by step", "cover options", "coverage options", "coverage you're looking for", "I'm here to help with that", "I'll walk you through", "we can discuss", "explore your options".
-- Your final sentence MUST be a natural restatement of this exact required objective and nothing else: "${requiredObjective}"
-- Never substitute a generic scheduling question when the current objective is a specific script step question.
-- Never skip the required objective. Never ask something different. Never freestyle a closing question.
-${historyBlock}${stepHint}
-WHAT THE LEAD JUST SAID:
-"${userText}"
+	- Never say or imply: "tell me more", "what would you like to start with", "let's go through the details", "step by step", "cover options", "coverage options", "coverage you're looking for", "I'm here to help with that", "I'll walk you through", "we can discuss", "explore your options".
+	- Your final sentence MUST be a natural restatement of this exact required objective and nothing else: "${requiredObjective}"
+	- Never substitute a generic scheduling question when the current objective is a specific script step question.
+	- Never skip the required objective. Never ask something different. Never freestyle a closing question.
+	- Known deterministic rebuttal lines already won before this instruction. For anything not hard-coded, sound like a skilled appointment setter, not a generic assistant.
+	- You are not selling, quoting, or giving advice. Your only objective is booking the quick call or live transfer.
+	${historyBlock}${stepHint}
+	WHAT THE LEAD JUST SAID:
+	"${userText}"
 
-YOUR JOB:
-1. Acknowledge what they said in one short sentence — warm, direct, and natural.
-2. If they asked something: answer it in one sentence using only hard-rule-safe information.
-3. Immediately redirect to the current scheduling objective. Do not linger on their topic.
-4. End with the required closing question above. Do not deviate from it.
+	YOUR JOB:
+	1. If this is resistance or an objection: agree briefly.
+	2. Respond directly using the ${scope} context and what they likely requested.
+	3. Reclose by positioning ${agent} as the licensed person who can cover details on a quick 5-minute call.
+	4. Assume the next step by ending with the exact required objective above. Do not deviate from it.
+	5. If this is only a simple question, answer in one sentence, then still end with the exact required objective.
 
 	KEEP IT SHORT: 2–3 sentences max. No speeches. No over-explaining.
 	`.trim();
@@ -6838,11 +6862,13 @@ HARD RULES (never break):
 - Never ask: age, DOB, coverage amount, mortgage balance, health, meds, smoking, income, SSN, or address.
 - If they ask cost/coverage: "${agent} will go over all of that on the call" then get back to scheduling.
 ${historyBlock}${userBlock}${deEscalateBlock}
-HOW TO RESPOND:
-1. React naturally — use variety. Match their energy. 1 sentence.
-2. Answer or acknowledge what they said briefly and directly. 1 sentence max.
-3. Bridge back to scheduling naturally.
-4. Close with the booking question (unless in de-escalation mode — then keep it soft).
+	HOW TO RESPOND:
+	1. Agree briefly with the concern or resistance.
+	2. Respond directly using the ${scope} context and what they likely requested.
+	3. Reclose by positioning ${agent} as the licensed person who can cover details on a quick 5-minute call.
+	4. Assume the next step by closing with the booking/transfer objective (unless in de-escalation mode — then keep it soft).
+	5. Known deterministic lines already won before this instruction. Unknown objections should sound like a skilled appointment setter, not a generic assistant.
+	6. You are not selling, quoting, or giving advice. The objective is booking or transfer only.
 
 NEVER SAY:
 - "I understand" as your opener every single time
