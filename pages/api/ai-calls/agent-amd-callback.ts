@@ -5,6 +5,7 @@ import AICallRecording from "@/models/AICallRecording";
 import mongooseConnect from "@/lib/mongooseConnect";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
+const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
 
 function getQueryValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] || "" : String(value || "");
@@ -41,6 +42,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const conferenceName = getQueryValue(req.query.conferenceName);
   const leadCallSid = getQueryValue(req.query.leadCallSid);
   const userEmail = getQueryValue(req.query.userEmail).toLowerCase();
+  const sessionId = getQueryValue(req.query.sessionId);
+  const leadId = getQueryValue(req.query.leadId);
+  const leadName = getQueryValue(req.query.leadName);
+  const agentName = getQueryValue(req.query.agentName);
+  const agentTimeZone = getQueryValue(req.query.agentTimeZone);
 
   const isHuman = answeredBy === "human";
   const isFailed =
@@ -88,6 +94,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.warn("[AGENT-AMD] could not mark transferRebootPending", err);
         }
 
+        try {
+          const rebootUrl = new URL("/api/ai-calls/transfer-reboot-twiml", COVECRM_BASE_URL);
+          rebootUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+          rebootUrl.searchParams.set("sessionId", sessionId);
+          rebootUrl.searchParams.set("leadId", leadId);
+          rebootUrl.searchParams.set("leadName", leadName);
+          rebootUrl.searchParams.set("agentName", agentName);
+          rebootUrl.searchParams.set("userEmail", userEmail);
+          rebootUrl.searchParams.set("callSid", leadCallSid);
+          rebootUrl.searchParams.set("agentTimeZone", agentTimeZone || "America/New_York");
+
+          await client.calls(leadCallSid).update({
+            url: rebootUrl.toString(),
+            method: "POST",
+          });
+          console.log("[AGENT-AMD] redirected lead call to AI reboot after failed transfer", {
+            leadCallSid,
+            agentCallSid,
+            answeredBy,
+            callStatus,
+            dialCallStatus,
+          });
+        } catch (err) {
+          console.warn("[AGENT-AMD] failed to redirect lead call to AI reboot", err);
+        }
       }
       console.log("[AGENT-AMD] machine/failed/unknown — marked transfer reboot pending", {
         conferenceName,
