@@ -944,13 +944,18 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
 
   const client = resolved.client;
 
-  // TrustHub + Brand Registrations live on platform account — use platform client.
-  // For subaccounts, the tenant client returns 404 for these resources.
-  const rawPlatformSid = (process.env.TWILIO_ACCOUNT_SID || "").replace(/[^A-Za-z0-9]/g, "").trim();
-  const trusthubAccountSid = rawPlatformSid.startsWith("AC") ? rawPlatformSid : resolved.accountSid;
-  const trusthubClient = buildPlatformTwilioClient() ?? client;
-  const rawPlatformAuth = buildPlatformAuth();
-  const trusthubAuth = rawPlatformAuth ?? resolved.auth;
+  // CoveCRM: every user owns a Twilio subaccount. All TrustHub, Brand Registration,
+  // Trust Product, Campaign, and phone-number operations must be tenant-scoped.
+  // Using the platform/master account causes "Cannot add bundle item BU... as it's not
+  // from the parent account" because Customer Profiles live on the user's subaccount.
+  const trusthubClient = client;
+  const trusthubAuth = resolved.auth;
+  const trusthubAccountSid = resolved.accountSid;
+
+  console.log("[A2P][TENANT_SCOPED_TRUSTHUB]", {
+    userEmail: normalizedEmail,
+    accountSid: resolved.accountSid,
+  });
 
   const now = new Date();
   const update: Record<string, any> = {
