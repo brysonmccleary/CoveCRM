@@ -16,7 +16,7 @@ export default function SecurityPage() {
         <section className="mb-10">
           <h2 className="text-2xl font-semibold mb-4">Infrastructure</h2>
           <ul className="space-y-2 text-slate-400">
-            <li>Secure cloud-hosted infrastructure</li>
+            <li>Cloud-hosted infrastructure with security-focused controls</li>
             <li>Encrypted data transmission using HTTPS (TLS)</li>
             <li>Scalable backend architecture</li>
           </ul>
@@ -27,8 +27,8 @@ export default function SecurityPage() {
           <h2 className="text-2xl font-semibold mb-4">Data Protection</h2>
           <ul className="space-y-2 text-slate-400">
             <li>Account-level data separation</li>
-            <li>No cross-user data access</li>
-            <li>Secure handling of lead and contact information</li>
+            <li>Controls designed to prevent unauthorized cross-account data access</li>
+            <li>Security-focused handling of lead and contact information</li>
           </ul>
         </section>
 
@@ -47,8 +47,8 @@ export default function SecurityPage() {
           <h2 className="text-2xl font-semibold mb-4">Access Control</h2>
           <ul className="space-y-2 text-slate-400">
             <li>Authenticated user access required</li>
-            <li>Protected API routes</li>
-            <li>System-level safeguards against unauthorized access</li>
+            <li>Access controls for sensitive product areas and routes</li>
+            <li>System-level safeguards intended to reduce unauthorized access</li>
           </ul>
         </section>
 

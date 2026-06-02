@@ -26,6 +26,13 @@ export default function PrivacyPolicy() {
             notes, tags, appointment history, etc.).
           </li>
           <li>
+            Communication data, including SMS message contents, call recordings,
+            call transcripts, call notes, AI-generated summaries, appointment
+            communications, message delivery information, call status,
+            timestamps, phone numbers, email addresses, and related communication
+            metadata.
+          </li>
+          <li>
             Usage data, log data, device information, and settings related to
             how you use CoveCRM.
           </li>
@@ -85,15 +92,46 @@ export default function PrivacyPolicy() {
           <li>
             Import and manage leads, contacts, conversations, and appointments.
           </li>
+          <li>
+            Process communications and lead data to provide requested features
+            such as SMS follow-up, calling tools, appointment booking,
+            AI-assisted messaging, AI dialer or virtual assistant features, AI
+            call coaching, AI-generated summaries, and communication analysis.
+          </li>
           <li>Process payments and manage subscriptions.</li>
           <li>Detect, prevent, and address technical or security issues.</li>
           <li>Respond to your requests and provide customer support.</li>
           <li>Improve and develop our products and services.</li>
         </ul>
 
-        {/* 4. Sharing & Disclosure */}
+        {/* 4. AI Processing */}
         <h2 className="text-xl font-semibold mt-6 mb-2">
-          4. How We Share or Disclose Information
+          4. AI Processing
+        </h2>
+        <p className="mb-4">
+          CoveCRM may provide AI-assisted features, including AI SMS Assistant,
+          AI Dialer or Virtual Assistant, AI Call Coach, AI-generated summaries,
+          call overviews, suggested follow-up, and analysis of customer
+          communications. When you enable or use these features, communications,
+          lead data, call recordings, transcripts, messages, notes, appointment
+          information, and related metadata may be processed by CoveCRM and our
+          AI service providers to provide the customer-requested functionality.
+        </p>
+        <p className="mb-4">
+          AI features are intended to assist users with CRM workflows,
+          communication organization, follow-up, summaries, and coaching.
+          AI-generated content may be incomplete or inaccurate and should be
+          reviewed by the user before relying on it or sending it externally.
+        </p>
+        <p className="mb-6">
+          CoveCRM does not use customer lead data, communications, call
+          recordings, transcripts, or Google user data to train generalized AI or
+          machine learning models owned by CoveCRM.
+        </p>
+
+        {/* 5. Sharing & Disclosure */}
+        <h2 className="text-xl font-semibold mt-6 mb-2">
+          5. How We Share or Disclose Information
         </h2>
         <p className="mb-2">
           We do <span className="font-semibold">not</span> sell or rent your
@@ -103,11 +141,28 @@ export default function PrivacyPolicy() {
         <ul className="list-disc list-inside space-y-1 mb-4">
           <li>
             <span className="font-semibold">Service providers:</span> We use
-            third parties such as Stripe (payments), Twilio (SMS/voice), Google
-            (Calendar), hosting and analytics providers, and email services
-            (e.g., Resend) to operate CoveCRM. These providers only receive the
-            data needed to perform services on our behalf and are contractually
-            obligated to protect it.
+            third-party service providers to operate CoveCRM and deliver
+            requested functionality. These may include payment processors such as
+            Stripe; communications providers such as Twilio for SMS, voice,
+            messaging, call routing, and related telecommunications services;
+            Google for authentication and calendar integrations; OpenAI or other
+            AI providers for AI-assisted features; Meta/Facebook for advertising
+            integrations, Facebook Lead Ads, lead ingestion, attribution,
+            reporting, and related advertising services; hosting,
+            infrastructure, analytics, monitoring, and email service providers.
+            These providers receive only the information reasonably necessary to
+            perform services on our behalf and are required to protect that
+            information.
+          </li>
+          <li>
+            <span className="font-semibold">Meta/Facebook integrations:</span>{" "}
+            If you connect Meta or Facebook features, CoveCRM may process
+            information related to Facebook Lead Ads, lead forms, campaign
+            performance, attribution, reporting, advertising accounts, pages,
+            pixels, events, or related advertising integrations. This information
+            is used to import leads, organize campaign activity, measure
+            performance, and provide reporting or automation features requested
+            by the user.
           </li>
           <li>
             <span className="font-semibold">Legal requirements:</span> We may
@@ -127,8 +182,8 @@ export default function PrivacyPolicy() {
           </li>
         </ul>
 
-        {/* 5. Data Security */}
-        <h2 className="text-xl font-semibold mt-6 mb-2">5. Data Security</h2>
+        {/* 6. Data Security */}
+        <h2 className="text-xl font-semibold mt-6 mb-2">6. Data Security</h2>
         <p className="mb-4">
           We implement reasonable technical and organizational measures—
           including encryption in transit, access controls, and audit logging—to
@@ -137,9 +192,28 @@ export default function PrivacyPolicy() {
           safe.
         </p>
 
-        {/* 6. Data Rights */}
+        {/* 7. Data Retention */}
+        <h2 className="text-xl font-semibold mt-6 mb-2">7. Data Retention</h2>
+        <p className="mb-4">
+          We retain personal information, lead data, communication records,
+          appointment records, account records, billing records, and related
+          metadata for as long as reasonably necessary to provide CoveCRM,
+          maintain your account, comply with legal, tax, accounting,
+          telecommunications, carrier, anti-abuse, dispute-resolution, and
+          security obligations, and enforce our agreements.
+        </p>
+        <p className="mb-4">
+          If you delete information from your account or close your account, we
+          may delete or de-identify information in accordance with our normal
+          retention practices, unless we need to retain it for legal, compliance,
+          security, backup, fraud-prevention, dispute, or legitimate business
+          purposes. Backup copies may persist for a limited period before being
+          overwritten or deleted through normal backup cycles.
+        </p>
+
+        {/* 8. Data Rights */}
         <h2 className="text-xl font-semibold mt-6 mb-2">
-          6. Your Rights (GDPR &amp; CCPA)
+          8. Your Rights (GDPR &amp; CCPA)
         </h2>
         <p className="mb-2">
           Depending on your location, you may have the right to access, correct,
@@ -158,9 +232,9 @@ export default function PrivacyPolicy() {
           law (including GDPR in the EU/EEA and CCPA/CPRA in California).
         </p>
 
-        {/* 7. Changes */}
+        {/* 9. Changes */}
         <h2 className="text-xl font-semibold mt-6 mb-2">
-          7. Changes to This Policy
+          9. Changes to This Policy
         </h2>
         <p className="mb-4">
           We may update this Privacy Policy from time to time. If we make
@@ -170,9 +244,9 @@ export default function PrivacyPolicy() {
           policy.
         </p>
 
-        {/* 8. Contact */}
+        {/* 10. Contact */}
         <h2 className="text-xl font-semibold mt-6 mb-2">
-          8. Contact Us
+          10. Contact Us
         </h2>
         <p className="mb-2">
           If you have any questions about this Privacy Policy or how we handle
