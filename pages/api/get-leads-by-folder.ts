@@ -55,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       leads = await Lead.find(
         { userEmail: email, $or: [{ folderId: { $exists: false } }, { folderId: null }] },
         {
-          _id: 1, name: 1, firstName: 1, lastName: 1, "First Name": 1, "Last Name": 1,
+          _id: 1, name: 1, Name: 1, fullName: 1, "Full Name": 1, firstName: 1, lastName: 1, "First Name": 1, "Last Name": 1,
           Phone: 1, phone: 1, Email: 1, email: 1, status: 1, updatedAt: 1, folderId: 1,
         }
       )
@@ -74,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ],
         },
         {
-          _id: 1, name: 1, firstName: 1, lastName: 1, "First Name": 1, "Last Name": 1,
+          _id: 1, name: 1, Name: 1, fullName: 1, "Full Name": 1, firstName: 1, lastName: 1, "First Name": 1, "Last Name": 1,
           Phone: 1, phone: 1, Email: 1, email: 1, status: 1, State: 1, state: 1,
           Age: 1, age: 1, updatedAt: 1, folderId: 1,
         }

@@ -781,7 +781,24 @@ const goToAIDialSession = () => {
     return undefined;
   };
 
-  const showColFirstName = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "firstName"))), [leads]);
+  const getLeadDisplayName = (lead: any) => {
+    const clean = (value: any) => (typeof value === "string" ? value.trim() : value ? String(value).trim() : "");
+    const fromCamel = [clean(lead?.firstName), clean(lead?.lastName)].filter(Boolean).join(" ").trim();
+    if (fromCamel) return fromCamel;
+    const fromTitle = [clean(lead?.["First Name"]), clean(lead?.["Last Name"])].filter(Boolean).join(" ").trim();
+    if (fromTitle) return fromTitle;
+    return (
+      clean(lead?.name) ||
+      clean(lead?.Name) ||
+      clean(lead?.fullName) ||
+      clean(lead?.["Full Name"]) ||
+      clean(lead?.email) ||
+      clean(lead?.phone) ||
+      "Unknown Lead"
+    );
+  };
+
+  const showColFirstName = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadDisplayName(l))), [leads]);
   const showColLastName = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "lastName"))), [leads]);
   const showColPhone = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "phone"))), [leads]);
   const showColEmail = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "email"))), [leads]);
@@ -1102,7 +1119,7 @@ const goToAIDialSession = () => {
                                 onClick={() => setPreviewLead(typeof expandedFolder === "string" && expandedFolder ? { ...lead, folderId: expandedFolder } : lead)}
                                 className="text-blue-500 underline cursor-pointer"
                               >
-                                {getLeadValue(lead, "firstName") || "-"}
+                                {getLeadDisplayName(lead)}
                               </button>
                             </td>
                           )}
@@ -1340,7 +1357,7 @@ const goToAIDialSession = () => {
                                 onClick={() => setPreviewLead(typeof expandedFolder === "string" && expandedFolder ? { ...lead, folderId: expandedFolder } : lead)}
                                 className="text-blue-500 underline cursor-pointer"
                               >
-                                {getLeadValue(lead, "firstName") || "-"}
+                                {getLeadDisplayName(lead)}
                               </button>
                             </td>
                           )}
