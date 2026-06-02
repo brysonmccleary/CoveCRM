@@ -1083,7 +1083,7 @@ async function replayPendingCommittedTurn(
     // ✅ Re-run the same commit logic path by directly invoking the same response.create decision logic
     // We do NOT touch audio streaming; we only create a response now that drain is complete.
 
-    let lastUserText = String(state.lastUserTranscript || "").trim();
+    let lastUserText = normalizeRawTranscript(String(state.lastUserTranscript || "").trim());
     const turnFinalization = shouldDeferTurnRouting(state, lastUserText, "replay", {
       reason,
       audioMs: restoredAudioMs,
@@ -1470,6 +1470,42 @@ function hash8(s: string): string {
   } catch {
     return "00000000";
   }
+}
+
+function normalizeRawTranscript(raw: string): string {
+  if (!raw) return "";
+  let t = raw.trim();
+
+  // Collapse duplicate tail: "Justmyself. Just myself." -> "just myself"
+  const lower = t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  const half = lower.slice(0, Math.floor(lower.length / 2)).trim();
+  const second = lower.slice(Math.floor(lower.length / 2)).trim();
+  if (half && second && (second.includes(half) || half.includes(second))) {
+    t = t.slice(0, Math.ceil(t.length / 2)).trim().replace(/[.,!?]+$/, "").trim();
+  }
+
+  // Common run-together corrections
+  const corrections: [RegExp, string][] = [
+    [/\bjustmyself\b/gi, "just myself"],
+    [/\bjustme\b/gi, "just me"],
+    [/\brightnow\b/gi, "right now"],
+    [/\brightnowworks\b/gi, "right now works"],
+    [/\brightnowisokay\b/gi, "right now is okay"],
+    [/\btomorrow\b/gi, "tomorrow"],
+    [/\blateryoday\b/gi, "later today"],
+    [/\bdidyou\b/gi, "did you"],
+    [/\bdidyounot\b/gi, "did you not"],
+  ];
+  for (const [pattern, replacement] of corrections) {
+    t = t.replace(pattern, replacement);
+  }
+
+  // Japanese/foreign greeting -> yes
+  if (/^[\u3000-\u9fff\uff00-\uffef。、！？\s.]+$/.test(t.trim())) {
+    return "yes";
+  }
+
+  return t.trim();
 }
 
 function normalizeTurnTextForKey(textRaw: string): string {
@@ -5149,7 +5185,7 @@ function buildConversationPolicyDecision(
   // Placed BEFORE the phase gate so it fires even in edge-case non-in_call phases.
   // "just me", "myself", "both of us", spouse answers → scripted booking frame WITH live-transfer option.
   // Policy is the ONLY path for these turns; old STEP1-HARD-ROUTE is bypassed.
-  if (intent.kind === "coverage_subject_answer" && state.phase === "in_call") {
+  if (intent.kind === "coverage_subject_answer" && (state.phase === "in_call" || state.phase === "awaiting_greeting_reply")) {
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
     const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
@@ -5164,6 +5200,7 @@ function buildConversationPolicyDecision(
       requiredClosingPivot: closingPivot,
       forbiddenTopics: [],
       stateWrites: {
+        phase: "in_call",
         coverageSubject: normalizeTurnTextForKey(intent.raw) || intent.raw,
         pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
         pendingLiveTransferAvailabilityAttempts: 0,
@@ -5557,7 +5594,6 @@ function buildConversationPolicyDecision(
   }
 
   if (intent.kind === "unknown" || intent.kind === "off_topic") {
-    if (state.phase === "awaiting_greeting_reply") return NOT_HANDLED;
     if (!ctx) return NOT_HANDLED;
 	    return {
 	      handled: true,
@@ -5703,7 +5739,8 @@ function buildConversationPolicyDecision(
     const aiName = (ctx?.voiceProfile?.aiName || "Alex").trim() || "Alex";
     const clientName = (ctx?.clientFirstName || "").trim() || "there";
     const repeatLine = String(state.lastPromptLine || "").trim();
-    const lineToSay = repeatLine || `Sorry about that — can you hear me okay, ${clientName}? This is ${aiName}.`;
+    const step1Line = (state.scriptSteps || [])[0] || "";
+    const lineToSay = step1Line.trim() || repeatLine || `Sorry about that — can you hear me okay, ${clientName}? This is ${aiName}.`;
     return {
       handled: true,
       routeKind: "policy_greeting_fallback",
@@ -5717,6 +5754,9 @@ function buildConversationPolicyDecision(
 	        awaitingUserAnswer: true,
 	        awaitingAnswerForStepIndex: 0,
 	        scriptStepIndex: 0,
+	        greetingAdvancePending: true,
+	        greetingAdvanceNextIndex: 1,
+	        greetingAdvanceNextPhase: "in_call",
 	      },
       shouldAdvanceStep: false,
     };
@@ -5901,7 +5941,7 @@ async function handleConversationTurn(
   turnKey: string,
   humanPause: () => Promise<void>
 ): Promise<boolean> {
-  const text = String(lastUserText || "").trim();
+  const text = normalizeRawTranscript(String(lastUserText || "").trim());
   if (!text) return false;
 
   const intent = classifyTurnIntent(text, state, stepCtx);
@@ -6135,6 +6175,7 @@ function buildFreeResponseInstruction(
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const closeQuestion = getScriptCloseQuestion(ctx);
+  const requiredObjective = (opts.currentStepLine && opts.currentStepLine.trim()) ? opts.currentStepLine.trim() : closeQuestion;
 
   // Kayla demo calls get a separate instruction set — no insurance framing, no licensed-agent
   // language, full freedom to discuss CoveCRM product.
@@ -6230,7 +6271,7 @@ The re-ask should sound natural, not robotic.
     : `
 YOUR CURRENT OBJECTIVE:
 Get the lead scheduled for a quick call with ${agent}.
-After handling what they said, pivot back to: "Does later today or tomorrow work better?"
+After handling what they said, your final sentence must be: "${requiredObjective}"
 `;
 
   return `
@@ -6250,7 +6291,9 @@ HARD RULES (non-negotiable, always):
 - Never discuss coverage options, plan options, policy details, underwriting, or program information.
 - Never ask discovery questions. Do not open new topics or invite elaboration.
 - Never say or imply: "tell me more", "what would you like to start with", "let's go through the details", "step by step", "cover options", "coverage options", "coverage you're looking for", "I'm here to help with that", "I'll walk you through", "we can discuss", "explore your options".
-- End ONLY with the required close question or the current step question: "${closeQuestion}". Nothing else.
+- Your final sentence MUST be a natural restatement of this exact required objective and nothing else: "${requiredObjective}"
+- Never substitute a generic scheduling question when the current objective is a specific script step question.
+- Never skip the required objective. Never ask something different. Never freestyle a closing question.
 ${historyBlock}${stepHint}
 WHAT THE LEAD JUST SAID:
 "${userText}"
