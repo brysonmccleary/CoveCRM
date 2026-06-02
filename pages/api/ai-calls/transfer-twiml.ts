@@ -170,10 +170,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 <Response>
   <Say voice="Polly.Joanna-Neural">Please hold for just a moment while I connect you.</Say>
   <Dial action="${xmlEscape(fallbackUrl.toString())}" method="POST">
-    <Conference waitUrl=""
-                waitMethod="GET"
-                beep="false"
-                startConferenceOnEnter="false"
+    <Conference beep="false"
+                startConferenceOnEnter="true"
                 endConferenceOnExit="true"
                 muted="false">${xmlEscape(conferenceName)}</Conference>
   </Dial>
