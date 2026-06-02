@@ -8453,7 +8453,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
         (state.bargeInAudioMsBuffered || 0) + 20
       );
 
-      // Keep a tiny ring buffer (~200ms) so we don't lose their first words
+      // Keep a short ring buffer so we don't lose their first words
       const ring = state.bargeInFrames || [];
       ring.push(payload);
       while (ring.length > 50) ring.shift(); // 50 * 20ms = 1000ms
@@ -8492,8 +8492,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     if (isSilence && !userSpokeRecently_gate) return;
 
         // While AI is actively speaking, never forward live user audio to OpenAI (we buffer for barge-in instead).
-    // EXCEPT: right after a barge-in cancel, we must allow inbound audio through immediately so VAD/transcription can lock.
-    if (state.aiSpeaking === true && (state as any).responseInFlight === true && !recentlyCancelled) return;
+    if (state.aiSpeaking === true && (state as any).responseInFlight === true) return;
   }
 
 
@@ -8546,7 +8545,13 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
    * then continue with normal appends. This prevents losing the first words.
    */
   try {
-    if (state.bargeInDetected && (state.bargeInFrames?.length || 0) > 0) {
+    if (
+      state.bargeInDetected &&
+      (state.bargeInFrames?.length || 0) > 0 &&
+      state.aiSpeaking !== true &&
+      state.responseInFlight !== true &&
+      state.waitingForResponse !== true
+    ) {
       const frames = state.bargeInFrames || [];
       state.bargeInFrames = [];
       state.bargeInDetected = false;
@@ -8560,11 +8565,15 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
           })
         );
       }
-      // Commit the flushed barge-in audio so OpenAI transcribes it
-      state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-      console.log("[AI-VOICE][BARGE-IN] flushed and committed barge-in frames", {
+      // OpenAI rejects manual commits below 100ms; let server VAD collect short tails.
+      const shouldCommit = frames.length >= 5; // 5 * 20ms = 100ms
+      if (shouldCommit) {
+        state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      }
+      console.log("[AI-VOICE][BARGE-IN] flushed barge-in frames", {
         callSid: state.callSid,
         frameCount: frames.length,
+        committed: shouldCommit,
       });
       return; // we already appended the ring buffer including this frame
     }
