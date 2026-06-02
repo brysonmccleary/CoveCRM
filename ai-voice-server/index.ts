@@ -8550,7 +8550,8 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       (state.bargeInFrames?.length || 0) > 0 &&
       state.aiSpeaking !== true &&
       state.responseInFlight !== true &&
-      state.waitingForResponse !== true
+      state.waitingForResponse !== true &&
+      state.phase !== "awaiting_greeting_reply"
     ) {
       const frames = state.bargeInFrames || [];
       state.bargeInFrames = [];
