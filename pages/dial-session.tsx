@@ -1139,6 +1139,8 @@ export default function DialSession() {
 
       setStatus("Dialing…");
       setCallActive(true);
+      setMuted(false);
+      try { sdkSetMuted(false); } catch {}
 
       // Ensure audio is gesture-unlocked; then start ringback.
       try { await ensureUnlocked(); } catch {}
@@ -1364,6 +1366,39 @@ export default function DialSession() {
   const handleHangUp = () => {
     // Agent hangup should also show Disconnected immediately.
     markDisconnected("agent-hangup");
+  };
+
+  const handleToggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+
+    try {
+      sdkSetMuted(next);
+      let sdkMuted = sdkGetMuted();
+
+      if (sdkMuted !== next) {
+        sdkSetMuted(next);
+        sdkMuted = sdkGetMuted();
+      }
+
+      if (sdkMuted !== next) {
+        setMuted(!next);
+        toast.error(next ? "Failed to mute call" : "Failed to unmute call");
+      }
+    } catch {
+      setMuted(!next);
+      toast.error(next ? "Failed to mute call" : "Failed to unmute call");
+    }
+  };
+
+  const handleRedialLead = async () => {
+    const currentLead = lead;
+    if (!currentLead) return;
+    if ((currentLead as any)?.quickDial) return;
+    if (callActive || placingCallRef.current || sessionEndedRef.current) return;
+
+    if (isPaused) setIsPaused(false);
+    await callLead(currentLead);
   };
 
   const togglePause = () => {
@@ -1661,6 +1696,12 @@ export default function DialSession() {
         .filter(Boolean)
         .slice(0, 5)
     : [];
+  const redialLeadDisabled =
+    !lead ||
+    !!(lead as any)?.quickDial ||
+    callActive ||
+    placingCallRef.current ||
+    sessionEndedRef.current;
 
   return (
     // ✅ UI ONLY: make the area to the right of Sidebar a constrained flex container (Safari-safe scroll)
@@ -1767,11 +1808,7 @@ export default function DialSession() {
           {/* Bottom (pinned) */}
           <div className="flex flex-col space-y-2 mt-4 flex-none">
             <button
-              onClick={() => {
-                const next = !sdkGetMuted();
-                sdkSetMuted(next);
-                setMuted(next);
-              }}
+              onClick={handleToggleMute}
               className="bg-purple-600 hover:bg-purple-700 px-3 py-2 rounded"
             >
               {muted ? "Unmute" : "Mute"}
@@ -1786,6 +1823,16 @@ export default function DialSession() {
 
             <button onClick={() => setShowBookModal(true)} className="bg-blue-700 hover:bg-blue-800 px-3 py-2 rounded">
               📅 Book Appointment
+            </button>
+
+            <button
+              onClick={handleRedialLead}
+              disabled={redialLeadDisabled}
+              className={`px-3 py-2 rounded ${
+                redialLeadDisabled ? "bg-gray-600 cursor-not-allowed opacity-60" : "bg-emerald-600 hover:bg-emerald-700"
+              }`}
+            >
+              Redial Lead
             </button>
           </div>
         </div>
