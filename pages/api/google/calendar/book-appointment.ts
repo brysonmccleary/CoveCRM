@@ -812,7 +812,7 @@ export default async function handler(
         phone: to,
         state,
         timeISO: clientStart.toISO()!,
-        timezone: tzShort,
+        timezone: agentZone,
         source: bearer && bearer === INTERNAL_API_TOKEN ? "AI" : "Manual",
         eventUrl: created.data.htmlLink || undefined,
       });

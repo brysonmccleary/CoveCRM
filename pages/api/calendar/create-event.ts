@@ -373,15 +373,6 @@ export default async function handler(
 
     // ✅ Email the agent (best-effort)
     try {
-      const startDate = new Date(startStr);
-      const tzLabel =
-        new Intl.DateTimeFormat(undefined, {
-          timeZone: tz,
-          timeZoneName: "short",
-        })
-          .formatToParts(startDate)
-          .find((p) => p.type === "timeZoneName")?.value || tz;
-
       const leadFirst = leadDoc?.["First Name"] || leadDoc?.firstName || "";
       const leadLast = leadDoc?.["Last Name"] || leadDoc?.lastName || "";
       const leadName = `${leadFirst} ${leadLast}`.trim() || "Client";
@@ -395,7 +386,7 @@ export default async function handler(
         phone: leadPhone,
         state: leadState,
         timeISO: new Date(startStr).toISOString(),
-        timezone: tzLabel,
+        timezone: tz,
         source: "Dialer",
         eventUrl: created.data.htmlLink || undefined,
       });

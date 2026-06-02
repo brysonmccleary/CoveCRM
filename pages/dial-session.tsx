@@ -220,6 +220,7 @@ export default function DialSession() {
   const [isPaused, setIsPaused] = useState(false);
   const [callActive, setCallActive] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [connectedDurationSec, setConnectedDurationSec] = useState(0);
   const [sessionStarted, setSessionStarted] = useState(false);
   const [sessionStartedCount, setSessionStartedCount] = useState(0);
   const [tapToStart, setTapToStart] = useState(false);
@@ -244,6 +245,8 @@ export default function DialSession() {
   const advanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextLeadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const connectedAtRef = useRef<number | null>(null);
+  const connectedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const advanceScheduledRef = useRef<boolean>(false);
   const sessionEndedRef = useRef<boolean>(false);
@@ -368,7 +371,30 @@ export default function DialSession() {
     if (nextLeadTimeoutRef.current) { clearTimeout(nextLeadTimeoutRef.current); nextLeadTimeoutRef.current = null; }
   };
   const clearStatusPoll = () => { if (statusPollRef.current) { clearInterval(statusPollRef.current); statusPollRef.current = null; } };
-  const killAllTimers = () => { clearWatchdog(); clearAdvanceTimers(); clearStatusPoll(); };
+  const formatDuration = (sec: number) => {
+    const safeSec = Math.max(0, Math.floor(sec || 0));
+    const minutes = Math.floor(safeSec / 60);
+    const seconds = safeSec % 60;
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  };
+  const stopConnectedTimer = () => {
+    if (connectedTimerRef.current) {
+      clearInterval(connectedTimerRef.current);
+      connectedTimerRef.current = null;
+    }
+    connectedAtRef.current = null;
+    setConnectedDurationSec(0);
+  };
+  const startConnectedTimer = () => {
+    if (connectedAtRef.current) return;
+    connectedAtRef.current = Date.now();
+    setConnectedDurationSec(0);
+    connectedTimerRef.current = setInterval(() => {
+      if (!connectedAtRef.current) return;
+      setConnectedDurationSec(Math.floor((Date.now() - connectedAtRef.current) / 1000));
+    }, 1000);
+  };
+  const killAllTimers = () => { clearWatchdog(); clearAdvanceTimers(); clearStatusPoll(); stopConnectedTimer(); };
   const getLeadId = (leadLike?: Lead | null) => String((leadLike as any)?.id || (leadLike as any)?._id || "").trim();
   const currentLeadId = () => getLeadId(leadQueue[currentLeadIndex] ?? lead);
   const getAttemptCount = (leadId: string) => Number(leadAttemptCountsRef.current[leadId] || 0);
@@ -376,6 +402,12 @@ export default function DialSession() {
     const statusLabel = String(callOutcomeRef.current?.status || "").toLowerCase();
     return hasConnectedRef.current || statusLabel === "connected" || statusLabel === "completed";
   };
+
+  useEffect(() => {
+    return () => {
+      stopConnectedTimer();
+    };
+  }, []);
 
   // NEW: central call logging helper (per lead, per call)
   const logCallOutcome = async (opts?: { statusOverride?: string; reason?: string }) => {
@@ -1022,6 +1054,7 @@ export default function DialSession() {
           stopRingbackNow();
           clearWatchdog();
           hasConnectedRef.current = true;
+          startConnectedTimer();
           callOutcomeRef.current = { status: "Connected", source: "poll-in-progress" };
           setStatus("Connected");
           return;
@@ -1129,6 +1162,7 @@ export default function DialSession() {
     try {
       advanceScheduledRef.current = false;
       terminalHandledRef.current = false;
+      stopConnectedTimer();
       placingCallRef.current = true;
       activeDialLeadIdRef.current = leadId;
       joinedRef.current = false;
@@ -1342,6 +1376,7 @@ export default function DialSession() {
   const nextLead = () => {
     if (sessionEndedRef.current) return;
     stopRingbackNow();
+    stopConnectedTimer();
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
     if (nextIndex >= leadQueue.length) return showSessionSummary();
@@ -1354,6 +1389,7 @@ export default function DialSession() {
   const disconnectAndNext = () => {
     if (sessionEndedRef.current) return;
     stopRingbackNow();
+    stopConnectedTimer();
     killAllTimers();
     hangupActiveCall("advance-next");
     leaveIfJoined("advance-next");
@@ -1405,6 +1441,7 @@ export default function DialSession() {
     setIsPaused((p) => !p);
     if (!isPaused) {
       stopRingbackNow();
+      stopConnectedTimer();
       killAllTimers();
       hangupActiveCall("pause");
       leaveIfJoined("pause");
@@ -1427,6 +1464,7 @@ export default function DialSession() {
 
     sessionEndedRef.current = true;
     stopRingbackNow();
+    stopConnectedTimer();
     killAllTimers();
     placingCallRef.current = false;
     activeDialLeadIdRef.current = null;
@@ -1449,6 +1487,7 @@ export default function DialSession() {
 
   const showSessionSummary = () => {
     stopRingbackNow();
+    stopConnectedTimer();
     alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
     // ✅ Send to the canonical Leads view
     try {
@@ -1522,6 +1561,7 @@ export default function DialSession() {
               stopRingbackNow();
               clearWatchdog();
               hasConnectedRef.current = true;
+              startConnectedTimer();
               callOutcomeRef.current = { status: "Connected", source: "socket-answered" };
             }
 
@@ -1702,6 +1742,10 @@ export default function DialSession() {
     callActive ||
     placingCallRef.current ||
     sessionEndedRef.current;
+  const showConnectedTimer =
+    callActive &&
+    connectedAtRef.current !== null &&
+    (connectedDurationSec > 0 || hasConnectedRef.current);
 
   return (
     // ✅ UI ONLY: make the area to the right of Sidebar a constrained flex container (Safari-safe scroll)
@@ -1740,6 +1784,9 @@ export default function DialSession() {
           {/* Top (scrollable) */}
           <div className="flex-1 min-h-0 overflow-y-auto">
             <p className="text-yellow-500 mb-2">Status: {status}</p>
+            {showConnectedTimer && (
+              <p className="text-sm text-green-300 mb-2">Call Time: {formatDuration(connectedDurationSec)}</p>
+            )}
 
             <p className="text-sm text-gray-400 mb-2">
               Lead {Math.min(currentLeadIndex + 1, Math.max(leadQueue.length, 1))} of {leadQueue.length || 1}

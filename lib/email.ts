@@ -130,37 +130,29 @@ function escapeHtml(str: string) {
 }
 
 /**
- * Format a booking time in a human-friendly way.
- *
- * - `timeISO` should include an offset (e.g. "2025-11-20T11:00:00-07:00") and
- *   is treated as the **client-local** time.
- * - `tzLabel` is an optional display label like "MST" / "PST". If not provided,
- *   we derive one from the offset.
- *
+ * Format a booking time in the agent's IANA timezone.
  * This avoids relying on the server's local timezone and keeps emails aligned
  * with the Google Calendar event time.
  */
-function formatDateTimeFriendly(timeISO: string, tzLabel?: string | null) {
+function formatDateTimeFriendly(timeISO: string, agentTz?: string | null) {
   try {
-    const dt = DateTime.fromISO(timeISO);
-    if (dt.isValid) {
-      const when = dt.toFormat("ccc, MMM d yyyy 'at' h:mm a");
-      const abbr = tzLabel || dt.toFormat("ZZZ"); // e.g. MST / PDT
-      return abbr ? `${when} ${abbr}` : when;
+    const parsed = DateTime.fromISO(timeISO, { setZone: true });
+    if (parsed.isValid) {
+      const zone = String(agentTz || "").trim();
+      const zoned = zone ? parsed.setZone(zone) : parsed;
+      if (zoned.isValid) {
+        const when = zoned.toFormat("cccc, LLLL d, yyyy 'at' h:mm a");
+        const abbr = zone ? zoned.offsetNameShort : "";
+        return abbr ? `${when} ${abbr}` : when;
+      }
+
+      const when = parsed.toFormat("cccc, LLLL d, yyyy 'at' h:mm a");
+      return when;
     }
 
-    // Fallback: legacy Date formatting if parsing somehow fails
-    const d = new Date(timeISO);
-    const when = d.toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-    return tzLabel ? `${when} ${tzLabel}` : when;
+    return timeISO;
   } catch {
-    return tzLabel ? `${timeISO} ${tzLabel}` : timeISO;
+    return timeISO;
   }
 }
 
@@ -232,6 +224,7 @@ export function renderLeadBookingEmail(opts: {
   agentName?: string;
   startISO: string | Date;
   endISO: string | Date;
+  timezone?: string | null;
   title?: string;
   description?: string;
   eventUrl?: string;
@@ -241,12 +234,13 @@ export function renderLeadBookingEmail(opts: {
     agentName,
     startISO,
     endISO,
+    timezone,
     title,
     description,
     eventUrl,
   } = opts;
-  const start = new Date(toISO(startISO)).toLocaleString();
-  const end = new Date(toISO(endISO)).toLocaleString();
+  const start = formatDateTimeFriendly(toISO(startISO), timezone ?? null);
+  const end = formatDateTimeFriendly(toISO(endISO), timezone ?? null);
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif">
       <h2>Appointment Confirmed</h2>
@@ -271,6 +265,7 @@ export function renderAgentBookingEmail(opts: {
   leadEmail?: string;
   startISO: string | Date;
   endISO: string | Date;
+  timezone?: string | null;
   title?: string;
   description?: string;
   leadUrl?: string;
@@ -283,13 +278,14 @@ export function renderAgentBookingEmail(opts: {
     leadEmail,
     startISO,
     endISO,
+    timezone,
     title,
     description,
     leadUrl,
     eventUrl,
   } = opts;
-  const start = new Date(toISO(startISO)).toLocaleString();
-  const end = new Date(toISO(endISO)).toLocaleString();
+  const start = formatDateTimeFriendly(toISO(startISO), timezone ?? null);
+  const end = formatDateTimeFriendly(toISO(endISO), timezone ?? null);
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif">
       <h2>New Booking</h2>
@@ -319,7 +315,7 @@ export function renderAgentAppointmentNotice(opts: {
   phone: string;
   state?: string;
   timeISO: string;
-  timezone?: string | null; // e.g. "CST" or "CDT"
+  timezone?: string | null; // IANA timezone, e.g. "America/Phoenix"
   source?: "AI" | "Dialer" | "Manual";
   eventUrl?: string;
 }) {
@@ -362,7 +358,7 @@ export async function sendAppointmentBookedEmail(opts: {
   phone: string;
   state?: string;
   timeISO: string; // event start in ISO
-  timezone?: string | null; // accept null or undefined
+  timezone?: string | null; // IANA timezone; accept null or undefined
   source?: "AI" | "Dialer" | "Manual";
   eventUrl?: string;
   /** Back-compat: accept `eventLink` as an alias for `eventUrl` from older callers */

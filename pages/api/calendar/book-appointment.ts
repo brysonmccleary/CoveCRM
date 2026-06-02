@@ -276,6 +276,7 @@ export default async function handler(
           // Ensure plain string type
           startISO: startAgent.toJSDate().toISOString(),
           endISO: endAgent.toJSDate().toISOString(),
+          timezone: agentTz,
           title: summary,
           description: desc,
           eventUrl,
@@ -295,6 +296,7 @@ export default async function handler(
           // Ensure plain string type
           startISO: startAgent.toJSDate().toISOString(),
           endISO: endAgent.toJSDate().toISOString(),
+          timezone: agentTz,
           title: summary,
           description: desc,
           leadUrl,
