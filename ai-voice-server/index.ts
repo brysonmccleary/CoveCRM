@@ -5149,7 +5149,7 @@ function buildConversationPolicyDecision(
   // Placed BEFORE the phase gate so it fires even in edge-case non-in_call phases.
   // "just me", "myself", "both of us", spouse answers → scripted booking frame WITH live-transfer option.
   // Policy is the ONLY path for these turns; old STEP1-HARD-ROUTE is bypassed.
-  if (intent.kind === "coverage_subject_answer") {
+  if (intent.kind === "coverage_subject_answer" && state.phase === "in_call") {
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
     const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
