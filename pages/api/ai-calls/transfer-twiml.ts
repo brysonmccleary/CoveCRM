@@ -174,7 +174,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 waitMethod="GET"
                 beep="false"
                 startConferenceOnEnter="false"
-                endConferenceOnExit="false"
+                endConferenceOnExit="true"
                 muted="false">${xmlEscape(conferenceName)}</Conference>
   </Dial>
 </Response>`;
