@@ -2960,6 +2960,7 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
     "yes i can", "yes i can hear you", "yes i can hear",
     "yeah i can", "yeah i can hear you", "yep i can",
     "yep i can hear you", "i can hear you", "i can hear",
+    "i can", "i hear you", "yes i hear you", "yeah i hear you",
     "loud and clear", "loud and clear yes",
     "what s up", "whats up", "yeah whats up", "yeah what s up",
     "yep whats up", "what up", "sup", "go on", "im here",
@@ -3137,6 +3138,349 @@ function getLiveTransferAvailabilityLine(ctx?: AICallContext): string {
 
 function getLiveTransferTryingLine(ctx?: AICallContext): string {
   return `Okay, let me try and get ${getAgentFirstName(ctx)} on the line. Give me one second.`;
+}
+
+function buildRebookingPolicyDecision(
+  state: CallState,
+  intent: TurnIntent,
+  ctx: AICallContext,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType }
+): PolicyDecision | null {
+  if (!(state as any).rebookingMode) return null;
+
+  const agentFirst = String((state as any).rebookingAgentFirst || getAgentFirstName(ctx) || "the agent").trim();
+  const raw = String(intent.raw || "").trim();
+  const t = normalizeTurnTextForKey(raw);
+  const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+  const explicitDay = pickDayHint(raw, "");
+  const namedDay = extractNamedWeekday(raw.toLowerCase());
+  const dayHint =
+    explicitDay === "today" || explicitDay === "tomorrow"
+      ? explicitDay
+      : rememberedDay
+      ? rememberedDay
+      : namedDay || null;
+  const windowHint = pickTimeWindowHint(raw, String(state.lastAcceptedUserText || ""));
+  const offeredTime = pickOfferedClockTimeFromPrompt(String(state.lastPromptLine || ""), raw);
+  const selectedTime = String(offeredTime || raw).trim();
+  const priorExactTime = String((state as any).lastExactTimeText || state.selectedTimeText || "").trim();
+  const callbackObjective = `The only objective is scheduling ${agentFirst}'s callback after the failed transfer.`;
+  const baseState = {
+    phase: "in_call",
+    coverageSubject: "rebooking_callback",
+    pendingLiveTransferAvailabilityConfirm: false,
+    pendingLiveTransferAvailabilityAttempts: 0,
+    liveTransferIntroSpoken: false,
+    pendingLiveTransferAfterLine: false,
+  };
+
+  function decision(
+    routeKind: string,
+    lineToSay: string,
+    stateWrites: Record<string, unknown> = {},
+    shouldAdvanceStep = false
+  ): PolicyDecision {
+    try {
+      console.log("[AI-VOICE][REBOOKING-ROUTE]", {
+        callSid: state.callSid,
+        routeKind,
+        intent: intent.kind,
+        subKind: intent.subKind || null,
+        selectedDay: (stateWrites as any).selectedDay || state.selectedDay || null,
+        selectedWindow: (stateWrites as any).selectedWindow || state.selectedWindow || null,
+        selectedTimeText: (stateWrites as any).selectedTimeText ? "[set]" : state.selectedTimeText ? "[set]" : null,
+      });
+    } catch {}
+    return {
+      handled: true,
+      routeKind,
+      responseMode: "exact_script",
+      objective: "rebooking_callback",
+      lineToSay,
+      requiredClosingPivot: lineToSay,
+      forbiddenTopics: [],
+      stateWrites: {
+        ...baseState,
+        ...stateWrites,
+      },
+      shouldAdvanceStep,
+    };
+  }
+
+  if (intent.kind === "hearing_problem") {
+    const repeatLine = String(state.lastPromptLine || "").trim();
+    return decision(
+      "rebooking_hearing_retry",
+      repeatLine || `Sorry about that — I was just trying to schedule a callback with ${agentFirst}. Would later today or tomorrow work better?`,
+      {
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 2,
+        scriptStepIndex: 2,
+      }
+    );
+  }
+
+  if (priorExactTime && isAffirmativeConfirmation(raw)) {
+    const lineToSay = `Perfect — I'll get ${agentFirst}'s callback set for ${priorExactTime}.`;
+    return decision(
+      "rebooking_exact_time_confirmed",
+      lineToSay,
+      {
+        selectedTimeText: priorExactTime,
+        lastExactTimeText: priorExactTime,
+        lastExactTimeAtMs: (state as any).lastExactTimeAtMs || Date.now(),
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+        scriptStepIndex: 3,
+      },
+      true
+    );
+  }
+
+  if (intent.kind === "exact_time" || offeredTime) {
+    const selectedDay = dayHint || rememberedDay;
+    if (!selectedDay) {
+      return decision(
+        "rebooking_exact_time_needs_day",
+        "Got it — was that for later today or tomorrow?",
+        {
+          pendingRebookingExactTimeText: selectedTime,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: 2,
+          scriptStepIndex: 2,
+        }
+      );
+    }
+    const lineToSay = `Perfect — I have ${selectedTime} for ${agentFirst}'s callback. Does that still work for you?`;
+    return decision(
+      "rebooking_exact_time",
+      lineToSay,
+      {
+        selectedDay,
+        selectedTimeText: selectedTime,
+        lastExactTimeText: selectedTime,
+        lastExactTimeAtMs: Date.now(),
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 3,
+        scriptStepIndex: 3,
+      }
+    );
+  }
+
+  if (intent.kind === "time_window" || windowHint) {
+    const selectedDay = dayHint || rememberedDay || "tomorrow";
+    const lineToSay = getTimeOfferLine(ctx, 0, selectedDay, windowHint || "afternoon", raw);
+    return decision(
+      "rebooking_time_window",
+      lineToSay,
+      {
+        selectedDay,
+        ...(windowHint ? { selectedWindow: windowHint } : {}),
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 2,
+        scriptStepIndex: 2,
+        timeOfferCountForStepIndex: 2,
+        timeOfferCount: 1,
+      }
+    );
+  }
+
+  if (intent.kind === "day_selection" || intent.kind === "live_transfer_later" || intent.kind === "scheduling_preference") {
+    if (dayHint) {
+      return decision(
+        "rebooking_day_selected",
+        "Got it — would morning, afternoon, or evening work better?",
+        {
+          selectedDay: dayHint,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: 2,
+          scriptStepIndex: 2,
+        }
+      );
+    }
+    return decision(
+      "rebooking_day_needed",
+      `No problem — should ${agentFirst} try you later today or tomorrow?`,
+      {
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 2,
+        scriptStepIndex: 2,
+      }
+    );
+  }
+
+  if (intent.kind === "live_transfer_now") {
+    return decision(
+      "rebooking_now_requested",
+      `${agentFirst} missed the live connection, so I'll set a callback instead. Would later today or tomorrow work better?`,
+      {
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 2,
+        scriptStepIndex: 2,
+      }
+    );
+  }
+
+  if (intent.kind === "greeting_ack") {
+    return decision(
+      "rebooking_greeting_ack",
+      `Great — ${agentFirst} missed the live connection, so I can set a callback. Would later today or tomorrow work better?`,
+      {
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 2,
+        scriptStepIndex: 2,
+      }
+    );
+  }
+
+  if (intent.kind === "not_interested" || intent.kind === "angry_or_profane") {
+    return decision(
+      "rebooking_soft_stop",
+      "I understand — sorry for the trouble. I'll make a note and let them know. Take care.",
+      {
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+        scriptStepIndex: 2,
+      }
+    );
+  }
+
+  const fallbackLine = t.includes("tomorrow") || t.includes("today")
+    ? "Got it — would morning, afternoon, or evening work better?"
+    : `I hear you. ${callbackObjective} Would later today or tomorrow work better?`;
+  return decision(
+    "rebooking_fallback",
+    fallbackLine,
+    {
+      ...(dayHint ? { selectedDay: dayHint } : {}),
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 2,
+      scriptStepIndex: 2,
+    }
+  );
+}
+
+function buildGreetingFirstTurnDecision(
+  state: CallState,
+  intent: TurnIntent,
+  ctx: AICallContext,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType }
+): PolicyDecision | null {
+  if (state.phase !== "awaiting_greeting_reply") return null;
+  if ((state as any).rebookingMode) return null;
+
+  const raw = String(intent.raw || "").trim();
+  const t = normalizeTurnTextForKey(raw);
+  const step1Line = (
+    stepCtx.steps[0] ||
+    (state.scriptSteps || [])[0] ||
+    getBookingFallbackLine(ctx)
+  ).trim();
+  if (!step1Line) return null;
+
+  const hardOptOut =
+    intent.kind === "angry_or_profane" ||
+    t.includes("stop calling") ||
+    t.includes("do not call") ||
+    t.includes("don t call") ||
+    t.includes("don't call") ||
+    t.includes("never call") ||
+    t.includes("remove me") ||
+    t.includes("take me off your list") ||
+    t.includes("wrong number") ||
+    t.includes("you have the wrong number");
+  if (hardOptOut) return null;
+
+  const hearingProblem =
+    t === "no" ||
+    t === "nope" ||
+    t === "not really" ||
+    t.includes("not really") ||
+    t.includes("barely hear") ||
+    t.includes("can barely hear") ||
+    t.includes("sorry what") ||
+    t.includes("what did you say") ||
+    t.includes("say that again") ||
+    t.includes("repeat that") ||
+    t.includes("cutting out") ||
+    t.includes("breaking up") ||
+    t.includes("can't hear") ||
+    t.includes("cant hear") ||
+    t.includes("cannot hear");
+
+  const identityQuestion =
+    t.includes("who is this") ||
+    t.includes("who are you") ||
+    t.includes("who s kayla") ||
+    t.includes("whos kayla") ||
+    t.includes("who is kayla") ||
+    t.includes("why are you calling") ||
+    t.includes("what is this about") ||
+    t.includes("how did you get my number") ||
+    t.includes("how did you get this number") ||
+    t.includes("didn t request") ||
+    t.includes("didn't request") ||
+    t.includes("i did not request") ||
+    t.includes("is this spam") ||
+    t.includes("is this a scam") ||
+    t.includes("spam");
+
+  const aiName = (ctx.voiceProfile?.aiName || "Kayla").trim() || "Kayla";
+  const agentFirst = getAgentFirstName(ctx);
+  let lineToSay = step1Line;
+  let routeKind = "greeting_ack";
+
+  if (hearingProblem) {
+    routeKind = "greeting_hearing_recover";
+    lineToSay = `Sorry about that — ${step1Line}`;
+  } else if (intent.kind === "not_interested") {
+    routeKind = "greeting_not_interested_soft_rebuttal";
+    lineToSay = `I hear you — most people say that before they realize what the request was for. ${step1Line}`;
+  } else if (identityQuestion) {
+    routeKind = "greeting_identity_recover";
+    if (
+      t.includes("how did you get") ||
+      t.includes("didn t request") ||
+      t.includes("didn't request") ||
+      t.includes("i did not request")
+    ) {
+      lineToSay = `It looks like the request came through recently, possibly from an online form. ${step1Line}`;
+    } else if (t.includes("spam") || t.includes("scam")) {
+      lineToSay = `No, this is just a quick follow-up about the request that came through for ${agentFirst}. ${step1Line}`;
+    } else {
+      lineToSay = `${aiName} is the virtual assistant helping ${agentFirst} with the request that came through. ${step1Line}`;
+    }
+  }
+
+  try {
+    console.log("[AI-VOICE][GREETING-ROUTE]", {
+      callSid: state.callSid,
+      routeKind,
+      intent: intent.kind,
+      subKind: intent.subKind || null,
+      textHash: hash8(raw),
+    });
+  } catch {}
+
+  return {
+    handled: true,
+    routeKind,
+    responseMode: "exact_script",
+    objective: "advance_to_step_1_after_greeting",
+    lineToSay,
+    requiredClosingPivot: step1Line,
+    forbiddenTopics: [],
+    stateWrites: {
+      phase: "in_call",
+      greetingAdvancePending: false,
+      greetingAdvanceNextIndex: undefined,
+      greetingAdvanceNextPhase: undefined,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      scriptStepIndex: 0,
+    },
+    shouldAdvanceStep: false,
+  };
 }
 
 
@@ -5082,6 +5426,12 @@ function buildConversationPolicyDecision(
   function ucFirst(s: string): string {
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
   }
+
+  const rebookingDecision = buildRebookingPolicyDecision(state, intent, ctx, stepCtx);
+  if (rebookingDecision?.handled) return rebookingDecision;
+
+  const greetingFirstTurnDecision = buildGreetingFirstTurnDecision(state, intent, ctx, stepCtx);
+  if (greetingFirstTurnDecision?.handled) return greetingFirstTurnDecision;
 
   // ── Branch: greeting ack (only during awaiting_greeting_reply phase) ──────
   // "yep", "yeah", "what's up", etc. → advance to first script step, never reprompt.
