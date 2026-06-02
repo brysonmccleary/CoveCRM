@@ -39,6 +39,53 @@ function getTimezoneFromState(stateRaw: string | undefined): string | null {
   return null;
 }
 
+function flattenLeadFieldsForDisplay(lead: any) {
+  const merged: Record<string, any> = {};
+  const merge = (source: any) => {
+    if (!source || typeof source !== "object" || Array.isArray(source)) return;
+    for (const [key, value] of Object.entries(source)) {
+      if (merged[key] === undefined) merged[key] = value;
+    }
+  };
+  merge(lead);
+  merge(lead?.customFields);
+  merge(lead?.fields);
+  merge(lead?.data);
+  merge(lead?.sheet);
+  merge(lead?.payload);
+  merge(lead?.rawRow);
+  return merged;
+}
+
+function cleanNamePart(value: any) {
+  return typeof value === "string" ? value.trim() : value ? String(value).trim() : "";
+}
+
+function resolveLeadNameParts(lead: any) {
+  const fields = flattenLeadFieldsForDisplay(lead);
+  const fromCamel = [cleanNamePart(fields.firstName), cleanNamePart(fields.lastName)]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  const fromTitle = [cleanNamePart(fields["First Name"]), cleanNamePart(fields["Last Name"])]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  const fullName =
+    fromCamel ||
+    fromTitle ||
+    cleanNamePart(fields.name) ||
+    cleanNamePart(fields.Name) ||
+    cleanNamePart(fields.fullName) ||
+    cleanNamePart(fields["Full Name"]);
+
+  const parts = fullName.split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || "there",
+    lastName: parts.slice(1).join(" ") || cleanNamePart(fields.surname),
+  };
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<OkResponse | ErrorResponse>
@@ -189,27 +236,9 @@ export default async function handler(
         }
       : voiceProfile;
 
-    // Derive a clean first name (prefer explicit first-name fields)
-    const rawFirstName: string =
-      leadAny.firstName ||
-      leadAny["First Name"] ||
-      leadAny.name ||
-      leadAny.fullName ||
-      "";
-
-    const clientFirstName =
-      rawFirstName && typeof rawFirstName === "string"
-        ? rawFirstName.trim().split(" ")[0] || "there"
-        : "there";
-
-    const clientLastName: string =
-      leadAny.lastName ||
-      leadAny["Last Name"] ||
-      (typeof leadAny.name === "string"
-        ? leadAny.name.trim().split(" ").slice(1).join(" ")
-        : "") ||
-      leadAny.surname ||
-      "";
+    const resolvedLeadName = resolveLeadNameParts(leadAny);
+    const clientFirstName = resolvedLeadName.firstName;
+    const clientLastName = resolvedLeadName.lastName;
 
     const clientState =
       leadAny.state || leadAny.st || leadAny.province || undefined;
