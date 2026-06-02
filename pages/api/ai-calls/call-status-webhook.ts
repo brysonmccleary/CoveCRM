@@ -806,6 +806,23 @@ export default async function handler(
 
           const hasMoreLeads = leadCount > 0 && lastIndex < leadCount - 1;
 
+          if (isTerminal) {
+            try {
+              const freshForClear = await AICallRecording.findOne({ callSid: CallSid }).lean();
+              if ((freshForClear as any)?.transferRebootPending) {
+                await AICallRecording.updateOne(
+                  { callSid: CallSid },
+                  { $unset: { transferRebootPending: 1 }, $set: { updatedAt: new Date() } }
+                ).exec();
+                console.log("[AI Dialer] Cleared transferRebootPending on terminal reboot call end", {
+                  callSid: CallSid,
+                });
+              }
+            } catch (e) {
+              console.warn("[AI Dialer] Failed to clear transferRebootPending (non-blocking)", e);
+            }
+          }
+
           // Re-fetch recording to get latest transferRebootPending state
           // agent-amd-callback may have written this flag after our initial load
           let isTransferRebootFresh = false;

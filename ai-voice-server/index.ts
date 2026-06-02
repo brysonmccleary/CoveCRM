@@ -5983,10 +5983,13 @@ async function handleConversationTurn(
   }
   const instr = buildResponseFromPolicy(decision, state, stepCtx);
 
+  // Apply policy decision stateWrites FIRST before repeat guard can interfere
   for (const [k, v] of Object.entries(decision.stateWrites)) {
     (state as any)[k] = v;
   }
+  // Apply repeat guard stateWrites but never let them clear coverageSubject or pendingLiveTransferAvailabilityConfirm
   for (const [k, v] of Object.entries(repeatGuardStateWrites)) {
+    if (k === "coverageSubject" || k === "pendingLiveTransferAvailabilityConfirm") continue;
     (state as any)[k] = v;
   }
 
