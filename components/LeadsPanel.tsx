@@ -781,19 +781,40 @@ const goToAIDialSession = () => {
     return undefined;
   };
 
+  const flattenLeadFieldsForDisplay = (lead: any) => {
+    const merged: Record<string, any> = {};
+    const merge = (source: any) => {
+      if (!source || typeof source !== "object" || Array.isArray(source)) return;
+      for (const [key, value] of Object.entries(source)) {
+        if (merged[key] === undefined) merged[key] = value;
+      }
+    };
+    merge(lead);
+    merge(lead?.customFields);
+    merge(lead?.fields);
+    merge(lead?.data);
+    merge(lead?.sheet);
+    merge(lead?.payload);
+    merge(lead?.rawRow);
+    return merged;
+  };
+
   const getLeadDisplayName = (lead: any) => {
+    const fields = flattenLeadFieldsForDisplay(lead);
     const clean = (value: any) => (typeof value === "string" ? value.trim() : value ? String(value).trim() : "");
-    const fromCamel = [clean(lead?.firstName), clean(lead?.lastName)].filter(Boolean).join(" ").trim();
+    const fromCamel = [clean(fields.firstName), clean(fields.lastName)].filter(Boolean).join(" ").trim();
     if (fromCamel) return fromCamel;
-    const fromTitle = [clean(lead?.["First Name"]), clean(lead?.["Last Name"])].filter(Boolean).join(" ").trim();
+    const fromTitle = [clean(fields["First Name"]), clean(fields["Last Name"])].filter(Boolean).join(" ").trim();
     if (fromTitle) return fromTitle;
     return (
-      clean(lead?.name) ||
-      clean(lead?.Name) ||
-      clean(lead?.fullName) ||
-      clean(lead?.["Full Name"]) ||
-      clean(lead?.email) ||
-      clean(lead?.phone) ||
+      clean(fields.name) ||
+      clean(fields.Name) ||
+      clean(fields.fullName) ||
+      clean(fields["Full Name"]) ||
+      clean(fields.email) ||
+      clean(fields.Email) ||
+      clean(fields.phone) ||
+      clean(fields.Phone) ||
       "Unknown Lead"
     );
   };
