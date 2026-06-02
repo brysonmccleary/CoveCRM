@@ -9,6 +9,7 @@ import AICallRecording from "@/models/AICallRecording";
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
+const AI_VOICE_WSS_URL = process.env.AI_VOICE_WSS_URL || process.env.AI_VOICE_STREAM_URL || "";
 const amdRebootedLeadCalls = new Map<string, number>();
 const AMD_REBOOTED_TTL_MS = 5 * 60 * 1000;
 
@@ -79,22 +80,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const isRebootPending = !!(recording as any)?.transferRebootPending;
 
     if (isRebootPending) {
-      const rebootUrl = new URL("/api/ai-calls/transfer-reboot-twiml", COVECRM_BASE_URL);
-      rebootUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
-      rebootUrl.searchParams.set("leadId", leadId);
-      rebootUrl.searchParams.set("leadName", leadName);
-      rebootUrl.searchParams.set("agentName", agentName);
-      rebootUrl.searchParams.set("userEmail", userEmail);
-      rebootUrl.searchParams.set("sessionId", sessionId);
-      rebootUrl.searchParams.set("callSid", leadCallSid || callSid);
-      rebootUrl.searchParams.set("agentTimeZone", agentTimeZone || "America/New_York");
-      console.log("[TRANSFER-FALLBACK] transferRebootPending in DB — redirecting to reboot", {
+      const wsUrl = AI_VOICE_WSS_URL;
+      if (!wsUrl) {
+        console.error("[TRANSFER-FALLBACK] AI_VOICE_WSS_URL not configured — hanging up");
+        res.setHeader("Content-Type", "text/xml");
+        return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
+      }
+      console.log("[TRANSFER-FALLBACK] transferRebootPending in DB — returning Connect/Stream for reboot", {
         leadCallSid: leadCallSid || callSid,
       });
       res.setHeader("Content-Type", "text/xml");
       return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Redirect method="POST">${xmlEscape(rebootUrl.toString())}</Redirect>
+  <Connect>
+    <Stream url="${xmlEscape(wsUrl)}">
+      <Parameter name="sessionId" value="${xmlEscape(sessionId)}"/>
+      <Parameter name="leadId" value="${xmlEscape(leadId)}"/>
+      <Parameter name="rebookingMode" value="true"/>
+      <Parameter name="leadName" value="${xmlEscape(leadName)}"/>
+      <Parameter name="agentName" value="${xmlEscape(agentName)}"/>
+      <Parameter name="userEmail" value="${xmlEscape(userEmail)}"/>
+      <Parameter name="callSid" value="${xmlEscape(leadCallSid || callSid)}"/>
+      <Parameter name="agentTimeZone" value="${xmlEscape(agentTimeZone || "America/New_York")}"/>
+      <Parameter name="callDirection" value="outbound"/>
+    </Stream>
+  </Connect>
 </Response>`);
     }
   } catch (dbErr) {
