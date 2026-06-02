@@ -139,7 +139,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       statusCallback: amdCallbackUrl.toString(),
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      timeout: 20,
+      timeout: 15,
     };
 
     await client.calls.create(agentCallOptions);
@@ -170,7 +170,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 <Response>
   <Say voice="Polly.Joanna-Neural">Please hold for just a moment while I connect you.</Say>
   <Dial action="${xmlEscape(fallbackUrl.toString())}" method="POST">
-    <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical"
+    <Conference waitUrl=""
                 waitMethod="GET"
                 beep="false"
                 startConferenceOnEnter="false"
