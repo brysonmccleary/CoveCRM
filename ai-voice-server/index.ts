@@ -2993,9 +2993,21 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
 function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
   const t = normalizeTurnTextForKey(textRaw);
   if (!t) return false;
-  if (["me", "myself", "my self", "just me", "for me", "spouse", "both", "both of us", "my partner", "the two of us", "us both"].includes(t)) return true;
+  if ([
+    "me", "myself", "my self", "just me", "for me",
+    "spouse", "both", "both of us", "the two of us", "us both",
+    "partner", "my partner",
+    "girlfriend", "my girlfriend",
+    "boyfriend", "my boyfriend",
+    "fiance", "my fiance", "fiancee", "my fiancee",
+    "significant other", "my significant other",
+    "family", "my family", "family member", "my family member",
+    "son", "my son", "daughter", "my daughter",
+    "child", "my child", "children", "my children", "kids", "my kids",
+    "parent", "my parent", "mom", "my mom", "dad", "my dad",
+  ].includes(t)) return true;
   return (
-    /\b(myself|my self|just me|for me|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner)\b/.test(t)
+    /\b(myself|my self|just me|for me|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner|girlfriend|my girlfriend|boyfriend|my boyfriend|fianc[eé]+|my fianc[eé]+|significant other|my significant other|family member|my family member|my kids|my children|my son|my daughter|my parent|my mom|my dad|my child)\b/.test(t)
   );
 }
 
@@ -4116,10 +4128,20 @@ function detectObjection(textRaw: string): string | null {
 
   // Very lightweight; only triggers if we actually have a transcript.
   // We NEVER follow them into other verticals; we keep booking-only language.
-
-  // We NEVER follow them into other verticals; we keep booking-only language.
   if (
     t.includes("not interested") ||
+    t.includes("i'm not interested") ||
+    t.includes("i m not interested") ||
+    t.includes("im not interested") ||
+    t.includes("i am not interested") ||
+    t.includes("don't think i'm interested") ||
+    t.includes("don t think i m interested") ||
+    t.includes("dont think im interested") ||
+    t.includes("don't think i am interested") ||
+    t.includes("i don't think i'm interested") ||
+    t.includes("i don t think i m interested") ||
+    t.includes("i dont think im interested") ||
+    t.includes("not really interested") ||
     t.includes("stop calling") ||
     t.includes("remove") ||
     t.includes("do not call") ||
@@ -4132,7 +4154,6 @@ function detectObjection(textRaw: string): string | null {
     t === "im all good" ||
     t === "i m fine" ||
     t === "im fine" ||
-    t === "not interested" ||
     t.startsWith("nah ") ||
     t.startsWith("not really") ||
     (t.includes("good") && t.includes("i m") && t.length < 20) ||
@@ -6318,8 +6339,8 @@ async function handleConversationTurn(
   const intent = classifyTurnIntent(text, state, stepCtx);
   const decision = buildConversationPolicyDecision(intent, state, stepCtx);
   // CURRENT STEP INVARIANT:
-  // If Step 1 is unanswered, no decision is allowed to advance past it.
-  // Objections, confusion, questions — all must return to Step 1.
+  // If Step 1 is unanswered, only blind script-advance is blocked.
+  // Objections and questions bypass this guard and are handled by the normal policy router.
   const step1Sacred =
     state.awaitingUserAnswer === true &&
     typeof state.awaitingAnswerForStepIndex === "number" &&
@@ -6327,12 +6348,17 @@ async function handleConversationTurn(
     !(state as any).coverageSubject &&
     state.phase === "in_call";
 
-  if (step1Sacred && decision.handled && decision.shouldAdvanceStep) {
-    // The decision tried to advance past unanswered Step 1 — block it
+  const STEP1_SACRED_BYPASS = new Set([
+    "not_interested", "already_have", "busy", "objection",
+    "question", "confusion", "angry_or_profane", "hearing_problem", "scam",
+  ]);
+
+  if (step1Sacred && decision.handled && decision.shouldAdvanceStep && !STEP1_SACRED_BYPASS.has(intent.kind)) {
+    // The decision tried to advance past unanswered Step 1 — block it and re-ask
     const requiredStep1Line = (state.scriptSteps || [])[0] || stepCtx.steps[0] || "";
     if (requiredStep1Line.trim()) {
       decision.shouldAdvanceStep = false;
-      decision.lineToSay = decision.lineToSay;
+      decision.lineToSay = requiredStep1Line;
       decision.requiredClosingPivot = requiredStep1Line;
       decision.stateWrites = {
         ...decision.stateWrites,
