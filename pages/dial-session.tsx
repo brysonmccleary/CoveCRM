@@ -402,6 +402,16 @@ export default function DialSession() {
     const statusLabel = String(callOutcomeRef.current?.status || "").toLowerCase();
     return hasConnectedRef.current || statusLabel === "connected" || statusLabel === "completed";
   };
+  const isQuietHoursError = (err: any) => {
+    if (err?.quietHours === true) return true;
+    const text = [
+      err?.message,
+      err?.error,
+      err?.reason,
+      err?.code,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return /quiet[-\s]?hours|after[-\s]?hours|outside.*(?:legal\s+calling\s+)?hours|outside.*8\s*am.*9\s*pm|legal\s+calling/.test(text);
+  };
 
   useEffect(() => {
     return () => {
@@ -1015,8 +1025,18 @@ export default function DialSession() {
     });
     if (!r.ok) {
       let msg = `Failed to start call`;
-      try { const j = await r.json(); if (j?.message) msg = j.message; } catch {}
-      throw new Error(msg);
+      let payload: any = {};
+      try {
+        payload = await r.json();
+        if (payload?.message || payload?.error) msg = payload.message || payload.error;
+      } catch {}
+      const err: any = new Error(msg);
+      err.status = r.status;
+      err.code = payload?.code;
+      err.reason = payload?.reason || payload?.error;
+      err.zone = payload?.zone || null;
+      err.quietHours = r.status === 409 && isQuietHoursError(err);
+      throw err;
     }
     const j = (await r.json()) as { success?: boolean; callSid?: string; conferenceName?: string };
     if (!j?.success || !j?.callSid || !j?.conferenceName) throw new Error("Call start did not return callSid + conferenceName");
@@ -1245,6 +1265,21 @@ export default function DialSession() {
       console.error(err);
       placingCallRef.current = false;
       activeDialLeadIdRef.current = null;
+      if (isQuietHoursError(err)) {
+        const zone = err?.zone || isCallAllowedForLead(leadToCall).zone;
+        stopRingbackNow();
+        killAllTimers();
+        await leaveIfJoined("quiet-hours-skip");
+        activeCallSidRef.current = null;
+        setCallActive(false);
+        setStatus(`Quiet hours (${localTimeString(zone)})`);
+        setHistory((prev) => [
+          { kind: "text", text: `⏭️ Skipped (quiet hours) • ${localTimeString(zone)}` },
+          ...prev,
+        ]);
+        if (!sessionEndedRef.current) scheduleNextLead();
+        return;
+      }
       setStatus(err?.message || "Call failed");
       stopRingbackNow();
       killAllTimers();

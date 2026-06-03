@@ -66,6 +66,50 @@ function pick(obj: any, keys: string[]): string {
   return "";
 }
 
+function normalizeFieldKey(key: string): string {
+  return String(key || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function parseObjectContainer(value: any): Record<string, any> | null {
+  if (!value) return null;
+  if (typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function pickNormalized(obj: any, normalizedKeys: string[]): string {
+  if (!obj || typeof obj !== "object") return "";
+  const wanted = new Set(normalizedKeys);
+  for (const key of Object.keys(obj)) {
+    if (!wanted.has(normalizeFieldKey(key))) continue;
+    const value = obj[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return String(value).trim();
+  }
+  return "";
+}
+
+function pickLeadField(lead: Record<string, any>, normalizedKeys: string[]): string {
+  const topLevel = pickNormalized(lead, normalizedKeys);
+  if (topLevel) return topLevel;
+
+  for (const containerKey of ["customFields", "fields", "data", "sheet", "payload", "rawRow"]) {
+    const container = parseObjectContainer(lead?.[containerKey]);
+    const value = pickNormalized(container, normalizedKeys);
+    if (value) return value;
+  }
+
+  return "";
+}
+
 export function normalizeState(val?: string): string | null {
   if (!val) return null;
   const s = String(val).trim().toUpperCase();
@@ -89,11 +133,11 @@ export function resolveLeadTimezone(lead: LeadLike): string | null {
   if (!lead) return null;
 
   // 1) Explicit tz fields
-  const explicit = pick(lead, ["timezone","timeZone","tz","ianaTimezone","IanaTimezone","IANA_TZ"]);
+  const explicit = pickLeadField(lead, ["timezone", "tz", "ianatimezone", "ianatz"]);
   if (explicit) return explicit;
 
   // 2) State (abbr or full)
-  const stateRaw = pick(lead, ["state","State","STATE","st","St","ST"]);
+  const stateRaw = pickLeadField(lead, ["state", "st", "province", "leadstate", "statecode"]);
   const abbr = normalizeState(stateRaw);
   if (abbr && STATE_TZ[abbr]) return STATE_TZ[abbr];
 
