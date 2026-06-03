@@ -357,6 +357,9 @@ export default function LeadProfileDial() {
   const [removeCampaignId, setRemoveCampaignId] = useState<string>("");
   const [removing, setRemoving] = useState(false);
 
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deletingLead, setDeletingLead] = useState(false);
+
   // ✅ Live edit state
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState<string>("");
@@ -613,6 +616,25 @@ export default function LeadProfileDial() {
       toast.success("✅ Note saved!");
     } catch (e: any) {
       toast.error(e?.message || "Failed to save note");
+    }
+  };
+
+  const handleDeleteLead = async () => {
+    if (!lead?.id) return;
+    try {
+      setDeletingLead(true);
+      const r = await fetch('/api/leads/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id }),
+      });
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok) throw new Error(j?.message || 'Failed to delete lead');
+      toast.success('Lead deleted');
+      window.location.href = LEADS_URL;
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete lead');
+      setDeletingLead(false);
     }
   };
 
@@ -1458,7 +1480,7 @@ export default function LeadProfileDial() {
             )}
           </div>
 
-          <div className="mt-4">
+          <div className="mt-4 flex items-center gap-2">
             <button
               onClick={() => {
                 try {
@@ -1470,6 +1492,10 @@ export default function LeadProfileDial() {
               className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
             >
               Back to Leads
+            </button>
+            <button type="button" onClick={() => setDeleteConfirmOpen(true)} disabled={!lead?.id}
+              className="bg-gray-800 hover:bg-gray-700 border border-red-500/40 text-red-400 hover:text-red-300 px-4 py-2 rounded disabled:opacity-50">
+              Delete Lead
             </button>
           </div>
         </div>
@@ -1590,6 +1616,27 @@ export default function LeadProfileDial() {
                 className="px-4 py-2 rounded bg-green-600 hover:bg-green-700 disabled:opacity-50"
               >
                 {enrolling ? "Enrolling…" : "Enroll"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Delete Confirm Modal */}
+      {deleteConfirmOpen ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={deletingLead ? undefined : () => setDeleteConfirmOpen(false)} />
+          <div className="relative w-full max-w-sm mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
+            <h3 className="text-lg font-bold mb-2">Delete Lead?</h3>
+            <p className="text-sm text-gray-300 mb-4">
+              <strong>{leadName}</strong> will be permanently removed. This cannot be undone.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={() => setDeleteConfirmOpen(false)} disabled={deletingLead}
+                className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50">Cancel</button>
+              <button onClick={handleDeleteLead} disabled={deletingLead}
+                className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 disabled:opacity-50">
+                {deletingLead ? 'Deleting…' : 'Delete'}
               </button>
             </div>
           </div>
