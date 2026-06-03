@@ -219,6 +219,7 @@ export default function DialSession() {
   const [readyToCall, setReadyToCall] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [callActive, setCallActive] = useState(false);
+  const [callEnded, setCallEnded] = useState(false);
   const [muted, setMuted] = useState(false);
   const [connectedDurationSec, setConnectedDurationSec] = useState(0);
   const [sessionStarted, setSessionStarted] = useState(false);
@@ -526,6 +527,7 @@ export default function DialSession() {
     placingCallRef.current = false;
     activeDialLeadIdRef.current = null;
     setCallActive(false);
+    setCallEnded(true);
     await logCallOutcome({ statusOverride: opts.status, reason: opts.reason });
 
     scheduleAdvance();
@@ -1189,6 +1191,7 @@ export default function DialSession() {
       hasConnectedRef.current = false;
       callOutcomeRef.current = null;
       callLoggedRef.current = false;
+      setCallEnded(false);
       leadAttemptCountsRef.current[leadId] = attemptsSoFar + 1;
 
       setStatus("Dialing…");
@@ -1468,6 +1471,18 @@ export default function DialSession() {
     if ((currentLead as any)?.quickDial) return;
     if (callActive || placingCallRef.current || sessionEndedRef.current) return;
 
+    // Cancel any pending auto-advance so it doesn't race with manual redial
+    clearAdvanceTimers();
+    advanceScheduledRef.current = false;
+    terminalHandledRef.current = false;
+
+    // Reset attempt count for this lead so the 2-attempt cap doesn't block redial
+    const leadId = getLeadId(currentLead);
+    if (leadId) {
+      leadAttemptCountsRef.current[leadId] = 0;
+    }
+
+    setCallEnded(false);
     if (isPaused) setIsPaused(false);
     await callLead(currentLead);
   };
@@ -1775,7 +1790,6 @@ export default function DialSession() {
     !lead ||
     !!(lead as any)?.quickDial ||
     callActive ||
-    placingCallRef.current ||
     sessionEndedRef.current;
   const showConnectedTimer =
     callActive &&
@@ -1910,11 +1924,15 @@ export default function DialSession() {
             <button
               onClick={handleRedialLead}
               disabled={redialLeadDisabled}
-              className={`px-3 py-2 rounded ${
-                redialLeadDisabled ? "bg-gray-600 cursor-not-allowed opacity-60" : "bg-emerald-600 hover:bg-emerald-700"
-              }`}
+              className={`px-3 py-2 rounded font-semibold transition-all ${
+                redialLeadDisabled
+                  ? "bg-gray-600 cursor-not-allowed opacity-60"
+                  : callEnded
+                  ? "bg-emerald-500 hover:bg-emerald-600 ring-2 ring-emerald-300 animate-pulse"
+                  : "bg-emerald-600 hover:bg-emerald-700"
+                }`}
             >
-              Redial Lead
+              {callEnded ? "📞 Call Again" : "Redial Lead"}
             </button>
           </div>
         </div>
