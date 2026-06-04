@@ -1468,7 +1468,6 @@ export default function DialSession() {
   const handleRedialLead = async () => {
     const currentLead = lead;
     if (!currentLead) return;
-    if ((currentLead as any)?.quickDial) return;
     if (callActive || placingCallRef.current || sessionEndedRef.current) return;
 
     // Cancel any pending auto-advance so it doesn't race with manual redial
@@ -1788,7 +1787,6 @@ export default function DialSession() {
     : [];
   const redialLeadDisabled =
     !lead ||
-    !!(lead as any)?.quickDial ||
     callActive ||
     sessionEndedRef.current;
   const showConnectedTimer =
