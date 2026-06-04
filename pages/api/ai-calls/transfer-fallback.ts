@@ -5,6 +5,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { sendEmail } from "@/lib/email";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
+import Lead from "@/models/Lead";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
@@ -56,6 +57,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const agentName     = Array.isArray(q.agentName)     ? q.agentName[0]     : String(q.agentName     || "");
   const leadName      = Array.isArray(q.leadName)      ? q.leadName[0]      : String(q.leadName      || "");
   const amdRebooted = String(q.amdRebooted || body?.amdRebooted || "").toLowerCase() === "true";
+  const coverageSubject = Array.isArray(q.coverageSubject) ? q.coverageSubject[0] : String(q.coverageSubject || "");
+  const selectedDay     = Array.isArray(q.selectedDay)     ? q.selectedDay[0]     : String(q.selectedDay     || "");
 
   if (!key || key !== AI_DIALER_CRON_KEY) {
     return res.status(401).send("Unauthorized");
@@ -127,24 +130,72 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       try {
         const agentEmailTo = String(req.query.userEmail || req.body?.userEmail || "");
         if (agentEmailTo) {
-          const leadFields: [string, string][] = [
-            ["Lead Name", String(req.query.leadName || "")],
-            ["Phone", String(req.body?.Called || req.body?.From || "")],
-            ["Agent", String(req.query.agentName || "")],
-            ["Scope", String(req.query.scope || "")],
-            ["Lead ID", String(req.query.leadId || "")],
-            ["Transfer Time", new Date().toLocaleString("en-US", { timeZone: String(req.query.agentTimeZone || "America/New_York") })],
-          ];
-          const rows = leadFields
-            .filter(([, v]) => v)
-            .map(([k, v]) => `<tr><td style="padding:6px 12px;border-bottom:1px solid #eee;font-weight:600;color:#555;width:160px">${k}</td><td style="padding:6px 12px;border-bottom:1px solid #eee;color:#222">${v}</td></tr>`)
-            .join("");
+          // Enrich with DB lead data
+          let dbLead: any = null;
+          try {
+            if (leadId) dbLead = await Lead.findById(leadId).lean();
+          } catch { /* non-blocking */ }
+
+          const rawRow = dbLead?.rawRow || {};
+          const getAddr = (keys: string[]) => { for (const k of keys) { const v = rawRow[k]; if (v && String(v).trim()) return String(v).trim(); } return ""; };
+          const address = getAddr(["Address", "address", "Street", "street"]);
+          const city    = getAddr(["City", "city"]);
+          const zip     = getAddr(["Zip", "zip", "ZipCode", "zipcode"]);
+          const addrLine = [address, city, zip].filter(Boolean).join(", ");
+
+          const dbLeadType = String(dbLead?.leadType || req.query.scope || "").trim();
+          const dbState    = String(dbLead?.State || "").trim();
+          const dbAge      = String(dbLead?.Age || "").trim();
+          const dbEmail    = String(dbLead?.email || dbLead?.Email || "").trim();
+          const dbCoverage = String((dbLead as any)?.["Coverage Amount"] || "").trim();
+
+          const formatCoverageSubject = (raw: string, name: string): string => {
+            const t = raw.toLowerCase().trim();
+            if (!t) return "";
+            if (t === "just me" || t === "myself" || t === "just myself") return "Just themselves";
+            if (t === "me and my spouse" || t === "both" || t === "spouse" || t === "me and spouse") return `${name} and spouse`;
+            if (t.includes("girlfriend") || t.includes("partner") || t.includes("significant other")) return `${name} and partner`;
+            return raw;
+          };
+          const displayLeadName = String(req.query.leadName || "").trim();
+          const coverageFor = formatCoverageSubject(coverageSubject, displayLeadName);
+
+          const transferTime = new Date().toLocaleString("en-US", { timeZone: String(req.query.agentTimeZone || "America/New_York") });
+          const phone = String(req.body?.Called || req.body?.From || "").trim();
+
+          const row = (label: string, value: string) =>
+            value ? `<tr><td style="padding:6px 12px;border-bottom:1px solid #eee;font-weight:600;color:#555;width:160px">${label}</td><td style="padding:6px 12px;border-bottom:1px solid #eee;color:#222">${value}</td></tr>` : "";
+
           const html = `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
-        <h2 style="color:#1a1a1a">Live Transfer Connected ✅</h2>
-        <p style="color:#555">A lead was just live transferred to you. Here are their details:</p>
-        <table style="width:100%;border-collapse:collapse;background:#f9f9f9;border-radius:8px;overflow:hidden">${rows}</table>
-        <p style="color:#888;font-size:12px;margin-top:16px">Sent automatically by CoveCRM after a successful live transfer.</p>
-      </div>`;
+  <h2 style="color:#1a1a1a">Live Transfer Connected &#x2705;</h2>
+  <p style="color:#555">A lead was just live transferred to you. Here are their details:</p>
+
+  <p style="font-weight:700;color:#333;margin:16px 0 4px">LEAD INFO</p>
+  <table style="width:100%;border-collapse:collapse;background:#f9f9f9;border-radius:8px;overflow:hidden">
+    ${row("Name", displayLeadName)}
+    ${row("Phone", phone)}
+    ${row("Email", dbEmail)}
+    ${row("Address", addrLine)}
+    ${row("State", dbState)}
+    ${row("Age", dbAge)}
+  </table>
+
+  <p style="font-weight:700;color:#333;margin:16px 0 4px">COVERAGE REQUEST</p>
+  <table style="width:100%;border-collapse:collapse;background:#f9f9f9;border-radius:8px;overflow:hidden">
+    ${row("Lead Type", dbLeadType)}
+    ${row("Coverage Amount", dbCoverage)}
+    ${row("For", coverageFor)}
+  </table>
+
+  <p style="font-weight:700;color:#333;margin:16px 0 4px">APPOINTMENT</p>
+  <table style="width:100%;border-collapse:collapse;background:#f9f9f9;border-radius:8px;overflow:hidden">
+    ${row("Time", exactTimeText || selectedDay)}
+    ${row("Agent", String(req.query.agentName || ""))}
+    ${row("Transfer Time", transferTime)}
+  </table>
+
+  <p style="color:#888;font-size:12px;margin-top:16px">Sent automatically by CoveCRM after a successful live transfer.</p>
+</div>`;
           await sendEmail(agentEmailTo, "Live Transfer Connected — Lead Details", html);
         }
       } catch (e) {

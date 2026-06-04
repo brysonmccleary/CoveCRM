@@ -174,6 +174,14 @@ export default async function handler(
       didLogSkippedEmail = true;
     }
     const state = lead.state || lead.State || "";
+    const leadType = lead.leadType || "";
+    const age = String(lead.Age || lead.age || "").trim();
+    const coverageAmount = String((lead as any)["Coverage Amount"] || "").trim();
+    const rawRow = (lead as any).rawRow || {};
+    const getAddr = (keys: string[]) => { for (const k of keys) { const v = rawRow[k]; if (v && String(v).trim()) return String(v).trim(); } return ""; };
+    const addressField = getAddr(["Address", "address", "Street", "street"]);
+    const cityField    = getAddr(["City", "city"]);
+    const zipField     = getAddr(["Zip", "zip", "ZipCode", "zipcode"]);
 
     // Prefer client-provided header tz if present; else state→TZ; else ET
     const headerTz = (req.headers["x-app-tz"] as string) || "";
@@ -293,7 +301,6 @@ export default async function handler(
             [firstName, lastName].filter(Boolean).join(" ") || undefined,
           leadPhone,
           leadEmail,
-          // Ensure plain string type
           startISO: startAgent.toJSDate().toISOString(),
           endISO: endAgent.toJSDate().toISOString(),
           timezone: agentTz,
@@ -301,6 +308,13 @@ export default async function handler(
           description: desc,
           leadUrl,
           eventUrl,
+          leadType: leadType || undefined,
+          age: age || undefined,
+          coverageAmount: coverageAmount || undefined,
+          address: addressField || undefined,
+          city: cityField || undefined,
+          zip: zipField || undefined,
+          state: state || undefined,
         });
         await sendEmail(userEmail, "New booking scheduled", html);
       }

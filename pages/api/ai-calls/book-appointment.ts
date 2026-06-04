@@ -9,6 +9,7 @@ import { google } from "googleapis";
 import { Types } from "mongoose";
 import { DateTime } from "luxon";
 import { enforceBookingSettings as BookingEnforcer } from "@/lib/booking/enforceBookingSettings";
+import { sendAppointmentBookedEmail } from "@/lib/email";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
@@ -388,6 +389,43 @@ export default async function handler(
         "[AI-CALLS][BOOK-APPOINTMENT] Failed to attach booking to lead history (non-blocking):",
         (err as any)?.message || err
       );
+    }
+
+    // ─────────────────────── Agent booking notification email ───────────────────────
+    try {
+      const rawRow = (lead as any).rawRow || {};
+      const getAddr = (keys: string[]) => { for (const k of keys) { const v = rawRow[k]; if (v && String(v).trim()) return String(v).trim(); } return ""; };
+      const leadState    = String((lead as any).State || (lead as any).state || "").trim();
+      const leadAge      = String((lead as any).Age || "").trim();
+      const leadCovAmt   = String((lead as any)["Coverage Amount"] || "").trim();
+      const leadType     = String((lead as any).leadType || "").trim();
+      const addressField = getAddr(["Address", "address", "Street", "street"]);
+      const cityField    = getAddr(["City", "city"]);
+      const zipField     = getAddr(["Zip", "zip", "ZipCode", "zipcode"]);
+      const coverageSubjectFromNotes = String(notes || "").trim();
+      const COVECRM_BASE = process.env.COVECRM_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
+      const leadUrl = COVECRM_BASE ? `${COVECRM_BASE}/lead/${(lead as any)._id}` : undefined;
+      await sendAppointmentBookedEmail({
+        to: userEmail,
+        agentName,
+        leadName: displayLeadName,
+        phone: phoneRaw,
+        state: leadState || undefined,
+        timeISO: startUtcDate.toISOString(),
+        timezone: agentTz,
+        source: (source === "ai-dialer" || !source) ? "AI" : "Manual",
+        eventUrl: (eventData as any).htmlLink || undefined,
+        leadType: leadType || undefined,
+        coverageSubject: coverageSubjectFromNotes || undefined,
+        age: leadAge || undefined,
+        coverageAmount: leadCovAmt || undefined,
+        address: addressField || undefined,
+        city: cityField || undefined,
+        zip: zipField || undefined,
+        leadEmail: leadEmail || undefined,
+      });
+    } catch (e) {
+      console.warn("[AI-CALLS][BOOK-APPOINTMENT] Agent email failed (non-blocking):", (e as any)?.message || e);
     }
 
     // ─────────────────────── Timezone formatting for AI voice ───────────────────────

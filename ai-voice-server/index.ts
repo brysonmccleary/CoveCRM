@@ -8630,6 +8630,8 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     transferUrl.searchParams.set("agentTimeZone", agentTimeZone);
     transferUrl.searchParams.set("userEmail", ctx.userEmail || "");
     transferUrl.searchParams.set("leadPhone", ctx.clientPhone || "");
+    transferUrl.searchParams.set("coverageSubject", (state as any).coverageSubject || "");
+    transferUrl.searchParams.set("selectedDay", state.selectedDay || "");
 
     const twilioCallUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls/${state.callSid}.json`;
     const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");

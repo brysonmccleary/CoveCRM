@@ -270,6 +270,15 @@ export function renderAgentBookingEmail(opts: {
   description?: string;
   leadUrl?: string;
   eventUrl?: string;
+  // enrichment
+  leadType?: string;
+  coverageSubject?: string;
+  age?: string;
+  coverageAmount?: string;
+  address?: string;
+  city?: string;
+  zip?: string;
+  state?: string;
 }) {
   const {
     agentName,
@@ -283,26 +292,64 @@ export function renderAgentBookingEmail(opts: {
     description,
     leadUrl,
     eventUrl,
+    leadType,
+    coverageSubject,
+    age,
+    coverageAmount,
+    address,
+    city,
+    zip,
+    state,
   } = opts;
   const start = formatDateTimeFriendly(toISO(startISO), timezone ?? null);
   const end = formatDateTimeFriendly(toISO(endISO), timezone ?? null);
+
+  const row = (label: string, value: string | undefined) =>
+    value ? `<tr><td style="padding:4px 8px;color:#64748b;width:140px">${label}</td><td style="padding:4px 8px">${escapeHtml(value)}</td></tr>` : "";
+
+  const addrLine = [address, city, zip].filter(Boolean).join(", ");
+
+  const formatCoverageSubject = (raw: string | undefined, name: string | undefined): string => {
+    if (!raw) return "";
+    const t = raw.toLowerCase().trim();
+    if (t === "just me" || t === "myself" || t === "just myself") return "Just themselves";
+    if (t === "me and my spouse" || t === "both" || t === "spouse" || t === "me and spouse") return `${name || "Lead"} and spouse`;
+    if (t.includes("girlfriend") || t.includes("partner") || t.includes("significant other")) return `${name || "Lead"} and partner`;
+    return raw;
+  };
+  const coverageFor = formatCoverageSubject(coverageSubject, leadName);
+
   return `
-    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif">
-      <h2>New Booking</h2>
-      <p>Hi ${escapeHtml(agentName || "Agent")}, you’ve got a new appointment.</p>
-      <ul>
-        <li><b>Lead:</b> ${escapeHtml(leadName || "Unknown")} ${
-          leadUrl ? `— <a href="${leadUrl}">Open lead</a>` : ""
-        }</li>
-        ${leadPhone ? `<li><b>Phone:</b> ${escapeHtml(leadPhone)}</li>` : ""}
-        ${leadEmail ? `<li><b>Email:</b> ${escapeHtml(leadEmail)}</li>` : ""}
-        <li><b>Topic:</b> ${escapeHtml(title || "Consultation")}</li>
-        <li><b>Starts:</b> ${escapeHtml(start)}</li>
-        <li><b>Ends:</b> ${escapeHtml(end)}</li>
-      </ul>
-      ${description ? `<p>${escapeHtml(description)}</p>` : ""}
-      ${eventUrl ? `<p><a href="${eventUrl}">View calendar event</a></p>` : ""}
-      <p>— Cove CRM</p>
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a">
+      <h2 style="margin:0 0 12px 0">New Booking</h2>
+      <p style="margin:0 0 12px 0">Hi ${escapeHtml(agentName || "Agent")}, you’ve got a new appointment.</p>
+
+      <p style="font-weight:700;color:#333;margin:12px 0 4px 0">LEAD INFO</p>
+      <table style="border-collapse:collapse;margin:0 0 8px 0">
+        ${row("Name", leadName ? `${escapeHtml(leadName)}${leadUrl ? ` — <a href="${leadUrl}">Open lead</a>` : ""}` : undefined)}
+        ${row("Phone", leadPhone)}
+        ${row("Email", leadEmail)}
+        ${row("Address", addrLine || undefined)}
+        ${row("State", state)}
+        ${row("Age", age)}
+      </table>
+
+      <p style="font-weight:700;color:#333;margin:12px 0 4px 0">COVERAGE REQUEST</p>
+      <table style="border-collapse:collapse;margin:0 0 8px 0">
+        ${row("Lead Type", leadType || title)}
+        ${row("Coverage", coverageAmount)}
+        ${row("For", coverageFor || undefined)}
+      </table>
+
+      <p style="font-weight:700;color:#333;margin:12px 0 4px 0">APPOINTMENT</p>
+      <table style="border-collapse:collapse;margin:0 0 8px 0">
+        ${row("Starts", start)}
+        ${row("Ends", end)}
+        ${eventUrl ? `<tr><td style="padding:4px 8px;color:#64748b">Calendar</td><td style="padding:4px 8px"><a href="${eventUrl}">Open event</a></td></tr>` : ""}
+      </table>
+
+      ${description ? `<p style="margin:8px 0">${escapeHtml(description)}</p>` : ""}
+      <p style="margin:16px 0 0 0">— Cove CRM</p>
     </div>
   `;
 }
@@ -315,32 +362,67 @@ export function renderAgentAppointmentNotice(opts: {
   phone: string;
   state?: string;
   timeISO: string;
-  timezone?: string | null; // IANA timezone, e.g. "America/Phoenix"
+  timezone?: string | null;
   source?: "AI" | "Dialer" | "Manual";
   eventUrl?: string;
+  // enrichment
+  leadType?: string;
+  coverageSubject?: string;
+  age?: string;
+  coverageAmount?: string;
+  address?: string;
+  city?: string;
+  zip?: string;
+  leadEmail?: string;
 }) {
   const pretty = formatDateTimeFriendly(opts.timeISO, opts.timezone);
   const who = escapeHtml(opts.leadName);
-  const ph = escapeHtml(opts.phone);
-  const st = escapeHtml(opts.state || "—");
   const src = escapeHtml(opts.source || "Manual");
+
+  const row = (label: string, value: string | undefined) =>
+    value ? `<tr><td style="padding:4px 8px;color:#64748b;width:140px">${label}</td><td style="padding:4px 8px">${escapeHtml(value)}</td></tr>` : "";
+
+  const addrLine = [opts.address, opts.city, opts.zip].filter(Boolean).join(", ");
+
+  const formatCoverageSubject = (raw: string | undefined, name: string): string => {
+    if (!raw) return "";
+    const t = raw.toLowerCase().trim();
+    if (t === "just me" || t === "myself" || t === "just myself") return "Just themselves";
+    if (t === "me and my spouse" || t === "both" || t === "spouse" || t === "me and spouse") return `${name} and spouse`;
+    if (t.includes("girlfriend") || t.includes("partner") || t.includes("significant other")) return `${name} and partner`;
+    return raw;
+  };
+  const coverageFor = formatCoverageSubject(opts.coverageSubject, opts.leadName);
 
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">New appointment booked</h2>
       <p style="margin:0 0 12px 0">Hi ${escapeHtml(opts.agentName || "there")},</p>
-      <table style="border-collapse:collapse;margin:8px 0 12px 0">
-        <tr><td style="padding:4px 8px;color:#64748b">Client</td><td style="padding:4px 8px"><b>${who}</b></td></tr>
-        <tr><td style="padding:4px 8px;color:#64748b">Phone</td><td style="padding:4px 8px">${ph}</td></tr>
-        <tr><td style="padding:4px 8px;color:#64748b">State</td><td style="padding:4px 8px">${st}</td></tr>
-        <tr><td style="padding:4px 8px;color:#64748b">Time</td><td style="padding:4px 8px">${escapeHtml(pretty)}</td></tr>
-        <tr><td style="padding:4px 8px;color:#64748b">Booked via</td><td style="padding:4px 8px">${src}</td></tr>
-        ${
-          opts.eventUrl
-            ? `<tr><td style="padding:4px 8px;color:#64748b">Calendar</td><td style="padding:4px 8px"><a href="${opts.eventUrl}">Open event</a></td></tr>`
-            : ""
-        }
+
+      <p style="font-weight:700;color:#333;margin:12px 0 4px 0">LEAD INFO</p>
+      <table style="border-collapse:collapse;margin:0 0 8px 0">
+        <tr><td style="padding:4px 8px;color:#64748b;width:140px">Client</td><td style="padding:4px 8px"><b>${who}</b></td></tr>
+        ${row("Phone", opts.phone)}
+        ${row("Email", opts.leadEmail)}
+        ${row("Address", addrLine || undefined)}
+        ${row("State", opts.state)}
+        ${row("Age", opts.age)}
       </table>
+
+      <p style="font-weight:700;color:#333;margin:12px 0 4px 0">COVERAGE REQUEST</p>
+      <table style="border-collapse:collapse;margin:0 0 8px 0">
+        ${row("Lead Type", opts.leadType)}
+        ${row("Coverage", opts.coverageAmount)}
+        ${row("For", coverageFor || undefined)}
+      </table>
+
+      <p style="font-weight:700;color:#333;margin:12px 0 4px 0">APPOINTMENT</p>
+      <table style="border-collapse:collapse;margin:0 0 8px 0">
+        <tr><td style="padding:4px 8px;color:#64748b;width:140px">Time</td><td style="padding:4px 8px">${escapeHtml(pretty)}</td></tr>
+        <tr><td style="padding:4px 8px;color:#64748b">Booked via</td><td style="padding:4px 8px">${src}</td></tr>
+        ${opts.eventUrl ? `<tr><td style="padding:4px 8px;color:#64748b">Calendar</td><td style="padding:4px 8px"><a href="${opts.eventUrl}">Open event</a></td></tr>` : ""}
+      </table>
+
       <p style="margin:16px 0 0 0">Have a great call! — Cove CRM</p>
     </div>
   `;
@@ -352,17 +434,25 @@ export function renderAgentAppointmentNotice(opts: {
  * Uses Resend if configured; falls back to SMTP.
  */
 export async function sendAppointmentBookedEmail(opts: {
-  to: string; // agent email
+  to: string;
   agentName?: string;
   leadName: string;
   phone: string;
   state?: string;
-  timeISO: string; // event start in ISO
-  timezone?: string | null; // IANA timezone; accept null or undefined
+  timeISO: string;
+  timezone?: string | null;
   source?: "AI" | "Dialer" | "Manual";
   eventUrl?: string;
-  /** Back-compat: accept `eventLink` as an alias for `eventUrl` from older callers */
   eventLink?: string;
+  // enrichment
+  leadType?: string;
+  coverageSubject?: string;
+  age?: string;
+  coverageAmount?: string;
+  address?: string;
+  city?: string;
+  zip?: string;
+  leadEmail?: string;
 }): Promise<SendEmailResult> {
   const pretty = formatDateTimeFriendly(opts.timeISO, opts.timezone ?? null);
   const subject = `📅 New appointment: ${opts.leadName} — ${pretty}`;
@@ -375,8 +465,15 @@ export async function sendAppointmentBookedEmail(opts: {
     timezone: opts.timezone ?? null,
     source: opts.source,
     eventUrl: opts.eventUrl ?? opts.eventLink,
+    leadType: opts.leadType,
+    coverageSubject: opts.coverageSubject,
+    age: opts.age,
+    coverageAmount: opts.coverageAmount,
+    address: opts.address,
+    city: opts.city,
+    zip: opts.zip,
+    leadEmail: opts.leadEmail,
   });
-  // Agent emails can just use default support reply-to, but it's optional
   return sendViaResend({
     to: opts.to,
     subject,
