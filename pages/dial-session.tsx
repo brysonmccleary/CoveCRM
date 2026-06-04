@@ -530,6 +530,14 @@ export default function DialSession() {
     setCallEnded(true);
     await logCallOutcome({ statusOverride: opts.status, reason: opts.reason });
 
+    const endedLead = leadQueue[currentLeadIndex] ?? lead;
+    if ((endedLead as any)?.quickDial) {
+      clearAdvanceTimers();
+      advanceScheduledRef.current = false;
+      setReadyToCall(false);
+      return;
+    }
+
     scheduleAdvance();
   };
 
