@@ -10,6 +10,7 @@ import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
 import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
 import { buildA2PFailureObject } from "@/lib/a2p/failureTranslator";
 import { maybeHandleA2PFailure } from "@/lib/a2p/a2pFailureAutomation";
+import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -271,29 +272,43 @@ async function ensureCampaignForProfile(args: {
     return;
   }
 
-  const description = buildCampaignDescription({
-    businessName: String(a2p.businessName || ""),
-    useCase: useCaseCode,
-    messageFlow: messageFlowText,
-  });
+  const lockUntil = new Date(Date.now() + 2 * 60 * 1000);
+  const lockedProfile = await A2PProfile.findOneAndUpdate(
+    {
+      _id: a2p._id,
+      $or: [
+        { campaignSubmitLockUntil: { $exists: false } },
+        { campaignSubmitLockUntil: null },
+        { campaignSubmitLockUntil: { $lt: new Date() } },
+      ],
+      $and: [
+        { $or: [{ campaignSid: { $exists: false } }, { campaignSid: null }, { campaignSid: "" }] },
+        { $or: [{ usa2pSid: { $exists: false } }, { usa2pSid: null }, { usa2pSid: "" }] },
+      ],
+    },
+    {
+      $set: {
+        campaignSubmitLockUntil: lockUntil,
+        campaignSubmitLastAttemptAt: new Date(),
+      },
+      $inc: { campaignSubmitAttempts: 1 },
+    },
+    { new: true },
+  );
 
-  const embeddedLinks = hasEmbeddedLinksFromText(messageFlowText, samples);
-  const embeddedPhone = hasEmbeddedPhoneFromText(messageFlowText, samples);
-
-  const createPayload: any = {
-    brandRegistrationSid: brandSid,
-    usAppToPersonUsecase: useCaseCode,
-    description,
-    messageFlow: messageFlowText,
-    messageSamples: samples,
-    hasEmbeddedLinks: embeddedLinks,
-    hasEmbeddedPhone: embeddedPhone,
-    subscriberOptIn: true,
-    ageGated: false,
-    directLending: false,
-  };
+  if (!lockedProfile) return;
 
   try {
+    const createPayload = buildA2PCampaignPayload({
+      profile: lockedProfile,
+      brandRegistrationSid: brandSid,
+      baseUrl: BASE_URL,
+      userId: String(lockedProfile.userId || a2p.userId || ""),
+      usecase: useCaseCode,
+      messageSamples: samples,
+      messageFlow: messageFlowText,
+    });
+
     const usa2p = await client.messaging.v1.services(messagingServiceSid).usAppToPerson.create(createPayload);
 
     const usa2pSid =
@@ -326,6 +341,11 @@ async function ensureCampaignForProfile(args: {
     await A2PProfile.updateOne(
       { _id: a2p._id },
       { $set: { lastError: `campaign_create: ${err?.message || err}` } },
+    );
+  } finally {
+    await A2PProfile.updateOne(
+      { _id: a2p._id },
+      { $unset: { campaignSubmitLockUntil: 1 } },
     );
   }
 }

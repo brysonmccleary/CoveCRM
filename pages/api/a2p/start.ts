@@ -11,6 +11,7 @@ import {
   getClientForUser,
   TwilioResolvedAuth,
 } from "@/lib/twilio/getClientForUser";
+import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
 import twilio from "twilio";
 import { Agent } from "undici";
 
@@ -45,7 +46,7 @@ const PRIMARY_PROFILE_SID = process.env.A2P_PRIMARY_PROFILE_SID!; // BU... (ISV)
 const baseUrl =
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
-  "http://localhost:3000";
+  "https://www.covecrm.com";
 
 const STATUS_CB =
   process.env.A2P_STATUS_CALLBACK_URL || `${baseUrl}/api/a2p/status-callback`;
@@ -2439,30 +2440,21 @@ usecaseCode: normalizedUseCase,
     if (!usa2pSid && canCreateCampaign) {
       const code = useCaseCodeFinal;
 
-      const description = buildCampaignDescription({
-        businessName: setPayload.businessName || "",
-        useCase: code,
+      const createPayload = buildA2PCampaignPayload({
+        profile: setPayload,
+        brandRegistrationSid: brandSid!,
+        baseUrl,
+        userId,
+        usecase: code,
+        messageSamples: samples,
         messageFlow: messageFlowText,
       });
-
-      const createPayload: any = {
-        brandRegistrationSid: brandSid!,
-        usAppToPersonUsecase: code,
-        description,
-        messageFlow: messageFlowText,
-        messageSamples: samples,
-        hasEmbeddedLinks: true,
-        hasEmbeddedPhone: false,
-        subscriberOptIn: true,
-        ageGated: false,
-        directLending: false,
-      };
 
       log("step: usAppToPerson.create (initial campaign)", {
         messagingServiceSid,
         payloadSummary: {
           useCase: code,
-          descriptionLength: description.length,
+          descriptionLength: createPayload.description.length,
           samplesCount: samples.length,
         },
         twilioAccountSidUsed,

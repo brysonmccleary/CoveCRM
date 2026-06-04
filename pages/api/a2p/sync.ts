@@ -8,8 +8,9 @@ import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notificati
 import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
 import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
 import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
+import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
 
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
 /**
@@ -319,19 +320,48 @@ async function ensureCampaignForApprovedBrandTenant(args: {
     return { created: false, campaignSid: null };
   }
 
-  const description = flow.slice(0, 180) || `Messaging campaign for ${doc.businessName || "CoveCRM user"}`;
-  const embeddedLinks = hasEmbeddedLinks(flow, messageSamples);
-  const embeddedPhone = hasEmbeddedPhone(flow, messageSamples);
+  const now = new Date();
+  const lockUntil = new Date(now.getTime() + 2 * 60 * 1000);
+  const lockedDoc = await A2PProfile.findOneAndUpdate(
+    {
+      _id: doc._id,
+      $or: [
+        { campaignSubmitLockUntil: { $exists: false } },
+        { campaignSubmitLockUntil: null },
+        { campaignSubmitLockUntil: { $lt: now } },
+      ],
+      $and: [
+        { $or: [{ campaignSid: { $exists: false } }, { campaignSid: null }, { campaignSid: "" }] },
+        { $or: [{ usa2pSid: { $exists: false } }, { usa2pSid: null }, { usa2pSid: "" }] },
+      ],
+    },
+    {
+      $set: {
+        campaignSubmitLockUntil: lockUntil,
+        campaignSubmitLastAttemptAt: now,
+      },
+      $inc: { campaignSubmitAttempts: 1 },
+    },
+    { new: true },
+  ).lean<AnyDoc | null>();
+
+  if (!lockedDoc) {
+    const refreshed = await A2PProfile.findById(doc._id).lean<AnyDoc | null>();
+    return { created: false, campaignSid: refreshed?.campaignSid || refreshed?.usa2pSid || null };
+  }
 
   try {
-    const usA2p = await client.messaging.v1.services(messagingServiceSid).usAppToPerson.create({
+    const createPayload = buildA2PCampaignPayload({
+      profile: lockedDoc,
       brandRegistrationSid: brandSid,
-      description,
-      hasEmbeddedLinks: embeddedLinks,
-      hasEmbeddedPhone: embeddedPhone,
+      baseUrl: BASE_URL,
+      userId: String(lockedDoc.userId || doc.userId || ""),
+      usecase: useCase,
       messageSamples,
-      usAppToPersonUsecase: useCase,
+      messageFlow: flow,
     });
+
+    const usA2p = await client.messaging.v1.services(messagingServiceSid).usAppToPerson.create(createPayload);
 
     const campaignSid =
       usA2p?.sid || usA2p?.campaignSid || usA2p?.campaign_id || usA2p?.campaignId || null;
@@ -374,6 +404,11 @@ async function ensureCampaignForApprovedBrandTenant(args: {
       { $set: { lastError: `auto-campaign: ${e?.message || String(e)}`, lastSyncedAt: new Date() } }
     );
     return { created: false, campaignSid: null };
+  } finally {
+    await A2PProfile.updateOne(
+      { _id: doc._id },
+      { $unset: { campaignSubmitLockUntil: 1 } },
+    );
   }
 }
 

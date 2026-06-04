@@ -16,7 +16,7 @@ function makeBaseUrl(req: NextApiRequest) {
       : `https://${fromEnv.replace(/\/$/, "")}`;
   }
 
-  const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000";
+  const host = req.headers["x-forwarded-host"] || req.headers.host || "www.covecrm.com";
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   return `${proto}://${host}`.replace(/\/$/, "");
 }

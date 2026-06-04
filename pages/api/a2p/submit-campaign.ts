@@ -7,11 +7,12 @@ import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
 
 const baseUrl =
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
-  "http://localhost:3000";
+  "https://www.covecrm.com";
 
 const BRAND_OK_FOR_CAMPAIGN = new Set([
   "APPROVED",
@@ -237,27 +238,15 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
   const useCaseCode = String((a2p as any).usecaseCode || "LOW_VOLUME");
   const messageFlowText = String(a2p.optInDetails || "");
 
-  const description = buildCampaignDescription({
-    businessName: a2p.businessName || "",
-    useCase: useCaseCode,
+  const createPayload = buildA2PCampaignPayload({
+    profile: a2p,
+    brandRegistrationSid: a2p.brandSid,
+    baseUrl,
+    userId,
+    usecase: useCaseCode,
+    messageSamples: samples,
     messageFlow: messageFlowText,
   });
-
-  const hasEmbeddedLinks = detectEmbeddedLinks(messageFlowText, samples);
-  const hasEmbeddedPhone = detectEmbeddedPhone(messageFlowText, samples);
-
-  const createPayload: any = {
-    brandRegistrationSid: a2p.brandSid,
-    usAppToPersonUsecase: useCaseCode,
-    description,
-    messageFlow: messageFlowText,
-    messageSamples: samples,
-    hasEmbeddedLinks,
-    hasEmbeddedPhone,
-    subscriberOptIn: true,
-    ageGated: false,
-    directLending: false,
-  };
 
   log("creating usa2p campaign", {
     userEmail,
@@ -266,8 +255,8 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
     useCaseCode,
     samplesCount: samples.length,
     twilioAccountSidUsed,
-    hasEmbeddedLinks,
-    hasEmbeddedPhone,
+    hasEmbeddedLinks: createPayload.hasEmbeddedLinks,
+    hasEmbeddedPhone: createPayload.hasEmbeddedPhone,
   });
 
   const usa2p = await client.messaging.v1

@@ -6,11 +6,12 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { Buffer } from "buffer";
 import twilio from "twilio";
 import { buildA2PFailureObject } from "@/lib/a2p/failureTranslator";
+import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
-  "http://localhost:3000"
+  "https://www.covecrm.com"
 ).replace(/\/$/, "");
 
 const A2P_TRUST_PRODUCT_POLICY_SID =
@@ -1468,30 +1469,19 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
           }
         } else {
           try {
-            const description = buildCampaignDescription({
-              businessName: String(profile.businessName || ""),
-              useCase,
+            const createPayload = buildA2PCampaignPayload({
+              profile,
+              brandRegistrationSid: brandSid,
+              baseUrl: BASE_URL,
+              userId: String(profile.userId || ""),
+              usecase: useCase,
+              messageSamples: samples,
               messageFlow,
             });
 
             const created: any = await client.messaging.v1
               .services(messagingServiceSid)
-              .usAppToPerson.create({
-                brandRegistrationSid: brandSid,
-                usAppToPersonUsecase: useCase,
-                description,
-                messageFlow,
-                messageSamples: samples,
-                hasEmbeddedLinks: /https?:\/\//i.test(`${messageFlow} ${samples.join(" ")}`),
-                hasEmbeddedPhone:
-                  /\+\d{7,}/.test(`${messageFlow} ${samples.join(" ")}`) ||
-                  /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(
-                    `${messageFlow} ${samples.join(" ")}`,
-                  ),
-                subscriberOptIn: true,
-                ageGated: false,
-                directLending: false,
-              });
+              .usAppToPerson.create(createPayload);
 
             campaignSid = String(
               created?.sid ||

@@ -2,11 +2,12 @@ import A2PProfile from "@/models/A2PProfile";
 import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
-  "http://localhost:3000"
+  "https://www.covecrm.com"
 ).replace(/\/$/, "");
 
 const APPROVED_BRAND = new Set(["approved", "verified", "active", "in_use", "registered"]);
@@ -213,15 +214,15 @@ async function createServiceCampaign(args: {
 
   const messageFlow = getMessageFlow(profile);
   const messageSamples = getMessageSamples(profile);
-  const payload = {
+  const payload = buildA2PCampaignPayload({
+    profile,
     brandRegistrationSid: brandSid,
-    description: messageFlow.slice(0, 180),
+    baseUrl: BASE_URL,
+    userId: String(profile?.userId || ""),
     messageFlow,
     messageSamples,
-    usAppToPersonUsecase: getUsecase(profile),
-    hasEmbeddedLinks: hasEmbeddedLinks(messageFlow, messageSamples),
-    hasEmbeddedPhone: hasEmbeddedPhone(messageFlow, messageSamples),
-  };
+    usecase: getUsecase(profile),
+  });
 
   try {
     return await client.messaging.v1.services(messagingServiceSid).usAppToPerson.create(payload);
@@ -233,6 +234,11 @@ async function createServiceCampaign(args: {
     body.set("UsAppToPersonUsecase", payload.usAppToPersonUsecase);
     body.set("HasEmbeddedLinks", String(payload.hasEmbeddedLinks));
     body.set("HasEmbeddedPhone", String(payload.hasEmbeddedPhone));
+    body.set("SubscriberOptIn", String(payload.subscriberOptIn));
+    body.set("AgeGated", String(payload.ageGated));
+    body.set("DirectLending", String(payload.directLending));
+    if (payload.privacyPolicyUrl) body.set("PrivacyPolicyUrl", payload.privacyPolicyUrl);
+    if (payload.termsAndConditionsUrl) body.set("TermsAndConditionsUrl", payload.termsAndConditionsUrl);
     for (const sample of payload.messageSamples) body.append("MessageSamples", sample);
 
     const { data } = await fetchTwilioJson(
