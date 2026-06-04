@@ -198,11 +198,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (reusable) {
       console.log("[STRIPE] Reusing existing subscription:", reusable.id);
       const latest = reusable.latest_invoice as any;
+      const existingClientSecret = latest?.payment_intent?.client_secret || null;
+      let existingSetupSecret = latest?.setup_intent?.client_secret || null;
+
+      // Trialing sub where card was never collected: latest_invoice is unexpanded (bare string),
+      // so both secrets are null. Create a fresh SetupIntent so billing.tsx renders the card
+      // form instead of auto-redirecting, allowing grantTrialIfEligible to run.
+      if (
+        !existingClientSecret &&
+        !existingSetupSecret &&
+        reusable.status === "trialing" &&
+        !(userDoc as any).trialGranted
+      ) {
+        const si = await stripe.setupIntents.create({
+          customer: customerId,
+          payment_method_types: ["card"],
+          usage: "off_session",
+          metadata: {
+            userId: userIdMeta,
+            subscriptionId: reusable.id,
+            email: effectiveEmail,
+          },
+        });
+        existingSetupSecret = si.client_secret || null;
+      }
+
       return res.status(200).json({
-        clientSecret: latest?.payment_intent?.client_secret || null,
-        setupClientSecret: latest?.setup_intent?.client_secret || null,
+        clientSecret: existingClientSecret,
+        setupClientSecret: existingSetupSecret,
         subscriptionId: reusable.id,
-        reused: true
+        reused: true,
       });
     }
 

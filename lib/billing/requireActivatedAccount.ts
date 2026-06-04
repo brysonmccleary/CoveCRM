@@ -13,7 +13,7 @@ export function isAccountActivated(user: any): boolean {
   if (!user) return false;
   if (user.role === "admin") return true;
   if (isLegacyAccount(user)) return true;
-  return user.emailVerified === true && user.trialGranted === true;
+  return user.emailVerified === true && (user.trialGranted === true || user.subscriptionStatus === "active");
 }
 
 export function assertAccountActivated(user: any): void {
