@@ -3465,6 +3465,10 @@ function buildGreetingFirstTurnDecision(
     }
   }
 
+  if (routeKind === "greeting_ack") {
+    lineToSay = `${getGreetingAckPrefix(raw)} ${step1Line}`.trim();
+  }
+
   try {
     console.log("[AI-VOICE][GREETING-ROUTE]", {
       callSid: state.callSid,
@@ -3490,7 +3494,7 @@ function buildGreetingFirstTurnDecision(
       greetingAdvanceNextPhase: undefined,
       awaitingUserAnswer: true,
       awaitingAnswerForStepIndex: routeKind === "greeting_not_interested_soft_rebuttal" ? 2 : 0,
-      scriptStepIndex: routeKind === "greeting_not_interested_soft_rebuttal" ? 2 : 0,
+      scriptStepIndex: routeKind === "greeting_not_interested_soft_rebuttal" ? 2 : 1,
       ...(routeKind === "greeting_not_interested_soft_rebuttal"
         ? {
             pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
@@ -6406,7 +6410,8 @@ async function handleConversationTurn(
     typeof state.awaitingAnswerForStepIndex === "number" &&
     state.awaitingAnswerForStepIndex === 0 &&
     !(state as any).coverageSubject &&
-    state.phase === "in_call";
+    state.phase === "in_call" &&
+    normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
 
   const STEP1_SACRED_BYPASS = new Set([
     "not_interested", "already_have", "busy", "objection",
@@ -6414,7 +6419,9 @@ async function handleConversationTurn(
   ]);
 
   if (step1Sacred && decision.handled && decision.shouldAdvanceStep && !STEP1_SACRED_BYPASS.has(intent.kind)) {
-    // The decision tried to advance past unanswered Step 1 — block it and re-ask
+    // Block advancement past unanswered Step 1. Route unrecognized input through GPT semantic
+    // bridge so the AI acknowledges what was said and returns naturally to the Step 1 question,
+    // rather than cold-repeating it. State does not advance.
     const requiredStep1Line = (state.scriptSteps || [])[0] || stepCtx.steps[0] || "";
     if (requiredStep1Line.trim()) {
       decision.shouldAdvanceStep = false;
@@ -6426,6 +6433,10 @@ async function handleConversationTurn(
         awaitingAnswerForStepIndex: 0,
         scriptStepIndex: typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0,
       };
+      if (state.context) {
+        decision.responseMode = "free_response";
+        decision.userText = text;
+      }
     }
   }
   if (!decision.handled) return false;
@@ -7050,7 +7061,7 @@ SUGGESTED LINE (your backbone — deliver the substance of this naturally, don't
 HOW TO DELIVER IT:
 1. If the lead said something — acknowledge it briefly first (1–4 words: "Got it.", "Yeah for sure.", "Makes sense.", "Okay —"). Match their energy.
 2. Respond to anything they raised that needs a quick word (1 sentence max). If nothing needs addressing, skip this.
-3. Deliver the substance of the suggested line naturally. You may rephrase slightly to sound conversational, but preserve the core ask.
+3. Deliver this line. Do not change the wording or the core ask.
 4. STOP. Do not add explanations, summaries, or extra commentary.
 
 VARIETY RULE: Do not open with "I understand" or "Got it" every single turn. Mix it up. Sound natural, not scripted.
@@ -7712,27 +7723,17 @@ HARD RULES:
 - Use "${leadName}" only if it flows naturally.
 ${historyBlock}${userBlock}
 YOUR REQUIRED OBJECTIVE THIS TURN:
-You must say the following — this is the required output. Deliver it naturally.
-It is okay to add a brief 1-sentence acknowledgment of what they just said
-BEFORE delivering the required line, if they said something that needs
-acknowledging (confusion, question, objection, frustration).
-If they said nothing unusual, deliver the required line directly.
+Say EXACTLY the following required line. Word for word. No additions before it. No additions after it. No paraphrasing. No filler.
 
 REQUIRED LINE:
 "${line}"
 
 DELIVERY RULES:
-- If the lead said something confusing, frustrated, or asked a question:
-  1. Acknowledge in ONE short sentence (warm, direct, no apology)
-  2. Then deliver the required line naturally
-  3. STOP
-- If the lead said nothing unusual (just answered normally):
-  1. Deliver the required line directly
-  2. STOP
-- Never add extra sentences after the required line
-- Never skip the required line
-- Never replace the required line with something else
-- 2 sentences maximum total
+- Say only this line. Nothing else.
+- Do NOT add any acknowledgment, filler, or apology before or after it.
+- Do NOT rephrase, paraphrase, or modify it in any way.
+- Do NOT add extra sentences before or after.
+- Never skip this line. Never replace it.
 `.trim();
 }
 
