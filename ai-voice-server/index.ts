@@ -1064,6 +1064,13 @@ async function replayPendingCommittedTurn(
       }
     }
 
+    // Discard micro-fragment barge-in tails (e.g. "I'm" with 0 audio ms) — not a real turn.
+    if (restoredTranscript && restoredTranscript.length <= 4 && restoredAudioMs === 0) {
+      if (pendingAgeMs < 1800) return;
+      state.pendingCommittedTurn = null;
+      return;
+    }
+
     // Clear pending now (prevents double replay) — ONLY after we have transcript or allowed greeting audio-only.
     state.pendingCommittedTurn = null;
 
@@ -1672,22 +1679,27 @@ function buildNonRepeatedStateAwareLine(
       const timeStepIndex = Math.max(Number(state.scriptStepIndex || 0), Math.min(2, Math.max(0, (state.scriptSteps || []).length - 1)));
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(timeStepIndex);
       const n = sameStep ? Number(state.timeOfferCount || 0) + 1 : 1;
-      return {
-        lineToSay: getTimeOfferLine(ctx, n, dayHint, windowHint, raw),
-        routeKind: `${routeKind}_repeat_guard_time_offer`,
-        objective: "time_selection",
-        stateWrites: {
-          ...(dayHint ? { selectedDay: dayHint } : {}),
-          ...(windowHint ? { selectedWindow: windowHint } : {}),
-          pendingLiveTransferAvailabilityConfirm: false,
-          pendingLiveTransferAvailabilityAttempts: 0,
-          scriptStepIndex: timeStepIndex,
-          timeOfferCountForStepIndex: timeStepIndex,
-          timeOfferCount: n + 1,
-          awaitingUserAnswer: true,
-          awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
-        },
-      };
+      const candidateTimeOffer = getTimeOfferLine(ctx, n, dayHint, windowHint, raw);
+      const recentLinesForCheck = recentAiLinesForRepeatCheck(state);
+      if (!recentLinesForCheck.some(prev => aiLinesAreSubstantiallySame(prev, candidateTimeOffer))) {
+        return {
+          lineToSay: candidateTimeOffer,
+          routeKind: `${routeKind}_repeat_guard_time_offer`,
+          objective: "time_selection",
+          stateWrites: {
+            ...(dayHint ? { selectedDay: dayHint } : {}),
+            ...(windowHint ? { selectedWindow: windowHint } : {}),
+            pendingLiveTransferAvailabilityConfirm: false,
+            pendingLiveTransferAvailabilityAttempts: 0,
+            scriptStepIndex: timeStepIndex,
+            timeOfferCountForStepIndex: timeStepIndex,
+            timeOfferCount: n + 1,
+            awaitingUserAnswer: true,
+            awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+          },
+        };
+      }
+      // candidate itself repeats recent lines — fall through to unansweredStep path
     }
   }
 
@@ -2990,6 +3002,25 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
   return false;
 }
 
+function isConversationalGreetingNegative(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    t.includes("not good") ||
+    t.includes("not great") ||
+    (t.includes("bad") && !t.includes("not bad")) ||
+    t.includes("terrible") ||
+    t.includes("rough") ||
+    t.includes("stressed") ||
+    t.includes("tired") ||
+    t.includes("not well") ||
+    t.includes("been better") ||
+    t.includes("not doing well") ||
+    t.includes("could be better") ||
+    t.includes("having a hard time")
+  );
+}
+
 function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
   const t = normalizeTurnTextForKey(textRaw);
   if (!t) return false;
@@ -3466,7 +3497,17 @@ function buildGreetingFirstTurnDecision(
   }
 
   if (routeKind === "greeting_ack") {
-    lineToSay = `${getGreetingAckPrefix(raw)} ${step1Line}`.trim();
+    if (isConversationalGreetingNegative(raw)) {
+      const empathyOpts = [
+        "Oh I'm sorry to hear that —",
+        "Aw I'm sorry —",
+        "Hope things turn around —",
+      ];
+      const empathy = empathyOpts[Math.floor(Math.random() * empathyOpts.length)];
+      lineToSay = `${empathy} ${step1Line}`;
+    } else {
+      lineToSay = `${getGreetingAckPrefix(raw)} ${step1Line}`.trim();
+    }
   }
 
   try {
@@ -5641,7 +5682,9 @@ function buildConversationPolicyDecision(
       };
     }
 
-    const lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?`;
+    const lineToSay = liveTransferEnabled
+      ? `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?`
+      : `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better?`;
     return {
       handled: true,
       routeKind: "policy_step1_coverage",
@@ -6588,6 +6631,7 @@ function buildControlledGptInstruction(opts: {
 }): string {
   const { userText, intent, requiredObjectiveLine, stepType, recentExchanges, ctx } = opts;
   const agent = (ctx.agentName || "the agent").split(" ")[0];
+  const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
   const leadName = (ctx.clientFirstName || "there").trim();
   const scope = getScopeLabelForScriptKey(ctx.scriptKey);
 
@@ -6600,7 +6644,7 @@ function buildControlledGptInstruction(opts: {
   }
 
   return `
-You are a warm, natural scheduling assistant named Kayla on a live phone call for ${agent}.
+You are a warm, natural scheduling assistant named ${aiName} on a live phone call for ${agent}.
 This call is ONLY about a ${scope} request.
 You are speaking with ${leadName}.
 You are NOT licensed. Never quote prices, rates, or coverage details.
@@ -7674,7 +7718,7 @@ DELIVERY RULES:
 
   return `
 Say this greeting EXACTLY:
-"Hey ${clientName}. This is ${aiName}. Can you hear me alright?"
+"Hey ${clientName}! This is ${aiName} — how are you doing today?"
 
 Use a natural phone tone.
 No extra words.

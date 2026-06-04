@@ -41,6 +41,13 @@ const VARIANT_COUNT_OPTIONS = [
   { value: 4, label: "Strong Test" },
 ];
 
+type MetaHealth = {
+  ok: boolean;
+  reason: string;
+  fixUrl?: string;
+  status?: string;
+};
+
 export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (leadType: string) => void }) {
   const [step, setStep] = useState(0);
   const [mainCategory, setMainCategory] = useState("final_expense");
@@ -62,6 +69,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [drafts, setDrafts] = useState<any[]>([]);
   const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
   const [selectedMetaAdAccountId, setSelectedMetaAdAccountId] = useState("");
+  const [metaHealth, setMetaHealth] = useState<MetaHealth | null>(null);
+  const [checkingMetaHealth, setCheckingMetaHealth] = useState(false);
   const creativeRef = useRef<HTMLDivElement>(null);
   const productionCreativeRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
@@ -95,6 +104,42 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
       }
     })();
   }, [leadType]);
+
+  const checkMetaHealth = async () => {
+    setCheckingMetaHealth(true);
+    try {
+      const params = new URLSearchParams();
+      if (leadType) params.set("leadType", leadType);
+      if (selectedMetaPageId) params.set("pageId", selectedMetaPageId);
+      if (selectedMetaAdAccountId) params.set("adAccountId", selectedMetaAdAccountId);
+      const response = await fetch(`/api/meta/health?${params.toString()}`);
+      const json = await response.json().catch(() => ({}));
+      const nextHealth = {
+        ok: !!json?.ok,
+        reason: String(json?.metaHealth?.reason || json?.error || "Finish Facebook setup before launching."),
+        fixUrl: json?.metaHealth?.fixUrl || "",
+        status: json?.metaHealth?.status || "",
+      };
+      setMetaHealth(nextHealth);
+      return nextHealth;
+    } catch {
+      const nextHealth = {
+        ok: false,
+        reason: "Facebook setup check failed. Reconnect Facebook and try again.",
+        fixUrl: "/api/meta/connect",
+        status: "error",
+      };
+      setMetaHealth(nextHealth);
+      return nextHealth;
+    } finally {
+      setCheckingMetaHealth(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!leadType) return;
+    checkMetaHealth();
+  }, [leadType, selectedMetaPageId, selectedMetaAdAccountId]);
 
   const resetGeneratedAd = () => {
     setDraft(null);
@@ -191,6 +236,11 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     setResult(null);
 
     try {
+      const health = await checkMetaHealth();
+      if (!health.ok) {
+        throw new Error(health.reason);
+      }
+
       const selectedDraft = drafts[0] || draft;
 
       // Capture one production 4:5 feed creative PNG for each generated draft.
@@ -560,6 +610,30 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
               ? "Your campaign is paused. Activate it when you're ready."
               : "This creates the Meta campaign, ad set, Instant Form, ad creative, and CRM folder."}
           </p>
+          {!result && metaHealth && !metaHealth.ok && (
+            <div className="mt-4 rounded-lg border border-yellow-700/40 bg-yellow-950/20 p-4">
+              <p className="text-sm font-semibold text-yellow-100">Finish Facebook setup before launching</p>
+              <p className="text-xs text-yellow-100/80 mt-1">{metaHealth.reason}</p>
+              {metaHealth.fixUrl && (
+                <a
+                  href={metaHealth.fixUrl}
+                  target={metaHealth.fixUrl.startsWith("http") ? "_blank" : undefined}
+                  rel={metaHealth.fixUrl.startsWith("http") ? "noreferrer" : undefined}
+                  className="inline-block mt-3 text-xs text-yellow-50 underline"
+                >
+                  {metaHealth.status === "missingPaymentMethod"
+                    ? "Add payment method in Facebook"
+                    : metaHealth.status === "missingLeadAdsEligibility"
+                      ? "Accept Lead Ads Terms"
+                      : metaHealth.status === "missingPage"
+                        ? "Create or choose a Facebook Page"
+                        : metaHealth.status === "missingAdAccount"
+                          ? "Select Ad Account"
+                          : "Reconnect Facebook"}
+                </a>
+              )}
+            </div>
+          )}
           {result?.campaignId && (
             <p className="text-xs text-gray-500 mt-2">Campaign ID: {result.campaignId}</p>
           )}
@@ -584,10 +658,10 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
             <button
               type="button"
               onClick={launch}
-              disabled={launching || !drafts.length || !states.length || imageGenerating}
+              disabled={launching || checkingMetaHealth || !metaHealth?.ok || !drafts.length || !states.length || imageGenerating}
               className="mt-4 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
             >
-              {launching ? "Launching..." : "Launch"}
+              {launching ? "Launching..." : checkingMetaHealth ? "Checking Facebook..." : "Launch"}
             </button>
           )}
         </div>

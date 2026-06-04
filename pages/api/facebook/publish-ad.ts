@@ -15,6 +15,7 @@ import { getCanonicalHeaders, getLeadSheetType } from "@/lib/facebook/sheets/she
 import { validateStates } from "@/lib/facebook/guardrails";
 import { validateLaunchInput } from "@/pages/api/facebook/validate-launch";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
+import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 
 export const config = {
   api: {
@@ -508,6 +509,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
+      const metaHealth = await checkMetaWriteReadiness({
+        user: fullUser,
+        userEmail,
+        accessToken,
+        pageId: pageIdFinal,
+        adAccountId: adAccountIdFinal,
+      });
+      if (!metaHealth.ok) {
+        await FBLeadCampaign.updateOne(
+          { _id: campaign._id },
+          {
+            $set: {
+              metaPublishStatus: "failed",
+              metaPublishError: metaHealth.reason,
+              metaLastPublishAttemptAt: new Date(),
+              metaObjectHealth: metaHealth.status === "reconnectNeeded" ? "token_expired" : "sync_failed",
+            },
+          }
+        ).catch(() => {});
+        return res.status(400).json({
+          ok: false,
+          error: metaHealth.reason,
+          metaHealth,
+        });
+      }
+
       if (!metaCampaignId) {
         const campaignParams = new URLSearchParams();
         campaignParams.set("name", lockedStructure.campaign.name);
@@ -785,6 +812,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (err: any) {
       metaPublishStatus = "failed";
       metaError = err?.message || "Meta publish failed";
+      await markMetaHealthFailure({
+        user,
+        userEmail,
+        error: metaError,
+      }).catch(() => {});
       console.error("[publish-ad] meta publish error:", metaError);
     }
 

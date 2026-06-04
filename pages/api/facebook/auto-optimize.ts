@@ -8,6 +8,7 @@ import CampaignActionLog from "@/models/CampaignActionLog";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import { sendEmail } from "@/lib/email";
+import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 
 type Summary = {
   processed: number;
@@ -49,6 +50,7 @@ const SKIP_CODES = {
   LEAD_MIN: "leadMinimum",
   SPEND_MIN: "spendMinimum",
   NO_ACCESS: "missingAccessToken",
+  META_HEALTH: "metaHealthBlocked",
   NO_ACTION: "noAction",
   GUARDRAIL: "guardrail",
 } as const;
@@ -327,8 +329,10 @@ async function updateCampaignBudget(options: {
     return { ok: false, reason: "Campaign is missing metaAdsetId" };
   }
 
-  const user = await User.findById(campaign.userId).select("metaAccessToken").lean() as any;
-  const accessToken = String(user?.metaAccessToken || "").trim();
+  const user = await User.findById(campaign.userId)
+    .select("_id email metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaReconnectNeeded metaHealthStatus lastMetaHealthError metaHealthCooldownUntil metaLastSuccessfulHealthCheckAt")
+    .lean() as any;
+  const accessToken = String(user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
 
   if (!accessToken && !metaMockMode) {
     return { ok: false, reason: "Meta access token missing" };
@@ -339,6 +343,17 @@ async function updateCampaignBudget(options: {
   if (metaMockMode) {
     metaResponseDetails = { mock: true, message: note };
   } else {
+    const metaHealth = await checkMetaWriteReadiness({
+      user,
+      userEmail: String(user?.email || campaign.userEmail || "").toLowerCase(),
+      accessToken,
+      pageId: String(campaign.facebookPageId || user?.metaPageId || "").trim(),
+      adAccountId: String(campaign.adAccountId || user?.metaAdAccountId || "").trim(),
+    });
+    if (!metaHealth.ok) {
+      return { ok: false, reason: metaHealth.reason };
+    }
+
     const params = new URLSearchParams();
     params.set("daily_budget", String(Math.round(newBudget * 100)));
     params.set("access_token", accessToken);
@@ -350,6 +365,11 @@ async function updateCampaignBudget(options: {
     });
     const json = await resp.json();
     if (!resp.ok) {
+      await markMetaHealthFailure({
+        user,
+        userEmail: String(user?.email || campaign.userEmail || "").toLowerCase(),
+        error: json,
+      }).catch(() => {});
       return { ok: false, reason: `Meta budget update failed: ${JSON.stringify(json)}` };
     }
     metaResponseDetails = json;
@@ -944,11 +964,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       continue;
     }
 
-    const user = await User.findById(campaign.userId).select("metaAccessToken").lean() as any;
-    const accessToken = String(user?.metaAccessToken || "").trim();
+    const user = await User.findById(campaign.userId)
+      .select("_id email metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaReconnectNeeded metaHealthStatus lastMetaHealthError metaHealthCooldownUntil metaLastSuccessfulHealthCheckAt")
+      .lean() as any;
+    const accessToken = String(user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
     if (!accessToken && !skipMetaCalls) {
       recordSkip(summary, SKIP_CODES.NO_ACCESS);
       continue;
+    }
+
+    if (!skipMetaCalls) {
+      const metaHealth = await checkMetaWriteReadiness({
+        user,
+        userEmail: String(user?.email || campaign.userEmail || "").toLowerCase(),
+        accessToken,
+        pageId: String(campaign.facebookPageId || user?.metaPageId || "").trim(),
+        adAccountId: String(campaign.adAccountId || user?.metaAdAccountId || "").trim(),
+      });
+      if (!metaHealth.ok) {
+        recordSkip(summary, SKIP_CODES.META_HEALTH);
+        await FBLeadCampaign.updateOne(
+          { _id: campaign._id },
+          {
+            $set: {
+              metaObjectHealth: metaHealth.status === "reconnectNeeded" ? "token_expired" : "sync_failed",
+              metaSyncStatus: metaHealth.status === "reconnectNeeded" ? "token_expired" : "sync_failed",
+              metaSyncError: metaHealth.reason,
+            },
+          }
+        ).catch(() => {});
+        continue;
+      }
     }
 
     const metaResponse: Record<string, any> = {};
@@ -968,7 +1014,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             body: params.toString(),
           });
           const json = await resp.json();
-          if (!resp.ok) throw new Error(JSON.stringify(json));
+          if (!resp.ok) {
+            await markMetaHealthFailure({ user, userEmail: String(user?.email || campaign.userEmail || "").toLowerCase(), error: json }).catch(() => {});
+            throw new Error(JSON.stringify(json));
+          }
           metaResponse.pause = json;
         }
         summary.paused += 1;
@@ -991,7 +1040,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             body: params.toString(),
           });
           const json = await resp.json();
-          if (!resp.ok) throw new Error(JSON.stringify(json));
+          if (!resp.ok) {
+            await markMetaHealthFailure({ user, userEmail: String(user?.email || campaign.userEmail || "").toLowerCase(), error: json }).catch(() => {});
+            throw new Error(JSON.stringify(json));
+          }
           metaResponse.scale = json;
         }
         const budgetDelta = newBudget - dailyBudget;
@@ -1018,7 +1070,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             body: copyParams.toString(),
           });
           const copyJson = await copyResp.json();
-          if (!copyResp.ok) throw new Error(JSON.stringify(copyJson));
+          if (!copyResp.ok) {
+            await markMetaHealthFailure({ user, userEmail: String(user?.email || campaign.userEmail || "").toLowerCase(), error: copyJson }).catch(() => {});
+            throw new Error(JSON.stringify(copyJson));
+          }
           metaResponse.fix = copyJson;
 
           if (pauseOriginalAfterDuplicate) {
@@ -1053,7 +1108,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             body: copyParams.toString(),
           });
           const copyJson = await copyResp.json();
-          if (!copyResp.ok) throw new Error(JSON.stringify(copyJson));
+          if (!copyResp.ok) {
+            await markMetaHealthFailure({ user, userEmail: String(user?.email || campaign.userEmail || "").toLowerCase(), error: copyJson }).catch(() => {});
+            throw new Error(JSON.stringify(copyJson));
+          }
           metaResponse.duplicate = copyJson;
 
           if (pauseOriginalAfterDuplicate) {

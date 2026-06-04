@@ -1,0 +1,610 @@
+pages/ringy-vs-covecrm.tsx:121:                          AI SMS assistance, power dialing, AI dial sessions, and appointment booking
+pages/ringy-vs-covecrm.tsx:152:                  <p>Yes. CoveCRM lists AI SMS assistance, AI dial sessions, AI call coach, and lead scoring features.</p>
+pages/power-dialer-for-insurance-agents.tsx:123:                  <p>Yes. CoveCRM publicly lists power dialing and AI dial sessions among its product features.</p>
+pages/best-crm-for-final-expense-agents.tsx:137:                  <p>Yes. CoveCRM publicly lists power dialing and AI dial sessions.</p>
+pages/dashboard.tsx:525:    { label: "Booked Appointments", value: bookedAppointments },
+pages/dial-session.tsx:1:// pages/dial-session.tsx
+pages/dial-session.tsx:213:  const [leadQueue, setLeadQueue] = useState<Lead[]>([]);
+pages/dial-session.tsx:214:  const [currentLeadIndex, setCurrentLeadIndex] = useState(0);
+pages/dial-session.tsx:215:  const lead = useMemo(() => leadQueue[currentLeadIndex] ?? null, [leadQueue, currentLeadIndex]);
+pages/dial-session.tsx:245:  const advanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+pages/dial-session.tsx:251:  const advanceScheduledRef = useRef<boolean>(false);
+pages/dial-session.tsx:370:    if (advanceTimeoutRef.current) { clearTimeout(advanceTimeoutRef.current); advanceTimeoutRef.current = null; }
+pages/dial-session.tsx:399:  const currentLeadId = () => getLeadId(leadQueue[currentLeadIndex] ?? lead);
+pages/dial-session.tsx:416:    const current = leadQueue[currentLeadIndex] ?? lead;
+pages/dial-session.tsx:424:      (hasConnectedRef.current ? "Completed" : "No Answer");
+pages/dial-session.tsx:527:      if (advanceScheduledRef.current || sessionEndedRef.current) return;
+pages/dial-session.tsx:528:      await handleTerminalCall({ status: "No Answer", reason: "watchdog-timeout", hangup: true });
+pages/dial-session.tsx:532:    if (advanceScheduledRef.current) return;
+pages/dial-session.tsx:533:    advanceScheduledRef.current = true;
+pages/dial-session.tsx:535:    if (advanceTimeoutRef.current) clearTimeout(advanceTimeoutRef.current);
+pages/dial-session.tsx:537:    advanceTimeoutRef.current = setTimeout(() => {
+pages/dial-session.tsx:538:      advanceScheduledRef.current = false;
+pages/dial-session.tsx:569:        body: JSON.stringify({ key: serverProgressKey, lastIndex: idx, total: leadQueue.length }),
+pages/dial-session.tsx:621:          leadQueue.length > 0 &&
+pages/dial-session.tsx:704:            console.info(`[dial-session] Cleared stale selectedDialNumber for user ${userEmail}`);
+pages/dial-session.tsx:748:        setCurrentLeadIndex(0);
+pages/dial-session.tsx:763:            setCurrentLeadIndex(0);
+pages/dial-session.tsx:794:        setCurrentLeadIndex(start);
+pages/dial-session.tsx:812:    if (typeof progressKey === "string" && leadQueue.length) {
+pages/dial-session.tsx:815:  }, [currentLeadIndex, progressKey, leadQueue.length]);
+pages/dial-session.tsx:940:  // Auto-advance driver
+pages/dial-session.tsx:948:    if (leadQueue.length > 0 && currentLeadIndex >= leadQueue.length && !sessionEndedRef.current) {
+pages/dial-session.tsx:954:      leadQueue.length > 0 &&
+pages/dial-session.tsx:963:      const current = leadQueue[currentLeadIndex] || null;
+pages/dial-session.tsx:967:        // ✅ NEW: if the current slot is invalid, advance or finish (prevents "Missing lead id" dead-end)
+pages/dial-session.tsx:968:        if (currentLeadIndex + 1 >= leadQueue.length) return showSessionSummary();
+pages/dial-session.tsx:970:        setCurrentLeadIndex((i) => i + 1);
+pages/dial-session.tsx:983:        if (currentLeadIndex + 1 >= leadQueue.length) {
+pages/dial-session.tsx:989:        setCurrentLeadIndex((i) => i + 1);
+pages/dial-session.tsx:995:      callLead(leadQueue[currentLeadIndex]);
+pages/dial-session.tsx:998:  }, [inboundMode, numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex, callActive]);
+pages/dial-session.tsx:1037:        // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
+pages/dial-session.tsx:1046:        // For queued/initiated/etc: do not force stop or start (avoid false toggles)
+pages/dial-session.tsx:1047:        if (s === "queued" || s === "initiated") {
+pages/dial-session.tsx:1068:            s === "no-answer" ? "No Answer" :
+pages/dial-session.tsx:1082:      status: hasConnectedRef.current ? "Completed" : "No Answer",
+pages/dial-session.tsx:1163:      advanceScheduledRef.current = false;
+pages/dial-session.tsx:1285:    // ❌ Do NOT move folders or touch disposition endpoints for "No Answer"
+pages/dial-session.tsx:1286:    if (label !== "No Answer") {
+pages/dial-session.tsx:1305:    // ✅ Always log the disposition in history so you can still see "No Answer"
+pages/dial-session.tsx:1322:  const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "Bad Number") => {
+pages/dial-session.tsx:1360:        if (label === "No Answer") {
+pages/dial-session.tsx:1363:          scheduleNextLead(); // advance to next lead
+pages/dial-session.tsx:1369:      if (!sessionEndedRef.current) scheduleNextLead(); // still advance on error
+pages/dial-session.tsx:1380:    if (leadQueue.length <= 1) return showSessionSummary();
+pages/dial-session.tsx:1382:    if (nextIndex >= leadQueue.length) return showSessionSummary();
+pages/dial-session.tsx:1385:    setCurrentLeadIndex(nextIndex);
+pages/dial-session.tsx:1394:    hangupActiveCall("advance-next");
+pages/dial-session.tsx:1395:    leaveIfJoined("advance-next");
+pages/dial-session.tsx:1461:      `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
+pages/dial-session.tsx:1491:    alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
+pages/dial-session.tsx:1540:              (leadQueue[currentLeadIndex] && (leadQueue[currentLeadIndex] as any)?.phone) ||
+pages/dial-session.tsx:1541:              (leadQueue[currentLeadIndex] &&
+pages/dial-session.tsx:1542:                Object.entries(leadQueue[currentLeadIndex]).find(([k]) => k.toLowerCase().includes("phone"))?.[1]) ||
+pages/dial-session.tsx:1570:              const label = s === "no-answer" ? "No Answer" : s === "busy" ? "Busy" : "Failed";
+pages/dial-session.tsx:1596:  }, [currentLeadIndex, leadQueue.length, fromNumber]);
+pages/dial-session.tsx:1792:              Lead {Math.min(currentLeadIndex + 1, Math.max(leadQueue.length, 1))} of {leadQueue.length || 1}
+pages/dial-session.tsx:1823:                // ✅ Remove Lead Type everywhere in regular dial session UI
+pages/dial-session.tsx:1949:              <button onClick={() => handleDisposition("Sold")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Sold</button>
+pages/dial-session.tsx:1950:              <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
+pages/dial-session.tsx:1951:              <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
+pages/dial-session.tsx:1952:              <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Not Interested</button>
+pages/folder/leads.tsx:311:    router.push(`/dial-session?${params.toString()}`);
+pages/folder/leads.tsx:337:    router.push(`/dial-session?${params.toString()}`);
+pages/folder/leads.tsx:367:    router.push(`/dial-session?${params.toString()}`);
+pages/ai-dial-session.tsx:4:// pages/ai-dial-session.tsx
+pages/ai-dial-session.tsx:28:  | "queued"
+pages/ai-dial-session.tsx:160:  // Active = anything still in play (queued / running / paused)
+pages/ai-dial-session.tsx:164:      (lastSession.status === "queued" ||
+pages/ai-dial-session.tsx:289:          throw new Error(data?.message || "Failed to load AI dial session");
+pages/ai-dial-session.tsx:297:          setSessionError(e?.message || "Failed to load AI dial session");
+pages/ai-dial-session.tsx:332:  /** Start a brand new AI dial session for the selected folder (mode: fresh) */
+pages/ai-dial-session.tsx:346:        "You already have an AI dial session in progress for this folder. End it first.",
+pages/ai-dial-session.tsx:376:        throw new Error(data?.message || "Failed to create AI dial session");
+pages/ai-dial-session.tsx:382:      setSessionError(e?.message || "Failed to create AI dial session");
+pages/ai-dial-session.tsx:388:  /** Resume AI dial session (keep lastIndex, mark as queued) */
+pages/ai-dial-session.tsx:401:      alert("No previous AI dial session found to resume for this folder.");
+pages/ai-dial-session.tsx:405:      alert("You already have an AI dial session in progress for this folder.");
+pages/ai-dial-session.tsx:433:        throw new Error(data?.message || "Failed to resume AI dial session");
+pages/ai-dial-session.tsx:439:      setSessionError(e?.message || "Failed to resume AI dial session");
+pages/ai-dial-session.tsx:445:  /** End the currently active AI dial session */
+pages/ai-dial-session.tsx:449:      "End the current AI dial session? The AI will stop calling new leads in this folder.",
+pages/ai-dial-session.tsx:468:        throw new Error(data?.message || "Failed to end AI dial session");
+pages/ai-dial-session.tsx:474:      setSessionError(e?.message || "Failed to end AI dial session");
+pages/ai-dial-session.tsx:520:                The AI dialer runs on advanced AI voice calls and is billed
+pages/ai-dial-session.tsx:749:                Select a folder above to view AI dial session status.
+pages/ai-dial-session.tsx:752:              <p className="text-gray-300">Loading AI dial session…</p>
+pages/ai-dial-session.tsx:755:                No AI dial sessions have been created for{" "}
+pages/facebook-ads/command-center.tsx:316:            <Metric label="Sold" value={pct(row.soldRate)} />
+pages/facebook-ads/command-center.tsx:480:            <TopCard label="Overall Sold %" value={loading ? "--" : pct(soldRate)} helper="Sales divided by leads." />
+pages/facebook-ads/command-center.tsx:547:                  <TopCard label="Not Interested %" value={pct(totals.leads ? totals.notInterested / totals.leads : 0)} />
+pages/f/[id].tsx:500:              {/* Continue / Submit button — hidden for choice steps (they auto-advance) */}
+pages/drip-campaigns/index.tsx:32:  const [currentText, setCurrentText] = useState("");
+pages/drip-campaigns/index.tsx:33:  const [currentDay, setCurrentDay] = useState("immediately");
+pages/drip-campaigns/index.tsx:49:    setCurrentText("");
+pages/drip-campaigns/index.tsx:50:    setCurrentDay("immediately");
+pages/drip-campaigns/index.tsx:152:              onChange={(e) => setCurrentText(e.target.value)}
+pages/drip-campaigns/index.tsx:158:              onChange={(e) => setCurrentDay(e.target.value)}
+pages/dashboard/roi.tsx:26:            <th>Sold</th>
+pages/lead/[id].tsx.bak.20260226-170833:79:      | "Not Interested"
+pages/lead/[id].tsx.bak.20260226-170833:80:      | "No Answer"
+pages/lead/[id].tsx.bak.20260226-170833:367:          const title = ev.title || "Booked Appointment";
+pages/lead/[id].tsx.bak.20260226-170833:527:    router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
+pages/lead/[id].tsx.bak.20260226-170833:910:    // Match existing behavior elsewhere: disposition endpoint ignores No Answer for folder moves.
+pages/lead/[id].tsx.bak.20260226-170833:911:    if (v === "No Answer") return;
+pages/lead/[id].tsx.bak.20260226-170833:1036:              <option value="Sold">Sold</option>
+pages/lead/[id].tsx.bak.20260226-170833:1037:              <option value="Booked Appointment">Booked Appointment</option>
+pages/lead/[id].tsx.bak.20260226-170833:1038:              <option value="Not Interested">Not Interested</option>
+pages/lead/[id].tsx.bak.20260226-170833:1039:              <option value="No Answer">No Answer</option>
+pages/lead/[id].tsx.bak.20260226-170315:79:      | "Not Interested"
+pages/lead/[id].tsx.bak.20260226-170315:80:      | "No Answer"
+pages/lead/[id].tsx.bak.20260226-170315:367:          const title = ev.title || "Booked Appointment";
+pages/lead/[id].tsx.bak.20260226-170315:527:    router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
+pages/lead/[id].tsx.bak.20260226-170444:79:      | "Not Interested"
+pages/lead/[id].tsx.bak.20260226-170444:80:      | "No Answer"
+pages/lead/[id].tsx.bak.20260226-170444:367:          const title = ev.title || "Booked Appointment";
+pages/lead/[id].tsx.bak.20260226-170444:527:    router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
+pages/lead/[id].tsx.bak.20260226-170444:994:              <option value="Sold">Sold</option>
+pages/lead/[id].tsx.bak.20260226-170444:995:              <option value="Booked Appointment">Booked Appointment</option>
+pages/lead/[id].tsx.bak.20260226-170444:996:              <option value="Not Interested">Not Interested</option>
+pages/lead/[id].tsx.bak.20260226-170444:997:              <option value="No Answer">No Answer</option>
+pages/lead/[id].tsx:85:      | "Not Interested"
+pages/lead/[id].tsx:86:      | "No Answer"
+pages/lead/[id].tsx:435:          const title = ev.title || "Booked Appointment";
+pages/lead/[id].tsx:619:  // ---------- Inline calling (NO /dial-session) ----------
+pages/lead/[id].tsx:1109:    // Match existing behavior elsewhere: disposition endpoint ignores No Answer for folder moves.
+pages/lead/[id].tsx:1241:          {/* Call row (NO /dial-session) */}
+pages/lead/[id].tsx:1347:              <option value="Sold">Sold</option>
+pages/lead/[id].tsx:1348:              <option value="Booked Appointment">Booked Appointment</option>
+pages/lead/[id].tsx:1349:              <option value="Not Interested">Not Interested</option>
+pages/lead/[id].tsx:1351:              <option value="No Answer">No Answer</option>
+pages/lead/[id].tsx:1353:              <option value="Do Not Contact">Do Not Contact</option>
+pages/life-insurance-crm.tsx:121:                          power dialing, AI dial sessions, Facebook lead workflows, and appointment booking.
+pages/life-insurance-crm.tsx:138:                  <p>Yes. CoveCRM publicly lists AI SMS, AI dial sessions, AI call coach, and lead scoring features.</p>
+pages/covecrm-features.tsx:111:                          <a href="/ai-dialer-for-insurance-agents"> AI dialer</a> workflows, AI dial sessions,
+pages/insurance-crm-faq.tsx:22:      "Yes. CoveCRM publicly lists power dialing and AI dial sessions as part of its insurance sales workflow features.",
+pages/close-vs-covecrm.tsx:153:                  <p>Yes. CoveCRM publicly lists a power dialer and AI dial sessions among its features.</p>
+pages/leads.tsx:27:const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number"];
+pages/leads.tsx:135:                title="Open dial session"
+pages/leads.tsx:374:      alert("Please select a number to call from before starting the dial session.");
+pages/leads.tsx:416:    router.push(`/dial-session?${params.toString()}`);
+pages/leads.tsx:443:    router.push(`/dial-session?${params.toString()}`);
+pages/leads.tsx:480:    if (disposition === "No Answer") return;
+pages/leads.tsx:544:            <button onClick={() => router.push("/ai-dial-session").catch(() => {})} className="bg-indigo-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer">
+pages/api/calls/transcribe-recording.ts:5:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+pages/api/calls/transcribe-recording.ts:308:  | "Not Interested"
+pages/api/calls/transcribe-recording.ts:309:  | "No Answer"
+pages/api/calls/transcribe-recording.ts:402:  outcome: "Booked" | "Callback" | "Not Interested" | "No Answer" | "Voicemail" | "Other";
+pages/api/calls/transcribe-recording.ts:459:- If outcome is "Not Interested", make that clear in the bullets.
+pages/api/calls/transcribe-recording.ts:715:      queueLeadMemoryHook({
+pages/api/calls/ai-result.ts:16:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+pages/api/calls/ai-result.ts:64:      queueLeadMemoryHook({
+pages/api/calls/ai-result.ts:76:  // 2. If booked — create a Booking + move to Booked Appointment folder
+pages/api/calls/ai-result.ts:110:        // Set appointmentTime on lead and move to Booked Appointment folder
+pages/api/calls/ai-result.ts:112:          let bookedFolder = await Folder.findOne({ userEmail: userEmail.toLowerCase(), name: "Booked Appointment" });
+pages/api/calls/ai-result.ts:113:          if (!bookedFolder) bookedFolder = await Folder.create({ userEmail: userEmail.toLowerCase(), name: "Booked Appointment" });
+pages/api/calls/ai-result.ts:116:            { $set: { appointmentTime: new Date(appointmentDate), folderId: bookedFolder._id, status: "Booked Appointment" } }
+pages/api/calls/ai-result.ts:143:      if (outcome === "not_interested") systemFolderName = "Not Interested";
+pages/api/calls/ai-result.ts:144:      else if (outcome === "do_not_call") systemFolderName = "Do Not Contact";
+pages/api/calls/ai-result.ts:150:        // Durable DNC flag — prevents future AI dial session from calling this lead
+pages/api/calls/ai-dial-session.ts:1:// pages/api/calls/ai-dial-session.ts
+pages/api/calls/ai-dial-session.ts:2:// POST — Start an AI dial session through the voice server
+pages/api/calls/ai-dial-session.ts:86:    return res.status(409).json({ error: "Outside business hours. AI dial session blocked." });
+pages/api/calls/ai-dial-session.ts:117:    message: `AI dial session started for ${leads.length} lead(s)`,
+pages/api/calls/ai-dial-session.ts:151:            kind: "ai_dial_session",
+pages/api/calls/ai-dial-session.ts:158:        console.error(`[ai-dial-session] Error triggering call for lead ${lead._id}:`, err?.message);
+pages/api/calls/ai-dial-session.ts:165:    console.error("[ai-dial-session] Session error:", err?.message)
+pages/api/messages/test-send.ts:16: *   the pre-queued Message row has a valid leadId (DB = source of truth).
+pages/api/calendar/book-appointment.ts:311:    // Move to "Booked Appointment" + set status
+pages/api/calendar/book-appointment.ts:314:      name: "Booked Appointment",
+pages/api/calendar/book-appointment.ts:317:      folder = await Folder.create({ userEmail, name: "Booked Appointment" });
+pages/api/calendar/book-appointment.ts:320:    lead.status = "Booked Appointment";
+pages/api/sheets/webhook.ts:289:    "queued",
+pages/api/google/calendar/book-appointment.ts:11:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+pages/api/google/calendar/book-appointment.ts:763:      queueLeadMemoryHook({
+pages/api/leads/add-note.ts:8:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+pages/api/leads/add-note.ts:88:    queueLeadMemoryHook({
+pages/api/chat-assistant.ts:47:- You’ll have options: Sold, Not Interested, No Answer, DNC, etc.
+pages/api/chat-assistant.ts:51:- Sold = moves to “Sold” folder
+pages/api/chat-assistant.ts:52:- Not Interested = moved to “Not Interested”
+pages/api/internal/run-drips.ts:556:          // ✅ skipping is safe, but do not advance state on dry runs
+pages/api/internal/run-drips.ts:694:        // ✅ DRY RUN: do not send and do not advance; just record that it would send.
+pages/api/internal/run-drips.ts:762:            // couldn't acquire lock — treat as suppressed for this tick, but DO NOT advance.
+pages/api/internal/run-drips.ts:767:          // ✅ FAILURE: do NOT advance cursorStep / sentAtByIndex.
+pages/api/internal/run-drips.ts:817:        // ✅ If lock miss, we purposely did not send; do NOT advance.
+pages/api/internal/run-drips.ts:836:        // ✅ SUCCESS PATH ONLY: advance cursor + schedule next
+pages/api/disposition-lead.ts:110:  const canonical = folderNameForDisposition(rawName); // "Sold" | "Not Interested" | "Booked Appointment" | null
+pages/api/disposition-lead.ts:145:        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment", "Bad Number", "No Show", "Do Not Contact"];
+pages/api/message/index.ts:11:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+pages/api/message/index.ts:124:    queueLeadMemoryHook({
+pages/api/ai-calls/status.ts:14: *  - CallStatus (queued|ringing|in-progress|completed|busy|no-answer|failed)
+pages/api/ai-calls/call-status-webhook.ts:452:                  status: { $in: ["queued", "running"] },
+pages/api/ai-calls/call-status-webhook.ts:871:          // - session is still active (queued/running)
+pages/api/ai-calls/call-status-webhook.ts:887:            (s.status === "queued" || s.status === "running")
+pages/api/ai-calls/call-status-webhook.ts:911:                status: { $in: ["queued", "running"] },
+pages/api/ai-calls/recording-webhook.ts:180:      // Future: enqueue AI summarizer to update outcome + summary
+pages/api/ai-calls/transcribe-recording.ts:5:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+pages/api/ai-calls/transcribe-recording.ts:345:      queueLeadMemoryHook({
+pages/api/ai-calls/start.ts:16:  // New AI dial session fields
+pages/api/ai-calls/start.ts:72:      .json({ ok: false, error: "folderId is required for AI dial session." });
+pages/api/ai-calls/start.ts:105:      error: "No leads found for this folder/user to start an AI dial session.",
+pages/api/ai-calls/start.ts:126:      error: "Unable to resolve a valid fromNumber for AI dial session.",
+pages/api/ai-calls/start.ts:143:    status: "queued",
+pages/api/ai-calls/admin-resume-latest.ts:13: * - Forces it back to `queued` with lastIndex = -1, clears completedAt/error
+pages/api/ai-calls/admin-resume-latest.ts:107:  latest.status = "queued";
+pages/api/ai-calls/admin-resume-latest.ts:117:    message: "Latest AI call session reset to queued.",
+pages/api/ai-calls/session.ts:21:   * - pages/ai-dial-session.tsx → VOICE_OPTIONS
+pages/api/ai-calls/session.ts:232:  // GET – fetch latest AI dial session (either for a folder, or active for user)
+pages/api/ai-calls/session.ts:263:        status: { $in: ["queued", "running", "paused"] },
+pages/api/ai-calls/session.ts:274:        .json({ ok: false, message: "Failed to load AI dial session" });
+pages/api/ai-calls/session.ts:279:  // POST – create/refresh an AI dial session for a folder
+pages/api/ai-calls/session.ts:315:      // Block Kayla demo sessions from the normal AI dial session UI.
+pages/api/ai-calls/session.ts:325:      // Pull queue snapshot from leads in that folder (per-user ownership)
+pages/api/ai-calls/session.ts:366:          status: "queued",
+pages/api/ai-calls/session.ts:385:        aiSession.status = "queued";
+pages/api/ai-calls/session.ts:393:      // This is what actually starts dialing instead of leaving the session stuck at QUEUED.
+pages/api/ai-calls/session.ts:412:        .json({ ok: false, message: "Failed to create AI dial session" });
+pages/api/ai-calls/session.ts:448:          .json({ ok: false, message: "AI dial session not found" });
+pages/api/ai-calls/session.ts:457:        // Put it back in the worker queue
+pages/api/ai-calls/session.ts:458:        aiSession.status = "queued";
+pages/api/ai-calls/session.ts:473:        .json({ ok: false, message: "Failed to update AI dial session" });
+pages/api/ai-calls/outcome.ts:155:  | "Not Interested"
+pages/api/ai-calls/outcome.ts:156:  | "No Answer"
+pages/api/ai-calls/outcome.ts:178:  if (outcome === "not_interested") return "Not Interested";
+pages/api/ai-calls/outcome.ts:179:  if (outcome === "no_answer") return "No Answer";
+pages/api/ai-calls/outcome.ts:271:  outcome: "Booked" | "Callback" | "Not Interested" | "No Answer" | "Voicemail" | "Other";
+pages/api/ai-calls/outcome.ts:646:        systemFolderName = "Booked Appointment";
+pages/api/ai-calls/outcome.ts:648:        systemFolderName = "Not Interested";
+pages/api/ai-calls/outcome.ts:650:        systemFolderName = "Do Not Contact";
+pages/api/ai-calls/outcome.ts:693:            leadFieldUpdate.status = "Booked Appointment";
+pages/api/ai-calls/outcome.ts:696:          leadFieldUpdate.status = "Not Interested";
+pages/api/ai-calls/outcome.ts:701:          leadFieldUpdate.status = "Do Not Contact";
+pages/api/ai-calls/stop.ts:54:      status: { $in: ["queued", "running", "paused"] },
+pages/api/ai-calls/stop.ts:61:      error: "No active AI dial session found for this user",
+pages/api/ai-calls/trigger-call.ts:90:  const blockedLeadStatuses = new Set(["queued", "calling", "in_progress", "completed"]);
+pages/api/ai-calls/trigger-call.ts:127:      status: { $in: ["queued", "running"] },
+pages/api/ai-calls/end-session.ts:58:      .json({ ok: false, message: "Failed to end AI dial session" });
+pages/api/ai-calls/worker.ts:140: * - NEVER dial unless there is a truly active / fresh queued session.
+pages/api/ai-calls/worker.ts:141: * - Prevents old “queued” sessions from being processed forever by a 1/min cron.
+pages/api/ai-calls/worker.ts:220:    // or "queued" but recently updated (fresh).
+pages/api/ai-calls/worker.ts:227:        { status: "queued", updatedAt: { $gte: freshCutoff } },
+pages/api/ai-calls/worker.ts:235:      console.log("[AI WORKER] no queued/running sessions (fresh window), exiting");
+pages/api/ai-calls/worker.ts:256:        status: { $in: ["queued", "running"] },
+pages/api/ai-calls/worker.ts:325:    // If the session is queued but stale, do nothing.
+pages/api/ai-calls/worker.ts:327:      aiSession.status === "queued" &&
+pages/api/ai-calls/worker.ts:331:      console.log("[AI WORKER] queued session is stale; exiting without dialing", {
+pages/api/ai-calls/worker.ts:337:      return res.status(200).json({ ok: true, message: "stale_queued_noop", sessionId });
+pages/api/ai-calls/worker.ts:349:            errorMessage: "AI dialer user not found for this session.",
+pages/api/ai-calls/worker.ts:562:    // ✅ HARD STOP: if lead no longer exists, skip and advance (no Twilio calls)
+pages/api/ai-calls/worker.ts:801:      // ✅ Success: advance lastIndex and clear cooldown
+pages/api/ai-calls/admin-stop-all.ts:37:      { status: { $in: ["queued", "running", "paused"] } },
+pages/api/voice/recording-webhook.ts.bak.20260301135517:321:        console.warn("ℹ️ Skipped AI queue:", (e as any)?.message || e);
+pages/api/voice/recording-webhook.ts:324:        console.warn("ℹ️ Skipped AI queue:", (e as any)?.message || e);
+pages/api/mobile/message/index.ts:10:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+pages/api/mobile/message/index.ts:128:    queueLeadMemoryHook({
+pages/api/ai/activity-feed.ts:82:  const [queuedReplies, callRecordings, aiStates, actionLogs, campaigns] =
+pages/api/ai/activity-feed.ts:98:        ...queuedReplies.map((r: any) => String(r.leadId || "")),
+pages/api/ai/activity-feed.ts:126:    ...queuedReplies.filter((reply: any) => {
+pages/api/affiliates/cron/autopayouts.ts:67:            status: "queued",
+pages/api/affiliates/cron/autopayouts.ts:71:        results.push({ promoCode: affiliate.promoCode, queued: amountUSD });
+pages/api/cron/ai-followups.ts:41:      status: { $nin: ["Not Interested", "Bad Number"] },
+pages/api/cron/fire-due-ai-calls.ts:21:  "Booked Appointment",
+pages/api/cron/fire-due-ai-calls.ts:23:  "Not Interested",
+pages/api/cron/fire-due-ai-calls.ts:25:  "Sold",
+pages/api/cron/fire-due-ai-calls.ts:27:  "Do Not Contact",
+pages/api/cron/ai-reactivation.ts:46:      status: { $nin: ["Sold", "Booked Appointment", "Bad Number"] },
+pages/api/cron/verify-doi-emails.ts:2:// Kicks off SMTP verification for queued DOI agent emails.
+pages/api/cron/ai-reactivation.ts.bak.20260402-220125:96:      status: { $nin: ["Sold", "Booked Appointment", "Bad Number"] },
+pages/api/cron/send-ai-queued.ts:1:// /pages/api/cron/send-ai-queued.ts
+pages/api/cron/send-ai-queued.ts:123:    console.warn("[send-ai-queued] sanitized owner greeting in AI reply", {
+pages/api/cron/send-ai-queued.ts:149:    console.warn("[send-ai-queued] HARD STOP enabled, exiting.");
+pages/api/cron/send-ai-queued.ts:157:    const locked = await acquireLock("cron", "send-ai-queued", 55);
+pages/api/cron/send-ai-queued.ts:159:      console.log("[send-ai-queued] Another run in progress, skipping.");
+pages/api/cron/send-ai-queued.ts:165:    // Find due queued AI replies
+pages/api/cron/send-ai-queued.ts:167:      status: "queued",
+pages/api/cron/send-ai-queued.ts:176:      console.log("[send-ai-queued] No queued messages due.");
+pages/api/cron/send-ai-queued.ts:188:      `[send-ai-queued] Processing ${due.length} queued AI message(s) at ${now.toISOString()}`
+pages/api/cron/send-ai-queued.ts:239:              { _id: job._id, status: "queued" },
+pages/api/cron/send-ai-queued.ts:250:              `[send-ai-queued] ⏭️ Rescheduled queuedId=${id} (no reply since human outbound) -> ${newSendAfter.toISOString()}`
+pages/api/cron/send-ai-queued.ts:263:              { _id: job._id, status: "queued" },
+pages/api/cron/send-ai-queued.ts:274:              `[send-ai-queued] ⏭️ Rescheduled queuedId=${id} (suppressed but missing lastHuman) -> ${newSendAfter.toISOString()}`
+pages/api/cron/send-ai-queued.ts:280:            `[send-ai-queued] ⚠️ gate check failed for ${id}:`,
+pages/api/cron/send-ai-queued.ts:286:        // Mark as "sending" and bump attempts, but only if still queued
+pages/api/cron/send-ai-queued.ts:290:            status: "queued",
+pages/api/cron/send-ai-queued.ts:303:            `[send-ai-queued] Skipping ${id} — no longer queued or max attempts reached.`
+pages/api/cron/send-ai-queued.ts:309:          `[send-ai-queued] Sending queuedId=${id} to=${updated.to} (attempt ${updated.attempts})`
+pages/api/cron/send-ai-queued.ts:380:        console.log(`[send-ai-queued] ✅ Sent queuedId=${id} to=${updated.to}`);
+pages/api/cron/send-ai-queued.ts:382:        console.error(`[send-ai-queued] ❌ Error sending queuedId=${id}:`, err?.message || err);
+pages/api/cron/send-ai-queued.ts:389:        // If we hit max attempts, mark as permanently failed; else put back to queued
+pages/api/cron/send-ai-queued.ts:397:          doc.status = "queued";
+pages/api/cron/send-ai-queued.ts:405:      status: "queued",
+pages/api/cron/send-ai-queued.ts:419:    console.error("[send-ai-queued] ❌ Cron error:", err);
+pages/api/cron/ai-followups.ts.bak.20260402-220125:89:      status: { $nin: ["Not Interested", "Bad Number"] },
+pages/api/cron/send-email-queue.ts:1:// pages/api/cron/send-email-queue.ts
+pages/api/cron/send-email-queue.ts:175:      console.error("[send-email-queue] Error processing record", r._id, err?.message);
+pages/api/cron/platform-promo-queue.ts:1:// pages/api/cron/platform-promo-queue.ts
+pages/api/cron/platform-promo-queue.ts:146:    queuedNextSteps: 0,
+pages/api/cron/platform-promo-queue.ts:198:        summary.queuedNextSteps += 1;
+pages/api/twilio/calls/status.ts:22:    // c.status: queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
+pages/api/twilio/calls/hangup.ts:20:    // Twilio statuses: queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
+pages/api/twilio/calls/hangup.ts:21:    if (prev === "queued" || prev === "ringing" || prev === "pending") {
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:30:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:697:   - All Twilio, quiet hours, drips, booking queueing, etc. remain unchanged.
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:729:  // Store on lead (this mirrors your existing appointment fields; we do NOT touch quiet hours or queueing)
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:877:  • updateLeadStatus(leadId, status) when they are clearly Not Interested, Booked, Reschedule Requested, etc.
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:941:              "A short status label such as 'Booked', 'Not Interested', 'Reschedule Requested', or 'Follow Up'.",
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1458:    queueLeadMemoryHook({
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1542:      (lead as any).status = "Not Interested";
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1545:        text: "[system] Lead opted out — moved to Not Interested.",
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1554:          status: "Not Interested",
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1560:      console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1561:      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1841:        console.log("🔁 Same AI content as last time — not queueing.");
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1850:      const queued = await AiQueuedReply.create({
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1856:        status: "queued",
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1868:        io.to(user.email).emit("ai:queued", {
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1870:          queuedId: queued._id,
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1876:        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`,
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1880:        message: "Inbound received; AI reply queued.",
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1881:        queuedId: String(queued._id),
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1885:      console.error("❌ AI SMS queue failed:", err);
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1888:        text: "[system] AI reply failed to queue. Agent should follow up manually.",
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1896:        message: "Inbound received; AI reply failed to queue.",
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:688:   - All Twilio, quiet hours, drips, booking queueing, etc. remain unchanged.
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:720:  // Store on lead (this mirrors your existing appointment fields; we do NOT touch quiet hours or queueing)
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:839:  • updateLeadStatus(leadId, status) when they are clearly Not Interested, Booked, Reschedule Requested, etc.
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:903:              "A short status label such as 'Booked', 'Not Interested', 'Reschedule Requested', or 'Follow Up'.",
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1482:      (lead as any).status = "Not Interested";
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1485:        text: "[system] Lead opted out — moved to Not Interested.",
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1494:          status: "Not Interested",
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1500:      console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1501:      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1781:        console.log("🔁 Same AI content as last time — not queueing.");
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1790:      const queued = await AiQueuedReply.create({
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1796:        status: "queued",
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1808:        io.to(user.email).emit("ai:queued", {
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1810:          queuedId: queued._id,
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1816:        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`,
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1820:        message: "Inbound received; AI reply queued.",
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1821:        queuedId: String(queued._id),
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1825:      console.error("❌ AI SMS queue failed:", err);
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1828:        text: "[system] AI reply failed to queue. Agent should follow up manually.",
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1836:        message: "Inbound received; AI reply failed to queue.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:695:   - All Twilio, quiet hours, drips, booking queueing, etc. remain unchanged.
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:727:  // Store on lead (this mirrors your existing appointment fields; we do NOT touch quiet hours or queueing)
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:846:  • updateLeadStatus(leadId, status) when they are clearly Not Interested, Booked, Reschedule Requested, etc.
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:910:              "A short status label such as 'Booked', 'Not Interested', 'Reschedule Requested', or 'Follow Up'.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1501:      (lead as any).status = "Not Interested";
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1504:        text: "[system] Lead opted out — moved to Not Interested.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1513:          status: "Not Interested",
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1519:      console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1520:      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1800:        console.log("🔁 Same AI content as last time — not queueing.");
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1809:      const queued = await AiQueuedReply.create({
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1815:        status: "queued",
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1827:        io.to(user.email).emit("ai:queued", {
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1829:          queuedId: queued._id,
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1835:        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`,
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1839:        message: "Inbound received; AI reply queued.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1840:        queuedId: String(queued._id),
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1844:      console.error("❌ AI SMS queue failed:", err);
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1847:        text: "[system] AI reply failed to queue. Agent should follow up manually.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1855:        message: "Inbound received; AI reply failed to queue.",
+pages/api/twilio/message-status.ts:27:      status: msg.status, // queued, sent, delivered, undelivered, failed
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:695:   - All Twilio, quiet hours, drips, booking queueing, etc. remain unchanged.
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:727:  // Store on lead (this mirrors your existing appointment fields; we do NOT touch quiet hours or queueing)
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:846:  • updateLeadStatus(leadId, status) when they are clearly Not Interested, Booked, Reschedule Requested, etc.
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:910:              "A short status label such as 'Booked', 'Not Interested', 'Reschedule Requested', or 'Follow Up'.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1501:      (lead as any).status = "Not Interested";
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1504:        text: "[system] Lead opted out — moved to Not Interested.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1513:          status: "Not Interested",
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1519:      console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1520:      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1800:        console.log("🔁 Same AI content as last time — not queueing.");
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1809:      const queued = await AiQueuedReply.create({
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1815:        status: "queued",
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1827:        io.to(user.email).emit("ai:queued", {
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1829:          queuedId: queued._id,
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1835:        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`,
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1839:        message: "Inbound received; AI reply queued.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1840:        queuedId: String(queued._id),
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1844:      console.error("❌ AI SMS queue failed:", err);
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1847:        text: "[system] AI reply failed to queue. Agent should follow up manually.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1855:        message: "Inbound received; AI reply failed to queue.",
+pages/api/twilio/inbound-sms.ts:30:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+pages/api/twilio/inbound-sms.ts:889:   - All Twilio, quiet hours, drips, booking queueing, etc. remain unchanged.
+pages/api/twilio/inbound-sms.ts:921:  // Store on lead (this mirrors your existing appointment fields; we do NOT touch quiet hours or queueing)
+pages/api/twilio/inbound-sms.ts:1107:  • updateLeadStatus(leadId, status) when they are clearly Not Interested, Booked, Reschedule Requested, etc.
+pages/api/twilio/inbound-sms.ts:1171:              "A short status label such as 'Booked', 'Not Interested', 'Reschedule Requested', or 'Follow Up'.",
+pages/api/twilio/inbound-sms.ts:1749:    queueLeadMemoryHook({
+pages/api/twilio/inbound-sms.ts:1833:      (lead as any).status = "Not Interested";
+pages/api/twilio/inbound-sms.ts:1836:        text: "[system] Lead opted out — moved to Not Interested.",
+pages/api/twilio/inbound-sms.ts:1859:          status: "Not Interested",
+pages/api/twilio/inbound-sms.ts:1865:      console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
+pages/api/twilio/inbound-sms.ts:1866:      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
+pages/api/twilio/inbound-sms.ts:2153:        console.log("🔁 Same AI content as last time — not queueing.");
+pages/api/twilio/inbound-sms.ts:2162:      const queued = await AiQueuedReply.create({
+pages/api/twilio/inbound-sms.ts:2168:        status: "queued",
+pages/api/twilio/inbound-sms.ts:2180:        io.to(user.email).emit("ai:queued", {
+pages/api/twilio/inbound-sms.ts:2182:          queuedId: queued._id,
+pages/api/twilio/inbound-sms.ts:2188:        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`,
+pages/api/twilio/inbound-sms.ts:2192:        message: "Inbound received; AI reply queued.",
+pages/api/twilio/inbound-sms.ts:2193:        queuedId: String(queued._id),
+pages/api/twilio/inbound-sms.ts:2197:      console.error("❌ AI SMS queue failed:", err);
+pages/api/twilio/inbound-sms.ts:2200:        text: "[system] AI reply failed to queue. Agent should follow up manually.",
+pages/api/twilio/inbound-sms.ts:2208:        message: "Inbound received; AI reply failed to queue.",
+pages/api/twilio/amd-callback.ts:249:        // Let the UI know a drop was played so it can advance if desired.
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:695:   - All Twilio, quiet hours, drips, booking queueing, etc. remain unchanged.
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:727:  // Store on lead (this mirrors your existing appointment fields; we do NOT touch quiet hours or queueing)
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:846:  • updateLeadStatus(leadId, status) when they are clearly Not Interested, Booked, Reschedule Requested, etc.
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:910:              "A short status label such as 'Booked', 'Not Interested', 'Reschedule Requested', or 'Follow Up'.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1501:      (lead as any).status = "Not Interested";
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1504:        text: "[system] Lead opted out — moved to Not Interested.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1513:          status: "Not Interested",
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1519:      console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1520:      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1800:        console.log("🔁 Same AI content as last time — not queueing.");
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1809:      const queued = await AiQueuedReply.create({
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1815:        status: "queued",
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1827:        io.to(user.email).emit("ai:queued", {
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1829:          queuedId: queued._id,
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1835:        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`,
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1839:        message: "Inbound received; AI reply queued.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1840:        queuedId: String(queued._id),
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1844:      console.error("❌ AI SMS queue failed:", err);
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1847:        text: "[system] AI reply failed to queue. Agent should follow up manually.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1855:        message: "Inbound received; AI reply failed to queue.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:695:   - All Twilio, quiet hours, drips, booking queueing, etc. remain unchanged.
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:727:  // Store on lead (this mirrors your existing appointment fields; we do NOT touch quiet hours or queueing)
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:846:  • updateLeadStatus(leadId, status) when they are clearly Not Interested, Booked, Reschedule Requested, etc.
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:910:              "A short status label such as 'Booked', 'Not Interested', 'Reschedule Requested', or 'Follow Up'.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1503:      (lead as any).status = "Not Interested";
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1506:        text: "[system] Lead opted out — moved to Not Interested.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1515:          status: "Not Interested",
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1521:      console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1522:      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1802:        console.log("🔁 Same AI content as last time — not queueing.");
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1811:      const queued = await AiQueuedReply.create({
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1817:        status: "queued",
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1829:        io.to(user.email).emit("ai:queued", {
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1831:          queuedId: queued._id,
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1837:        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`,
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1841:        message: "Inbound received; AI reply queued.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1842:        queuedId: String(queued._id),
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1846:      console.error("❌ AI SMS queue failed:", err);
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1849:        text: "[system] AI reply failed to queue. Agent should follow up manually.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1857:        message: "Inbound received; AI reply failed to queue.",
+pages/api/stripe/webhook.ts:473:      status: "queued",
+pages/api/stripe/webhook.ts:660:            audit("ai_dialer_topup: missing email on session", {
+pages/legal/refund-policy.tsx:7:        All subscriptions to Cove CRM are billed in advance (monthly or
+pages/_app.tsx:81:    window.location.href.includes("dial-session");
+components/ReminderBanner.tsx:69:        "You're currently in a dial session. Are you sure you want to leave and view this lead?"
+components/settings/ProfilePanel.tsx:38:  const [currentPassword, setCurrentPassword] = useState("");
+components/settings/ProfilePanel.tsx:107:      setCurrentPassword("");
+components/settings/ProfilePanel.tsx:218:              onChange={(e) => setCurrentPassword(e.target.value)}
+components/CallSummary.tsx:38:  const [currentCall, setCurrentCall] = useState<CallShape | null>(call || null);
+components/CallSummary.tsx:56:    if (call) setCurrentCall(call);
+components/CallSummary.tsx:65:      if (json?.call) setCurrentCall(json.call);
+components/messages/ChatThread.tsx:19:  queuedAt?: string;
+components/messages/ChatThread.tsx:28:  status: "queued" | "sent" | "delivered" | "opened" | "bounced" | "replied" | "failed";
+components/messages/ChatThread.tsx:40:  queued: "bg-gray-600 text-gray-200",
+components/messages/ChatThread.tsx:83:  return m.date || m.sentAt || m.createdAt || m.queuedAt;
+components/messages/ChatThread.tsx.bak.20260228152220:17:  queuedAt?: string;
+components/messages/ChatThread.tsx.bak.20260228152220:59:  return m.date || m.sentAt || m.createdAt || m.queuedAt;
+components/messages/ChatThread.tsx.bak.20260228162210:18:  queuedAt?: string;
+components/messages/ChatThread.tsx.bak.20260228162210:60:  return m.date || m.sentAt || m.createdAt || m.queuedAt;
+components/messages/ChatThread.tsx.bak.20260228154319:18:  queuedAt?: string;
+components/messages/ChatThread.tsx.bak.20260228154319:60:  return m.date || m.sentAt || m.createdAt || m.queuedAt;
+components/messages/ChatThread.tsx.bak.20260228163128:18:  queuedAt?: string;
+components/messages/ChatThread.tsx.bak.20260228163128:60:  return m.date || m.sentAt || m.createdAt || m.queuedAt;
+components/messages/ChatThread.tsx.bak.20260228163431:18:  queuedAt?: string;
+components/messages/ChatThread.tsx.bak.20260228163431:60:  return m.date || m.sentAt || m.createdAt || m.queuedAt;
+components/FoldersList.tsx:19:const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number", "No Show", "Do Not Contact"];
+components/FoldersList.tsx:20:const SYSTEM_FOLDER_ORDER = ["Sold", "Not Interested", "Booked Appointment", "Bad Number", "No Show", "Do Not Contact"];
+components/DripCampaignsPanel.tsx.bak.1772051834:34:  const [currentText, setCurrentText] = useState("");
+components/DripCampaignsPanel.tsx.bak.1772051834:35:  const [currentDay, setCurrentDay] = useState("immediately");
+components/DripCampaignsPanel.tsx.bak.1772051834:149:    setCurrentText("");
+components/DripCampaignsPanel.tsx.bak.1772051834:150:    setCurrentDay(`Day ${numericDay + 1}`);
+components/DripCampaignsPanel.tsx.bak.1772051834:164:    setCurrentText((prev) => `${prev} <${field}>`);
+components/DripCampaignsPanel.tsx.bak.1772051834:188:      setCurrentDay("immediately");
+components/DripCampaignsPanel.tsx.bak.1772051834:628:            onChange={(e) => setCurrentText(e.target.value)}
+components/DripCampaignsPanel.tsx.bak.1772051834:634:            onChange={(e) => setCurrentDay(e.target.value)}
+components/CalendarBookings.tsx:120:  const [currentDate, setCurrentDate] = useState<Date>(() => {
+components/CalendarBookings.tsx:307:    setCurrentDate(date);
+components/CalendarBookings.tsx:414:      router.push(`/dial-session?leadId=${lead._id}`);
+components/CalendarView.tsx:141:  const [currentDate, setCurrentDate] = useState<Date>(() => {
+components/CalendarView.tsx:234:    setCurrentDate(date);
+components/CalendarView.tsx:309:    if (lead?._id) router.push(`/dial-session?leadId=${lead._id}`);
+components/DripCampaignsPanel.tsx:116:  const [currentText, setCurrentText] = useState("");
+components/DripCampaignsPanel.tsx:117:  const [currentDay, setCurrentDay] = useState("immediately");
+components/DripCampaignsPanel.tsx:226:    setCurrentText("");
+components/DripCampaignsPanel.tsx:227:    setCurrentDay(`Day ${numericDay + 1}`);
+components/DripCampaignsPanel.tsx:249:    setCurrentText((prev) => {
+components/DripCampaignsPanel.tsx:276:      setCurrentDay("immediately");
+components/DripCampaignsPanel.tsx:875:            onChange={(e) => setCurrentText(e.target.value)}
+components/DripCampaignsPanel.tsx:881:            onChange={(e) => setCurrentDay(e.target.value)}
+components/LeadsPanel.tsx:14:const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number", "No Show", "Do Not Contact"];
+components/LeadsPanel.tsx:157:                title="Open dial session"
+components/LeadsPanel.tsx:375:      alert("Please select a number to call from before starting the dial session.");
+components/LeadsPanel.tsx:412:    router.push(`/dial-session?${q}`);
+components/LeadsPanel.tsx:432:    router.push(`/dial-session?${q.toString()}`);
+components/LeadsPanel.tsx:455:    router.push(`/dial-session?${params.toString()}`);
+components/LeadsPanel.tsx:630:    if (disposition === "No Answer") return;
+components/LeadsPanel.tsx:673:    router.push("/ai-dial-session").catch(() => {});
+components/LeadsPanel.tsx:1193:                  <span style={folder.name === "Booked Appointment" ? { width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, background: "#0f2d1a", color: "#34d399" } : folder.name === "Not Interested" ? { width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, background: "#2d1010", color: "#f87171" } : folder.name === "Sold" ? { width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, background: "#0f2d1a", color: "#34d399" } : { width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, background: "#1e2438", color: "#6b7280" }}>
+components/dial/DialHistory.tsx:99:              <div className="mt-1 text-sm">{ev.title || "Booked Appointment"}</div>
+components/IncomingCallBanner.tsx:97:      // inbound-only safety: do NOT navigate into dial-session without a conference
+components/IncomingCallBanner.tsx:109:    router.push(`/dial-session?${params.toString()}`);
+components/SettingsPanel.tsx:37:  const [currentPassword, setCurrentPassword] = useState("");
+components/SettingsPanel.tsx:163:      setCurrentPassword("");
+components/SettingsPanel.tsx:327:              onChange={(e) => setCurrentPassword(e.target.value)}
+components/CallDetailCard.tsx:112:  // 🔗 Navigate to your existing dial session page for this lead
+components/CallDetailCard.tsx:121:  // “Call Back” should open the same dial session screen as from Leads
+components/PowerDialerPanel.tsx:79:        No active lead selected. Start a dial session from leads screen.
+components/LeadPreviewPanel.tsx:135:              <option value="Sold">Sold</option>
+components/LeadPreviewPanel.tsx:136:              <option value="Booked Appointment">Booked Appointment</option>
+components/LeadPreviewPanel.tsx:137:              <option value="Not Interested">Not Interested</option>
+components/LeadPreviewPanel.tsx:138:              <option value="No Answer">No Answer</option>
+lib/systemFolders.ts:7:  "Sold",
+lib/systemFolders.ts:8:  "Not Interested",
+lib/systemFolders.ts:9:  "Booked Appointment",
+lib/systemFolders.ts:12:  "Do Not Contact",
+lib/systemFolders.ts:35:  if (n === "booked") return true; // shorthand for “Booked Appointment”
+lib/dial/useInlineLeadCall.ts:164:        // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
+lib/dial/useInlineLeadCall.ts:172:        if (s === "queued" || s === "initiated") {
+lib/dial/useInlineLeadCall.ts:189:            s === "no-answer" ? "No Answer" :
+lib/dial/useInlineLeadCall.ts:218:      // Ensure audio unlock and start MP3 ringback (matches dial-session philosophy)
+lib/dial/useInlineLeadCall.ts.bak2:152:        // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
+lib/dial/useInlineLeadCall.ts.bak2:160:        if (s === "queued" || s === "initiated") {
+lib/dial/useInlineLeadCall.ts.bak2:175:            s === "no-answer" ? "No Answer" :
+lib/dial/useInlineLeadCall.ts.bak2:202:      // Ensure audio unlock and start MP3 ringback (matches dial-session philosophy)
+lib/ai/memory/queueLeadMemoryHook.ts:87:export function queueLeadMemoryHook(args: LeadMemoryHookArgs) {
+lib/ai/memory/queueLeadMemoryHook.ts:190:        source: "lib/ai/memory/queueLeadMemoryHook:extractLeadMemory",
+lib/ai/memory/queueLeadMemoryHook.ts:200:        source: "lib/ai/memory/queueLeadMemoryHook:generateLeadMemorySummary",
+lib/ai/triggerAIFirstCall.ts:36:  "Booked Appointment",
+lib/ai/triggerAIFirstCall.ts:38:  "Not Interested",
+lib/ai/triggerAIFirstCall.ts:40:  "Sold",
+lib/ai/triggerAIFirstCall.ts:42:  "Do Not Contact",
+lib/ai/triggerAIFirstCall.ts:52:  "queued",
+lib/dispositionToFolder.ts:11:  if (s === "sold") return "Sold";
+lib/dispositionToFolder.ts:12:  if (s === "not interested" || s === "notinterested") return "Not Interested";
+lib/dispositionToFolder.ts:13:  if (s === "booked appointment" || s === "booked") return "Booked Appointment";
+lib/dispositionToFolder.ts:16:  if (s === "do not contact" || s === "do_not_contact" || s === "dnc" || s === "opt out" || s === "opt_out" || s === "stop") return "Do Not Contact";
+lib/a2p/resumeAutomation.ts:966:  let advanced = false;
+lib/a2p/resumeAutomation.ts:982:      advanced = true;
+lib/a2p/resumeAutomation.ts:1132:        advanced = true;
+lib/a2p/resumeAutomation.ts:1343:          advanced = true;
+lib/a2p/resumeAutomation.ts:1513:              advanced = true;
+lib/a2p/resumeAutomation.ts:1649:    if (advanced) {
+lib/a2p/a2pFailureAutomation.ts:201:    status: { $in: ["draft", "queued", "sent"] },
+lib/a2p/a2pFailureAutomation.ts:335:    ? await SupportEmailDraft.findOne({ relatedProposalId, source: "a2p_failure", status: { $in: ["draft", "queued"] } })
+lib/a2p/a2pFailureAutomation.ts:371:    status: proposal?.autoEligible && process.env.SUPPORT_EMAIL_SEND_ENABLED === "true" ? "queued" : "draft",
+lib/drips/enrollOnNewLead.ts:9: * - "now" / "immediate"  => enqueue immediately (nextSendAt = now)
+lib/drips/enrollOnNewLead.ts:10: * - "nextWindow"        => enqueue for the next 9:00 AM PT window
+lib/email/sendEmail.ts:130:  // Create EmailMessage in queued state before attempting send
+lib/email/sendEmail.ts:142:    status: "queued",
+lib/billing/trackUsage.ts:66:    auto_advance: true,
+lib/billing/trackAiDialerUsage.ts:73:    auto_advance: true,
+lib/prospecting/sendPlatformPromo.ts:103:  // Create tracking record (queued)
+lib/prospecting/sendPlatformPromo.ts:111:    status: "queued",
+lib/twilio/sendSMS.ts:13:import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+lib/twilio/sendSMS.ts:590:      queuedAt: new Date(),
+lib/twilio/sendSMS.ts:597:      queueLeadMemoryHook({
+lib/twilio/sendSMS.ts:660:  // PRE-INSERT queued row with IDEMPOTENCY KEY (this is the duplicate gate)
+lib/twilio/sendSMS.ts:669:      status: "queued",
+lib/twilio/sendSMS.ts:674:      queuedAt: new Date(),
+lib/twilio/sendSMS.ts:682:    // Duplicate idempotencyKey → treat as already sent/queued
+lib/twilio/sendSMS.ts:697:    queueLeadMemoryHook({
+lib/twilio/sendSMS.ts:762:            status: "Not Interested",
+lib/twilio/sendSMS.ts:768:              text: "[system] Twilio 21610 (STOP) — lead marked Not Interested.",
+models/AffiliatePayout.ts:12:  status: "queued" | "sent" | "failed"; // lifecycle tracking
+models/AffiliatePayout.ts:29:      enum: ["queued", "sent", "failed"],
+models/AffiliatePayout.ts:30:      default: "queued",
+models/Call.ts:12:  // ✅ dial session + GHL-style billing window
+models/Call.ts:69:      | "Not Interested"
+models/Call.ts:70:      | "No Answer"
+models/Call.ts:89:    // ✅ dial session + GHL-style billing window
+models/Call.ts:146:            enum: ["Booked", "Callback", "Not Interested", "No Answer", "Voicemail", "Other"],
+models/PlatformEmailRecord.ts:21:      enum: ["queued", "sent", "failed"],
+models/PlatformEmailRecord.ts:22:      default: "queued",
+models/AiQueuedReply.ts:12:  status: "queued" | "sending" | "sent" | "failed";
+models/AiQueuedReply.ts:26:      enum: ["queued", "sending", "sent", "failed"],
+models/AiQueuedReply.ts:27:      default: "queued",
+models/SupportEmailDraft.ts:18:      enum: ["draft", "queued", "sent", "discarded"],
+models/Message.ts:25:  queuedAt?: Date;
+models/Message.ts:64:    queuedAt: { type: Date },
+models/Folder.ts:61:  "Sold",
+models/Folder.ts:62:  "Not Interested",
+models/Folder.ts:63:  "Booked Appointment",
+models/Folder.ts:66:  "Do Not Contact",
+models/Folder.ts:86:  if (n === "booked") return true; // shorthand for “Booked Appointment”
+models/EmailMessage.ts:22:      enum: ["queued", "sent", "delivered", "opened", "bounced", "replied", "failed"],
+models/EmailMessage.ts:23:      default: "queued",
+models/AICallSession.ts:5:  | "queued"
+models/AICallSession.ts:87:      enum: ["queued", "running", "paused", "completed", "stopped", "failed", "error"],
+models/AICallSession.ts:89:      default: "queued",
+models/AICallSession.ts:101:    // AI dialer stats (per session)
+utils/prebuiltDrips.ts:95:    name: "Sold Lead Follow-up Drip",
+utils/ringAudio.ts:32:    return p.startsWith("/dial-session") || p.startsWith("/ai-dial-session");
+utils/ringAudio.ts:152:  // HARD BLOCK everywhere EXCEPT dial-session routes.

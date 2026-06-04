@@ -6,6 +6,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { classifyMetaHealthError, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
@@ -31,6 +32,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const data = await resp.json() as any;
 
     if (!resp.ok) {
+      const classified = classifyMetaHealthError(data);
+      if (classified.status !== "error") {
+        await markMetaHealthFailure({ user, userEmail: email, error: data }).catch(() => {});
+      }
       return res.status(200).json({ adAccounts: [], connected: false, error: data?.error?.message || "Failed to load ad accounts" });
     }
 

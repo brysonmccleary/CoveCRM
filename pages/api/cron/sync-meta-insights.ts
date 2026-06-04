@@ -6,6 +6,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import FBLeadSubscription from "@/models/FBLeadSubscription";
 import { syncAdInsights } from "@/lib/meta/syncAdInsights";
+import { classifyMetaHealthError, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 
 const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
@@ -37,7 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { metaAccessToken: { $exists: true, $ne: "" } },
     ],
   })
-    .select("_id email metaAdAccountId metaSystemUserToken metaAccessToken metaTokenExpiresAt")
+    .select("_id email metaAdAccountId metaSystemUserToken metaAccessToken metaTokenExpiresAt metaReconnectNeeded metaHealthCooldownUntil lastMetaHealthError")
     .lean() as any[];
 
   let synced = 0;
@@ -50,6 +51,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   for (const user of users) {
     const userEmail = (user.email || "").toLowerCase();
     if (!activeEmails.has(userEmail)) continue;
+
+    const cooldownUntil = user.metaHealthCooldownUntil ? new Date(user.metaHealthCooldownUntil) : null;
+    if (user.metaReconnectNeeded || (cooldownUntil && cooldownUntil > now)) {
+      failed++;
+      errors.push(`${userEmail}: ${user.lastMetaHealthError || "Meta health cooldown active"}`);
+      continue;
+    }
 
     // Skip and mark campaigns if token is known-expired
     if (user.metaTokenExpiresAt && new Date(user.metaTokenExpiresAt) < now) {
@@ -71,7 +79,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const token = user.metaSystemUserToken || user.metaAccessToken;
     try {
-      await syncAdInsights(String(user._id), userEmail, user.metaAdAccountId, token, 7);
+      const result = await syncAdInsights(String(user._id), userEmail, user.metaAdAccountId, token, 7);
+      if (result.error) {
+        const classified = classifyMetaHealthError(result.error);
+        if (classified.status !== "error") {
+          await markMetaHealthFailure({
+            user,
+            userEmail,
+            error: result.error,
+          }).catch(() => {});
+          failed++;
+          errors.push(`${userEmail}: ${classified.reason}`);
+          continue;
+        }
+      }
       synced++;
     } catch (err: any) {
       failed++;

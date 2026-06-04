@@ -6,6 +6,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
+import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 
 async function updateMetaObjectStatus(
   objectId: string,
@@ -85,10 +86,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!metaAdIds.length) return res.status(400).json({ error: "Campaign is missing metaAdId" });
 
       const user = await User.findOne({ email: session.user.email.toLowerCase() })
-        .select("metaSystemUserToken metaAccessToken")
+        .select("_id email metaSystemUserToken metaAccessToken metaAdAccountId metaPageId metaReconnectNeeded metaHealthStatus lastMetaHealthError metaHealthCooldownUntil metaLastSuccessfulHealthCheckAt")
         .lean() as any;
       const accessToken = String(user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
       if (!accessToken) return res.status(400).json({ error: "Meta access token missing" });
+
+      const metaHealth = await checkMetaWriteReadiness({
+        user,
+        userEmail: session.user.email.toLowerCase(),
+        accessToken,
+        pageId: String((campaign as any).facebookPageId || user?.metaPageId || "").trim(),
+        adAccountId: String((campaign as any).adAccountId || user?.metaAdAccountId || "").trim(),
+      });
+      if (!metaHealth.ok) {
+        return res.status(400).json({
+          ok: false,
+          error: metaHealth.reason,
+          metaHealth,
+        });
+      }
 
       try {
         if (requestedMetaStatus === "ACTIVE") {
@@ -121,6 +137,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             },
           }
         ).catch(() => {});
+        await markMetaHealthFailure({
+          user,
+          userEmail: session.user.email.toLowerCase(),
+          error: failure.metaError,
+        }).catch(() => {});
         return res.status(500).json({
           ok: false,
           error: "Meta status update failed",
@@ -163,21 +184,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if ((campaign as any).metaCampaignId) {
       try {
         const user = await User.findOne({ email: session.user.email.toLowerCase() })
-          .select("metaSystemUserToken metaAccessToken")
+          .select("_id email metaSystemUserToken metaAccessToken metaAdAccountId metaPageId metaReconnectNeeded metaHealthStatus lastMetaHealthError metaHealthCooldownUntil metaLastSuccessfulHealthCheckAt")
           .lean() as any;
         const accessToken = String(user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
         if (accessToken) {
-          await fetch(
-            `https://graph.facebook.com/v18.0/${(campaign as any).metaCampaignId}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                status: "DELETED",
-                access_token: accessToken,
-              }),
-            }
-          );
+          const metaHealth = await checkMetaWriteReadiness({
+            user,
+            userEmail: session.user.email.toLowerCase(),
+            accessToken,
+            pageId: String((campaign as any).facebookPageId || user?.metaPageId || "").trim(),
+            adAccountId: String((campaign as any).adAccountId || user?.metaAdAccountId || "").trim(),
+          });
+          if (metaHealth.ok) {
+            await fetch(
+              `https://graph.facebook.com/v18.0/${(campaign as any).metaCampaignId}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  status: "DELETED",
+                  access_token: accessToken,
+                }),
+              }
+            );
+          }
         }
       } catch (e) {
         // Non-fatal — proceed with local delete

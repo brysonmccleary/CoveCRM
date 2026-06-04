@@ -9,6 +9,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { syncAdInsights } from "@/lib/meta/syncAdInsights";
+import { classifyMetaHealthError, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 
 const META_GRAPH_BASE = "https://graph.facebook.com/v19.0";
 
@@ -61,6 +62,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tokenExpiresAt: user.metaTokenExpiresAt || null,
       lastSyncAt: user.metaLastInsightSyncAt || null,
       lastWebhookAt: user.metaLastWebhookAt || null,
+      reconnectNeeded: Boolean(user.metaReconnectNeeded),
+      metaHealthStatus: user.metaHealthStatus || "unknown",
+      lastMetaHealthError: user.lastMetaHealthError || "",
+      metaHealthCooldownUntil: user.metaHealthCooldownUntil || null,
+      metaLastSuccessfulHealthCheckAt: user.metaLastSuccessfulHealthCheckAt || null,
     });
   }
 
@@ -126,6 +132,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         token,
         days
       );
+      if (result.error) {
+        const classified = classifyMetaHealthError(result.error);
+        if (classified.status !== "error") {
+          await markMetaHealthFailure({
+            user,
+            userEmail: email,
+            error: result.error,
+          }).catch(() => {});
+          return res.status(400).json({
+            ok: false,
+            error: classified.reason,
+            metaHealthStatus: classified.status,
+            fixUrl: classified.fixUrl,
+          });
+        }
+      }
       return res.status(200).json({ ok: true, ...result });
     } catch (err: any) {
       console.error("[sync-insights] Error:", err?.message);

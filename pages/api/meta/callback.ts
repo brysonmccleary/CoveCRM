@@ -94,6 +94,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         $set: {
           metaAccessToken: longLivedToken,
           metaTokenExpiresAt: tokenExpiresAt,
+          metaReconnectNeeded: false,
+          metaHealthStatus: "unknown",
+          lastMetaHealthError: "",
+          metaHealthCooldownUntil: null,
           ...(firstAd?.account_id && {
             metaAdAccountId: firstAd.account_id,
           }),

@@ -1,0 +1,5 @@
+pages/accessibility.tsx
+pages/legal/terms.tsx
+pages/legal/privacy.tsx
+pages/legal/affiliate-terms.tsx
+pages/security.tsx

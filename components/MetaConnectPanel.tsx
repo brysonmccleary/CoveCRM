@@ -12,6 +12,18 @@ interface MetaStatus {
   tokenExpiresAt?: string | null;
   lastWebhookAt?: string | null;
   lastInsightSyncAt?: string | null;
+  reconnectNeeded?: boolean;
+  metaHealthStatus?: string;
+  lastMetaHealthError?: string;
+  metaHealthCooldownUntil?: string | null;
+  metaLastSuccessfulHealthCheckAt?: string | null;
+}
+
+interface MetaHealth {
+  ok: boolean;
+  reason: string;
+  fixUrl?: string;
+  status?: string;
 }
 
 interface MetaPage {
@@ -52,6 +64,8 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
+  const [health, setHealth] = useState<MetaHealth | null>(null);
+  const [checkingHealth, setCheckingHealth] = useState(false);
   const [selectedPage, setSelectedPage] = useState("");
   const [selectedAdAccount, setSelectedAdAccount] = useState("");
   const [savingAssets, setSavingAssets] = useState(false);
@@ -113,10 +127,18 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
           tokenExpiresAt: data?.tokenExpiresAt || null,
           lastWebhookAt: data?.lastWebhookAt || null,
           lastInsightSyncAt: data?.lastSyncAt || null,
+          reconnectNeeded: !!data?.reconnectNeeded,
+          metaHealthStatus: data?.metaHealthStatus || "unknown",
+          lastMetaHealthError: data?.lastMetaHealthError || "",
+          metaHealthCooldownUntil: data?.metaHealthCooldownUntil || null,
+          metaLastSuccessfulHealthCheckAt: data?.metaLastSuccessfulHealthCheckAt || null,
         };
         setStatus(nextStatus);
         if (nextStatus.pageId) setSelectedPage(nextStatus.pageId);
         if (nextStatus.adAccountId) setSelectedAdAccount(nextStatus.adAccountId);
+        if (nextStatus.connected) {
+          await checkHealth(nextStatus.pageId, nextStatus.adAccountId);
+        }
       } else {
         setStatus(null);
       }
@@ -124,6 +146,34 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
       setStatus(null);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkHealth = async (pageId?: string, adAccountId?: string) => {
+    setCheckingHealth(true);
+    try {
+      const params = new URLSearchParams();
+      if (leadType) params.set("leadType", leadType);
+      if (pageId) params.set("pageId", pageId);
+      if (adAccountId) params.set("adAccountId", adAccountId);
+      const query = params.toString();
+      const res = await fetch(`/api/meta/health${query ? `?${query}` : ""}`);
+      const data = await res.json().catch(() => ({}));
+      setHealth({
+        ok: !!data?.ok,
+        reason: String(data?.metaHealth?.reason || data?.error || ""),
+        fixUrl: data?.metaHealth?.fixUrl || "",
+        status: data?.metaHealth?.status || "",
+      });
+    } catch {
+      setHealth({
+        ok: false,
+        reason: "Facebook setup check failed. Try reconnecting Facebook.",
+        fixUrl: "/api/meta/connect",
+        status: "error",
+      });
+    } finally {
+      setCheckingHealth(false);
     }
   };
 
@@ -178,6 +228,7 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
         setSyncMsg(data?.error || "Failed to save selected assets.");
       } else {
         setSyncMsg("Saved selected Facebook Page and Ad Account.");
+        await checkHealth(selectedPage, selectedAdAccount);
       }
       await fetchStatus();
     } finally {
@@ -319,9 +370,34 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                   </div>
                   <div className="bg-white/5 border border-white/10 rounded-lg p-3">
                     <p className="text-xs text-gray-400 mb-0.5">Connection</p>
-                    <p className="text-emerald-400 text-sm font-medium">Connection active</p>
+                    <p className={`${health?.ok ? "text-emerald-400" : "text-yellow-300"} text-sm font-medium`}>
+                      {checkingHealth ? "Checking setup..." : health?.ok ? "Ready" : "Needs attention"}
+                    </p>
                   </div>
                 </div>
+
+                {health && !health.ok && (
+                  <div className="rounded-lg border border-yellow-700/40 bg-yellow-950/20 p-4">
+                    <p className="text-sm font-semibold text-yellow-100">Finish Facebook setup before launching ads</p>
+                    <p className="text-xs text-yellow-100/80 mt-1">{health.reason}</p>
+                    {health.fixUrl && (
+                      <a
+                        href={health.fixUrl}
+                        target={health.fixUrl.startsWith("http") ? "_blank" : undefined}
+                        rel={health.fixUrl.startsWith("http") ? "noreferrer" : undefined}
+                        className="inline-block mt-3 text-xs text-yellow-50 underline"
+                      >
+                        {health.status === "missingPaymentMethod"
+                          ? "Add payment method in Facebook"
+                          : health.status === "missingLeadAdsEligibility"
+                            ? "Accept Lead Ads Terms"
+                            : health.status === "missingPage"
+                              ? "Create or choose a Facebook Page"
+                              : "Reconnect Facebook"}
+                      </a>
+                    )}
+                  </div>
+                )}
 
 
 

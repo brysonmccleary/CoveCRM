@@ -1,0 +1,518 @@
+pages/index.tsx:382:                Connect your Facebook lead forms directly to Cove. New leads are automatically imported, scored, organized into folders, and enrolled in drip campaigns — the moment they fill out your ad.
+pages/admin/site-intelligence.tsx:194:                  One place to review high-friction pages, broken conversion moments, and mobile behavior before it impacts signup flow or lead generation.
+pages/conversations.tsx:20:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+pages/conversations.tsx:44:    return new Intl.DateTimeFormat(undefined, {
+pages/conversations.tsx:56:    return new Intl.DateTimeFormat(undefined, {
+pages/conversations.tsx:63:  return new Intl.DateTimeFormat(undefined, {
+pages/conversations.tsx.bak.20260228154338:20:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+pages/conversations.tsx.bak.20260228154338:44:    return new Intl.DateTimeFormat(undefined, {
+pages/conversations.tsx.bak.20260228154338:56:    return new Intl.DateTimeFormat(undefined, {
+pages/conversations.tsx.bak.20260228154338:63:  return new Intl.DateTimeFormat(undefined, {
+pages/lead/[id].tsx.bak.20260226-170833:306:  const fmtDateTime = (d?: string | Date) => {
+pages/lead/[id].tsx.bak.20260226-170833:361:          lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170833:365:          lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170833:368:          const when = ev.startsAt ? fmtDateTime(ev.startsAt) : fmtDateTime(ev.date);
+pages/lead/[id].tsx.bak.20260226-170833:371:          lines.push(`🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170833:374:          lines.push(`🤖 ${label} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170833:1122:                  {fmtDateTime((latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt)}
+pages/lead/[id].tsx.bak.20260226-170833:1123:                  {closeOverview.generatedAt ? <> • Overview generated {fmtDateTime(closeOverview.generatedAt)}</> : null}
+pages/lead/[id].tsx.bak.20260226-170315:306:  const fmtDateTime = (d?: string | Date) => {
+pages/lead/[id].tsx.bak.20260226-170315:361:          lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170315:365:          lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170315:368:          const when = ev.startsAt ? fmtDateTime(ev.startsAt) : fmtDateTime(ev.date);
+pages/lead/[id].tsx.bak.20260226-170315:371:          lines.push(`🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170315:374:          lines.push(`🤖 ${label} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170315:1062:                  {fmtDateTime((latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt)}
+pages/lead/[id].tsx.bak.20260226-170315:1063:                  {closeOverview.generatedAt ? <> • Overview generated {fmtDateTime(closeOverview.generatedAt)}</> : null}
+pages/lead/[id].tsx.bak.20260226-170444:306:  const fmtDateTime = (d?: string | Date) => {
+pages/lead/[id].tsx.bak.20260226-170444:361:          lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170444:365:          lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170444:368:          const when = ev.startsAt ? fmtDateTime(ev.startsAt) : fmtDateTime(ev.date);
+pages/lead/[id].tsx.bak.20260226-170444:371:          lines.push(`🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170444:374:          lines.push(`🤖 ${label} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx.bak.20260226-170444:1080:                  {fmtDateTime((latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt)}
+pages/lead/[id].tsx.bak.20260226-170444:1081:                  {closeOverview.generatedAt ? <> • Overview generated {fmtDateTime(closeOverview.generatedAt)}</> : null}
+pages/lead/[id].tsx:374:  const fmtDateTime = (d?: string | Date) => {
+pages/lead/[id].tsx:429:          lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx:433:          lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx:436:          const when = ev.startsAt ? fmtDateTime(ev.startsAt) : fmtDateTime(ev.date);
+pages/lead/[id].tsx:439:          lines.push(`🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx:442:          lines.push(`🤖 ${label} • ${fmtDateTime(ev.date)}`);
+pages/lead/[id].tsx:1437:                  {fmtDateTime((latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt)}
+pages/lead/[id].tsx:1438:                  {closeOverview.generatedAt ? <> • Overview generated {fmtDateTime(closeOverview.generatedAt)}</> : null}
+pages/book/[...email].tsx:3:import moment from "moment";
+pages/book/[...email].tsx:112:                {moment(slot).format("ddd, MMM D @ h:mm A")}
+pages/kayla.tsx:162:        text: "We couldn’t submit your request right now. Please try again in a moment.",
+pages/api/calls/ai-dial-session.ts:40:  const formatter = new Intl.DateTimeFormat("en-US", {
+pages/api/calls/ai-dial-session.ts:86:    return res.status(409).json({ error: "Outside business hours. AI dial session blocked." });
+pages/api/calendar/book-appointment.ts:14:import { DateTime } from "luxon";
+pages/api/calendar/book-appointment.ts:184:    const startParsed = DateTime.fromISO(startISO, { setZone: true });
+pages/api/calendar/book-appointment.ts:185:    const endParsed = DateTime.fromISO(endISO, { setZone: true });
+pages/api/bookings/available-slots.ts:21:    return new Intl.DateTimeFormat("en-CA", {
+pages/api/bookings/available-slots.ts:35:    const dayName = new Intl.DateTimeFormat("en-US", {
+pages/api/bookings/available-slots.ts:48:    return new Intl.DateTimeFormat("en-US", {
+pages/api/bookings/available-slots.ts:72:  const localParts = new Intl.DateTimeFormat("en-US", {
+pages/api/assistants/booking.ts:7:import { DateTime } from "luxon";
+pages/api/assistants/booking.ts:80:  const now = DateTime.now().setZone(zone);
+pages/api/assistants/booking.ts:126:      let dt = DateTime.fromObject({ year: now.year, month, day, hour: h, minute: min, second: 0, millisecond: 0 }, { zone });
+pages/api/assistants/booking.ts:273:        const dt = DateTime.fromISO(startISO, { zone });
+pages/api/google/calendar/book-appointment.ts:16:import { DateTime } from "luxon";
+pages/api/google/calendar/book-appointment.ts:256:    ? DateTime.fromISO(iso)
+pages/api/google/calendar/book-appointment.ts:257:    : DateTime.fromISO(iso, { zone: clientZone });
+pages/api/google/calendar/book-appointment.ts:289:function enforceMinLead(sendAt: DateTime): DateTime {
+pages/api/google/calendar/book-appointment.ts:290:  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+pages/api/google/calendar/book-appointment.ts:703:    const nowClient = DateTime.now().setZone(clientZone);
+pages/api/google/calendar/book-appointment.ts:726:    const sendOrSchedule = async (body: string, scheduledAt?: DateTime) => {
+pages/api/internal/run-drips.ts:12:import { DateTime } from "luxon";
+pages/api/internal/run-drips.ts:191:  base: DateTime,
+pages/api/internal/run-drips.ts:194:): DateTime {
+pages/api/internal/run-drips.ts:206:  return DateTime.now().setZone(PT_ZONE).hour === SEND_HOUR_PT;
+pages/api/internal/run-drips.ts:370:        nowPT: DateTime.now().setZone(PT_ZONE).toISO(),
+pages/api/internal/run-drips.ts:375:    const nowPT = DateTime.now().setZone(PT_ZONE);
+pages/api/internal/run-drips.ts:570:              const base = DateTime.now().setZone(PT_ZONE).startOf("day");
+pages/api/internal/run-drips.ts:796:          const retryAt = DateTime.now()
+pages/api/internal/run-drips.ts:822:            ? DateTime.now().setZone(PT_ZONE).plus({ minutes: 2 }).toJSDate()
+pages/api/internal/run-drips.ts:855:          const base = DateTime.now().setZone(PT_ZONE).startOf("day");
+pages/api/internal/run-drips.ts:876:      nowPT: DateTime.now().setZone(PT_ZONE).toISO(),
+pages/api/book-calendar-event.ts:33:  const startDateTime = new Date(`${date}T${time}:00`);
+pages/api/book-calendar-event.ts:34:  const endDateTime = new Date(startDateTime.getTime() + 30 * 60000); // 30-min event
+pages/api/book-calendar-event.ts:42:        start: { dateTime: startDateTime.toISOString() },
+pages/api/book-calendar-event.ts:43:        end: { dateTime: endDateTime.toISOString() },
+pages/api/user/update-timezone.ts:9:    Intl.DateTimeFormat(undefined, { timeZone: tz });
+pages/api/dashboard/stats.ts:33:    const fmt = new Intl.DateTimeFormat("en-US", {
+pages/api/ai-calls/transfer-twiml.ts:171:  <Say voice="Polly.Joanna-Neural">Please hold for just a moment while I connect you.</Say>
+pages/api/ai-calls/book-appointment.ts:10:import { DateTime } from "luxon";
+pages/api/ai-calls/book-appointment.ts:261:        const startAgent = DateTime.fromJSDate(startUtcDate, { zone: "utc" })
+pages/api/ai-calls/book-appointment.ts:426:    const parts = new Intl.DateTimeFormat("en-US", {
+pages/api/ai-calls/book-appointment.ts:462:      new Intl.DateTimeFormat("en-US", {
+pages/api/ai-calls/booking-confirmation-sms.ts:19:    return new Intl.DateTimeFormat("en-US", {
+pages/api/facebook/execute-action.ts:105:    return "Last automation action was within 24 hours";
+pages/api/facebook/recommendations.ts:156:          ? `Campaign momentum is strong. Duplicate-test a new variation using the globally strong ${globalWinner.hookType}/${globalWinner.bodyAngle} direction.`
+pages/api/facebook/recommendations.ts:157:          : "Campaign momentum is strong. Launch an additional ad variation to capture more volume."
+pages/api/facebook/auto-optimize.ts:218:    return "Last automation action was within 24 hours";
+pages/api/facebook/auto-optimize.ts:775:        reasonParts.push("Campaign momentum is strong and ready for a fresh ad variation.");
+pages/api/ai/appointments.ts:5:import { DateTime } from "luxon";
+pages/api/ai/appointments.ts:48:  const dt = DateTime.fromISO(dtISO, { zone }).set({ second: 0, millisecond: 0 });
+pages/api/ai/appointments.ts:99:    const apptZoned = DateTime.fromISO(timeISO, { zone }).set({ second: 0, millisecond: 0 });
+pages/api/ai/appointments.ts:103:    const nowUtc = DateTime.utc();
+pages/api/drips/enroll-folder.ts:12:import { DateTime } from "luxon";
+pages/api/drips/enroll-folder.ts:46:  const nowPT = DateTime.now().setZone(PT_ZONE);
+pages/api/drips/enroll-folder.ts:60:  const base = DateTime.now().setZone(PT_ZONE).startOf("day");
+pages/api/drips/drips-folder-watch.ts:5:import { DateTime } from "luxon";
+pages/api/drips/drips-folder-watch.ts:32:  const nowPT = DateTime.now().setZone(PT_ZONE);
+pages/api/drips/enroll-lead.ts:14:import { DateTime } from "luxon";
+pages/api/drips/enroll-lead.ts:45:  const base = DateTime.now().setZone(PT_ZONE).startOf("day");
+pages/api/stats/today.ts:7:import { DateTime } from "luxon";
+pages/api/stats/today.ts:28:    const start = DateTime.now().setZone(tz).startOf("day");
+pages/api/stats/weekly.ts:7:import { DateTime } from "luxon";
+pages/api/stats/weekly.ts:31:    const today = DateTime.now().setZone(tz).startOf("day");
+pages/api/cron/platform-promo-queue.ts:15:const PLACEHOLDER_EMAIL = /@noemail\.doilead\.local$/i;
+pages/api/assign-drip-to-folder.ts:14:import { DateTime } from "luxon";
+pages/api/assign-drip-to-folder.ts:46:function isQuietHoursPT(now = DateTime.now().setZone(PT_ZONE)) {
+pages/api/assign-drip-to-folder.ts:55:function nextWindowPT(now = DateTime.now().setZone(PT_ZONE)): Date {
+pages/api/assign-drip-to-folder.ts:140:    const nowPT = DateTime.now().setZone(PT_ZONE);
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:16:import { DateTime } from "luxon";
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:60:// ---------- quiet hours (lead-local) ----------
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:263:  const nowLocal = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:285:  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:436:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:492:      let dt = DateTime.fromObject(
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:510:    const dt = DateTime.now()
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:558:  let base = DateTime.now().setZone(zone).plus({ days: 1 }); // "tomorrow" in client zone
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:719:  const dt = DateTime.fromISO(args.datetime, { zone });
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:720:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:915:              "ISO-8601 datetime string for the appointment in the lead's local timezone.",
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1139:  if (iso) return { start: DateTime.fromISO(iso).setZone(tz) };
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1637:    const nowISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1715:      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1720:      const nowUtc = DateTime.utc();
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1735:          DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
+pages/api/twilio/inbound-sms.ts.bak.ai-included.20260403085345:1810:          memory.lastConfirmAtISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:15:import { DateTime } from "luxon";
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:57:// ---------- quiet hours (lead-local) ----------
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:260:  const nowLocal = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:282:  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:433:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:489:      let dt = DateTime.fromObject(
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:507:    const dt = DateTime.now()
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:555:  let base = DateTime.now().setZone(zone).plus({ days: 1 }); // "tomorrow" in client zone
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:710:  const dt = DateTime.fromISO(args.datetime, { zone });
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:711:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:877:              "ISO-8601 datetime string for the appointment in the lead's local timezone.",
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1087:  if (iso) return { start: DateTime.fromISO(iso).setZone(tz) };
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1577:    const nowISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1655:      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1660:      const nowUtc = DateTime.utc();
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1675:          DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260301135545:1750:          memory.lastConfirmAtISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:16:import { DateTime } from "luxon";
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:58:// ---------- quiet hours (lead-local) ----------
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:261:  const nowLocal = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:283:  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:434:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:490:      let dt = DateTime.fromObject(
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:508:    const dt = DateTime.now()
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:556:  let base = DateTime.now().setZone(zone).plus({ days: 1 }); // "tomorrow" in client zone
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:717:  const dt = DateTime.fromISO(args.datetime, { zone });
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:718:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:884:              "ISO-8601 datetime string for the appointment in the lead's local timezone.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1106:  if (iso) return { start: DateTime.fromISO(iso).setZone(tz) };
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1596:    const nowISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1674:      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1679:      const nowUtc = DateTime.utc();
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1694:          DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105024:1769:          memory.lastConfirmAtISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:16:import { DateTime } from "luxon";
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:58:// ---------- quiet hours (lead-local) ----------
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:261:  const nowLocal = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:283:  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:434:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:490:      let dt = DateTime.fromObject(
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:508:    const dt = DateTime.now()
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:556:  let base = DateTime.now().setZone(zone).plus({ days: 1 }); // "tomorrow" in client zone
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:717:  const dt = DateTime.fromISO(args.datetime, { zone });
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:718:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:884:              "ISO-8601 datetime string for the appointment in the lead's local timezone.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1106:  if (iso) return { start: DateTime.fromISO(iso).setZone(tz) };
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1596:    const nowISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1674:      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1679:      const nowUtc = DateTime.utc();
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1694:          DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105314:1769:          memory.lastConfirmAtISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts:16:import { DateTime } from "luxon";
+pages/api/twilio/inbound-sms.ts:61:// ---------- quiet hours (lead-local) ----------
+pages/api/twilio/inbound-sms.ts:264:  const nowLocal = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts:286:  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+pages/api/twilio/inbound-sms.ts:437:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts:493:      let dt = DateTime.fromObject(
+pages/api/twilio/inbound-sms.ts:511:    const dt = DateTime.now()
+pages/api/twilio/inbound-sms.ts:559:  let base = DateTime.now().setZone(zone).plus({ days: 1 }); // "tomorrow" in client zone
+pages/api/twilio/inbound-sms.ts:851:    const dt = DateTime.fromJSDate(raw instanceof Date ? raw : new Date(raw)).setZone(tz);
+pages/api/twilio/inbound-sms.ts:911:  const dt = DateTime.fromISO(args.datetime, { zone });
+pages/api/twilio/inbound-sms.ts:912:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts:1145:              "ISO-8601 datetime string for the appointment in the lead's local timezone.",
+pages/api/twilio/inbound-sms.ts:1428:  if (iso) return { start: DateTime.fromISO(iso).setZone(tz) };
+pages/api/twilio/inbound-sms.ts:1942:    const nowISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts:2020:      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
+pages/api/twilio/inbound-sms.ts:2025:      const nowUtc = DateTime.utc();
+pages/api/twilio/inbound-sms.ts:2040:          DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
+pages/api/twilio/inbound-sms.ts:2115:          memory.lastConfirmAtISO = DateTime.utc().toISO();
+pages/api/twilio/call/start.ts:53:  // --- Resolve lead + enforce quiet hours (8am–9pm local) ---
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:16:import { DateTime } from "luxon";
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:58:// ---------- quiet hours (lead-local) ----------
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:261:  const nowLocal = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:283:  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:434:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:490:      let dt = DateTime.fromObject(
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:508:    const dt = DateTime.now()
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:556:  let base = DateTime.now().setZone(zone).plus({ days: 1 }); // "tomorrow" in client zone
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:717:  const dt = DateTime.fromISO(args.datetime, { zone });
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:718:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:884:              "ISO-8601 datetime string for the appointment in the lead's local timezone.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1106:  if (iso) return { start: DateTime.fromISO(iso).setZone(tz) };
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1596:    const nowISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1674:      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1679:      const nowUtc = DateTime.utc();
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1694:          DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105155:1769:          memory.lastConfirmAtISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:16:import { DateTime } from "luxon";
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:58:// ---------- quiet hours (lead-local) ----------
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:261:  const nowLocal = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:283:  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:434:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:490:      let dt = DateTime.fromObject(
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:508:    const dt = DateTime.now()
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:556:  let base = DateTime.now().setZone(zone).plus({ days: 1 }); // "tomorrow" in client zone
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:717:  const dt = DateTime.fromISO(args.datetime, { zone });
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:718:  const now = DateTime.now().setZone(zone);
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:884:              "ISO-8601 datetime string for the appointment in the lead's local timezone.",
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1108:  if (iso) return { start: DateTime.fromISO(iso).setZone(tz) };
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1598:    const nowISO = DateTime.utc().toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1676:      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1681:      const nowUtc = DateTime.utc();
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1696:          DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
+pages/api/twilio/inbound-sms.ts.bak.20260302105417:1771:          memory.lastConfirmAtISO = DateTime.utc().toISO();
+pages/api/stripe/webhook.ts:909:                  html: `<p>Hi {{firstName}},</p><p>Just wanted to follow up on my previous note. I'd love to connect when you have a moment.</p><p>— ${prospUser.name || "Your Name"}</p>`,
+pages/index.tsx.bak.20260402-194511:353:                Connect your Facebook lead forms directly to Cove. New leads are automatically imported, scored, organized into folders, and enrolled in drip campaigns — the moment they fill out your ad.
+pages/_app.tsx:130:        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+components/settings/AISettingsPanel.tsx:163:            description="Controlled from the AI Dial Session screen and protected by built-in lead-local quiet hours."
+components/messages/InboxSidebar.tsx.bak.20260228152227:20:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/InboxSidebar.tsx.bak.20260228152227:42:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228152227:54:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228152227:61:  return new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx:52:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/ChatThread.tsx:66:  const weekday = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx:71:  const time = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx:382:                ? new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228154314:20:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/InboxSidebar.tsx.bak.20260228154314:42:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228154314:54:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228154314:61:  return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228162214:20:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/InboxSidebar.tsx.bak.20260228162214:42:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228162214:54:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228162214:61:  return new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228152220:28:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/ChatThread.tsx.bak.20260228152220:42:  const weekday = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228152220:47:  const time = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228162210:29:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/ChatThread.tsx.bak.20260228162210:43:  const weekday = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228162210:48:  const time = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228154319:29:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/ChatThread.tsx.bak.20260228154319:43:  const weekday = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228154319:48:  const time = new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228162750:20:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/InboxSidebar.tsx.bak.20260228162750:42:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228162750:54:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx.bak.20260228162750:61:  return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx:22:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/InboxSidebar.tsx:44:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx:56:    return new Intl.DateTimeFormat(undefined, {
+components/messages/InboxSidebar.tsx:63:  return new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228163128:29:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/ChatThread.tsx.bak.20260228163128:43:  const weekday = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228163128:48:  const time = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228163431:29:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/messages/ChatThread.tsx.bak.20260228163431:43:  const weekday = new Intl.DateTimeFormat(undefined, {
+components/messages/ChatThread.tsx.bak.20260228163431:48:  const time = new Intl.DateTimeFormat(undefined, {
+components/BookingForm.tsx:29:    const fullDateTime = new Date(`${date}T${time}:00`);
+components/BookingForm.tsx:38:          time: fullDateTime.toISOString(),
+components/BookingForm.tsx:57:          start: fullDateTime.toISOString(),
+components/BookingForm.tsx:59:          end: new Date(fullDateTime.getTime() + 30 * 60000).toISOString(),
+components/ConversationsPanel.tsx:22:    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+components/ConversationsPanel.tsx:43:    return new Intl.DateTimeFormat(undefined, {
+components/ConversationsPanel.tsx:54:    return new Intl.DateTimeFormat(undefined, {
+components/ConversationsPanel.tsx:60:  return new Intl.DateTimeFormat(undefined, {
+components/ConversationsPanel.tsx:73:  const weekday = new Intl.DateTimeFormat(undefined, {
+components/ConversationsPanel.tsx:78:  const time = new Intl.DateTimeFormat(undefined, {
+components/SupportChatModal.tsx:91:            "I couldn’t reach the support assistant right now. Please check your connection and try again in a moment.",
+components/BookAppointmentModal.tsx:75:  const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
+components/lead/AIInsightsPanel.tsx:36:function formatDateTime(value?: string | Date | null) {
+components/lead/AIInsightsPanel.tsx:196:            <span className="text-right text-gray-200">{formatDateTime(lastSmsDate)}</span>
+components/lead/AIInsightsPanel.tsx:200:            <span className="text-right text-gray-200">{formatDateTime(lastCallDate)}</span>
+components/lead/AIInsightsPanel.tsx:204:            <span className="text-right text-gray-200">{formatDateTime(lastAIFollowUpDate)}</span>
+components/lead/AIInsightsPanel.tsx:208:            <span className="text-right text-gray-200">{formatDateTime(lastReactivationDate)}</span>
+components/SettingsPanel.tsx:61:    setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+components/CallRowClose.tsx:28:function fmtDateTime(d?: string | Date) {
+components/CallRowClose.tsx:80:          {fmtDateTime(row.startedAt)}
+lib/booking/enforceBookingSettings.ts:1:import { DateTime } from "luxon";
+lib/booking/enforceBookingSettings.ts:25:function normalizeWeekdayKey(dt: DateTime) {
+lib/booking/enforceBookingSettings.ts:41:function getDaySchedule(workingHours: WorkingHours | undefined, dtAgent: DateTime) {
+lib/booking/enforceBookingSettings.ts:52:  dtAgentStart: DateTime,
+lib/booking/enforceBookingSettings.ts:53:  dtAgentEnd: DateTime,
+lib/booking/enforceBookingSettings.ts:72:  dtAgentStart: DateTime,
+lib/booking/enforceBookingSettings.ts:107:  candidateStart: DateTime,
+lib/booking/enforceBookingSettings.ts:108:  candidateEnd: DateTime,
+lib/booking/enforceBookingSettings.ts:116:    const bStart = DateTime.fromISO(String(b.start || ""));
+lib/booking/enforceBookingSettings.ts:117:    const bEnd = DateTime.fromISO(String(b.end || ""));
+lib/booking/enforceBookingSettings.ts:126:  dayStartAgent: DateTime,
+lib/booking/enforceBookingSettings.ts:127:  dayEndAgent: DateTime,
+lib/booking/enforceBookingSettings.ts:143:function formatSuggestionISO(dtAgent: DateTime, outputZone: string) {
+lib/booking/enforceBookingSettings.ts:152:  requestedStartAgent: DateTime,
+lib/booking/enforceBookingSettings.ts:222:  requestedStart: DateTime;
+lib/leads/generateNudges.ts:15:    "New lead sitting untouched — call within the next few hours for best contact rates.",
+lib/email.ts:7:import { DateTime } from "luxon";
+lib/email.ts:137:function formatDateTimeFriendly(timeISO: string, agentTz?: string | null) {
+lib/email.ts:139:    const parsed = DateTime.fromISO(timeISO, { setZone: true });
+lib/email.ts:242:  const start = formatDateTimeFriendly(toISO(startISO), timezone ?? null);
+lib/email.ts:243:  const end = formatDateTimeFriendly(toISO(endISO), timezone ?? null);
+lib/email.ts:287:  const start = formatDateTimeFriendly(toISO(startISO), timezone ?? null);
+lib/email.ts:288:  const end = formatDateTimeFriendly(toISO(endISO), timezone ?? null);
+lib/email.ts:322:  const pretty = formatDateTimeFriendly(opts.timeISO, opts.timezone);
+lib/email.ts:367:  const pretty = formatDateTimeFriendly(opts.timeISO, opts.timezone ?? null);
+lib/utils/scheduleReminders.ts:5:import { DateTime } from "luxon";
+lib/utils/scheduleReminders.ts:7:// Derive the DateTime instance type without importing Luxon types directly
+lib/utils/scheduleReminders.ts:8:type LuxonDateTime = ReturnType<typeof DateTime.fromJSDate>;
+lib/utils/scheduleReminders.ts:11:const formatTime = (dt: LuxonDateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE);
+lib/utils/scheduleReminders.ts:14:const formatDate = (dt: LuxonDateTime) =>
+lib/utils/scheduleReminders.ts:26:  const test = DateTime.utc().setZone(tz || "America/New_York");
+lib/utils/scheduleReminders.ts:76:  const nowUTC = DateTime.utc();
+lib/utils/scheduleReminders.ts:94:    const bookingTime = DateTime.fromJSDate(date, { zone: tz });
+lib/facebook/creativeStyleRules.ts:123:      subjectDirection: "family moment — parents with children, home setting, warm lighting",
+lib/ai/memory/memoryExtractor.ts:62:          "Extract structured lead memory facts as JSON. Return only JSON array. Keys allowed: preferred_contact_time, preferred_channel, spouse_name, existing_coverage, objection, callback_time, appointment_intent, sentiment.",
+lib/ai/triggerAIFirstCall.ts:112: * Returns true if current time is within business hours.
+lib/ai/triggerAIFirstCall.ts:123:    const formatter = new Intl.DateTimeFormat("en-US", {
+lib/ai/triggerAIFirstCall.ts:291:    // Guard 12 — business hours check (FAIL-SAFE: blocks on any parse error)
+lib/ai/triggerAIFirstCall.ts:297:        console.info(`[triggerAIFirstCall] Outside business hours for ${userEmail} — skipping`);
+lib/ai/generateCallCoachReport.ts:19:- If they got stuck on an objection, identify the exact objection and explain where momentum was lost.
+lib/ai/generateCallCoachReport.ts:103:- Identify exactly where the call slowed down or lost momentum.
+lib/ai/generateCallCoachReport.ts:108:- Quote or closely reference actual moments from the transcript.
+lib/drips/enrollOnNewLead.ts:2:import { DateTime } from "luxon";
+lib/drips/enrollOnNewLead.ts:23:function computeNextWindowPT(now = DateTime.now().setZone(PT_ZONE)): Date {
+lib/billing/checkCallingAllowed.ts:2:// Server-side guard: returns whether a user is allowed to place outbound calls.
+lib/prospecting/assignLeads.ts:42:    email: { $not: /^_doi_.*@noemail\.doilead\.local$/ },
+lib/prospecting/sendPlatformPromo.ts:59:  if (toEmail.endsWith("@noemail.doilead.local")) {
+lib/twilio/sendSMS.ts:9:import { DateTime } from "luxon";
+lib/twilio/sendSMS.ts:627:    const nowLocal = DateTime.now().setZone(zone);
+lib/twilio/sendSMS.ts:784:  const nowLocal = DateTime.now().setZone(zone);
+lib/twilio/sendSMS.ts:804:  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+lib/twilio/syncA2P.ts:419:  // This prevents Twilio 21704 and ensures numbers start working the moment approval happens.
+utils/timezone.ts:2:import { DateTime } from "luxon";
+utils/timezone.ts:152:}): DateTime {
+utils/timezone.ts:153:  const dt = DateTime.fromFormat(time, "h:mm a", { zone: fromZone, setZone: true });
+utils/timezone.ts:163:  const dt = DateTime.fromISO(iso, { setZone: true });
+utils/checkCallTime.ts:2:import { DateTime } from "luxon";
+utils/checkCallTime.ts:10:  const now = DateTime.now().setZone(timezone || "UTC");
+utils/checkCallTime.ts:28:  const now = DateTime.now().setZone(zone);
+hooks/useTimezoneSync.ts:11:      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+ai-voice-server/index.ts.bak_temp:3060:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_temp:4447:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak_temp:4541:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak_temp:4647:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_temp:5177:        const tzParts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_temp:7864:              const tzParts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_temp:7884:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/dist/index.js:3183:            const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/dist/index.js:5419:                    const tzParts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(approxUtc);
+ai-voice-server/dist/index.js:6731:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/dist/index.js:6822:        Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/dist/index.js:6912:        const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/dist/index.js:7392:                const tzParts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/dist/scripts/kaylaSignupScript.js:26:- AI First Call on Real-Time Leads: the moment a new lead comes in from
+ai-voice-server/dist/scripts/kaylaSignupScript.js:32:- AI Call Overview: breaks down key moments from each call automatically
+ai-voice-server/dist/scripts/kaylaSignupScript.js:39:- Facebook webhook: leads flow in the moment someone fills out a Facebook
+ai-voice-server/index.ts.bak17:2516:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak17:3678:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak17:3772:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak17:3878:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak17:4299:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak17:6739:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak10:2506:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak10:3668:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak10:3762:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak10:3868:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak10:4286:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak10:6723:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak19:2516:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak19:3678:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak19:3772:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak19:3878:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak19:4299:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak19:6768:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak21:2529:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak21:3691:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak21:3785:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak21:3891:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak21:4312:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak21:6781:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak7:2503:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak7:3660:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak7:3754:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak7:3860:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak7:4278:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak9:2506:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak9:3668:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak9:3762:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak9:3868:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak9:4286:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak9:6716:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak20:2518:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak20:3680:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak20:3774:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak20:3880:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak20:4301:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak20:6770:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak_firstturn:3055:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_firstturn:4436:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak_firstturn:4530:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak_firstturn:4636:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_firstturn:5166:        const tzParts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_firstturn:7848:              const tzParts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_firstturn:7868:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak18:2516:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak18:3678:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak18:3772:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak18:3878:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak18:4299:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak18:6735:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak11:2506:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak11:3668:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak11:3762:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak11:3868:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak11:4286:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak11:6723:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak16:2511:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak16:3673:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak16:3767:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak16:3873:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak16:4294:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak16:6734:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak8:2509:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak8:3671:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak8:3765:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak8:3871:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak8:4289:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak6:2503:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak6:3660:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak6:3754:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak6:3860:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak6:4278:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/scripts/kaylaSignupScript.ts:28:- AI First Call on Real-Time Leads: the moment a new lead comes in from
+ai-voice-server/scripts/kaylaSignupScript.ts:34:- AI Call Overview: breaks down key moments from each call automatically
+ai-voice-server/scripts/kaylaSignupScript.ts:41:- Facebook webhook: leads flow in the moment someone fills out a Facebook
+ai-voice-server/index.ts.bak12b:2510:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak12b:3672:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak12b:3766:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak12b:3872:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak12b:4290:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak12b:6727:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak3:2351:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak3:3575:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak3:3681:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak4:2358:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak4:3599:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak4:3705:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak13:2510:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak13:3672:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak13:3766:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak13:3872:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak13:4290:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak13:6730:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts:3805:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts:6278:          const tzParts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(approxUtc);
+ai-voice-server/index.ts:7727:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts:7822:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts:7928:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts:8465:        const tzParts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak14:2510:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak14:3672:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak14:3766:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak14:3872:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak14:4290:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak14:6730:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak22:2542:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak22:3704:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak22:3798:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak22:3904:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak22:4325:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak22:6794:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak5:2421:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak5:3662:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak5:3768:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak2:2311:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak2:3532:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak2:3638:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak15:2511:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak15:3673:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak15:3767:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak15:3873:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak15:4294:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak15:6734:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak12:2510:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak12:3672:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak12:3766:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak12:3872:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak12:4290:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+ai-voice-server/index.ts.bak12:6727:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.bak_clocktime:3059:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_clocktime:4446:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.bak_clocktime:4540:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.bak_clocktime:4646:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_clocktime:5176:        const tzParts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_clocktime:7863:              const tzParts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.bak_clocktime:7883:            // Sanity check: must be in the future (within 48 hours)
+ai-voice-server/index.ts.pre-silence-watchdog.bak:2450:      const parts = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.pre-silence-watchdog.bak:3607:- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+ai-voice-server/index.ts.pre-silence-watchdog.bak:3701:    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+ai-voice-server/index.ts.pre-silence-watchdog.bak:3807:    const fmt = new Intl.DateTimeFormat("en-US", {
+ai-voice-server/index.ts.pre-silence-watchdog.bak:4225:  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;

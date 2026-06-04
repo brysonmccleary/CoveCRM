@@ -17,6 +17,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       $set: {
         metaAccessToken: "",
         metaTokenExpiresAt: null,
+        metaReconnectNeeded: false,
+        metaHealthStatus: "unknown",
+        lastMetaHealthError: "",
+        metaHealthCooldownUntil: null,
         metaPageId: "",
         metaPageName: "",
         metaPageAccessToken: "",

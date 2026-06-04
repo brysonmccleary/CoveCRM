@@ -275,6 +275,12 @@ export interface IUser {
   metaTokenExpiresAt?: Date;
   metaLastWebhookAt?: Date;
   metaLastInsightSyncAt?: Date;
+  metaReconnectNeeded?: boolean;
+  metaHealthStatus?: string;
+  lastMetaHealthError?: string;
+  metaHealthCooldownUntil?: Date;
+  metaLastHealthCheckAt?: Date;
+  metaLastSuccessfulHealthCheckAt?: Date;
 }
 
 const SyncedSheetSchema = new Schema(
@@ -571,6 +577,28 @@ const UserSchema = new Schema<IUser>({
   metaTokenExpiresAt: { type: Date, default: null },
   metaLastWebhookAt: { type: Date, default: null },
   metaLastInsightSyncAt: { type: Date, default: null },
+  metaReconnectNeeded: { type: Boolean, default: false },
+  metaHealthStatus: {
+    type: String,
+    enum: [
+      "unknown",
+      "healthy",
+      "reconnectNeeded",
+      "accountDisabled",
+      "missingPaymentMethod",
+      "missingPagePermission",
+      "missingLeadAdsEligibility",
+      "missingPage",
+      "missingAdAccount",
+      "cooldown",
+      "error",
+    ],
+    default: "unknown",
+  },
+  lastMetaHealthError: { type: String, default: "" },
+  metaHealthCooldownUntil: { type: Date, default: null },
+  metaLastHealthCheckAt: { type: Date, default: null },
+  metaLastSuccessfulHealthCheckAt: { type: Date, default: null },
 });
 
 UserSchema.index({ email: 1 }, { name: "user_email_idx" });

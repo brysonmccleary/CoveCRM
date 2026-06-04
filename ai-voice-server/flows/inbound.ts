@@ -86,12 +86,7 @@ export function isReturningMissedCall(text: string): boolean {
     t.includes("returning") ||
     t.includes("missed call") ||
     t.includes("called me") ||
-    t.includes("you called") ||
-    t.includes("who is this") ||
-    t.includes("what is this") ||
-    t.includes("what is this about") ||
-    t.includes("what's this about") ||
-    t.includes("whats this about")
+    t.includes("you called")
   );
 }
 

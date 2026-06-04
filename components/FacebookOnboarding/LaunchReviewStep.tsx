@@ -1,10 +1,8 @@
-import type { BusinessIdentity } from "./BusinessIdentityStep";
 import type { LaunchReadiness } from "./LaunchReadinessCard";
 import ProfileVisibilityNotice from "./ProfileVisibilityNotice";
 import type { PageIdentity } from "./PageIdentityCard";
 
 type LaunchReviewStepProps = {
-  businessIdentity: BusinessIdentity;
   page?: PageIdentity | null;
   leadType?: string;
   readiness: LaunchReadiness;
@@ -18,11 +16,9 @@ const LEAD_TYPE_LABELS: Record<string, string> = {
   trucker: "Trucker Leads",
 };
 
-export default function LaunchReviewStep({ businessIdentity, page, leadType, readiness }: LaunchReviewStepProps) {
-  const businessName = businessIdentity.businessName.trim() || "Choose a business name";
+export default function LaunchReviewStep({ page, leadType, readiness }: LaunchReviewStepProps) {
   const pageName = page?.name?.trim() || "Choose a business Page before launch";
-  const leadLabel = leadType ? LEAD_TYPE_LABELS[leadType] || businessIdentity.leadFocus : businessIdentity.leadFocus;
-  const locationLabel = businessIdentity.state.trim() || "Chosen in launch step";
+  const leadLabel = leadType ? LEAD_TYPE_LABELS[leadType] || leadType : "Choose a lead type";
 
   return (
     <section className="rounded-3xl border border-white/10 bg-[#0f172a] p-5 shadow-2xl shadow-black/20 sm:p-7">
@@ -52,10 +48,10 @@ export default function LaunchReviewStep({ businessIdentity, page, leadType, rea
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          ["Business identity", businessName],
+          ["Facebook connected", readiness.items.find((item) => item.key === "facebook")?.ready ? "Connected" : "Connect Facebook"],
           ["Facebook page", pageName],
           ["Lead type", leadLabel],
-          ["Primary state", locationLabel],
+          ["Campaign status", "Launches paused first"],
         ].map(([label, value]) => (
           <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
             <p className="text-xs uppercase tracking-wide text-gray-500">{label}</p>

@@ -8,6 +8,7 @@ import type { AiAdBrainAction } from "@/lib/ai/adBrain";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import CampaignActionLog from "@/models/CampaignActionLog";
 import User from "@/models/User";
+import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 import {
   generateWinningVariantList,
   isWinnerSupportedLeadType,
@@ -328,7 +329,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await mongooseConnect();
 
   const user = (await User.findOne({ email })
-    .select("_id email metaAccessToken metaSystemUserToken metaAdAccountId metaPageId")
+    .select("_id email metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaReconnectNeeded metaHealthStatus lastMetaHealthError metaHealthCooldownUntil metaLastSuccessfulHealthCheckAt")
     .lean()) as any;
   if (!user?._id) return res.status(404).json({ error: "User not found" });
 
@@ -350,6 +351,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const accessToken = String(user.metaSystemUserToken || user.metaAccessToken || "").trim();
   if (!accessToken) {
     return res.status(400).json({ error: "Execution blocked: Meta access token missing" });
+  }
+
+  const metaHealth = await checkMetaWriteReadiness({
+    user,
+    userEmail: email,
+    accessToken,
+    pageId: String(campaign.facebookPageId || user.metaPageId || "").trim(),
+    adAccountId: String(campaign.adAccountId || user.metaAdAccountId || "").trim(),
+  });
+  if (!metaHealth.ok) {
+    return res.status(400).json({
+      error: metaHealth.reason,
+      metaHealth,
+    });
   }
 
   const now = new Date();
@@ -483,6 +498,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(400).json({ error: "Unsupported AI Ad Brain action" });
   } catch (err: any) {
+    await markMetaHealthFailure({
+      user,
+      userEmail: email,
+      error: err,
+    }).catch(() => {});
     await CampaignActionLog.create({
       userId: campaign.userId,
       campaignId: campaign._id,

@@ -8,6 +8,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 import CampaignActionLog from "@/models/CampaignActionLog";
+import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 
 type ActionType = "PAUSE" | "RESUME" | "SCALE" | "DECREASE" | "FIX" | "DUPLICATE_TEST" | "SET_BUDGET";
 
@@ -148,7 +149,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
 
-  const user = (await User.findOne({ email }).select("_id metaAccessToken").lean()) as any;
+  const user = (await User.findOne({ email })
+    .select("_id email metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaReconnectNeeded metaHealthStatus lastMetaHealthError metaHealthCooldownUntil metaLastSuccessfulHealthCheckAt")
+    .lean()) as any;
   if (!user?._id) return res.status(404).json({ error: "User not found" });
 
   if (req.method === "GET") {
@@ -206,7 +209,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({ error: "Campaign not found" });
   }
 
-  const accessToken = String(user.metaAccessToken || "").trim();
+  const accessToken = String(user.metaSystemUserToken || user.metaAccessToken || "").trim();
   const isDryRun = dryRun === true;
   if (!accessToken && !isDryRun && !metaMockMode) {
     return res.status(400).json({ error: "Meta access token missing" });
@@ -317,6 +320,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       reasoning: actionReasoning,
     });
   }
+
+  if (!metaMockMode) {
+    const metaHealth = await checkMetaWriteReadiness({
+      user,
+      userEmail: email,
+      accessToken,
+      pageId: String(campaign.facebookPageId || user.metaPageId || "").trim(),
+      adAccountId: String(campaign.adAccountId || user.metaAdAccountId || "").trim(),
+    });
+    if (!metaHealth.ok) {
+      return res.status(400).json({
+        error: metaHealth.reason,
+        metaHealth,
+      });
+    }
+  }
+
   const actionMessage = buildActionMessage({
     actionType: actionType as ActionType,
     campaignName: String(campaign.campaignName || "Campaign"),
@@ -345,6 +365,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       const json = await resp.json();
       if (!resp.ok) {
+        await markMetaHealthFailure({ user, userEmail: email, error: json }).catch(() => {});
         return res.status(500).json({ error: `Meta pause failed: ${JSON.stringify(json)}` });
       }
       metaResponse.pause = json;
@@ -373,6 +394,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       const json = await resp.json();
       if (!resp.ok) {
+        await markMetaHealthFailure({ user, userEmail: email, error: json }).catch(() => {});
         return res.status(500).json({ error: `Meta decrease failed: ${JSON.stringify(json)}` });
       }
       metaResponse.decrease = json;
@@ -403,6 +425,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       const json = await resp.json();
       if (!resp.ok) {
+        await markMetaHealthFailure({ user, userEmail: email, error: json }).catch(() => {});
         return res.status(500).json({ error: `Meta resume failed: ${JSON.stringify(json)}` });
       }
       metaResponse.resume = json;
@@ -436,6 +459,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       const json = await resp.json();
       if (!resp.ok) {
+        await markMetaHealthFailure({ user, userEmail: email, error: json }).catch(() => {});
         return res.status(500).json({ error: `Meta scale failed: ${JSON.stringify(json)}` });
       }
       metaResponse.scale = json;
@@ -463,6 +487,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       const json = await resp.json();
       if (!resp.ok) {
+        await markMetaHealthFailure({ user, userEmail: email, error: json }).catch(() => {});
         return res.status(500).json({ error: `Meta set budget failed: ${JSON.stringify(json)}` });
       }
       metaResponse.setBudget = json;
@@ -499,6 +524,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       const copyJson = await copyResp.json();
       if (!copyResp.ok) {
+        await markMetaHealthFailure({ user, userEmail: email, error: copyJson }).catch(() => {});
         return res.status(500).json({ error: `Meta FIX duplicate failed: ${JSON.stringify(copyJson)}` });
       }
       metaResponse.fixCopy = copyJson;
@@ -519,6 +545,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         const budgetJson = await budgetResp.json();
         if (!budgetResp.ok) {
+          await markMetaHealthFailure({ user, userEmail: email, error: budgetJson }).catch(() => {});
           return res.status(500).json({ error: `Meta FIX budget update failed: ${JSON.stringify(budgetJson)}` });
         }
         metaResponse.fixBudget = budgetJson;
@@ -535,6 +562,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         const pauseJson = await pauseResp.json();
         if (!pauseResp.ok) {
+          await markMetaHealthFailure({ user, userEmail: email, error: pauseJson }).catch(() => {});
           return res.status(500).json({ error: `Meta FIX pause original failed: ${JSON.stringify(pauseJson)}` });
         }
         metaResponse.fixPauseOriginal = pauseJson;
@@ -572,6 +600,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       const dupJson = await copyResp.json();
       if (!copyResp.ok) {
+        await markMetaHealthFailure({ user, userEmail: email, error: dupJson }).catch(() => {});
         return res.status(500).json({ error: `Meta campaign duplicate failed: ${JSON.stringify(dupJson)}` });
       }
       metaResponse.duplicateCampaign = dupJson;
@@ -608,6 +637,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         const pauseJson = await pauseResp.json();
         if (!pauseResp.ok) {
+          await markMetaHealthFailure({ user, userEmail: email, error: pauseJson }).catch(() => {});
           return res.status(500).json({ error: `Meta duplicate pause original failed: ${JSON.stringify(pauseJson)}` });
         }
         metaResponse.duplicatePauseOriginal = pauseJson;

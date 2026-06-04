@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import AdWizard from "@/components/FacebookAds/AdWizard";
 import MetaConnectPanel from "@/components/MetaConnectPanel";
-import BusinessIdentityStep, { type BusinessIdentity } from "./BusinessIdentityStep";
 import FacebookTrustIntro from "./FacebookTrustIntro";
 import LaunchReviewStep from "./LaunchReviewStep";
 import LaunchReadinessCard, { type LaunchReadiness } from "./LaunchReadinessCard";
@@ -28,12 +27,6 @@ export default function FacebookOnboardingFlow({
   selectedLeadType,
   onLeadTypeChange,
 }: FacebookOnboardingFlowProps) {
-  const [businessIdentity, setBusinessIdentity] = useState<BusinessIdentity>({
-    businessName: "",
-    leadFocus: "Final Expense",
-    state: "",
-    stylePreference: "Professional",
-  });
   const [status, setStatus] = useState<FacebookStatus | null>(null);
   const [connectedPages, setConnectedPages] = useState<ConnectedPage[]>([]);
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
@@ -108,12 +101,6 @@ export default function FacebookOnboardingFlow({
       missingText: "Choose a business Page before launch.",
     },
     {
-      key: "identity",
-      label: "Business identity ready",
-      ready: Boolean(businessIdentity.businessName.trim()),
-      missingText: "Choose or enter a business name.",
-    },
-    {
       key: "lead-type",
       label: "Lead type selected",
       ready: Boolean(selectedLeadType),
@@ -137,11 +124,8 @@ export default function FacebookOnboardingFlow({
     <div className="space-y-7">
       <FacebookTrustIntro connected={Boolean(status?.connected)} />
 
-      <BusinessIdentityStep value={businessIdentity} onChange={setBusinessIdentity} />
-
       {needsPageGuidance && (
         <NoPageGuidedSetup
-          businessIdentity={businessIdentity}
           onRefreshPages={loadFacebookDisplayState}
           onAlreadyHavePage={() => setShowAdvancedSetup(true)}
           refreshing={refreshingPages}
@@ -158,8 +142,7 @@ export default function FacebookOnboardingFlow({
             <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Step 1</p>
             <h2 className="mt-1 text-2xl font-bold text-white">Connect Facebook and choose your page</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
-              This connection lets CoveCRM prepare your campaign and route new leads into your CRM.
-              You can keep the technical setup tucked away.
+              Connect Facebook, choose the Facebook Page customers will see, then choose the Ad Account to run ads from.
             </p>
           </div>
           <button
@@ -184,7 +167,9 @@ export default function FacebookOnboardingFlow({
                   {displayPageIdentity?.name ? `Business page selected: ${displayPageIdentity.name}` : "Choose a business Page before launching ads."}
                 </p>
                 {!displayPageIdentity?.name && (
-                  <p className="mt-2 text-xs font-medium text-amber-300">Choose a business Page before launching ads.</p>
+                  <p className="mt-2 text-xs font-medium text-amber-300">
+                    Already have a Page? Click Review page and select it. Need one? Create it directly on Facebook, then return and refresh.
+                  </p>
                 )}
               </div>
               <button
@@ -201,16 +186,8 @@ export default function FacebookOnboardingFlow({
                 <div>
                   <p className="text-base font-semibold text-white">No Facebook business page connected yet</p>
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-blue-100/80">
-                    We will help you create a professional business presence. Start with a trustworthy name,
-                    then connect Facebook when you are ready.
+                    Continue with Facebook, then choose the Facebook Page customers will see and the Ad Account to run ads from.
                   </p>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-blue-100/80">
-                    {["Desert Valley Coverage", "Legacy Life Solutions", "Heritage Family Benefits"].map((name) => (
-                      <span key={name} className="rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-1">
-                        {name}
-                      </span>
-                    ))}
-                  </div>
                 </div>
                 <a
                   href="/api/meta/connect"
@@ -244,7 +221,6 @@ export default function FacebookOnboardingFlow({
       </section>
 
       <LaunchReviewStep
-        businessIdentity={businessIdentity}
         page={displayPageIdentity}
         leadType={selectedLeadType}
         readiness={readiness}

@@ -1,0 +1,500 @@
+pages/index.tsx:17:    points: ["Smart lead management", "2-way SMS inbox", "Calendar sync", "Organized pipeline view"],
+pages/index.tsx:29:    description: "Automated SMS drips, AI nudges, and appointment reminders keep leads moving without letting opportunities slip away.",
+pages/index.tsx:48:  const homepageTitle = "Cove CRM – CRM for Insurance Agents, AI Dialer, SMS & Facebook Leads";
+pages/index.tsx:50:    "CoveCRM is a CRM for insurance agents with AI dialer tools, SMS automation, Facebook lead workflows, power dialing, and appointment booking built for high-volume insurance sales.";
+pages/index.tsx:353:          {/* AI SMS Assistant */}
+pages/index.tsx:357:              <h3 className="text-2xl md:text-3xl font-bold mb-4">AI SMS Assistant – Always-On Follow-Up</h3>
+pages/index.tsx:362:                <li className="flex items-start gap-2"><span className="text-blue-400 mt-0.5">•</span> 2-way conversations in your existing SMS inbox.</li>
+pages/index.tsx:403:              ["2-Way SMS Inbox", "Text back and forth with leads in real time. Every conversation tracked in one place."],
+pages/index.tsx:469:                  { feature: "Native AI SMS follow-up", cove: "yes", ringy: "no", close: "no", ghl: "maybe", generic: "no" },
+pages/index.tsx:628:              <p className="text-xs text-slate-400 mb-7">+ tax &amp; call/SMS usage</p>
+pages/index.tsx:632:                  "Power dialer, SMS inbox, lead management",
+pages/index.tsx:637:                  "AI SMS Assistant — automated lead follow-up",
+pages/index.tsx:653:                🤖 AI tools included. Standard Twilio usage charges apply for calls and SMS.
+pages/index.tsx:686:                The AI layer isn&apos;t a bolt-on. It&apos;s baked into every interaction — scoring calls in real time, summarizing every conversation, nudging reps to act on stale leads, and automating SMS follow-up so no lead goes cold. The result is a system that works even when your reps don&apos;t.
+pages/ringy-vs-covecrm.tsx:64:                        AI tools, SMS automation, dialing, appointments, and lead follow-up.
+pages/ringy-vs-covecrm.tsx:102:                          SMS automation, dialing, Facebook lead workflows, appointments, and AI
+pages/ringy-vs-covecrm.tsx:121:                          AI SMS assistance, power dialing, AI dial sessions, and appointment booking
+pages/ringy-vs-covecrm.tsx:130:                          speed to lead, SMS follow-up, dialing, AI assistance, and appointment workflows.
+pages/ringy-vs-covecrm.tsx:152:                  <p>Yes. CoveCRM lists AI SMS assistance, AI dial sessions, AI call coach, and lead scoring features.</p>
+pages/insurance-agent-follow-up-system.tsx:84:                          A useful follow-up system should include lead organization, SMS history,
+pages/insurance-agent-follow-up-system.tsx:92:                          <li>Fast first response through SMS or calling workflows</li>
+pages/insurance-agent-follow-up-system.tsx:111:                          CoveCRM brings SMS automation, lead folders, dialing tools, reminders,
+pages/insurance-agent-follow-up-system.tsx:129:                  <p>Yes. CoveCRM publicly lists SMS automation, drip campaigns, lead nudges, dialing, and appointment workflows.</p>
+pages/insurance-agent-follow-up-system.tsx:133:                  <p>It should include lead organization, SMS, calling, reminders, drip campaigns, appointment booking, and a clear record of what happened last.</p>
+pages/insurance-agent-follow-up-system.tsx:137:                  <p>Yes. Organized reminders, notes, SMS history, and call activity can help agents revisit older leads without losing context.</p>
+pages/insurance-agent-follow-up-system.tsx:147:                            <li><a href="/ai-sms-for-insurance-agents">AI SMS for Insurance Agents</a></li>
+pages/power-dialer-for-insurance-agents.tsx:6:    "Learn how a power dialer for insurance agents helps reduce manual clicks, speed up outbound calls, log activity, and fit with SMS and appointment workflows.";
+pages/power-dialer-for-insurance-agents.tsx:63:                        call lists faster while keeping call outcomes, SMS follow-up, and
+pages/power-dialer-for-insurance-agents.tsx:95:                          <a href="/ai-dialer-for-insurance-agents"> AI dialer</a> adds more automation or AI-assisted workflow,
+pages/power-dialer-for-insurance-agents.tsx:106:                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">How It Fits With SMS and Appointments</h2>
+pages/power-dialer-for-insurance-agents.tsx:108:                          CoveCRM connects dialing with SMS conversations, lead prioritization,
+pages/power-dialer-for-insurance-agents.tsx:126:                  <h3 className="text-lg font-semibold text-white">Can dialing work with SMS follow-up?</h3>
+pages/power-dialer-for-insurance-agents.tsx:127:                  <p>Yes. CoveCRM combines dialing, SMS automation, lead management, and appointment workflows.</p>
+pages/power-dialer-for-insurance-agents.tsx:131:                  <p>Agents should compare ease of use, call logging, lead list workflow, SMS handoff, appointment follow-up, and whether the dialer connects cleanly to their CRM.</p>
+pages/ai-sms-for-insurance-agents.tsx:3:export default function AISMSForInsuranceAgentsPage() {
+pages/ai-sms-for-insurance-agents.tsx:4:  const title = "AI SMS for Insurance Agents | CoveCRM";
+pages/ai-sms-for-insurance-agents.tsx:6:    "AI SMS for insurance agents helps automate follow-up, respond faster, keep conversations organized, and book more appointments.";
+pages/ai-sms-for-insurance-agents.tsx:7:  const url = "https://www.covecrm.com/ai-sms-for-insurance-agents";
+pages/ai-sms-for-insurance-agents.tsx:59:            <h1 className="mt-4 text-4xl md:text-5xl font-bold tracking-tight text-white">AI SMS for Insurance Agents</h1>
+pages/ai-sms-for-insurance-agents.tsx:62:                        AI SMS for insurance agents should help teams respond faster, keep
+pages/ai-sms-for-insurance-agents.tsx:84:                          Many insurance leads respond faster to text than to email. SMS helps
+pages/ai-sms-for-insurance-agents.tsx:90:                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">How AI SMS Helps Agents Follow Up Faster</h2>
+pages/ai-sms-for-insurance-agents.tsx:92:                          AI SMS can help with quick replies, follow-up prompts, and consistent
+pages/ai-sms-for-insurance-agents.tsx:98:                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">What Insurance Agents Should Look For in AI SMS</h2>
+pages/ai-sms-for-insurance-agents.tsx:100:                          Agents should compare whether AI SMS keeps conversation history in the CRM,
+pages/ai-sms-for-insurance-agents.tsx:105:                          The strongest setup connects AI SMS with <a href="/crm-that-texts-leads-automatically">automatic texting</a>,
+pages/ai-sms-for-insurance-agents.tsx:114:                          CoveCRM combines SMS automation, a two-way inbox, lead folders, dialing,
+pages/ai-sms-for-insurance-agents.tsx:123:                  <h3 className="text-lg font-semibold text-white">What is AI SMS for insurance agents?</h3>
+pages/ai-sms-for-insurance-agents.tsx:124:                  <p>It is SMS follow-up assisted by AI so agents can respond faster and keep lead conversations organized.</p>
+pages/ai-sms-for-insurance-agents.tsx:127:                  <h3 className="text-lg font-semibold text-white">Does CoveCRM include SMS automation?</h3>
+pages/ai-sms-for-insurance-agents.tsx:128:                  <p>Yes. CoveCRM publicly lists SMS automation, AI SMS assistant, and two-way SMS inbox features.</p>
+pages/ai-sms-for-insurance-agents.tsx:131:                  <h3 className="text-lg font-semibold text-white">Can AI SMS help book appointments?</h3>
+pages/ai-sms-for-insurance-agents.tsx:135:                  <h3 className="text-lg font-semibold text-white">What should agents compare in AI SMS tools?</h3>
+pages/ai-sms-for-insurance-agents.tsx:139:                  <h3 className="text-lg font-semibold text-white">Does AI SMS replace calling?</h3>
+pages/ai-sms-for-insurance-agents.tsx:140:                  <p>No. AI SMS can support faster follow-up, but many insurance teams still need calling workflows for detailed conversations and appointment-setting.</p>
+pages/go-high-level-vs-covecrm.tsx:85:                          Insurance teams often need fast speed to lead, organized folders, SMS
+pages/go-high-level-vs-covecrm.tsx:132:                          CoveCRM focuses on CRM, SMS automation, AI dialer tools, power dialing,
+pages/go-high-level-vs-covecrm.tsx:158:                  <h3 className="text-lg font-semibold text-white">Does CoveCRM include SMS and dialing?</h3>
+pages/go-high-level-vs-covecrm.tsx:159:                  <p>Yes. CoveCRM publicly lists SMS automation, two-way SMS, power dialing, and AI dialer tools.</p>
+pages/best-crm-for-final-expense-agents.tsx:6:    "Looking for the best CRM for final expense agents? See why fast follow-up, SMS, dialing, and appointment booking matter.";
+pages/best-crm-for-final-expense-agents.tsx:93:                          SMS history, dialing, appointment reminders, and organized notes because
+pages/best-crm-for-final-expense-agents.tsx:110:                          Fast SMS follow-up and efficient dialing can help agents reach interested
+pages/best-crm-for-final-expense-agents.tsx:118:                          CoveCRM includes insurance-focused lead management, SMS automation,
+pages/best-crm-for-final-expense-agents.tsx:129:                  <p>Lead organization, fast SMS, dialing, notes, reminders, and appointment booking are important for final expense follow-up.</p>
+pages/best-crm-for-final-expense-agents.tsx:132:                  <h3 className="text-lg font-semibold text-white">Does CoveCRM support SMS follow-up?</h3>
+pages/best-crm-for-final-expense-agents.tsx:133:                  <p>Yes. CoveCRM publicly lists SMS automation, a two-way SMS inbox, and AI SMS assistant features.</p>
+pages/dashboard.tsx:41:  FaSms,
+pages/dashboard.tsx:225:                ? FaSms
+pages/sms/optin-terms/[userId].tsx:1:// pages/sms/optin-terms/[userId].tsx
+pages/sms/optin-terms/[userId].tsx:21:        <h1 className="text-3xl font-bold mb-2">SMS Opt-In Terms</h1>
+pages/sms/optin-terms/[userId].tsx:23:          These terms apply if you choose to opt in to receive SMS messages related to your existing policy, account servicing, and policy updates.
+pages/sms/optin-terms/[userId].tsx:33:          If you opt in, you agree to receive SMS messages from <span className="font-semibold">{businessName}</span> regarding your existing policy,
+pages/sms/optin-terms/[userId].tsx:49:        <h2 className="text-xl font-semibold mt-6 mb-2">5. Consent</h2>
+pages/sms/optin-terms/[userId].tsx:51:          Consent is optional and is not a condition of purchase. You may choose whether to opt in to receive SMS messages.
+pages/sms/optin-terms/[userId].tsx:56:          See the <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-privacy/${encodeURIComponent(userId)}`}>SMS Opt-In Privacy</a> page
+pages/sms/optin-terms/[userId].tsx:57:          for details about how data is handled for this opt-in.
+pages/sms/optin-terms/[userId].tsx:61:          <a className="underline text-slate-300 hover:text-white" href={`/sms/optin/${encodeURIComponent(userId)}`}>Back to Opt-In</a>
+pages/sms/optin-privacy/[userId].tsx:1:// pages/sms/optin-privacy/[userId].tsx
+pages/sms/optin-privacy/[userId].tsx:21:        <h1 className="text-3xl font-bold mb-2">SMS Opt-In Privacy</h1>
+pages/sms/optin-privacy/[userId].tsx:23:          This privacy notice explains how information is handled when you submit this form and, if you choose, opt in to receive SMS messages related to your existing policy, account servicing, and policy updates.
+pages/sms/optin-privacy/[userId].tsx:33:          When you submit the SMS opt-in form, information you enter may include your name, mobile phone number, and optionally email address.
+pages/sms/optin-privacy/[userId].tsx:38:          This information is used to document consent and to enable policy-related messaging such as current policy communications,
+pages/sms/optin-privacy/[userId].tsx:49:          Data may be processed by service providers used to deliver SMS services and to host CoveCRM. These providers receive only the
+pages/sms/optin-privacy/[userId].tsx:55:          Consent records may be retained as needed for compliance and audit purposes.
+pages/sms/optin-privacy/[userId].tsx:66:          <a className="underline text-slate-300 hover:text-white" href={`/sms/optin/${encodeURIComponent(userId)}`}>Back to Opt-In</a>
+pages/sms/optin-privacy/[userId].tsx:68:          <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-terms/${encodeURIComponent(userId)}`}>Opt-in Terms</a>
+pages/sms/optin/[userId].tsx:1:// pages/sms/optin/[userId].tsx
+pages/sms/optin/[userId].tsx:22:  const [consent, setConsent] = useState(false);
+pages/sms/optin/[userId].tsx:42:          <h1 className="text-3xl font-bold">SMS Communication Preferences</h1>
+pages/sms/optin/[userId].tsx:44:            This page is used by existing customers to confirm their communication preferences for text messages related to their current policy, account servicing, and policy updates.
+pages/sms/optin/[userId].tsx:63:              SMS consent is optional. You may submit this form without agreeing to receive SMS messages.
+pages/sms/optin/[userId].tsx:101:                Enter the phone number that will receive text messages.
+pages/sms/optin/[userId].tsx:118:                Checking the box below is optional and only applies if you want to receive SMS messages from this business.
+pages/sms/optin/[userId].tsx:123:                  checked={consent}
+pages/sms/optin/[userId].tsx:124:                  onChange={(e) => setConsent(e.target.checked)}
+pages/sms/optin/[userId].tsx:128:                  By clicking this box, you agree to receive SMS messages from{" "}
+pages/sms/optin/[userId].tsx:131:                  may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.
+pages/sms/optin/[userId].tsx:136:                <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-terms/${encodeURIComponent(userId)}`}>Opt-in Terms</a>
+pages/sms/optin/[userId].tsx:138:                <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-privacy/${encodeURIComponent(userId)}`}>Opt-in Privacy</a>
+pages/sms/optin/[userId].tsx:162:                  Thanks — your SMS opt-in has been recorded for this sender.
+pages/sms/optin/[userId].tsx:181:          This page is provided by CoveCRM to support SMS communication preference documentation for existing customer communications.
+pages/best-crm-for-veteran-insurance-agents.tsx:93:                          follow-up history, SMS and call records, appointment reminders, and a simple
+pages/best-crm-for-veteran-insurance-agents.tsx:111:                          should be. A CRM should keep SMS, calls, notes, and appointment activity connected.
+pages/best-crm-for-veteran-insurance-agents.tsx:118:                          CoveCRM includes insurance lead management, SMS automation, dialing,
+pages/best-crm-for-veteran-insurance-agents.tsx:129:                  <p>They should look for organized pipelines, SMS follow-up, dialing, notes, and appointment booking workflows.</p>
+pages/ai-dialer-for-insurance-agents.tsx:63:                        The most useful setup connects dialing with lead records, SMS follow-up,
+pages/ai-dialer-for-insurance-agents.tsx:146:                          <li>Lead prioritization alongside SMS and CRM history</li>
+pages/ai-dialer-for-insurance-agents.tsx:166:                          CoveCRM combines AI dialing with CRM, <a href="/crm-that-texts-leads-automatically">SMS follow-up</a>,
+pages/ai-dialer-for-insurance-agents.tsx:175:                          CoveCRM combines dialing, SMS automation, lead folders, appointment
+pages/ai-dialer-for-insurance-agents.tsx:186:                  <p>It is a calling tool that uses AI-assisted workflows to help agents contact and follow up with insurance leads.</p>
+pages/ai-dialer-for-insurance-agents.tsx:194:                  <p>Yes. CoveCRM includes SMS automation, lead management, appointment booking, and related insurance sales workflow tools.</p>
+pages/ai-dialer-for-insurance-agents.tsx:198:                  <p>Agents should compare call workflow speed, CRM history, SMS follow-up, appointment handoff, lead organization, and whether the tool fits insurance-specific sales processes.</p>
+pages/ai-dialer-for-insurance-agents.tsx:202:                  <p>Not always. A power dialer helps agents call faster in a manual workflow, while an AI dialer adds more automation or AI-assisted steps. Many teams benefit from both.</p>
+pages/insurance-leads-for-agents.tsx:85:                          a system for speed to lead, SMS follow-up, dialing, notes, folders, and
+pages/insurance-leads-for-agents.tsx:124:                  <p>They should respond quickly, organize the lead, begin follow-up, and use SMS, calls, and appointments to move the conversation forward.</p>
+pages/insurance-leads-for-agents.tsx:128:                  <p>Yes. CoveCRM includes lead folders, pipelines, SMS conversations, dialing tools, and appointment workflow features.</p>
+pages/numbers.tsx:52:        setDefaultId(defData.defaultSmsNumberId || null);
+pages/numbers.tsx:164:                            ✓ Primary SMS
+pages/numbers.tsx:233:              This number has active drip campaigns or is your default SMS number. Releasing it will stop messages from sending and remove it from your account. This cannot be undone.
+pages/dial-session.tsx:825:            | { type: "sms"; dir: "inbound" | "outbound" | "ai"; text: string; date: string }
+pages/dial-session.tsx:896:          } else if ((ev as any).type === "sms") {
+pages/dial-session.tsx:897:            const sms = ev as any;
+pages/dial-session.tsx:898:            const t = String(sms.text || "");
+pages/dial-session.tsx:900:            rows.push({ kind: "text", text: `💬 ${sms.dir.toUpperCase()} • ${when} — ${t}` });
+pages/ai-dial-session.tsx:151:  // 🔹 AI Dialer billing state (separate from SMS AI)
+pages/ai-dial-session.tsx:240:  /** Load AI Dialer billing status (separate from SMS AI) */
+pages/admin/ai-copilot.tsx:60:    noSmsSent: boolean;
+pages/admin/ai-copilot.tsx:304:                          <div className="font-semibold text-slate-100">Corrected Opt-In Text</div>
+pages/f/[id].tsx:31:  consentText?: string;
+pages/f/[id].tsx:56:// Consent copy used on the consent step and as footer note.
+pages/f/[id].tsx:57:const COMPLIANT_CONSENT_TEXT =
+pages/f/[id].tsx:58:  "By clicking Continue, you agree to be contacted by a licensed insurance agent via calls, texts/SMS, and email, including automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase.";
+pages/f/[id].tsx:206:  const consentText =
+pages/f/[id].tsx:207:    funnelData.complianceProfile?.consentText?.trim() || COMPLIANT_CONSENT_TEXT;
+pages/f/[id].tsx:210:    // ── Consent step: show full TCPA text + single submit button ────────────
+pages/f/[id].tsx:211:    if (step.id === "consent") {
+pages/f/[id].tsx:222:              {consentText}
+pages/f/[id].tsx:393:  const isConsentStep = currentStep?.id === "consent";
+pages/f/[id].tsx:501:              {!isChoiceStep && !isConsentStep && (
+pages/f/[id].tsx:534:              {/* Consent footer — short note on every step, full text shown on consent step */}
+pages/f/[id].tsx:535:              {!isConsentStep && (
+pages/f/[id].tsx:537:                  {COMPLIANT_CONSENT_TEXT}
+pages/f/[id].tsx:738:        consentText: String(campaign.complianceProfile?.consentText || ""),
+pages/drip-campaigns/index.tsx:11:type TabMode = "sms" | "email";
+pages/drip-campaigns/index.tsx:28:  const [tab, setTab] = useState<TabMode>("sms");
+pages/drip-campaigns/index.tsx:62:      body: JSON.stringify({ name, type: "sms", steps }),
+pages/drip-campaigns/index.tsx:109:            onClick={() => setTab("sms")}
+pages/drip-campaigns/index.tsx:111:              tab === "sms"
+pages/drip-campaigns/index.tsx:116:            SMS
+pages/drip-campaigns/index.tsx:135:        {/* SMS tab */}
+pages/drip-campaigns/index.tsx:136:        {tab === "sms" && <>
+pages/facebook-leads/index.tsx:226:    "AI SMS + AI call support on every incoming lead",
+pages/facebook-leads/index.tsx:412:    "AI SMS + AI call fired on every incoming lead automatically",
+pages/lead/[id].tsx.bak.20260226-170833:92:      type: "sms";
+pages/lead/[id].tsx.bak.20260226-170833:362:        } else if (ev.type === "sms") {
+pages/lead/[id].tsx.bak.20260226-170833:363:          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
+pages/lead/[id].tsx.bak.20260226-170315:92:      type: "sms";
+pages/lead/[id].tsx.bak.20260226-170315:362:        } else if (ev.type === "sms") {
+pages/lead/[id].tsx.bak.20260226-170315:363:          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
+pages/lead/[id].tsx.bak.20260226-170444:92:      type: "sms";
+pages/lead/[id].tsx.bak.20260226-170444:362:        } else if (ev.type === "sms") {
+pages/lead/[id].tsx.bak.20260226-170444:363:          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
+pages/lead/[id].tsx:98:      type: "sms";
+pages/lead/[id].tsx:343:  const [showSmsPanel, setShowSmsPanel] = useState(false);
+pages/lead/[id].tsx:430:        } else if (ev.type === "sms") {
+pages/lead/[id].tsx:431:          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
+pages/lead/[id].tsx:1271:              onClick={() => setShowSmsPanel((v) => !v)}
+pages/lead/[id].tsx:1274:              {showSmsPanel ? "Close Text" : "Text"}
+pages/lead/[id].tsx:1320:          {showSmsPanel && lead?._id && (
+pages/lead/[id].tsx:1331:                mode="sms"
+pages/life-insurance-crm.tsx:84:                          Life insurance agents need fast lead response, clear notes, SMS history,
+pages/life-insurance-crm.tsx:93:                          SMS replies, call activity, reminders, and appointments connected. It should
+pages/life-insurance-crm.tsx:120:                          CoveCRM is positioned around insurance sales workflows, including AI SMS,
+pages/life-insurance-crm.tsx:138:                  <p>Yes. CoveCRM publicly lists AI SMS, AI dial sessions, AI call coach, and lead scoring features.</p>
+pages/life-insurance-crm.tsx:146:                  <p>An insurance-focused CRM can reduce setup by keeping common life insurance workflows, lead sources, SMS, calls, and appointments closer together.</p>
+pages/team/index.tsx:20:  smsCount: number;
+pages/team/index.tsx:187:      e.calls === 0 && e.smsCount === 0 && e.leadsAdded === 0 && e.appointmentsBooked === 0
+pages/team/index.tsx:236:                    <th className="pb-3 pr-4 text-right">SMS Sent</th>
+pages/team/index.tsx:270:                        <td className="py-3 pr-4 text-right text-purple-300">{entry.smsCount}</td>
+pages/covecrm-features.tsx:95:                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Texting and AI SMS</h2>
+pages/covecrm-features.tsx:97:                          Public CoveCRM positioning includes SMS automation, a two-way SMS inbox,
+pages/covecrm-features.tsx:98:                          drip campaigns, lead nudges, and <a href="/ai-sms-for-insurance-agents">AI SMS assistance</a>.
+pages/covecrm-features.tsx:101:                          <li>Automatic SMS follow-up for faster first response</li>
+pages/covecrm-features.tsx:103:                          <li>AI-assisted SMS workflows connected to lead follow-up</li>
+pages/covecrm-features.tsx:116:                          <li>AI-assisted calling workflows for supported insurance outreach</li>
+pages/covecrm-features.tsx:133:                          CoveCRM publicly lists AI Call Coach, AI Call Overview, AI SMS Assistant,
+pages/covecrm-features.tsx:143:                          from duplicate records, and keep SMS, calls, and appointments connected.
+pages/covecrm-features.tsx:161:                  <p>CoveCRM includes insurance CRM features for lead organization, SMS, dialing, AI workflows, and appointment booking.</p>
+pages/insurance-crm-faq.tsx:17:      "Yes. Some CRMs, including CoveCRM, include SMS automation and follow-up tools that help agents text leads quickly.",
+pages/insurance-crm-faq.tsx:47:      "A power dialer helps agents move through outbound calls faster with fewer manual steps, while an AI dialer adds more automation or AI-assisted calling workflows.",
+pages/insurance-crm-faq.tsx:67:      "Yes. Insurance CRM follow-up automation can help with SMS, drip campaigns, reminders, lead nudges, and consistent next steps after a lead arrives.",
+pages/upgrade.tsx:8:  "AI SMS Assistant — drafts reply suggestions",
+pages/upgrade.tsx:13:  "Twilio SMS & calling integration",
+pages/upgrade.tsx:71:            Everything you need to close more deals — AI calling, SMS, and full CRM in one place.
+pages/book/[...email].tsx:72:          You’ll receive an email or SMS reminder shortly.
+pages/close-vs-covecrm.tsx:102:                          <a href="/ai-sms-for-insurance-agents"> AI SMS</a>, lead folders, appointment booking,
+pages/close-vs-covecrm.tsx:111:                          <li>How will SMS, dialing, and appointments stay connected to each lead?</li>
+pages/close-vs-covecrm.tsx:120:                          CoveCRM focuses on insurance lead workflows, including SMS automation,
+pages/close-vs-covecrm.tsx:129:                          Insurance agents often need dialing and SMS connected to specific lead
+pages/close-vs-covecrm.tsx:157:                  <p>CoveCRM is designed around insurance lead follow-up, SMS, dialing, and appointment workflows.</p>
+pages/kayla.tsx:55:  "AI SMS",
+pages/kayla.tsx:75:    a: "CoveCRM already supports outbound SMS and follow-up messaging. Texting behavior depends on the account’s messaging setup and compliance status.",
+pages/how-insurance-agents-can-book-more-appointments.tsx:85:                          SMS and dialing workflows can reduce the time between lead arrival and contact.
+pages/how-insurance-agents-can-book-more-appointments.tsx:101:                          SMS and call notes are separated, reminders are missed, or leads are not
+pages/how-insurance-agents-can-book-more-appointments.tsx:127:                          CoveCRM includes SMS automation, dialing tools, Google Calendar sync,
+pages/how-insurance-agents-can-book-more-appointments.tsx:145:                  <p>Yes. SMS can help agents respond quickly and move interested leads toward a scheduled conversation.</p>
+pages/api/settings/default-number.ts:2:// GET  — get current default SMS number
+pages/api/settings/default-number.ts:3:// POST — set default SMS number
+pages/api/settings/default-number.ts:10:import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefault";
+pages/api/settings/default-number.ts:21:      "email defaultSmsNumberId numbers",
+pages/api/settings/default-number.ts:25:      await resolvePreferredSmsDefault(user);
+pages/api/settings/default-number.ts:28:      defaultSmsNumberId: (user as any)?.defaultSmsNumberId ?? null,
+pages/api/settings/default-number.ts:36:      "email defaultSmsNumberId numbers",
+pages/api/settings/default-number.ts:49:          error: "Selected primary SMS number is not present on this account.",
+pages/api/settings/default-number.ts:56:      { $set: { defaultSmsNumberId: numberId ?? null } }
+pages/api/messages/test-send.ts:8:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/messages/test-send.ts:17: * - Uses the current user's Messaging Service routing via sendSms().
+pages/api/messages/test-send.ts:76:          "Last Name": "SMS",
+pages/api/messages/test-send.ts:89:    const result = await sendSms({
+pages/api/messages/test-send.ts:110:      message: result.scheduledAt ? "SMS scheduled" : "SMS accepted",
+pages/api/messages/test-send.ts:121:    return res.status(500).json({ message: err?.message || "Failed to send test SMS" });
+pages/api/google-auth/initiate.ts:40:    prompt: "consent",
+pages/api/google-auth/start.ts:29:    prompt: "consent",
+pages/api/numbers/buy.ts:67:      const a2pApproved = readiness?.canSendSms === true;
+pages/api/numbers/buy.ts:86:            smsBlockedReason: a2pApproved ? null : "A2P messaging service not registered",
+pages/api/numbers/[id].ts:33:        // Check if this is the user's default SMS number
+pages/api/numbers/[id].ts:34:        const user = await User.findOne({ email: userEmail }).select("defaultSmsNumberId").lean();
+pages/api/numbers/[id].ts:35:        const defaultId = String((user as any)?.defaultSmsNumberId || "");
+pages/api/numbers/[id].ts:41:            message: "This is your default SMS number. Releasing it will stop outbound SMS from using this number. Are you sure?",
+pages/api/calendar/book-appointment.ts:229:    // SMS confirmation — show CLIENT timezone + agent NAME
+pages/api/calendar/book-appointment.ts:265:      console.warn("SMS confirmation failed:", e);
+pages/api/test/send-sms.ts:4:import { sendSMS } from "@/lib/twilio/sendSMS";
+pages/api/test/send-sms.ts:16:    const r = await sendSMS(to, body, session.user.email, { source: "test_safe_mode" });
+pages/api/sms/send.ts:1:// pages/api/sms/send.ts
+pages/api/sms/send.ts:9:import { sendSMS } from "@/lib/twilio/sendSMS";
+pages/api/sms/send.ts:26:    const { sid, serviceSid, messageId, scheduledAt } = await sendSMS(
+pages/api/sms/send.ts:80:      console.warn("⚠️ /api/sms/send suppression update failed:", e?.message || e);
+pages/api/sms/send.ts:93:      message: scheduledAt ? "SMS scheduled" : "SMS accepted",
+pages/api/sms/send.ts:102:    console.error("❌ /api/sms/send error:", err);
+pages/api/sms/send.ts:106:    return res.status(500).json({ message: err?.message || "Failed to send SMS" });
+pages/api/auth/[...nextauth].ts:61:      inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
+pages/api/auth/[...nextauth].ts:173:          prompt: "consent",
+pages/api/google/calendar/book-appointment.ts:18:import { sendSms } from "@/lib/twilio/sendSMS"; // thread-sticky sender for confirmation
+pages/api/google/calendar/book-appointment.ts:261:// ---- SMS helpers ----------------------------------------------------------
+pages/api/google/calendar/book-appointment.ts:440:      await sendSms({
+pages/api/google/calendar/book-appointment.ts:686:    // ------------------ SMS: confirmation + reminders ----------------------
+pages/api/google/calendar/book-appointment.ts:709:      await sendSms({
+pages/api/google/calendar/book-appointment.ts:714:        // ✅ Only AI SMS assistant confirmations get the 3–5 min human delay;
+pages/api/google/calendar/book-appointment.ts:766:        type: "sms",
+pages/api/google/calendar/auth.ts:14:      prompt: "consent",
+pages/api/google/index.ts:5: * Generates the Google OAuth consent URL with the right scopes
+pages/api/google/index.ts:29:    prompt: "consent",
+pages/api/google/auth.ts:83:    prompt: "consent",
+pages/api/leads/history.ts:13:  | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
+pages/api/leads/history.ts:55:  // --- SMS strictly for this lead ---
+pages/api/leads/history.ts:61:        type: "sms",
+pages/api/start-conference.ts:50:  const defaultSmsNumberId = String((user as any)?.defaultSmsNumberId || "");
+pages/api/start-conference.ts:51:  if (defaultSmsNumberId) {
+pages/api/start-conference.ts:54:      return entryId === defaultSmsNumberId || String(entry?.sid || "") === defaultSmsNumberId;
+pages/api/chat-assistant.ts:61:🤖 AI SMS Assistant:
+pages/api/chat-assistant.ts:100:- You must register once with proof of opt-in
+pages/api/book-slot.ts:68:    // Optional: send SMS confirmation to guest
+pages/api/admin/ai/a2p-failures/scan.ts:37:      "Campaign rejected: Missing opt-out language and insufficient opt-in description.";
+pages/api/admin/ai/a2p-failures/simulate.ts:29:    "Campaign rejected: Missing opt-out language and insufficient opt-in description.";
+pages/api/internal/run-drips.ts:9:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/internal/run-drips.ts:484:          (campaign as any).type !== "sms"
+pages/api/internal/run-drips.ts:731:const result = await sendSms({
+pages/api/internal/run-drips.ts:743:            // If sendSms did not throw, we treat it as a successful “send outcome”
+pages/api/message/index.ts.bak.20260228162205:9:import { sendSMS } from "@/lib/twilio/sendSMS";
+pages/api/message/index.ts.bak.20260228162205:70:  // Send SMS for outbound messages
+pages/api/message/index.ts.bak.20260228162205:76:      await sendSMS(to, text.trim(), user._id);
+pages/api/message/index.ts.bak.20260228162205:81:        .json({ error: err?.message || "Failed to send SMS" });
+pages/api/message/index.ts.bak.20260228151417:9:import { sendSMS } from "@/lib/twilio/sendSMS";
+pages/api/message/index.ts.bak.20260228151417:69:  // Send SMS for outbound messages
+pages/api/message/index.ts.bak.20260228151417:75:      await sendSMS(to, text.trim(), user._id);
+pages/api/message/index.ts.bak.20260228151417:80:        .json({ error: err?.message || "Failed to send SMS" });
+pages/api/message/index.ts:9:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/message/index.ts:82:  // Send SMS for outbound messages
+pages/api/message/index.ts:88:      await sendSms({
+pages/api/message/index.ts:103:        .json({ error: err?.message || "Failed to send SMS" });
+pages/api/message/index.ts:127:      type: "sms",
+pages/api/registerA2P.ts:227:  // If NOT using CoveCRM-hosted compliance pages, require public opt-in + terms + privacy URLs
+pages/api/registerA2P.ts:230:      errors.landingOptInUrl = 'Opt-in page URL is required (must start with https://).';
+pages/api/registerA2P.ts:308:    errors.optInDetails = "Opt-in details are required.";
+pages/api/ai-calls/booking-confirmation-sms.ts:4:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/ai-calls/booking-confirmation-sms.ts:69:  const user = await User.findOne({ email }).select("email firstName name a2p a2pStatus numbers defaultSmsNumberId").lean<any>();
+pages/api/ai-calls/booking-confirmation-sms.ts:84:  const smsAllowed = approvedTopLevel || approvedNested;
+pages/api/ai-calls/booking-confirmation-sms.ts:86:  if (!smsAllowed) {
+pages/api/ai-calls/booking-confirmation-sms.ts:87:    console.log(`[AI-VOICE][SMS-CONFIRM] SMS confirmation skipped — A2P not approved for ${email}`, {
+pages/api/ai-calls/booking-confirmation-sms.ts:93:    return res.status(200).json({ ok: true, smsSent: false });
+pages/api/ai-calls/booking-confirmation-sms.ts:105:    await sendSms({
+pages/api/ai-calls/booking-confirmation-sms.ts:113:    return res.status(200).json({ ok: true, smsSent: true });
+pages/api/ai-calls/booking-confirmation-sms.ts:115:    console.warn("[AI-VOICE][SMS-CONFIRM] send failed:", err?.message || err);
+pages/api/ai-calls/booking-confirmation-sms.ts:116:    return res.status(200).json({ ok: true, smsSent: false });
+pages/api/facebook/publish-ad.ts:435:            consentText:
+pages/api/facebook/publish-ad.ts:436:              String(complianceProfile?.consentText || "").trim() ||
+pages/api/facebook/publish-ad.ts:437:              "By submitting, you agree to be contacted by phone, text/SMS, or email by a licensed insurance agent, including through automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase.",
+pages/api/facebook/publish-ad.ts:594:        const storedConsentText = String(
+pages/api/facebook/publish-ad.ts:595:          storedComplianceProfile.consentText ||
+pages/api/facebook/publish-ad.ts:596:          complianceProfile?.consentText ||
+pages/api/facebook/publish-ad.ts:597:          "By submitting, you agree to be contacted by phone, text/SMS, or email by a licensed insurance agent, including through automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase."
+pages/api/facebook/publish-ad.ts:607:          title: "Consent and Important Disclosures",
+pages/api/facebook/publish-ad.ts:615:              key: "covecrm_contact_consent",
+pages/api/facebook/publish-ad.ts:616:              text: storedConsentText,
+pages/api/facebook/proven-ads/seed-defaults.ts:79:      "Consent",
+pages/api/facebook/proven-ads/seed-defaults.ts:176:      "Consent",
+pages/api/team/leaderboard.ts:54:        smsCount,
+pages/api/team/leaderboard.ts:63:        // Outbound SMS sent
+pages/api/team/leaderboard.ts:91:        smsCount,
+pages/api/mobile/numbers/buy.ts:22:const INBOUND_SMS_WEBHOOK = `${BASE_URL}/api/twilio/inbound-sms`;
+pages/api/mobile/numbers/buy.ts:251:      inboundRequestUrl: INBOUND_SMS_WEBHOOK,
+pages/api/mobile/numbers/buy.ts:270:    inboundRequestUrl: INBOUND_SMS_WEBHOOK,
+pages/api/mobile/numbers/buy.ts:461:        smsUrl: INBOUND_SMS_WEBHOOK,
+pages/api/mobile/numbers/buy.ts:487:          smsEnabled: true,
+pages/api/mobile/numbers/buy.ts:499:        smsUrl: INBOUND_SMS_WEBHOOK,
+pages/api/mobile/numbers/buy.ts:609:      a2pVerified = readiness.canSendSms === true;
+pages/api/mobile/numbers/buy.ts:616:            smsBlockedReason: a2pVerified ? null : "A2P messaging service not registered",
+pages/api/mobile/numbers/buy.ts:628:            smsBlockedReason: "A2P messaging service not registered",
+pages/api/mobile/numbers/buy.ts:649:      smsBlockedReason: a2pVerified ? undefined : "A2P messaging service not registered",
+pages/api/mobile/numbers/buy.ts:654:        sms:
+pages/api/mobile/numbers/buy.ts:655:          (purchased as any).capabilities?.SMS ?? purchased.capabilities?.sms,
+pages/api/mobile/numbers/available.ts:138:        smsEnabled: true,
+pages/api/mobile/numbers/index.ts:144:        smsEnabled: true,
+pages/api/mobile/login.ts:61:      inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
+pages/api/mobile/message/conversations.ts:105:// Apply "never show SMS Lead" rule on the backend too, for mobile
+pages/api/mobile/message/conversations.ts:108:  const isSmsLead =
+pages/api/mobile/message/conversations.ts:109:    name && name.toLowerCase() === "sms lead";
+pages/api/mobile/message/conversations.ts:111:  if (!name || isSmsLead) {
+pages/api/mobile/message/index.ts.bak.20260228152204:8:import { sendSMS } from "@/lib/twilio/sendSMS";
+pages/api/mobile/message/index.ts.bak.20260228152204:77:  // Send SMS for outbound messages
+pages/api/mobile/message/index.ts.bak.20260228152204:83:      await sendSMS(to, text.trim(), user._id);
+pages/api/mobile/message/index.ts.bak.20260228152204:88:        .json({ error: err?.message || "Failed to send SMS" });
+pages/api/mobile/message/index.ts.bak.20260228162205:8:import { sendSMS } from "@/lib/twilio/sendSMS";
+pages/api/mobile/message/index.ts.bak.20260228162205:77:  // Send SMS for outbound messages
+pages/api/mobile/message/index.ts.bak.20260228162205:83:      await sendSMS(to, text.trim(), user._id);
+pages/api/mobile/message/index.ts.bak.20260228162205:88:        .json({ error: err?.message || "Failed to send SMS" });
+pages/api/mobile/message/index.ts:8:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/mobile/message/index.ts:89:  // Send SMS for outbound messages
+pages/api/mobile/message/index.ts:95:      await sendSms({
+pages/api/mobile/message/index.ts:107:        .json({ error: err?.message || "Failed to send SMS" });
+pages/api/mobile/message/index.ts:131:      type: "sms",
+pages/api/mobile/message/index.ts.bak.20260228151425:8:import { sendSMS } from "@/lib/twilio/sendSMS";
+pages/api/mobile/message/index.ts.bak.20260228151425:76:  // Send SMS for outbound messages
+pages/api/mobile/message/index.ts.bak.20260228151425:82:      await sendSMS(to, text.trim(), user._id);
+pages/api/mobile/message/index.ts.bak.20260228151425:87:        .json({ error: err?.message || "Failed to send SMS" });
+pages/api/ai/explain-drip.ts:12:const SYSTEM_PROMPT = `You are an expert insurance sales coach and copywriter. You build high-converting SMS and email drip sequences for insurance agents. You understand insurance buyer psychology, common objections, and what motivates people to take action. Always respond with valid JSON only.`;
+pages/api/ai/explain-drip.ts:24:  const { scenario, type = "sms", campaignName, stepCount = 5 } = req.body as {
+pages/api/ai/explain-drip.ts:26:    type?: "sms" | "email";
+pages/api/ai/explain-drip.ts:55:${type === "sms"
+pages/api/ai/explain-drip.ts:56:  ? "For SMS: keep each message under 160 characters. Conversational, not salesy. No subject line needed (use empty string). Use {{first_name}} and {{agent_name}} merge fields."
+pages/api/ai/appointments.ts:11:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/ai/appointments.ts:154:    // 🚫 NEW: never send confirmation SMS if appointment time is already in the past
+pages/api/ai/appointments.ts:158:        "[ai/appointments] Skipping confirmation SMS because time is in the past:",
+pages/api/ai/appointments.ts:162:      // 4) Send confirmation SMS from the thread-sticky number
+pages/api/ai/appointments.ts:164:      await sendSms({
+pages/api/ai/support/chat.ts:29:        "I hit an internal support error while checking your account. Based on your current setup, here’s what to verify next: confirm your Twilio and A2P settings, make sure at least one number is active, and review any recent SMS or import errors in Settings.",
+pages/api/ai/activity-feed.ts:133:        id: `sms-${reply._id}`,
+pages/api/ai/response-handler.ts:6:  // Your real inbound SMS AI flow is handled entirely by:
+pages/api/ai/response-handler.ts:7:  //   /api/twilio/inbound-sms
+pages/api/kayla/submit.ts:9:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/kayla/submit.ts:21:  smsSent: boolean;
+pages/api/kayla/submit.ts:53:function buildKaylaSms(firstName: string, attemptedCall: boolean) {
+pages/api/kayla/submit.ts:103:  const defaultSmsNumberId = String(user?.defaultSmsNumberId || "");
+pages/api/kayla/submit.ts:105:    (defaultSmsNumberId
+pages/api/kayla/submit.ts:108:          return entryId === defaultSmsNumberId || String(entry?.sid || "") === defaultSmsNumberId;
+pages/api/kayla/submit.ts:133:      smsSent: false,
+pages/api/kayla/submit.ts:156:      smsSent: false,
+pages/api/kayla/submit.ts:165:      smsSent: false,
+pages/api/kayla/submit.ts:174:      smsSent: false,
+pages/api/kayla/submit.ts:188:      smsSent: false,
+pages/api/kayla/submit.ts:200:      smsSent: false,
+pages/api/kayla/submit.ts:214:      smsSent: false,
+pages/api/kayla/submit.ts:236:  let smsSent = false;
+pages/api/kayla/submit.ts:356:      await sendSms({
+pages/api/kayla/submit.ts:358:        body: buildKaylaSms(firstName, attemptedCall),
+pages/api/kayla/submit.ts:363:      smsSent = true;
+pages/api/kayla/submit.ts:365:      smsSent = false;
+pages/api/kayla/submit.ts:366:      reason = reason || `SMS send skipped: ${err?.message || "configuration blocked send"}`;
+pages/api/kayla/submit.ts:377:    smsSent,
+pages/api/a2p/status.ts:72:    simpleTitle: failure.simpleTitle || "SMS registration needs review",
+pages/api/a2p/status.ts:75:      "The SMS registration could not be approved yet. CoveCRM will review the registration details and guide the next step.",
+pages/api/a2p/status.ts:115:        canSendSms: false,
+pages/api/a2p/status.ts:180:        canSendSms: false,
+pages/api/a2p/status.ts:308:              "Your A2P campaign registration was rejected by carriers. Please review your use case description, sample messages, and opt-in/opt-out details, then resubmit.";
+pages/api/a2p/status.ts:390:        (a2p as any).messagingReady = readiness.canSendSms;
+pages/api/a2p/status.ts:470:    const canSendSms = Boolean((a2p as any).messagingReady && (a2p as any).messagingServiceSid && serviceA2PRegistered);
+pages/api/a2p/status.ts:483:      canSendSms,
+pages/api/a2p/status-callback.ts:79:  let desc = `Life insurance lead follow-up and appointment reminder SMS campaign for ${businessName}. Use case: ${useCase}. `;
+pages/api/a2p/status-callback.ts:83:    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 300)}`;
+pages/api/a2p/status-callback.ts:86:      "Leads opt in via TCPA-compliant web forms and receive updates about their life insurance options and booked appointments.";
+pages/api/a2p/status-callback.ts:148:  const inboundRequestUrl = `${BASE_URL}/api/twilio/inbound-sms`;
+pages/api/a2p/submit-campaign.ts:51:  let desc = `Life insurance lead follow-up and appointment reminder SMS campaign for ${businessName}. Use case: ${useCase}. `;
+pages/api/a2p/submit-campaign.ts:54:    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 300)}`;
+pages/api/a2p/submit-campaign.ts:57:      "Leads opt in via TCPA-compliant web forms and receive updates about their life insurance options and booked appointments.";
+pages/api/a2p/submit-campaign.ts:117:    inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
+pages/api/a2p/start.ts:93:  const hostedOptIn = `${baseUrl}/sms/optin/${args.userId}`;
+pages/api/a2p/start.ts:94:  const hostedTos = `${baseUrl}/sms/optin-terms/${args.userId}`;
+pages/api/a2p/start.ts:95:  const hostedPrivacy = `${baseUrl}/sms/optin-privacy/${args.userId}`;
+pages/api/a2p/start.ts:157:  let desc = `Life insurance lead follow-up and appointment reminder SMS campaign for ${businessName}. Use case: ${useCase}. `;
+pages/api/a2p/start.ts:161:    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 300)}`;
+pages/api/a2p/start.ts:164:      "Leads opt in via TCPA-compliant web forms and receive updates about their life insurance options and booked appointments.";
+pages/api/a2p/start.ts:1296:    inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
+pages/api/a2p/hosted-compliance.ts:31:    optInUrl: `${baseUrl}/sms/optin/${userId}`,
+pages/api/a2p/hosted-compliance.ts:32:    tosUrl: `${baseUrl}/sms/optin-terms/${userId}`,
+pages/api/a2p/hosted-compliance.ts:33:    privacyUrl: `${baseUrl}/sms/optin-privacy/${userId}`,
+pages/api/a2p/sync.ts:580:              messagingReady: readiness.canSendSms,
+pages/api/a2p/sync.ts:581:              applicationStatus: readiness.canSendSms ? "approved" : "pending",
+pages/api/a2p/sync.ts:582:              registrationStatus: readiness.canSendSms ? "ready" : "campaign_submitted",
+pages/api/a2p/sync.ts:586:              ...(!readiness.canSendSms ? { lastError: "Messaging Service is not A2P registered/verified." } : {}),
+pages/api/a2p/sync.ts:588:            ...(readiness.canSendSms ? { $unset: { lastError: 1 } } : {}),
+pages/api/a2p/sync.ts:622:          state: readiness.canSendSms ? "approved" : "pending",
+pages/api/a2p/sync.ts:737:              messagingReady: readiness.canSendSms,
+pages/api/a2p/sync.ts:738:              applicationStatus: readiness.canSendSms ? "approved" : "pending",
+pages/api/a2p/sync.ts:739:              registrationStatus: readiness.canSendSms ? "ready" : "campaign_submitted",
+pages/api/a2p/sync.ts:743:              ...(!readiness.canSendSms ? { lastError: "Messaging Service is not A2P registered/verified." } : {}),
+pages/api/a2p/sync.ts:745:            ...(readiness.canSendSms
+pages/api/a2p/sync.ts:781:          state: readiness.canSendSms ? "approved" : "pending",
+pages/api/a2p/assign-number.ts:100:          sms: (incoming as any).capabilities?.SMS ?? (incoming as any).capabilities?.sms ?? undefined,
+pages/api/callback/google-calendar.ts:59:    //    reuse the one we have on file. If neither exists, ask to reconnect with consent.
+pages/api/callback/google-calendar.ts:66:          "No refresh_token available. Please reconnect with access_type=offline&prompt=consent.",
+pages/api/drips/enroll-folder.ts:14:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/drips/enroll-folder.ts:260:    if (campaign.type !== "sms")
+pages/api/drips/enroll-folder.ts:261:      return res.status(400).json({ error: "Campaign must be SMS type" });
+pages/api/drips/enroll-folder.ts:475:          const result = await sendSms({
+pages/api/drips/resume-lead.ts:69:    if (campaign.isActive !== true || campaign.type !== "sms") {
+pages/api/drips/drips-folder-watch.ts:84:      // Deactivate watcher if campaign is no longer active SMS
+pages/api/drips/drips-folder-watch.ts:89:      const isSmsActive = !!campaign && campaign.type === "sms" && campaign.isActive === true;
+pages/api/drips/drips-folder-watch.ts:91:      if (!isSmsActive) {
+pages/api/drips/enroll-lead.ts:11:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/drips/enroll-lead.ts:236:    if (campaign.isActive !== true || campaign.type !== "sms") {
+pages/api/drips/enroll-lead.ts:237:      return res.status(400).json({ error: "Campaign is not an active SMS campaign" });
+pages/api/drips/enroll-lead.ts:386:              await sendSms({
+pages/api/drips/seed.ts:59:      type: drip.type, // e.g., "sms"
+pages/api/drips/campaigns.ts:10: *   Returns all SMS drip campaigns visible to the current user:
+pages/api/drips/campaigns.ts:21: *   Creates a new custom SMS drip campaign for the current user, active by default.
+pages/api/drips/campaigns.ts:65:      type: "sms",
+pages/api/drips/campaigns.ts:179:      type: "sms",
+pages/api/connect/google-calendar.ts:31:    prompt: "consent",
+pages/api/connect/google-calendar/index.ts:35:    prompt: "consent",        // ← force consent so Google issues refresh_token
+pages/api/connect/google-calendar/callback.ts:60:    // (Google may omit refresh_token if user previously consented and prompt isn't "consent",
+pages/api/connect/google-calendar/callback.ts:61:    // but we DO use prompt=consent; this is still a safe fallback.)
+pages/api/funnel/create.ts:83:        "By submitting this form, you agree to be contacted about insurance options by a licensed agent via calls, texts/SMS, and email, including automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase. This is a private insurance service and is not affiliated with any government agency.",
+pages/api/cron/verify-twilio-webhooks.ts:12:const SMS_URL   = `${BASE}/api/twilio/inbound-sms`;
+pages/api/cron/verify-twilio-webhooks.ts:36:        const wantInbound = SMS_URL;
+pages/api/cron/verify-twilio-webhooks.ts:54:    // 2) Walk all IncomingPhoneNumbers on the master account and enforce Voice/SMS webhooks
+pages/api/cron/verify-twilio-webhooks.ts:64:          smsUrl: SMS_URL,
+pages/api/cron/verify-twilio-webhooks.ts:65:          smsMethod: "POST",
+pages/api/cron/verify-twilio-webhooks.ts:75:        if (current.smsUrl !== desired.smsUrl) changed.push("smsUrl");
+pages/api/cron/verify-twilio-webhooks.ts:76:        if (String(current.smsMethod || "").toUpperCase() !== "POST") changed.push("smsMethod");
+pages/api/cron/ai-followups.ts:97:      if (decision.suggestedAction === "sms") {
+pages/api/cron/ai-followups.ts:103:          message: { $regex: /^SMS Follow-up Task:/i },
+pages/api/cron/ai-followups.ts:111:            message: `SMS Follow-up Task: ${decision.reason}`,
+pages/api/cron/ai-followups.ts:121:          body: `SMS follow-up task suggested: ${decision.reason}`,
+pages/api/cron/ai-followups.ts:127:          sourceId: `sms-task:${new Date().toISOString()}`,
+pages/api/cron/ai-reactivation.ts:54:  let smsSent = 0;
+pages/api/cron/ai-reactivation.ts:108:      if (decision.suggestedAction === "sms") {
+pages/api/cron/ai-reactivation.ts:114:          message: { $regex: /^Reactivation SMS Task:/i },
+pages/api/cron/ai-reactivation.ts:122:            message: `Reactivation SMS Task: ${decision.reason}`,
+pages/api/cron/ai-reactivation.ts:132:          body: `Reactivation SMS task suggested: ${decision.reason}`,
+pages/api/cron/ai-reactivation.ts:138:          sourceId: `reactivation-sms-task:${new Date().toISOString()}`,
+pages/api/cron/ai-reactivation.ts:190:    smsSent,
+pages/api/cron/ai-reactivation.ts.bak.20260402-220125:15:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/cron/ai-reactivation.ts.bak.20260402-220125:104:  let smsSent = 0;
+pages/api/cron/ai-reactivation.ts.bak.20260402-220125:156:      if (decision.suggestedAction === "sms") {
+pages/api/cron/ai-reactivation.ts.bak.20260402-220125:166:        await sendSms({
+pages/api/cron/ai-reactivation.ts.bak.20260402-220125:188:        smsSent++;
+pages/api/cron/ai-reactivation.ts.bak.20260402-220125:237:    smsSent,
+pages/api/cron/send-ai-queued.ts:11:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/cron/send-ai-queued.ts:34:function pickLeadFirstNameForSms(lead: any): string | null {
+pages/api/cron/send-ai-queued.ts:47:function pickLeadFullNameForSms(lead: any): string | null {
+pages/api/cron/send-ai-queued.ts:48:  const first = pickLeadFirstNameForSms(lead);
+pages/api/cron/send-ai-queued.ts:148:  if (process.env.AI_SMS_HARD_STOP === "1") {
+pages/api/cron/send-ai-queued.ts:332:          console.warn("[SMS_GUARD] Blocked unsafe outbound SMS", {
+pages/api/cron/send-ai-queued.ts:346:          leadFirst: pickLeadFirstNameForSms(leadForGreeting),
+pages/api/cron/send-ai-queued.ts:347:          leadFull: pickLeadFullNameForSms(leadForGreeting),
+pages/api/cron/send-ai-queued.ts:360:        await sendSms({
+pages/api/cron/sync-google-sheets.ts:8:import { sendSMS } from "@/lib/twilio/sendSMS";
+pages/api/cron/sync-google-sheets.ts:74:    let smsSent = 0;
+pages/api/cron/sync-google-sheets.ts:75:    let smsFailed = 0;
+pages/api/cron/sync-google-sheets.ts:201:                    if (!dripDoc || dripDoc.type !== "sms") return;
+pages/api/cron/sync-google-sheets.ts:237:                    await sendSMS(to, finalBody, user._id.toString());
+pages/api/cron/sync-google-sheets.ts:273:                    smsSent++;
+pages/api/cron/sync-google-sheets.ts:276:                    smsFailed++;
+pages/api/cron/sync-google-sheets.ts:291:      smsSent,
+pages/api/cron/sync-google-sheets.ts:292:      smsFailed,
+pages/api/cron/enforce-twilio-inbound-webhooks.ts:53: * - IncomingPhoneNumber.smsUrl
+pages/api/cron/enforce-twilio-inbound-webhooks.ts:81:  const inboundUrl = `${base}/api/twilio/inbound-sms?token=${encodeURIComponent(webhookSecret)}`;
+pages/api/cron/enforce-twilio-inbound-webhooks.ts:146:        const method = (n.smsMethod || "").toUpperCase();
+pages/api/cron/enforce-twilio-inbound-webhooks.ts:147:        if (n.smsUrl !== inboundUrl || method !== "POST") {
+pages/api/cron/enforce-twilio-inbound-webhooks.ts:148:          await client.incomingPhoneNumbers(n.sid).update({ smsUrl: inboundUrl, smsMethod: "POST" });
+pages/api/cron/twilio-daily-sync.ts:12:const INBOUND_WEBHOOK = BASE_URL ? `${BASE_URL}/api/twilio/inbound-sms` : undefined;
+pages/api/cron/ai-followups.ts.bak.20260402-220125:14:import { sendSms } from "@/lib/twilio/sendSMS";
+pages/api/cron/ai-followups.ts.bak.20260402-220125:143:      if (decision.suggestedAction === "sms") {
+pages/api/cron/ai-followups.ts.bak.20260402-220125:153:        await sendSms({
+pages/api/cron/schedule-sms-reminders.ts:1:// /pages/api/cron/schedule-sms-reminders.ts
+pages/api/cron/schedule-sms-reminders.ts:22:    return res.status(200).json({ message: "SMS reminders processed successfully" });
+pages/api/cron/schedule-sms-reminders.ts:24:    console.error("[schedule-sms-reminders] error:", err?.message || err);
+pages/api/cron/schedule-sms-reminders.ts:25:    return res.status(500).json({ message: "Failed to process SMS reminders" });
+pages/api/assign-drip-to-folder.ts:124:    // If not a sendable SMS campaign, stop here (watcher still active for future logic)
+pages/api/assign-drip-to-folder.ts:125:    const isSendableSms =
