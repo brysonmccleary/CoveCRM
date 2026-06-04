@@ -4102,7 +4102,13 @@ function detectObjection(textRaw: string): string | null {
     t.includes("dont remember") ||
     t.includes("don't remember") ||
     t.includes("doesn't ring a bell") ||
-    t.includes("doesnt ring a bell")
+    t.includes("doesnt ring a bell") ||
+    t.includes("no idea what this") ||
+    t.includes("no idea what you") ||
+    t.includes("don't know what this") ||
+    t.includes("dont know what this") ||
+    t.includes("don't know what you") ||
+    t.includes("dont know what you")
   ) return "confused_identity";
   if (!t) return null;
 
@@ -4161,7 +4167,14 @@ function detectObjection(textRaw: string): string | null {
   ) {
     return "not_interested";
   }
-  if (t.includes("scam") || t.includes("fraud") || t.includes("spam")) {
+  if (
+    t.includes("scam") || t.includes("fraud") || t.includes("spam") ||
+    t.includes("sounds fake") || t.includes("this is fake") || t.includes("that's fake") ||
+    t.includes("that sounds fake") || t.includes("i don't trust this") ||
+    t.includes("i dont trust this") || t.includes("don't trust this") ||
+    t.includes("dont trust this") || t.includes("seems fake") ||
+    t.includes("seems sketchy") || t.includes("sounds sketchy")
+  ) {
     return "scam";
   }
   if (
@@ -4223,6 +4236,21 @@ if (
     t.includes("pressed for time") ||
     t.includes("short on time") ||
     t.includes("in the middle of") ||
+    t.includes("driving") ||
+    t.includes("hospital") ||
+    t.includes("eating") ||
+    t.includes("at dinner") ||
+    t.includes("in class") ||
+    t.includes("need to talk to my") ||
+    t.includes("need to check with my") ||
+    t.includes("let me talk to my") ||
+    t.includes("need to ask my") ||
+    t.includes("have to talk to my") ||
+    t.includes("in a month") ||
+    t.includes("next month") ||
+    t.includes("in a few weeks") ||
+    t.includes("in a couple weeks") ||
+    t.includes("in a couple of weeks") ||
     /not\s+(?:a\s+)?good\s+time/i.test(t) ||
     /(?:really|very|too)\s+busy/i.test(t) ||
     /can.?t\s+(?:really\s+)?talk\s+(?:right\s+)?now/i.test(t)
@@ -4854,7 +4882,7 @@ function classifyTurnIntent(
     t.includes("today") || t.includes("tomorrow") || t.includes("morning") ||
     t.includes("afternoon") || t.includes("evening") || t.includes("time") ||
     t.includes("daytime");
-  if (hasJustSaidSignal && hasSchedulingContext) {
+  if (hasJustSaidSignal) {
     return { kind: "confusion", subKind: "i_just_said", raw };
   }
 
@@ -5581,8 +5609,35 @@ function buildConversationPolicyDecision(
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
     const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
-    const lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?`;
     const advancedIdx = Math.min(stepCtx.idx + 1, Math.max(0, stepCtx.steps.length - 1));
+    const coverageSubjectValue = normalizeTurnTextForKey(intent.raw) || intent.raw;
+
+    // Compound turn: coverage answer + embedded objection (e.g. "my girlfriend, but I'm not interested").
+    // Store coverageSubject to clear Step 1, then route through the existing rebuttal immediately.
+    const secondaryObjKind = detectObjection(intent.raw);
+    if (secondaryObjKind === "not_interested" || secondaryObjKind === "busy") {
+      return {
+        handled: true,
+        routeKind: "policy_compound_coverage_objection",
+        responseMode: "exact_script",
+        objective: "return_to_booking",
+        lineToSay: getRebuttalLine(ctx, secondaryObjKind),
+        requiredClosingPivot: requiredObjective,
+        forbiddenTopics: [],
+        stateWrites: {
+          phase: "in_call",
+          coverageSubject: coverageSubjectValue,
+          scriptStepIndex: advancedIdx,
+          pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          lastObjectionKind: secondaryObjKind,
+          objectionRepeatCount: 1,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+
+    const lineToSay = `Got it — I just need to get you scheduled for a quick call with ${agentFirst} so they can answer everything. Does later today or tomorrow work better, or did you want me to try to get them on the line right now?`;
     return {
       handled: true,
       routeKind: "policy_step1_coverage",
@@ -5593,7 +5648,7 @@ function buildConversationPolicyDecision(
       forbiddenTopics: [],
       stateWrites: {
         phase: "in_call",
-        coverageSubject: normalizeTurnTextForKey(intent.raw) || intent.raw,
+        coverageSubject: coverageSubjectValue,
         pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
         pendingLiveTransferAvailabilityAttempts: 0,
         // Advance past Step 1 when no live-transfer pending; keep at Step 1 while waiting for availability answer.
@@ -5864,6 +5919,7 @@ function buildConversationPolicyDecision(
     const objRepeatCount = objIsRepeat ? (Number(state.objectionRepeatCount ?? 0) + 1) : 1;
     const objRepeatMode = objIsRepeat && objRepeatCount >= 2;
     const objStateWrites: Record<string, unknown> = { lastObjectionKind: objKind, objectionRepeatCount: objRepeatCount };
+    const dayHintFromTurn = !state.selectedDay ? extractExplicitDaySelection(intent.raw) : null;
 
     if (objRepeatMode) {
       const rebuttalBase = lineToSay;
@@ -5878,6 +5934,7 @@ function buildConversationPolicyDecision(
         stateWrites: {
           ...objStateWrites,
           ...preserveCurrentStepState(),
+          ...(dayHintFromTurn ? { selectedDay: dayHintFromTurn } : {}),
         },
         shouldAdvanceStep: false,
         repeatMode: true,
@@ -5887,14 +5944,16 @@ function buildConversationPolicyDecision(
     return {
       handled: true,
       routeKind: `policy_${sk || "objection"}`,
-      responseMode: "exact_script",
+      responseMode: sk === "busy" ? "soft_script" : "exact_script",
       objective: "return_to_booking",
       lineToSay,
+      ...(sk === "busy" ? { userText: intent.raw } : {}),
       requiredClosingPivot: requiredObjective,
       forbiddenTopics: [],
       stateWrites: {
         ...objStateWrites,
         ...preserveCurrentStepState(),
+        ...(dayHintFromTurn ? { selectedDay: dayHintFromTurn } : {}),
       },
       shouldAdvanceStep: false,
     };
@@ -6203,6 +6262,7 @@ function buildResponseFromPolicy(
       closingPivot: decision.requiredClosingPivot,
       repeatMode: decision.repeatMode,
       recentExchanges: state.recentExchanges,
+      userText: decision.userText,
     });
   }
   if (decision.responseMode === "guided_gpt" && decision.routeKind.startsWith("post_coverage_") && decision.baseAnswer && state.context) {
