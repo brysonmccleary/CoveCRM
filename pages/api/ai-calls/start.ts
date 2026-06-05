@@ -317,7 +317,7 @@ export default async function handler(
 
   const billingCheck = await checkCallingAllowed(userEmail);
   if (!billingCheck.allowed) {
-    return res.status(402).json({ error: billingCheck.reason, ok: false });
+    return res.status(402).json({ error: "billing_required", reason: billingCheck.reason, redirect: billingCheck.redirect, ok: false });
   }
 
   // If folderId is provided, we treat this as a full AI dial SESSION start.

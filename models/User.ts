@@ -150,7 +150,7 @@ export interface IUser {
 
   hasAI?: boolean;
   plan?: "Free" | "Pro";
-  subscriptionStatus?: "active" | "canceled";
+  subscriptionStatus?: "active" | "canceled" | "pending";
 
   aiUsage?: { openAiCost: number; twilioCost: number; totalCost: number };
 
@@ -463,8 +463,8 @@ const UserSchema = new Schema<IUser>({
   plan: { type: String, enum: ["Free", "Pro"], default: "Free" },
   subscriptionStatus: {
     type: String,
-    enum: ["active", "canceled"],
-    default: "active",
+    enum: ["active", "canceled", "pending"],
+    default: "pending",
   },
 
   aiUsage: {

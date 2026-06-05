@@ -899,10 +899,16 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
   const user = await User.findOne({ email: session.user.email as string });
 
   if (!isAccountActivated(user)) {
-    const destination =
-      (user as any)?.emailVerified === true
-        ? `/billing?email=${encodeURIComponent(String(session.user.email))}&trial=1`
-        : `/verify-email?email=${encodeURIComponent(String(session.user.email))}`;
+    const emailEnc = encodeURIComponent(String(session.user.email));
+    let destination: string;
+    if ((user as any)?.emailVerified === true) {
+      const bp = new URLSearchParams({ email: String(session.user.email), trial: "1" });
+      const uc = String((user as any)?.usedCode || "").trim();
+      if (uc) bp.set("promoCode", uc);
+      destination = `/billing?${bp.toString()}`;
+    } else {
+      destination = `/verify-email?email=${emailEnc}`;
+    }
     return {
       redirect: { destination, permanent: false },
     };

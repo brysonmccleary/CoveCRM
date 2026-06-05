@@ -7,6 +7,7 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import { LeadAIState } from "@/models/LeadAIState";
 import { sendSMS } from "@/lib/twilio/sendSMS";
+import { requireBillingReady } from "@/lib/billing/requireBillingReady";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
@@ -22,6 +23,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const user = await User.findOne({ email: session.user.email });
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    const billingReady = requireBillingReady(user);
+    if (!billingReady.ok) {
+      return res.status(402).json({ error: "billing_required", reason: billingReady.reason, redirect: billingReady.redirect });
+    }
 
     const { sid, serviceSid, messageId, scheduledAt } = await sendSMS(
       to,

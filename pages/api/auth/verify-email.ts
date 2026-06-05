@@ -107,7 +107,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (user as any).emailVerificationExpiresAt = null;
       await user.save();
 
-      return res.redirect(302, `/billing?email=${encodeURIComponent(email)}&trial=1`);
+      const billingParams = new URLSearchParams({ email, trial: "1" });
+      const usedCode = String((user as any).usedCode || "").trim();
+      if (usedCode) billingParams.set("promoCode", usedCode);
+      return res.redirect(302, `/billing?${billingParams.toString()}`);
     } catch (err: any) {
       console.error("[verify-email] link error:", err?.message || err);
       return redirectToVerifyError(res, email);

@@ -20,7 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userEmail = session.user.email.toLowerCase();
 
   const billingCheck = await checkCallingAllowed(userEmail);
-  if (!billingCheck.allowed) return res.status(402).json({ error: billingCheck.reason });
+  if (!billingCheck.allowed) return res.status(402).json({ error: "billing_required", reason: billingCheck.reason, redirect: billingCheck.redirect });
 
   const { toPhone, dropId, leadId } = req.body as { toPhone?: string; dropId?: string; leadId?: string };
   if (!toPhone) return res.status(400).json({ error: "toPhone required" });

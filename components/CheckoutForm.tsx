@@ -169,8 +169,11 @@ export default function CheckoutForm({
         <div className="text-sm text-gray-500">Card type: {cardBrand}</div>
       )}
 
-      {/* Stripe card input */}
-      <div className="border border-gray-300 rounded p-3 bg-white">
+      {/* Stripe card input — inline bg forces white even inside dark-mode parents */}
+      <div
+        className="border border-gray-300 rounded p-3 bg-white"
+        style={{ backgroundColor: "#ffffff" }}
+      >
         <CardElement
           options={{
             style: {

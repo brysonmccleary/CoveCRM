@@ -88,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const billingCheck = await checkCallingAllowed(userEmail);
     if (!billingCheck.allowed) {
-      return sendJSON(res, 402, { message: billingCheck.reason });
+      return sendJSON(res, 402, { error: "billing_required", reason: billingCheck.reason, redirect: billingCheck.redirect });
     }
 
     const baseUrl = (NEXT_PUBLIC_BASE_URL || NEXTAUTH_URL || "").replace(/\/$/, "");

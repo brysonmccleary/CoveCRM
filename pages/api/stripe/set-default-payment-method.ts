@@ -52,6 +52,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+    // Confirm the payment method was attached to this customer (guards against email-spoofing the body)
+    if (
+      paymentMethod.customer &&
+      String(paymentMethod.customer) !== String(customerId)
+    ) {
+      return res.status(403).json({ error: "Payment method does not belong to this customer." });
+    }
     const fingerprint = paymentMethod.card?.fingerprint || null;
     if (fingerprint) {
       (user as any).stripeCardFingerprint = fingerprint;

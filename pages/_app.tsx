@@ -12,6 +12,7 @@ import Head from "next/head";
 import { useRouter } from "next/router";
 import SoftphoneProvider from "@/components/telephony/SoftphoneProvider";
 import IncomingCallBanner from "@/components/IncomingCallBanner";
+import BillingRequiredModal from "@/components/BillingRequiredModal";
 
 // 🔌 client socket + unread store
 import { connectAndJoin } from "@/lib/socketClient";
@@ -187,6 +188,9 @@ function InnerApp({
 
       {/* Page content */}
       <Component {...pageProps} />
+
+      {/* Billing required modal — shown when any billable API returns 402 billing_required */}
+      {authed && !isPublic && <BillingRequiredModal />}
 
       {/* Toasts */}
       <Toaster position="top-right" reverseOrder={false} />

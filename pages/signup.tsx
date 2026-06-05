@@ -159,7 +159,9 @@ export default function SignUp() {
 
       toast.success("Account created! Check your email for the verification code.");
       void uiTotal;
-      router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+      const veParams = new URLSearchParams({ email, trial: "1" });
+      if (promoCode.trim()) veParams.set("code", promoCode.trim());
+      router.push(`/verify-email?${veParams.toString()}`);
     } catch (err: any) {
       const msg = err?.response?.data?.message || "Signup failed. Try again.";
       toast.error(msg);

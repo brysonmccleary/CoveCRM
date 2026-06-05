@@ -7,6 +7,7 @@ import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
+import { requireBillingReady } from "@/lib/billing/requireBillingReady";
 
 export default async function handler(
   req: NextApiRequest,
@@ -25,6 +26,11 @@ export default async function handler(
       const { areaCode } = req.body;
       const user = await User.findOne({ email: userEmail });
       if (!user) return res.status(404).json({ message: "User not found" });
+
+      const billingReady = requireBillingReady(user);
+      if (!billingReady.ok) {
+        return res.status(402).json({ error: "billing_required", reason: billingReady.reason, redirect: billingReady.redirect });
+      }
 
       const { client, accountSid } = await getClientForUser(userEmail);
 

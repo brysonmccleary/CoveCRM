@@ -121,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const billingCheck = await checkCallingAllowed(email);
     if (!billingCheck.allowed) {
-      return res.status(402).json({ message: billingCheck.reason });
+      return res.status(402).json({ error: "billing_required", reason: billingCheck.reason, redirect: billingCheck.redirect });
     }
 
     // If leadId provided, we can enforce quiet-hours based on lead; otherwise skip that check.

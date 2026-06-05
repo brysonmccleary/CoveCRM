@@ -194,7 +194,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       password: hashed,
       role: admin ? "admin" : "user",
       plan: admin ? "Pro" : "Free",
-      subscriptionStatus: "active",
+      subscriptionStatus: admin ? "active" : "pending",
       emailVerified: admin,
       emailVerificationCodeHash: admin ? null : verificationCodeHash,
       emailVerificationExpiresAt: admin ? null : verificationExpiresAt,

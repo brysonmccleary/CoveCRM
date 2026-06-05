@@ -40,6 +40,7 @@ export default function BillingPage() {
   const [intentMode, setIntentMode] = useState<"payment" | "setup">("payment");
   const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
 
   // Display data coming back from the server
   const [discount, setDiscount] = useState<string | undefined>();
@@ -125,6 +126,7 @@ export default function BillingPage() {
       } catch (err: any) {
         console.error("Error creating subscription:", err);
         toast.error(err?.message || "Failed to start subscription.");
+        if (!cancelled) setHasError(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -208,8 +210,20 @@ export default function BillingPage() {
           </>
         )}
 
-        {/* Zero-amount success path (no clientSecret) */}
-        {!loading && !clientSecret && !setupClientSecret && (
+        {/* API error state */}
+        {!loading && hasError && (
+          <div className="text-center space-y-2">
+            <p className="text-red-500 font-semibold">
+              Something went wrong setting up billing.
+            </p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Please refresh the page to try again, or contact support if the issue persists.
+            </p>
+          </div>
+        )}
+
+        {/* Zero-amount success path (no clientSecret, no error) */}
+        {!loading && !hasError && !clientSecret && !setupClientSecret && (
           <div className="text-center space-y-2">
             {promoCodeStr && (
               <p className="text-green-600 dark:text-green-400 font-semibold">

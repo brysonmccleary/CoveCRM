@@ -47,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const billingCheck = await checkCallingAllowed(userEmail);
   if (!billingCheck.allowed) {
-    return res.status(402).json({ error: billingCheck.reason });
+    return res.status(402).json({ error: "billing_required", reason: billingCheck.reason, redirect: billingCheck.redirect });
   }
 
   // --- Resolve lead + enforce quiet hours (8am–9pm local) ---

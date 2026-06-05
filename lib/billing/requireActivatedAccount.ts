@@ -13,7 +13,12 @@ export function isAccountActivated(user: any): boolean {
   if (!user) return false;
   if (user.role === "admin") return true;
   if (isLegacyAccount(user)) return true;
-  return user.emailVerified === true && (user.trialGranted === true || user.subscriptionStatus === "active");
+  if (user.emailVerified !== true) return false;
+  // trialGranted is set only after a card is saved via grantTrialIfEligible
+  if (user.trialGranted === true) return true;
+  // hasEverPaid is set only after invoice.payment_succeeded webhook fires
+  if (user.hasEverPaid === true) return true;
+  return false;
 }
 
 export function assertAccountActivated(user: any): void {
