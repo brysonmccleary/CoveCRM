@@ -24,6 +24,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const conferenceName = getQueryValue(req.query.conferenceName);
   const leadCallSid = getQueryValue(req.query.leadCallSid);
+  const agentName = getQueryValue(req.query.agentName);
+  const leadName = getQueryValue(req.query.leadName);
+  const scope = getQueryValue(req.query.scope);
   const answeredBy = String(req.body?.AnsweredBy || "").toLowerCase();
 
   if (!conferenceName) {
@@ -41,9 +44,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
   }
 
+  const agentFirst = agentName ? agentName.split(" ")[0] : "";
+  const whisper = agentFirst && leadName && scope
+    ? `Hey ${agentFirst}, I have ${leadName} on the line to go over ${scope}. Have a great day!`
+    : agentFirst && leadName
+    ? `Hey ${agentFirst}, I have ${leadName} on the line for you. Have a great day!`
+    : "Hey, I have your lead on the line for you. Have a great day!";
+
   res.setHeader("Content-Type", "text/xml");
   return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+  <Say voice="Polly.Joanna-Neural">${xmlEscape(whisper)}</Say>
   <Dial>
     <Conference beep="false"
                 startConferenceOnEnter="true"

@@ -115,6 +115,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     url.searchParams.set("userEmail", userEmail || "");
     url.searchParams.set("agentName", agentName || "");
     url.searchParams.set("leadName", leadName || "");
+    url.searchParams.set("scope", scope || "");
     url.searchParams.set("agentTimeZone", agentTimeZone || "America/New_York");
   }
 
