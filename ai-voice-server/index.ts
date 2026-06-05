@@ -2271,6 +2271,15 @@ function getGreetingAckPrefix(userTextRaw: string): string {
     return opts[Math.floor(Math.random() * opts.length)];
   }
 
+  if (t.includes("how are you") || t.includes("how r you") || t.includes("how are u")) {
+    const opts = [
+      "I'm doing great, thanks for asking! Anyway,",
+      "I'm great, thank you! So,",
+      "Doing well, thanks! So,",
+    ];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
+
   const opts = ["Got it.", "Okay.", "Sure.", "Yeah.", "Alright."];
   return opts[Math.floor(Math.random() * opts.length)];
 }
@@ -7103,7 +7112,7 @@ SUGGESTED LINE (your backbone — deliver the substance of this naturally, don't
 "${line}"
 
 HOW TO DELIVER IT:
-1. If the lead said something — acknowledge it briefly first (1–4 words: "Got it.", "Yeah for sure.", "Makes sense.", "Okay —"). Match their energy.
+1. If the lead said something — acknowledge it briefly first (1–4 words: "Yeah for sure.", "Makes sense.", "Okay —", "Got it."). Match their energy.
 2. Respond to anything they raised that needs a quick word (1 sentence max). If nothing needs addressing, skip this.
 3. Deliver this line. Do not change the wording or the core ask.
 4. STOP. Do not add explanations, summaries, or extra commentary.
