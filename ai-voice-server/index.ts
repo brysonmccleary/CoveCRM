@@ -3515,7 +3515,8 @@ function buildGreetingFirstTurnDecision(
       const empathy = empathyOpts[Math.floor(Math.random() * empathyOpts.length)];
       lineToSay = `${empathy} ${step1Line}`;
     } else {
-      lineToSay = `${getGreetingAckPrefix(raw)} ${step1Line}`.trim();
+      const cleanedStep1Line = step1Line.replace(/^got it\s*[—\-–]\s*/i, "").replace(/^got it\.\s*/i, "");
+      lineToSay = `${getGreetingAckPrefix(raw)} ${cleanedStep1Line}`.trim();
     }
   }
 
@@ -3759,6 +3760,19 @@ function isTimeIndecisionOrAvailability(textRaw: string): boolean {
     t.includes("not certain") ||
     t.includes("i don't know") ||
     t.includes("idk")
+  ) return true;
+
+  // Vague future / defer phrases that must NOT echo back as confirmed exact times
+  if (
+    t.includes("next week") ||
+    t.includes("the week after") ||
+    t.includes("next few days") ||
+    t.includes("in a few days") ||
+    t.includes("in a couple days") ||
+    t.includes("later this week") ||
+    t.includes("call me back") ||
+    t.includes("few weeks") ||
+    t.includes("couple weeks")
   ) return true;
 
   return false;
@@ -4162,7 +4176,12 @@ function detectObjection(textRaw: string): string | null {
     t.includes("don't know what this") ||
     t.includes("dont know what this") ||
     t.includes("don't know what you") ||
-    t.includes("dont know what you")
+    t.includes("dont know what you") ||
+    t.includes("what company") ||
+    t.includes("who do you work for") ||
+    t.includes("what organization") ||
+    t.includes("who are you with") ||
+    t.includes("what business")
   ) return "confused_identity";
   if (!t) return null;
 
@@ -4261,7 +4280,14 @@ function detectObjection(textRaw: string): string | null {
     // short closers
     t.includes("all set") ||
     t.includes("i'm all set") ||
-    t.includes("im all set")
+    t.includes("im all set") ||
+
+    // "already signed up / enrolled / bought" variants
+    t.includes("already signed up") ||
+    t.includes("signed up already") ||
+    t.includes("already enrolled") ||
+    t.includes("already bought") ||
+    t.includes("already got something")
   ) {
       // If they are still actively scheduling (e.g. "what times do you have tomorrow"),
   // don't treat this as an objection — let the stepper offer time options.
@@ -4271,6 +4297,17 @@ function detectObjection(textRaw: string): string | null {
   return "already_have";
 }
 if (
+    t.includes("talk to my wife") ||
+    t.includes("talk to my husband") ||
+    t.includes("talk to my partner") ||
+    t.includes("check with my wife") ||
+    t.includes("check with my husband") ||
+    t.includes("check with my partner") ||
+    t.includes("run it by my wife") ||
+    t.includes("run it by my husband")
+  ) return "spouse_consult";
+
+  if (
     t.includes("busy") ||
     t.includes("at work") ||
     t.includes("no time") ||
@@ -4424,6 +4461,10 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return `I completely understand — and that's actually great that you have something in place. A lot of people ${agent} works with have coverage but end up overpaying or have gaps they didn't know about. The call is literally just to make sure what you have still makes sense. Does later today or tomorrow work better?`;
   }
 
+  if (kind === "spouse_consult") {
+    return `That makes total sense — and honestly it might be worth having them on the call too so you're both on the same page. Could you both do a quick call together? Does later today or tomorrow work better?`;
+  }
+
   if (kind === "busy") {
     return `I completely understand — and I won't keep you long. ${agent}'s call is only about 5 minutes at whatever time works for you. Does later today or tomorrow work better?`;
   }
@@ -4451,7 +4492,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   }
 
   if (kind === "already_talked") {
-    return `Got it — and that's totally fine. This is just the follow-up to make sure everything got wrapped up on your end. ${agent} keeps it quick. Does later today or tomorrow work better?`;
+    return `I hear you — and I appreciate you being upfront. I just want to make sure you have everything you need before closing this out. ${agent} keeps it to five minutes and won't pressure you either way. Does later today or tomorrow still work?`;
   }
 
   if (kind === "how_did_you_get") {
@@ -4511,7 +4552,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
 
   if (kind === "source_memory") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Yeah, most people fill these out online and go through it pretty quick so they don't always remember. This is just about the ${scope} request — ${agent} wants to make sure you got taken care of. `;
+    return `Yeah, most people fill these out online and go through it pretty quick so they don't always remember. This is just about the ${scope} request — ${agent} wants to make sure you got taken care of. Does later today or tomorrow work better?`;
   }
 
   if (kind === "permission_to_ask") {
@@ -6149,7 +6190,8 @@ function buildConversationPolicyDecision(
     }
 
     const ackPrefix = getHumanAckPrefixForStepAnswer(stepCtx.stepType, intent.raw);
-    const fullLine = ackPrefix ? `${ackPrefix} ${nextStep}` : nextStep;
+    const cleanedNextStep = nextStep.replace(/^got it\s*[—\-–]\s*/i, "").replace(/^got it\.\s*/i, "");
+    const fullLine = ackPrefix ? `${ackPrefix} ${cleanedNextStep}` : nextStep;
 
     return {
       handled: true,
