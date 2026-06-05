@@ -61,8 +61,6 @@ TEAM AND AGENCY FEATURES:
 TECHNICAL:
 - A2P 10DLC: automated submission — if it fails, CoveCRM tells you why,
   gathers what it needs, and resubmits automatically
-- No email campaigns currently
-- Mobile app coming soon
 - Integrations: Facebook webhook direct, Google Sheets via Apps Script
 
 PRICING AND SIGNUP:
@@ -74,11 +72,6 @@ PRICING AND SIGNUP:
   per active member — forever
 - Signup page: covecrm.com/signup — there is a box for the affiliate
   or discount code at signup
-
-WHAT COVECRM IS NOT YET:
-- No email campaigns
-- No voicemail drop yet (coming)
-- Mobile app not yet live (coming soon)
 
 CONVERSATION FLOW — FOLLOW THIS NATURALLY, NOT ROBOTICALLY:
 
