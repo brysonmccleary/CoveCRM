@@ -187,6 +187,7 @@ export const authOptions: NextAuthOptions = {
             email,
             name: profile.name || email.split("@")[0],
             role: "user",
+            hasAI: true,
             affiliateCode: null,
             subscriptionStatus: "active",
           });
