@@ -105,11 +105,10 @@ const VOICE_OPTIONS = [
 
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const session = await getServerSession(ctx.req as any, ctx.res as any, authOptions as any);
-  const email = (session as any)?.user?.email?.toLowerCase?.() || "";
-  if (email !== "bryson.mccleary1@gmail.com") {
+  if (!(session as any)?.user?.email) {
     return {
       redirect: {
-        destination: "/dashboard?tab=leads",
+        destination: "/login",
         permanent: false,
       },
     };
@@ -333,7 +332,7 @@ export default function AIDialSessionPage() {
   const handleStartSession = async () => {
     if (aiDialerLocked) {
       alert(
-        "AI Dialer is locked. Add AI Dialer minutes in Settings → Billing before starting.",
+        "AI Dialer is locked. Complete billing in Settings → Billing before starting.",
       );
       return;
     }
@@ -389,7 +388,7 @@ export default function AIDialSessionPage() {
   const handleResumeSession = async () => {
     if (aiDialerLocked) {
       alert(
-        "AI Dialer is locked. Add AI Dialer minutes in Settings → Billing before resuming.",
+        "AI Dialer is locked. Complete billing in Settings → Billing before resuming.",
       );
       return;
     }
@@ -501,7 +500,7 @@ export default function AIDialSessionPage() {
           </div>
         </div>
 
-        {/* AI Dialer upgrade banner */}
+        {/* AI Dialer billing banner */}
         <div className="mb-4">
           {aiBillingLoading ? (
             <div className="p-3 rounded bg-slate-800 border border-slate-600 text-sm">
@@ -514,19 +513,12 @@ export default function AIDialSessionPage() {
           ) : aiDialerLocked ? (
             <div className="p-3 rounded bg-slate-900 border border-yellow-500 text-sm">
               <div className="font-semibold mb-1">
-                AI Dialer Add-on Required
+                Billing Required
               </div>
               <p className="text-xs text-gray-200">
-                The AI dialer runs on advanced AI voice calls and is billed
-                separately from your normal dialer usage.
+                Complete billing in <span className="font-semibold">Settings → Billing</span> to use AI Dialer features.
                 <br />
-                Add the <span className="font-semibold">AI Dialer</span> add-on
-                in <span className="font-semibold">Settings → Billing</span> to
-                unlock this page.
-                <br />
-                Each $20 top-up gives you ~{" "}
-                <span className="font-semibold">133 minutes</span> at{" "}
-                <span className="font-semibold">$0.15/min</span> (~$9/hour).
+                <span className="font-semibold">$20 for every 4 hours of dial time.</span> Dial time includes all call attempts — answered or not.
               </p>
             </div>
           ) : (
@@ -535,10 +527,8 @@ export default function AIDialSessionPage() {
               <p className="text-xs text-gray-100">
                 AI Dialer runs completely separate from your manual dialer
                 usage. We bill{" "}
-                <span className="font-semibold">
-                  $20 automatically for every 133 minutes
-                </span>{" "}
-                of AI dialing.
+                <span className="font-semibold">$20 for every 4 hours of dial time.</span>{" "}
+                Dial time includes all call attempts — answered or not.
               </p>
             </div>
           )}
@@ -679,7 +669,7 @@ export default function AIDialSessionPage() {
               </p>
               {aiDialerLocked && !aiBillingLoading && (
                 <p className="mt-1 text-xs text-yellow-300">
-                  AI Dialer is currently locked. Add minutes in Settings →
+                  AI Dialer is currently locked. Complete billing in Settings →
                   Billing to enable these controls.
                 </p>
               )}

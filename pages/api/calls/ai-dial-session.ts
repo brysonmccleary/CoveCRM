@@ -4,7 +4,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
-import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/lib/mongo/leads";
 import AISettings from "@/models/AISettings";
@@ -62,8 +61,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
   if (!email) return res.status(401).json({ error: "Unauthorized" });
-  // AI Dial Session is unreleased — restrict to experimental admin
-  if (!isExperimentalAdminEmail(email)) return res.status(403).json({ error: "Not available" });
 
   await mongooseConnect();
 

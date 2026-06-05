@@ -540,14 +540,14 @@ export default async function handler(
           );
         } else {
           const user = await User.findOne({ email: userEmail });
-          if (!user) {
-            console.warn(
-              "[AI Dialer billing] User not found for email",
+          if (user) {
+            console.log(
+              "[AI Dialer billing] Tracking usage for email",
               userEmail,
               "CallSid",
               CallSid
             );
-// Bill based on **dial time** (full call duration in seconds)
+            // Bill based on **dial time** (full call duration in seconds)
             const minutes = Math.max(1, Math.ceil(durationSec / 60));
             const vendorCostUsd =
               VENDOR_RATE_PER_MINUTE > 0 ? minutes * VENDOR_RATE_PER_MINUTE : 0;

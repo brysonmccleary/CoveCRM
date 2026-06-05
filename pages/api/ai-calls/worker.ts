@@ -8,8 +8,6 @@ import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { Types } from "mongoose";
-import { stripe } from "@/lib/stripe";
-import { assertBillingAllowed } from "@/lib/billing/assertBillingAllowed";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 import { selectLocalPresenceNumber } from "@/lib/twilio/localPresence";
 
@@ -30,16 +28,6 @@ const AI_DIALER_DISABLED =
   AI_DIALER_DISABLED_RAW === "1" ||
   AI_DIALER_DISABLED_RAW.toLowerCase() === "true" ||
   AI_DIALER_DISABLED_RAW.toLowerCase() === "yes";
-
-// 🔹 What you charge the user: $0.15 per *dial* minute
-const AI_RATE_PER_MINUTE = Number(
-  process.env.AI_DIALER_BILL_RATE_PER_MINUTE || "0.15"
-);
-
-// 🔹 How much to auto-top-up by (USD)
-const AI_DIALER_AUTO_TOPUP_AMOUNT_USD = Number(
-  process.env.AI_DIALER_AUTO_TOPUP_AMOUNT_USD || "20"
-);
 
 // 🔹 Admins who get free AI Dialer (no charges, no balance checks)
 const ADMIN_FREE_AI_EMAILS: string[] = (process.env.ADMIN_FREE_AI_EMAILS || "")
@@ -153,13 +141,6 @@ const MAX_ATTEMPTS_PER_LEAD = Number(
   process.env.AI_DIALER_MAX_ATTEMPTS_PER_LEAD || "2"
 );
 
-
-async function autoTopupIfNeeded(userDoc: any): Promise<{ balanceUSD: number; toppedUp: boolean }> {
-  // ✅ POSTPAID MODEL: worker does NOT charge or create PaymentIntents.
-  // Billing happens strictly inside trackAiDialerUsage() via $20 usage thresholds.
-  const currentBalance = Number(userDoc.aiDialerBalance || 0);
-  return { balanceUSD: currentBalance, toppedUp: false };
-}
 
 function makeRequestId() {
   return `worker_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -338,7 +319,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ✅ DB kill switch (User.aiDialerEnabled default true)
-    // IMPORTANT: this must be a real mongoose doc (NOT .lean()) because autoTopupIfNeeded calls userDoc.save()
     const userDoc: any = await User.findOne({ email: userEmail });
     if (!userDoc) {
       await AICallSession.updateOne(
@@ -371,36 +351,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const adminFree = isAdminFreeEmail(userEmail);
     const bypassAmd = isBypassAmdEmail(userEmail);
 
-    if (!adminFree) {
-      try {
-        assertBillingAllowed(userDoc);
-      } catch (err: any) {
-        await AICallSession.updateOne(
-          { _id: sessionId },
-          {
-            $set: {
-              status: "stopped",
-              errorMessage: err?.message || "Account paused due to unpaid usage balance.",
-              completedAt: new Date(),
-            },
-          }
-        );
-
-        console.log("[AI WORKER] stopped due to unpaid usage balance", {
-          sessionId,
-          userEmail,
-        });
-
-        await releaseLock(sessionId);
-        return res.status(200).json({
-          ok: true,
-          message: "stopped_unpaid_usage_balance",
-          sessionId,
-        });
-      }
+    if (!adminFree && userDoc.hasAI !== true) {
+      await AICallSession.updateOne(
+        { _id: sessionId },
+        {
+          $set: {
+            status: "stopped",
+            errorMessage: "AI Dialer access is not enabled for this account.",
+            completedAt: new Date(),
+          },
+        }
+      );
+      console.log("[AI WORKER] stopped due to missing AI entitlement", {
+        sessionId,
+        userEmail,
+      });
+      await releaseLock(sessionId);
+      return res.status(200).json({
+        ok: true,
+        message: "stopped_ai_not_enabled",
+        sessionId,
+      });
     }
 
-    // Block calling if subscription payment failed and grace period has expired.
+    // Block calling if the account is not billing-ready or a payment issue blocks calling.
     if (!adminFree) {
       const billingCheck = await checkCallingAllowed(userEmail);
       if (!billingCheck.allowed) {
@@ -433,45 +407,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sessionId,
         userEmail,
       });
-    }
-
-    // Balance check before placing ANY new call
-    if (AI_RATE_PER_MINUTE > 0 && !adminFree) {
-      let balance = Number(userDoc.aiDialerBalance || 0);
-
-      if (balance < AI_RATE_PER_MINUTE) {
-        const { balanceUSD, toppedUp } = await autoTopupIfNeeded(userDoc);
-        balance = balanceUSD;
-
-        if (balance < AI_RATE_PER_MINUTE) {
-          await AICallSession.updateOne(
-            { _id: sessionId },
-            {
-              $set: {
-                status: "stopped",
-                errorMessage: toppedUp
-                  ? "AI Dialer auto-topup completed but balance is still too low to continue. Please contact support."
-                  : "AI Dialer balance is depleted and automatic top-up failed. Please update your card or add AI Dialer balance in Settings → Billing.",
-                completedAt: new Date(),
-              },
-            }
-          );
-
-          console.log("[AI WORKER] stopped due to balance depleted", {
-            sessionId,
-            userEmail,
-            balanceUSD: balance,
-          });
-
-          await releaseLock(sessionId);
-          return res.status(200).json({
-            ok: true,
-            message: "stopped_balance_depleted",
-            sessionId,
-            balanceUSD: balance,
-          });
-        }
-      }
     }
 
     // Determine next index/lead
