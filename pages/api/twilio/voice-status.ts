@@ -308,9 +308,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     isVoicemail,
     updatedAt: now,
 
-    // If we learned a leadId from InboundCall and the Call doc doesn't have one yet, attach it
-    ...(leadId && !existing?.leadId ? { leadId } : {}),
-
     // ✅ Recording persistence (this is the missing piece)
     ...(recordingSid ? { recordingSid } : {}),
     ...(recordingUrl ? { recordingUrl } : {}),

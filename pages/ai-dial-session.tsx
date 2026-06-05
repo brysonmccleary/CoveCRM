@@ -518,7 +518,7 @@ export default function AIDialSessionPage() {
               <p className="text-xs text-gray-200">
                 Complete billing in <span className="font-semibold">Settings → Billing</span> to use AI Dialer features.
                 <br />
-                <span className="font-semibold">$20 for every 4 hours of dial time.</span> Dial time includes all call attempts — answered or not.
+                <span className="font-semibold">$20 for every 4 hours of dial time.</span>
               </p>
             </div>
           ) : (
@@ -527,8 +527,7 @@ export default function AIDialSessionPage() {
               <p className="text-xs text-gray-100">
                 AI Dialer runs completely separate from your manual dialer
                 usage. We bill{" "}
-                <span className="font-semibold">$20 for every 4 hours of dial time.</span>{" "}
-                Dial time includes all call attempts — answered or not.
+                <span className="font-semibold">$20 for every 4 hours of dial time.</span>
               </p>
             </div>
           )}

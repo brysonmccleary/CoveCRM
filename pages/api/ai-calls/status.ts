@@ -56,7 +56,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : undefined;
 
   const update: any = {
-    userEmail,
     lastStatus: status,
     updatedAt: now,
   };
