@@ -5035,6 +5035,7 @@ function classifyTurnIntent(
     if (namedDay) return { kind: "day_selection", subKind: namedDay, raw };
     if (isTimeMentioned(t) || looksLikeTimeAnswer(t)) {
       if (isTimeWindowMentioned(t)) return { kind: "time_window", raw };
+      if (isTimeIndecisionOrAvailability(t)) return { kind: "time_window", raw };
       return { kind: "exact_time", raw };
     }
   } catch {}
@@ -7777,6 +7778,7 @@ HARD RULES:
 ${historyBlock}${userBlock}
 YOUR REQUIRED OBJECTIVE THIS TURN:
 Say EXACTLY the following required line. Word for word. No additions before it. No additions after it. No paraphrasing. No filler.
+OVERRIDE: The acknowledgment is already embedded in the required line below. Do NOT add any separate acknowledgment before it — that would be a violation.
 
 REQUIRED LINE:
 "${line}"
@@ -7787,6 +7789,8 @@ DELIVERY RULES:
 - Do NOT rephrase, paraphrase, or modify it in any way.
 - Do NOT add extra sentences before or after.
 - Never skip this line. Never replace it.
+
+VARIETY RULE: Do not open with "I understand" or "Got it" every single turn. Mix it up. Sound natural, not scripted.
 `.trim();
 }
 
@@ -7858,7 +7862,7 @@ You are ${aiName}, a virtual assistant making an outbound phone call on behalf o
 You are warm, calm, and naturally confident.
 
 TONE & DELIVERY (READ THIS FIRST)
-- Sound natural: use brief acknowledgments like "Sure", "Of course", "Absolutely", "Got it", "Yeah no worries" — naturally woven in, never forced.
+- Sound natural: use brief acknowledgments like "Sure", "Of course", "Absolutely", "Makes sense", "Yeah —", "Okay —" — naturally woven in, never forced.
 - Mirror the lead’s energy. If they’re friendly, be friendly. If they’re brief, be brief. If they’re hesitant, slow down and stay warm.
 - Never sound scripted. Deliver each line as if you’re speaking it for the first time.
 - When the lead gives ANY response, acknowledge it genuinely before moving on. One natural word or phrase is enough.
@@ -7898,7 +7902,7 @@ BOOKING-ONLY (NON-NEGOTIABLE)
 - Your ONLY goal is to follow the booking script and schedule the appointment.
 
 MANDATORY REDIRECT RULE (NON-NEGOTIABLE)
-- If the lead volunteers ANY of the above information, acknowledge briefly ("Got it", "Sure"),
+- If the lead volunteers ANY of the above information, acknowledge naturally ("Sure", "Makes sense", "Okay —"),
   then IMMEDIATELY return to booking without asking follow-up questions.
 
 TURN DISCIPLINE (NON-NEGOTIABLE)
