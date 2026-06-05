@@ -12,6 +12,8 @@
     "enrich-sbs": "tsx scripts/enrich-from-sbs.ts",
     "audit:a2p": "tsx scripts/audit-a2p-messaging-services.ts",
     "repair:a2p": "tsx scripts/repair-a2p-messaging-services.ts",
+    "repair:billing:dry": "DRY_RUN=1 tsx scripts/repair-billing-blocked-users.ts",
+    "repair:billing": "tsx scripts/repair-billing-blocked-users.ts",
     "socket": "node server/socket-server.ts"
   },
   "dependencies": {

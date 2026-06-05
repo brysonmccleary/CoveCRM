@@ -1086,7 +1086,14 @@ export default async function handler(
           const user = await User.findOne({ stripeCustomerId: customerId });
           if (user) {
             user.subscriptionStatus = "active";
-            (user as any).hasEverPaid = true;
+            // Only mark hasEverPaid when real money was collected.
+            // $0 trial invoices and 100%-off promo invoices must NOT set this flag,
+            // because the customer may have no card stored yet.
+            if (paidCents > 0) {
+              (user as any).hasEverPaid = true;
+              (user as any).billingBlocked = false;
+              (user as any).billingBlockedReason = null;
+            }
             (user as any).pastDueSince = null;
             (user as any).callingBlocked = false;
             await user.save();

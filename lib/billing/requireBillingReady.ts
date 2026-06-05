@@ -1,7 +1,7 @@
 // lib/billing/requireBillingReady.ts
-// Sync guard: checks Mongo fields only (trialGranted / hasEverPaid).
+// Sync guard: checks Mongo fields only (trialGranted / hasEverPaid / billingBlocked).
 // Call this with a user document that includes: role, createdAt, billingMode,
-// trialGranted, hasEverPaid, email, usedCode.
+// trialGranted, hasEverPaid, billingBlocked, email, usedCode.
 
 const ENFORCEMENT_STARTED_AT = new Date(
   process.env.ACCOUNT_ACTIVATION_ENFORCEMENT_STARTED_AT || "2026-04-10T00:00:00.000Z"
@@ -22,8 +22,13 @@ export function requireBillingReady(user: any): BillingReadyResult {
   // Self-billed users manage their own Twilio — no platform payment required.
   if (user.billingMode === "self") return { ok: true };
 
-  // trialGranted is set only after a card is saved via grantTrialIfEligible.
-  // hasEverPaid is set only after invoice.payment_succeeded webhook fires.
+  // billingBlocked is set by the repair script for users whose hasEverPaid was
+  // poisoned by a $0 trial invoice without a real card on file. Distrust hasEverPaid
+  // entirely for these users and force them back to billing.
+  if (user.billingBlocked === true) return block("missing_payment_method", user);
+
+  // trialGranted: set only after a card is saved via grantTrialIfEligible (verified fingerprint).
+  // hasEverPaid: set only after invoice.payment_succeeded with paidCents > 0 (fixed in webhook).
   if (user.trialGranted === true || user.hasEverPaid === true) return { ok: true };
 
   return block("billing_pending", user);

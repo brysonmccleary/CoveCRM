@@ -18,7 +18,7 @@ const BLOCKED_MESSAGE =
 export async function checkCallingAllowed(email: string): Promise<CallingCheck> {
   await mongooseConnect();
   const user = await User.findOne({ email: email.toLowerCase() })
-    .select("billingMode callingBlocked hasEverPaid pastDueSince trialGranted role createdAt email usedCode")
+    .select("billingMode billingBlocked billingBlockedReason callingBlocked hasEverPaid pastDueSince trialGranted role createdAt email usedCode")
     .lean<any>();
 
   if (!user) return { allowed: false, reason: "User not found" };
