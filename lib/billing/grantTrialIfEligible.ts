@@ -111,6 +111,10 @@ export async function grantTrialIfEligible(user: any, stripe: Stripe): Promise<G
       trialActivatedAt: new Date(),
       trialEmailUsed: true,
       trialBlockedReason: null,
+      billingBlocked: false,
+      billingBlockedReason: null,
+      callingBlocked: false,
+      subscriptionStatus: "active",
     },
   };
   if (trialCreditDollars > 0) update.$inc = { usageBalance: trialCreditDollars };
