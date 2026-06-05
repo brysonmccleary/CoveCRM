@@ -5,6 +5,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
+import { LeadAIState } from "@/models/LeadAIState";
 // ⬇️ use the Twilio helper we updated earlier
 import { sendSMS } from "@/lib/twilio/sendSMS";
 
@@ -92,6 +93,24 @@ export default async function handler(
       await lead.save();
     } catch (e) {
       console.warn("Failed to append to lead.interactionHistory:", e);
+    }
+
+    try {
+      const now = new Date();
+      await LeadAIState.updateOne(
+        { userEmail: email, leadId: lead._id },
+        {
+          $set: {
+            userEmail: email,
+            leadId: lead._id,
+            lastHumanOutboundAt: now,
+            aiSuppressedUntil: new Date(now.getTime() + 10 * 60 * 1000),
+          },
+        },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.warn("Failed to set AI suppression:", e);
     }
 
     // ✅ Emit real-time socket event to update Conversations

@@ -7,6 +7,7 @@ import Lead from "@/models/Lead";
 import Message from "@/models/Message";
 import User from "@/models/User";
 import { sendSms } from "@/lib/twilio/sendSMS";
+import { LeadAIState } from "@/models/LeadAIState";
 import { initSocket, emitToUser } from "@/lib/socket";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import crypto from "crypto";
@@ -101,6 +102,24 @@ export default async function handler(
       return res
         .status(500)
         .json({ error: err?.message || "Failed to send SMS" });
+    }
+
+    try {
+      const now = new Date();
+      await LeadAIState.updateOne(
+        { userEmail: email, leadId: lead._id },
+        {
+          $set: {
+            userEmail: email,
+            leadId: lead._id,
+            lastHumanOutboundAt: now,
+            aiSuppressedUntil: new Date(now.getTime() + 10 * 60 * 1000),
+          },
+        },
+        { upsert: true }
+      );
+    } catch (e: any) {
+      console.warn("⚠️ /api/message AI suppression update failed:", e?.message || e);
     }
   }
 
