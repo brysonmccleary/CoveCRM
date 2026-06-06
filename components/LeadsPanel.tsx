@@ -4,7 +4,6 @@ import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
 import { useRouter } from "next/router";
 
-import { useSession } from "next-auth/react";
 interface NumberEntry {
   id: string;
   phoneNumber: string;
@@ -666,10 +665,7 @@ export default function LeadsPanel() {
     }
   };
 
-    const { data: session } = useSession();
-  const isBryson = (session as any)?.user?.email?.toLowerCase?.() === "bryson.mccleary1@gmail.com";
-
-const goToAIDialSession = () => {
+  const goToAIDialSession = () => {
     router.push("/ai-dial-session").catch(() => {});
   };
 
@@ -852,15 +848,13 @@ const goToAIDialSession = () => {
           Quick Dial
         </button>
 
-        {isBryson ? (
-          <button
-            onClick={goToAIDialSession}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
-          >
-            AI Dial Session
-          </button>
-        ) : null}
-</div>
+        <button
+          onClick={goToAIDialSession}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
+        >
+          AI Dial Session
+        </button>
+      </div>
 
       {showQuickDial && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
