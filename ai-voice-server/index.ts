@@ -3562,7 +3562,7 @@ function buildGreetingFirstTurnDecision(
 
   if (routeKind === "greeting_ack") {
     if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
-      const lineToSay = "Awesome. Looks like you wanted to hear how the AI works. Most agents ask about the dialer, texting, features, or how it compares to what they're already using. What are you most curious about?";
+      const lineToSay = "Looks like you wanted to hear how the AI works. Most agents ask about the dialer, texting, features, or how it compares to what they're already using. What are you most curious about?";
       return {
         handled: true,
         routeKind: "kayla_greeting_ack_demo",
@@ -5094,7 +5094,26 @@ function classifyTurnIntent(
       "let's do it",
       "lets do it",
     ];
-    if (isKaylaDemo && kaylaReadySignals.some(s => t.includes(s))) {
+    const lastAiLine = (() => {
+      try {
+        const recent = Array.isArray((state as any)?.recentExchanges)
+          ? (state as any).recentExchanges
+          : [];
+        const lastAi = [...recent].reverse().find((e: any) => e?.role === "ai");
+        return normalizeTurnTextForKey(lastAi?.text || (state as any)?.lastPromptLine || "");
+      } catch {
+        return "";
+      }
+    })();
+    const afterTrialOffer =
+      lastAiLine.includes("trial") ||
+      lastAiLine.includes("code") ||
+      lastAiLine.includes("signup") ||
+      lastAiLine.includes("sign up");
+    const shortAffirmativeReady =
+      afterTrialOffer &&
+      /^(yes|yeah|yep|sure|ok|okay|i do|do it|yeah sure|yes sure|sounds good|perfect)$/.test(t);
+    if (isKaylaDemo && (kaylaReadySignals.some(s => t.includes(s)) || shortAffirmativeReady)) {
       return { kind: "kayla_signup_ready", raw };
     }
   } catch {}
@@ -5300,6 +5319,7 @@ type KaylaDemoTopic =
   | "pricing"
   | "orion"
   | "general_competitor"
+  | "why_choose"
   | "email"
   | "ask_kayla"
   | "a2p";
@@ -5309,6 +5329,7 @@ function detectKaylaDemoTopic(raw: string): KaylaDemoTopic | null {
   if (!t) return null;
 
   if (/\borion\b/.test(t)) return "orion";
+  if (/\b(why should i choose|why choose|why you|choose you|over any others|over others|what makes you different|why are you better|better than|different from|why covecrm|why cove crm)\b/.test(t)) return "why_choose";
   if (/\b(gohighlevel|go high level|ghl|builderall|close|ringy|phoneburner|phone burner)\b/.test(t)) return "general_competitor";
   if (/\b(email|emails|email campaign|email campaigns)\b/.test(t)) return "email";
   if (/\b(voicemail|voice mail|voice mails|voicemails|leave a message|leave messages|leave voicemail|voicemail drop)\b/.test(t)) return "voicemail";
@@ -5330,7 +5351,7 @@ function detectKaylaDemoTopic(raw: string): KaylaDemoTopic | null {
 function getKaylaDemoTopicAnswer(ctx: AICallContext, topic: KaylaDemoTopic): string {
   switch (topic) {
     case "overview":
-      return `CoveCRM is built to automate as much of an insurance agent's day as possible so you spend more time running appointments instead of chasing leads. The core pieces are the AI dialer, AI texting, manual power dialer, manual texting, lead folders, drips, call recordings, AI coaching, calendar sync, team stats, cost tracking, and Meta ads once review is complete. Most agents come for the AI dialer, but the real value is having everything in one insurance-specific system. Do you want me to break down the dialer first?`;
+      return `CoveCRM is built for insurance agents who want calls, texts, lead follow-up, and appointments handled in one place. The main pieces are the AI dialer, AI texting, manual power dialer, lead folders, drips, recordings, AI coaching, calendar sync, team stats, cost tracking, and Meta ads once review is complete. Most agents want to hear about the AI dialer first — is that where you want me to start?`;
     case "ai_dialer":
       return `The AI dialer calls through the folder or lead list you choose, talks to the lead, handles objections, and books the appointment on your calendar. If live transfer is toggled on, it can try to transfer a warm lead to you; if you don't answer, it goes back to the lead and books the appointment instead. If it hits voicemail, it skips it and moves to the next lead.`;
     case "live_transfer":
@@ -5350,9 +5371,11 @@ function getKaylaDemoTopicAnswer(ctx: AICallContext, topic: KaylaDemoTopic): str
     case "pricing":
       return `$199.99 per month flat, unlimited users, all features included. There is a 7-day free trial, and COVE50 takes $50 off every month. Want me to text you the trial link and code?`;
     case "orion":
-      return `We've had users test Orion and switch over. We don't speak on competitors — that's not our style — but people who switched are happy. What specifically were you comparing between the two?`;
+      return `We've had users test Orion and switch over. We don't trash competitors, but the reason people choose CoveCRM is that it combines the AI dialer with texting, manual dialing, coaching, lead folders, calendar sync, and insurance-specific workflows in one place. What part of Orion were you comparing against?`;
     case "general_competitor":
       return `Most CRMs are built for general sales teams. CoveCRM was built by someone who spent almost ten years in insurance and wrote over a hundred thousand in personal production in one month, so the scripts, objection handling, drips, appointment workflows, and AI dialer are based on insurance workflows instead of adapted from a generic CRM. What are you using now?`;
+    case "why_choose":
+      return `Because CoveCRM is built specifically around insurance workflows, not generic sales pipelines. The AI dialer, objection handling, drips, coach, folders, and appointment flow are all built around how insurance agents actually work leads. Most tools can store leads — CoveCRM is built to work them.`;
     case "email":
       return `CoveCRM is focused on calls, texting, drips, lead management, coaching, and ads. The main automation is the AI dialer and AI texting, because that is where insurance agents usually need speed-to-lead and follow-up most.`;
     case "ask_kayla":
@@ -5827,7 +5850,7 @@ function buildConversationPolicyDecision(
   }
 
   if (intent.kind === "kayla_signup_ready" && normalizeScriptKey(ctx?.scriptKey) === "kayla_signup") {
-    const lineToSay = "Perfect — you're all set. Check your texts in just a second, the trial link and code will be right there. It was great talking with you.";
+    const lineToSay = "Perfect — I'll text you the trial link and COVE50 code now. You get 7 days free, and COVE50 takes $50 off every month.";
     return {
       handled: true,
       routeKind: "kayla_signup_ready",
@@ -5857,7 +5880,7 @@ function buildConversationPolicyDecision(
     // Kayla demo calls have no script steps — treat the ack as a free-form opener
     // and route directly into the Kayla demo free-response path.
     if (isKaylaDemo) {
-      const lineToSay = "Awesome. Looks like you wanted to hear how the AI works. Most agents ask about the dialer, texting, features, or how it compares to what they're already using. What are you most curious about?";
+      const lineToSay = "Looks like you wanted to hear how the AI works. Most agents ask about the dialer, texting, features, or how it compares to what they're already using. What are you most curious about?";
       return {
         handled: true,
         routeKind: "kayla_greeting_ack_demo",
@@ -8232,9 +8255,13 @@ You are ${aiName}, the CoveCRM AI on a live demo call with ${leadName}. You are 
 THIS CALL IS THE DEMO.
 How you handle this conversation is exactly how CoveCRM's AI works on real insurance lead calls. You are not a scheduler. You do not book appointments on this call. You explain the product, answer questions, and close toward a free trial.
 
+PRONUNCIATION:
+- Say CoveCRM as "Cove C R M."
+- Never say Coke CRM, CoCRM, or Co CRM.
+
 OPENING — first response after greeting only:
 Say exactly:
-"Awesome. Looks like you wanted to hear how the AI works. Most agents ask about the dialer, texting, features, or how it compares to what they're already using. What are you most curious about?"
+"Looks like you wanted to hear how the AI works. Most agents ask about the dialer, texting, features, or how it compares to what they're already using. What are you most curious about?"
 Then stop. Wait.
 
 TURN DISCIPLINE — NON-NEGOTIABLE:
@@ -8260,8 +8287,8 @@ PRODUCT TRUTH — DO NOT INVENT:
 
 DEFAULT CRM OVERVIEW:
 Use when asked "how does it work", "break it down", "what does it do", or similar:
-"CoveCRM is built to automate as much of an insurance agent's day as possible so you spend more time running appointments instead of chasing leads. The core pieces are the AI dialer, AI texting, manual power dialer, manual texting, lead folders, drips, call recordings, AI coaching, calendar sync, team stats, cost tracking, and Meta ads once review is complete. Most agents come for the AI dialer, but the real value is having everything in one insurance-specific system."
-Then ask: "Do you want me to break down the AI dialer first?"
+"CoveCRM is built for insurance agents who want calls, texts, lead follow-up, and appointments handled in one place. The main pieces are the AI dialer, AI texting, manual power dialer, lead folders, drips, recordings, AI coaching, calendar sync, team stats, cost tracking, and Meta ads once review is complete. Most agents want to hear about the AI dialer first — is that where you want me to start?"
+Use that as the complete answer, then stop.
 
 CATEGORY ANSWERS — deliver naturally, 2-3 sentences max:
 
@@ -8297,8 +8324,11 @@ GoHighLevel / Builderall / Close / Ringy / general CRMs:
 Ask: "What are you currently using to manage your leads?"
 
 Orion / Orion AI:
-"We've had users test that and switch over. We don't speak on competitors — that's not our style. People who switched are happy."
+"We've had users test Orion and switch over. We don't trash competitors, but the reason people choose CoveCRM is that it combines the AI dialer with texting, manual dialing, coaching, lead folders, calendar sync, and insurance-specific workflows in one place."
 Ask: "What specifically were you looking for that made you want to compare?"
+
+WHY CHOOSE COVECRM / WHAT MAKES IT DIFFERENT:
+"Because CoveCRM is built specifically around insurance workflows, not generic sales pipelines. The AI dialer, objection handling, drips, coach, folders, and appointment flow are all built around how insurance agents actually work leads. Most tools can store leads — CoveCRM is built to work them."
 
 NOT INTERESTED objection:
 "Yeah, fair. You typically don't request a demo if you're not at least a little curious. What was the main thing that made you want to look into it?"
@@ -8332,7 +8362,7 @@ Close ONLY when:
 
 Step 1: "We have a 7-day free trial so you can make sure it's everything you want. I'll text you the code COVE50 — that takes $50 off every month. Any other questions before I send it?"
 
-Step 2 after confirm: "Perfect — check your texts in just a second. It was great talking with you."
+Step 2 after confirm: "Perfect — I'll text you the trial link and COVE50 code now. You get 7 days free, and COVE50 takes $50 off every month."
 
 READY TO SIGN UP (send the code / I'm in / let's do it):
 Skip to Step 2. Do not ask more questions.
