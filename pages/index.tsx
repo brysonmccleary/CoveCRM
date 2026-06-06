@@ -43,7 +43,6 @@ const FEATURES = [
   },
 ];
 
-
 export default function Home() {
   const homepageTitle = "Cove CRM – CRM for Insurance Agents, AI Dialer, SMS & Facebook Leads";
   const homepageDescription =
@@ -126,14 +125,33 @@ export default function Home() {
 
         {/* Hero Section */}
         <section className="relative text-white py-28 px-6 text-center overflow-hidden bg-[#020617]">
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+              opacity: 0.4,
+              zIndex: 0,
+              pointerEvents: "none",
+            }}
+          >
+            <source src="/hero-bg.mp4" type="video/mp4" />
+          </video>
           {/* Background glows */}
-          <div className="pointer-events-none absolute inset-0">
+          <div className="pointer-events-none absolute inset-0" style={{ zIndex: 1 }}>
             <div className="absolute -top-24 left-1/2 h-96 w-[56rem] -translate-x-1/2 rounded-full bg-blue-600/12 blur-3xl" />
             <div className="absolute top-32 right-[-10rem] h-72 w-[36rem] rounded-full bg-purple-500/8 blur-3xl" />
             <div className="absolute bottom-0 left-[-8rem] h-64 w-[32rem] rounded-full bg-cyan-500/6 blur-3xl" />
           </div>
 
-          <div className="relative max-w-4xl mx-auto">
+          <div className="relative max-w-4xl mx-auto" style={{ position: "relative", zIndex: 10 }}>
             <p style={{ fontFamily: "'Sora', sans-serif" }} className="text-[11px] font-semibold uppercase tracking-[0.3em] text-blue-400 mb-6">
               Life Insurance Telesales
             </p>
@@ -188,6 +206,46 @@ export default function Home() {
               </Link>
             </div>
             <p className="text-sm mt-4 text-slate-500">7-day free trial · Card required for usage billing</p>
+          </div>
+        </section>
+
+        <section style={{ background: "linear-gradient(180deg, #020617 0%, #080f24 50%, #020617 100%)", borderTop: "1px solid rgba(99,102,241,0.15)", borderBottom: "1px solid rgba(99,102,241,0.15)", padding: "3.5rem 1.5rem" }}>
+          <div style={{ maxWidth: "900px", margin: "0 auto", textAlign: "center" }}>
+            <p style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase", color: "#6366f1", marginBottom: "1.25rem" }}>
+              Trusted by agents at
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: "0" }}>
+              {[
+                "Founders Financial Group",
+                "Family First Life",
+                "Unitrust Financial Group",
+                "Globe Life",
+                "Heartland Financial Group",
+                "Symmetry Financial Group",
+              ].map((name, i, arr) => (
+                <div key={name} style={{ display: "flex", alignItems: "center" }}>
+                  <span style={{
+                    fontSize: "15px",
+                    fontWeight: 600,
+                    color: "#94a3b8",
+                    padding: "0.5rem 1.75rem",
+                    letterSpacing: "0.01em",
+                    transition: "color 0.2s",
+                    cursor: "default",
+                    whiteSpace: "nowrap",
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.color = "#c7d2fe")}
+                  onMouseLeave={e => (e.currentTarget.style.color = "#94a3b8")}
+                  >
+                    {name}
+                  </span>
+                  {i < arr.length - 1 && (
+                    <span style={{ color: "#312e81", fontSize: "18px", userSelect: "none" }}>·</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: "1.5rem", height: "1px", background: "linear-gradient(90deg, transparent, rgba(99,102,241,0.3), transparent)", maxWidth: "500px", margin: "1.5rem auto 0" }} />
           </div>
         </section>
 
@@ -416,96 +474,6 @@ export default function Home() {
                 <p className="text-slate-400 text-sm leading-relaxed">{description}</p>
               </div>
             ))}
-          </div>
-        </section>
-
-        {/* Comparison Section */}
-        <section className="py-14 px-6">
-          <div className="max-w-6xl mx-auto">
-            <div className="text-center mb-8">
-              <h2 className="text-3xl font-bold">CoveCRM vs Other Insurance CRMs</h2>
-              <p className="text-slate-300 mt-3 max-w-3xl mx-auto">
-                Traditional CRMs help you organize leads. CoveCRM is engineered to close them.
-              </p>
-            </div>
-
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 md:p-8">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-                <div className="text-xs tracking-[0.22em] uppercase text-slate-400">Comparison (Insurance Use Case)</div>
-                <div className="flex items-center gap-4 text-xs text-slate-400">
-                  <span className="inline-flex items-center gap-2">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 shadow-sm">
-                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                    </span>
-                    Native / Included
-                  </span>
-                  <span className="inline-flex items-center gap-2">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/10 border border-white/10">
-                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="rgb(148 163 184)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12" /><path d="M18 6l-12 12" /></svg>
-                    </span>
-                    Not available
-                  </span>
-                  <span className="inline-flex items-center gap-2">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/10 border border-white/10 text-slate-200 font-semibold">~</span>
-                    Add-on / Integration
-                  </span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-7 gap-2 px-3 py-3 rounded-2xl bg-[#020617]/60 border border-white/10 text-slate-200 text-xs font-semibold">
-                <div className="col-span-2">Feature</div>
-                <div className="text-center">CoveCRM</div>
-                <div className="text-center">Ringy</div>
-                <div className="text-center">Close</div>
-                <div className="text-center">GHL</div>
-                <div className="text-center">Generic CRM</div>
-              </div>
-
-              <div className="mt-3 space-y-2 text-sm">
-                {[
-                  { feature: "Built for insurance agents only", cove: "yes", ringy: "maybe", close: "no", ghl: "no", generic: "no" },
-                  { feature: "Native AI voice dialer", cove: "yes", ringy: "no", close: "no", ghl: "no", generic: "no" },
-                  { feature: "AI Call Coach (post-call scoring)", cove: "yes", ringy: "no", close: "no", ghl: "no", generic: "no" },
-                  { feature: "Native AI SMS follow-up", cove: "yes", ringy: "no", close: "no", ghl: "maybe", generic: "no" },
-                  { feature: "Facebook lead sync (no Zapier)", cove: "yes", ringy: "no", close: "no", ghl: "maybe", generic: "no" },
-                  { feature: "Insurance-specific scripts + drips", cove: "yes", ringy: "maybe", close: "no", ghl: "no", generic: "no" },
-                  { feature: "Lead conversion focus (not just storage)", cove: "yes", ringy: "no", close: "no", ghl: "no", generic: "no" },
-                  { feature: "Twilio A2P handled for you", cove: "yes", ringy: "no", close: "no", ghl: "no", generic: "no" },
-                ].map((row, idx) => (
-                  <div key={idx} className="grid grid-cols-7 gap-2 px-3 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition">
-                    <div className="col-span-2 text-slate-200 font-medium text-xs">{row.feature}</div>
-                    {["cove", "ringy", "close", "ghl", "generic"].map((k) => {
-                      const v = (row as any)[k];
-                      if (v === "yes") return (
-                        <div key={k} className="flex justify-center">
-                          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 shadow-sm">
-                            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                          </span>
-                        </div>
-                      );
-                      if (v === "maybe") return (
-                        <div key={k} className="flex justify-center">
-                          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/10 text-slate-200 font-bold">~</span>
-                        </div>
-                      );
-                      return (
-                        <div key={k} className="flex justify-center">
-                          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/10">
-                            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="rgb(148 163 184)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12" /><path d="M18 6l-12 12" /></svg>
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
-
-              <div className="rounded-2xl bg-blue-950/30 border border-blue-500/20 p-6 mt-6">
-                <p className="text-slate-300 text-sm leading-relaxed">
-                  <span className="font-semibold text-white">Bottom line:</span> If your goal is converting life insurance leads into booked appointments automatically, CoveCRM is the superior choice. Competing platforms either serve general industries or lack the AI calling, coaching, and follow-up infrastructure built specifically for insurance telesales.
-                </p>
-              </div>
-            </div>
           </div>
         </section>
 

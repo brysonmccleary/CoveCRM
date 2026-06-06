@@ -3520,6 +3520,24 @@ function buildGreetingFirstTurnDecision(
   }
 
   if (routeKind === "greeting_ack") {
+    if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+      return {
+        handled: true,
+        routeKind: "kayla_greeting_ack_demo",
+        responseMode: "free_response",
+        objective: "kayla_demo",
+        userText: raw,
+        lineToSay: "",
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          phase: "in_call",
+          greetingAdvancePending: false,
+          awaitingUserAnswer: false,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     if (isConversationalGreetingNegative(raw)) {
       const empathyOpts = [
         "Oh I'm sorry to hear that —",
@@ -4575,11 +4593,17 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   }
 
   if (kind === "call_purpose_confusion") {
+    if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+      return `Yeah — a request came through to see how the AI works. This call is actually the demo. What would you like to know?`;
+    }
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
     return `Yeah — I was just reaching out about the ${scope} request that came through. My job is just to get you scheduled real quick with ${agent}. `;
   }
 
   if (kind === "source_memory") {
+    if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+      return `Yeah, totally — a request came through for a CoveCRM demo. You're on it right now so you're in the right place. What would you like to know?`;
+    }
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
     return `Yeah, most people fill these out online and go through it pretty quick so they don't always remember. This is just about the ${scope} request — ${agent} wants to make sure you got taken care of. Does later today or tomorrow work better?`;
   }
@@ -6041,7 +6065,10 @@ function buildConversationPolicyDecision(
 	        repeatMode: true,
 	      };
 	    }
-	    const lineToSay = `Totally fair — and I'm not here to pressure you. Most people who felt that way ended up really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${requiredObjective}`;
+	    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
+	    const lineToSay = isKayla
+	      ? `Totally fair — I won't push. I can send you the trial code now and you can look it over whenever you're ready. Is there anything specific that didn't feel like a fit?`
+	      : `Totally fair — and I'm not here to pressure you. Most people who felt that way ended up really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${requiredObjective}`;
 	    return {
 	      handled: true, routeKind: "policy_not_interested", responseMode: "exact_script",
 	      objective: "return_to_booking", lineToSay, requiredClosingPivot: requiredObjective,
