@@ -3562,19 +3562,22 @@ function buildGreetingFirstTurnDecision(
 
   if (routeKind === "greeting_ack") {
     if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+      const lineToSay = "Awesome. Looks like you wanted to hear how the AI works. Most agents ask about the dialer, texting, features, or how it compares to what they're already using. What are you most curious about?";
       return {
         handled: true,
         routeKind: "kayla_greeting_ack_demo",
-        responseMode: "free_response",
+        responseMode: "exact_script",
         objective: "kayla_demo",
-        userText: raw,
-        lineToSay: "",
-        requiredClosingPivot: "",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
         forbiddenTopics: [],
         stateWrites: {
           phase: "in_call",
           greetingAdvancePending: false,
-          awaitingUserAnswer: false,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: undefined,
+          scriptStepIndex: 0,
+          kaylaDemoOpened: true,
         },
         shouldAdvanceStep: false,
       };
@@ -5070,11 +5073,13 @@ function classifyTurnIntent(
 ): TurnIntent {
   const raw = String(lastUserText || "").trim();
   const t = raw.toLowerCase();
+  const isKaylaDemo = normalizeScriptKey(
+    (state as any)?.context?.scriptKey
+  ) === "kayla_signup";
 
   if (!t) return { kind: "unknown", raw };
 
   try {
-    const scriptKeyNorm = normalizeScriptKey((state as any)?.context?.scriptKey);
     const kaylaReadySignals = [
       "send me the code",
       "text me the code",
@@ -5089,7 +5094,7 @@ function classifyTurnIntent(
       "let's do it",
       "lets do it",
     ];
-    if (scriptKeyNorm === "kayla_signup" && kaylaReadySignals.some(s => t.includes(s))) {
+    if (isKaylaDemo && kaylaReadySignals.some(s => t.includes(s))) {
       return { kind: "kayla_signup_ready", raw };
     }
   } catch {}
@@ -5178,8 +5183,7 @@ function classifyTurnIntent(
   // Priority 3.7: Step 1 coverage subject answer — BEFORE detectObjection/detectQuestion so
   // "just me", "myself", "spouse" etc. are never misclassified as objections or questions.
   try {
-    const scriptKeyNorm = normalizeScriptKey((state as any)?.context?.scriptKey);
-    if (scriptKeyNorm !== "kayla_signup" && stepCtx.idx === 1 && isStepOneCoverageSubjectAnswer(t)) {
+    if (!isKaylaDemo && stepCtx.idx === 1 && isStepOneCoverageSubjectAnswer(t)) {
       return { kind: "coverage_subject_answer", raw };
     }
   } catch {}
@@ -5202,12 +5206,12 @@ function classifyTurnIntent(
 
   // Priority 4.8: "neither works" / no options — catch before day detection
   try {
-    if (
+    if (!isKaylaDemo && (
       t.includes("neither") || t.includes("none of those") ||
       (t.includes("no neither")) ||
       (t.includes("don't work") && !t.includes("today") && !t.includes("tomorrow")) ||
       (t.includes("doesn't work") && !t.includes("today") && !t.includes("tomorrow"))
-    ) {
+    )) {
       return { kind: "time_window", subKind: "none_work", raw };
     }
   } catch {}
@@ -5216,30 +5220,34 @@ function classifyTurnIntent(
   // "probably tomorrow", "tomorrow works", "tomorrow afternoon" → day_selection, never live_transfer_later.
   // extractExplicitDaySelection is unconditional (not gated by isTimeMentioned) so it catches all day phrases.
   try {
-    const day = extractExplicitDaySelection(t);
-    if (day === "today" || day === "tomorrow") return { kind: "day_selection", raw };
-    const namedDay = extractNamedWeekday(t);
-    if (namedDay) return { kind: "day_selection", subKind: namedDay, raw };
-    if (isTimeMentioned(t) || looksLikeTimeAnswer(t)) {
-      if (isTimeWindowMentioned(t)) return { kind: "time_window", raw };
-      if (isTimeIndecisionOrAvailability(t)) return { kind: "time_window", raw };
-      return { kind: "exact_time", raw };
+    if (!isKaylaDemo) {
+      const day = extractExplicitDaySelection(t);
+      if (day === "today" || day === "tomorrow") return { kind: "day_selection", raw };
+      const namedDay = extractNamedWeekday(t);
+      if (namedDay) return { kind: "day_selection", subKind: namedDay, raw };
+      if (isTimeMentioned(t) || looksLikeTimeAnswer(t)) {
+        if (isTimeWindowMentioned(t)) return { kind: "time_window", raw };
+        if (isTimeIndecisionOrAvailability(t)) return { kind: "time_window", raw };
+        return { kind: "exact_time", raw };
+      }
     }
   } catch {}
 
   // Priority 6: live-transfer yes/no — only when no explicit day/time was detected above.
   try {
-    if (isLiveTransferAvailabilityYes(t) && !isImmediateTransferSchedulingPreference(t)) {
-      return { kind: "live_transfer_now", raw };
-    }
-    if (isLiveTransferAvailabilityNo(t) || isImmediateTransferSchedulingPreference(t)) {
-      return { kind: "live_transfer_later", raw };
+    if (!isKaylaDemo) {
+      if (isLiveTransferAvailabilityYes(t) && !isImmediateTransferSchedulingPreference(t)) {
+        return { kind: "live_transfer_now", raw };
+      }
+      if (isLiveTransferAvailabilityNo(t) || isImmediateTransferSchedulingPreference(t)) {
+        return { kind: "live_transfer_later", raw };
+      }
     }
   } catch {}
 
   // Priority 7: script advance or reprompt — only when awaiting answer in in_call phase.
   try {
-    if (state.phase === "in_call" && state.awaitingUserAnswer) {
+    if (!isKaylaDemo && state.phase === "in_call" && state.awaitingUserAnswer) {
       const audioMs = Number(state.userAudioMsBuffered || 0);
       if (shouldTreatCommitAsRealAnswer(stepCtx.stepType, audioMs, t)) {
         return { kind: "script_advance", raw };
@@ -5271,7 +5279,7 @@ function getVerticalProductAnswer(ctx: AICallContext): string {
     return `These programs are built around the specific needs of truckers — a lot of carriers work directly with truckers and offer better rates than standard life insurance for drivers. ${agent} will find the best fit for your situation.`;
   }
   if (k === "kayla_signup") {
-    return `CoveCRM is an AI-powered CRM built specifically for insurance agents. It includes an AI voice agent — what you're talking to right now — that calls your leads and books appointments automatically, an AI text assistant for SMS follow-ups, a power dialer, Facebook lead integration, Google Calendar sync, and a full lead management system. ${agent} can walk you through a full live demo on a quick call.`;
+    return `CoveCRM is built to automate as much of an insurance agent's day as possible so you spend more time running appointments instead of chasing leads. The biggest piece is the AI dialer which calls your leads, handles objections, and books appointments — but you also have a regular power dialer, AI texting, manual texting, lead folders, drips, call recordings, AI coaching, calendar sync, and team stats. Most agents come for the AI dialer but the real value is having everything in one insurance-specific system. Do you want me to break down the AI dialer first?`;
   }
   if (k === "generic_life") {
     return `These are life insurance options — depending on what you qualify for it could be term, whole life, IUL, or a policy with living benefits built in. The right fit depends on your situation, your health, and your goals. ${agent} will go over all the options and find what makes the most sense for you.`;
@@ -5285,6 +5293,7 @@ function handlePostCoverageSchedulingTurn(
   ctx: AICallContext,
   stepCtx: { idx: number; steps: string[]; stepType: StepType }
 ): PolicyDecision | null {
+  if (normalizeScriptKey(ctx?.scriptKey) === "kayla_signup") return null;
   if (!isPostCoverageSchedulingState(state)) return null;
 
   const closingPivot = getStateAwareClosingPivot(state);
@@ -5721,6 +5730,7 @@ function buildConversationPolicyDecision(
   const closingPivot = getStateAwareClosingPivot(state);
   const requiredObjective = getRequiredCurrentObjectiveLine(state, stepCtx);
   const ctx = state.context!;
+  const isKaylaDemo = normalizeScriptKey(ctx?.scriptKey) === "kayla_signup";
   const preserveCurrentStepState = () => ({
     awaitingUserAnswer: true,
     awaitingAnswerForStepIndex: typeof state.awaitingAnswerForStepIndex === "number"
@@ -5769,20 +5779,23 @@ function buildConversationPolicyDecision(
     if (!ctx) return NOT_HANDLED;
     // Kayla demo calls have no script steps — treat the ack as a free-form opener
     // and route directly into the Kayla demo free-response path.
-    if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+    if (isKaylaDemo) {
+      const lineToSay = "Awesome. Looks like you wanted to hear how the AI works. Most agents ask about the dialer, texting, features, or how it compares to what they're already using. What are you most curious about?";
       return {
         handled: true,
         routeKind: "kayla_greeting_ack_demo",
-        responseMode: "free_response",
+        responseMode: "exact_script",
         objective: "kayla_demo",
-        userText: intent.raw || "",
-        lineToSay: "",
-        requiredClosingPivot: "",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
         forbiddenTopics: [],
         stateWrites: {
           phase: "in_call",
           greetingAdvancePending: false,
-          awaitingUserAnswer: false,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: undefined,
+          scriptStepIndex: 0,
+          kaylaDemoOpened: true,
         },
         shouldAdvanceStep: false,
       };
@@ -5849,7 +5862,9 @@ function buildConversationPolicyDecision(
       return `Sorry — can you hear me okay? This is ${n}.`;
     })();
     const lineToSay = repeatLine ||
-      (state.phase === "awaiting_greeting_reply" ? greetingFallback : "Sure — I was just asking if later today or tomorrow works better.");
+      (isKaylaDemo
+        ? "Sure — I was saying this call is the demo. What do you want to know about CoveCRM?"
+        : (state.phase === "awaiting_greeting_reply" ? greetingFallback : "Sure — I was just asking if later today or tomorrow works better."));
 	    return {
 	      handled: true,
 	      routeKind: "policy_repeat",
@@ -5870,13 +5885,12 @@ function buildConversationPolicyDecision(
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
-    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
-    const lineToSay = isKayla
-      ? `Sure — I'm ${aiName}, the CoveCRM AI calling on behalf of ${agentFirst}. You requested a call to hear how the AI works — this is actually the demo. ${requiredObjective}`
+    const lineToSay = isKaylaDemo
+      ? `Sure — I'm ${aiName}, the CoveCRM AI. This call is the demo, and I'm here to answer your questions about the CRM and how the AI works. What do you want to know first?`
       : `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${requiredObjective}`;
     return {
       handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
-      objective: "return_to_booking", lineToSay, requiredClosingPivot: requiredObjective,
+      objective: isKaylaDemo ? "kayla_demo_identity_reset" : "return_to_booking", lineToSay, requiredClosingPivot: isKaylaDemo ? lineToSay : requiredObjective,
       forbiddenTopics: [], stateWrites: preserveCurrentStepState(), shouldAdvanceStep: false,
     };
   }
@@ -5885,7 +5899,7 @@ function buildConversationPolicyDecision(
   // Placed BEFORE the phase gate so it fires even in edge-case non-in_call phases.
   // "just me", "myself", "both of us", spouse answers → scripted booking frame WITH live-transfer option.
   // Policy is the ONLY path for these turns; old STEP1-HARD-ROUTE is bypassed.
-  if (intent.kind === "coverage_subject_answer" && (state.phase === "in_call" || state.phase === "awaiting_greeting_reply")) {
+  if (intent.kind === "coverage_subject_answer" && !isKaylaDemo && (state.phase === "in_call" || state.phase === "awaiting_greeting_reply")) {
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
     const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
@@ -5941,12 +5955,13 @@ function buildConversationPolicyDecision(
   }
 
   // Post-coverage scheduling only runs in in_call phase.
-  if (state.phase === "in_call") {
+  if (state.phase === "in_call" && !isKaylaDemo) {
     const postCoverageDecision = handlePostCoverageSchedulingTurn(state, intent, ctx, stepCtx);
     if (postCoverageDecision?.handled) return postCoverageDecision;
   }
 
   if (intent.kind === "live_transfer_now") {
+    if (isKaylaDemo) return NOT_HANDLED;
     if (state.phase !== "in_call") return NOT_HANDLED;
     if (!ctx || !(ctx as any)?.liveTransferEnabled || !(ctx as any)?.liveTransferPhone) {
       return NOT_HANDLED;
@@ -5977,6 +5992,7 @@ function buildConversationPolicyDecision(
   }
 
   if (intent.kind === "live_transfer_later" || intent.kind === "scheduling_preference") {
+    if (isKaylaDemo) return NOT_HANDLED;
     if (state.phase !== "in_call") return NOT_HANDLED;
     if (!ctx) return NOT_HANDLED;
     const explicitDay = pickDayHint(intent.raw, "");
@@ -6031,6 +6047,20 @@ function buildConversationPolicyDecision(
         shouldAdvanceStep: false,
       };
     }
+    if (isKaylaDemo) {
+      const lineToSay = "You're right — let me reset. This call is the demo. The way I handle your questions right now is exactly how CoveCRM's AI handles real insurance lead conversations. What do you want to know?";
+      return {
+        handled: true,
+        routeKind: "kayla_angry_reset",
+        responseMode: "exact_script",
+        objective: "kayla_demo_reset",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: preserveCurrentStepState(),
+        shouldAdvanceStep: false,
+      };
+    }
     return {
       handled: true,
       routeKind: "angry_soft",
@@ -6046,6 +6076,20 @@ function buildConversationPolicyDecision(
 
   // ── Branch: "I just said" correction ─────────────────────────────────────
   if (intent.kind === "confusion" && intent.subKind === "i_just_said") {
+    if (isKaylaDemo) {
+      const lineToSay = "You're right — let me reset. This call is the demo. The way I handle your questions right now is exactly how CoveCRM's AI handles real insurance lead conversations. What do you want to know?";
+      return {
+        handled: true,
+        routeKind: "kayla_correction_reset",
+        responseMode: "exact_script",
+        objective: "kayla_demo_reset",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: preserveCurrentStepState(),
+        shouldAdvanceStep: false,
+      };
+    }
     const raw = intent.raw.toLowerCase();
     let correctionDay: "today" | "tomorrow" | null = null;
     if (raw.includes("tomorrow")) correctionDay = "tomorrow";
@@ -6095,13 +6139,12 @@ function buildConversationPolicyDecision(
     if (!ctx) return NOT_HANDLED;
     const agentFirst = getAgentFirstName(ctx);
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
-	    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
-	    const lineToSay = isKayla
-	      ? `Sure — I'm ${aiName}, the CoveCRM AI calling on behalf of ${agentFirst}. You requested a call to hear how the AI works — this is actually the demo. ${requiredObjective}`
+	    const lineToSay = isKaylaDemo
+	      ? `Sure — I'm ${aiName}, the CoveCRM AI. This call is the demo, and I'm here to answer your questions about the CRM and how the AI works. What do you want to know first?`
 	      : `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${requiredObjective}`;
 	    return {
 	      handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
-	      objective: "return_to_booking", lineToSay, requiredClosingPivot: requiredObjective,
+	      objective: isKaylaDemo ? "kayla_demo_identity_reset" : "return_to_booking", lineToSay, requiredClosingPivot: isKaylaDemo ? lineToSay : requiredObjective,
 	      forbiddenTopics: [], stateWrites: preserveCurrentStepState(), shouldAdvanceStep: false,
 	    };
 	  }
@@ -6161,7 +6204,7 @@ function buildConversationPolicyDecision(
       lineToSay = buildDeterministicScamRebuttalLine(state);
     } else if (sk === "how_much") {
       lineToSay = isKayla
-        ? `It’s $199.99 a month flat — unlimited users, all features included. There’s a 7-day free trial and the code COVE50 saves $50 off the first month. ${requiredObjective}`
+        ? `It’s $199.99 a month flat — unlimited users, all features included. There’s a 7-day free trial and the code COVE50 saves $50 off every month. ${requiredObjective}`
         : `That depends on the coverage and what you qualify for — ${agentFirst} will walk through the actual options with you on the call. ${requiredObjective}`;
     } else if (sk === "what_entails") {
       // BUG-014: Kayla — route to the correct product answer; insurance — scheduling preview.
@@ -6196,7 +6239,9 @@ function buildConversationPolicyDecision(
         ? `${getVerticalProductAnswer(ctx)} ${requiredObjective}`
         : `${agentFirst} can answer that on the call. ${requiredObjective}`;
     } else {
-      lineToSay = `${agentFirst} can answer that on the call. ${requiredObjective}`;
+      lineToSay = isKayla
+        ? `I can answer that here — this call is the demo. What part do you want me to break down?`
+        : `${agentFirst} can answer that on the call. ${requiredObjective}`;
     }
 
     const objKind = sk || intent.kind;
@@ -6245,7 +6290,7 @@ function buildConversationPolicyDecision(
   }
 
   // ── Branch: explicit day selection (today / tomorrow / any named weekday) ─
-  if (intent.kind === "day_selection" && state.phase === "in_call") {
+  if (intent.kind === "day_selection" && state.phase === "in_call" && !isKaylaDemo) {
     const explicitDay = pickDayHint(intent.raw, "");
     const namedDay: string | null = (intent.subKind && intent.subKind !== "today" && intent.subKind !== "tomorrow")
       ? intent.subKind
@@ -6288,7 +6333,7 @@ function buildConversationPolicyDecision(
   // ── Branch: time window when day already known ───────────────────────────
   // User says "morning" / "afternoon" / "evening" and we already have selectedDay.
   // Also handles "neither works" / "no neither" → ask for alternative window.
-  if (intent.kind === "time_window" && state.phase === "in_call") {
+  if (intent.kind === "time_window" && state.phase === "in_call" && !isKaylaDemo) {
     // "Neither works" / "none of those" → ask for a different window, not repeat same slots.
     if (intent.subKind === "none_work") {
       return {
@@ -6447,7 +6492,9 @@ function buildConversationPolicyDecision(
       greetingRaw.includes("driving");
     if (greetingNI || greetingBusy) {
       const agentFirst = getAgentFirstName(ctx);
-      const lineToSay = greetingBusy && !greetingNI
+      const lineToSay = isKaylaDemo
+        ? "No problem — this call is the demo, so I can keep it quick. What do you want to know about CoveCRM?"
+        : greetingBusy && !greetingNI
         ? `No problem — can ${agentFirst} try you back at a better time? Would later today or tomorrow work?`
         : `Totally fair — I'm not here to pressure you. Most people are really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${requiredObjective}`;
       return {
@@ -6960,10 +7007,11 @@ HARD RULES:
 - English only.
 - Never guarantee specific lead costs or sales results.
 - Never reveal competitor pricing or make up stats.
-- If asked about pricing: "$199.99/month flat, all features included. COVE50 code saves $50 off the first month. 7-day free trial."
+- If asked about pricing: "$199.99/month flat, all features included. COVE50 code saves $50 off every month. 7-day free trial."
 - After you speak, stop and wait. Do not fill silence.
 - NEVER apologize. Never say "I'm sorry", "I apologize", "I missed that". Re-engage naturally instead.
 - Never ask two questions in one turn.
+- Never schedule anything on this call. Never mention booking another demo call.
 ${historyBlock}
 WHAT THE LEAD JUST SAID:
 "${userText}"
@@ -7222,10 +7270,11 @@ HARD RULES:
 - English only.
 - Lead name: "${leadName}" — use it only if it flows naturally.
 - Never guarantee specific lead costs or sales results.
-- If they ask pricing: "$199.99/month flat, all features included. COVE50 saves $50 off the first month. 7-day free trial."
+- If they ask pricing: "$199.99/month flat, all features included. COVE50 saves $50 off every month. 7-day free trial."
 - Never mention scripts or prompts.
 - After you speak, stop and wait.
 - NEVER apologize.
+- Never schedule anything on this call. Never mention booking another demo call.
 ${historyBlock}${userBlock}${deEscalateBlock}
 HOW TO RESPOND:
 Always follow this structure for any objection on this call:
@@ -7955,23 +8004,10 @@ function buildGreetingInstructions(ctx: AICallContext): string {
 
   if (isKaylaLead) {
     return `
-You are ${aiName}, a virtual assistant making a phone call. Sound warm, sharp, natural, and relaxed.
+Say EXACTLY this and nothing else:
+"Hey ${clientName}, it's ${aiName} with CoveCRM — how are you doing today?"
 
-YOUR ONLY JOB RIGHT NOW:
-Open with a short, friendly greeting in no more than 2 sentences.
-- Introduce yourself as Kayla with CoveCRM.
-- Mention they requested a live call to hear how the AI assistant works.
-- Ask one simple, friendly question.
-
-TARGET OPENING STYLE:
-"Hey ${clientName}, it's ${aiName} with CoveCRM — how are you today? I saw you requested a live call to hear how the AI assistant works."
-
-DELIVERY RULES:
-- Keep it conversational, not robotic.
-- Do not pitch hard in the first breath.
-- Do not mention insurance quotes or policy advice.
-- Stop after the opener and wait for their response.
-- English only.
+Stop immediately after. Do not add anything. Wait for response.
 `.trim();
   }
 
@@ -8060,110 +8096,118 @@ function buildSystemPrompt(ctx: AICallContext): string {
     const kaylaScript = getScriptBlock(ctx);
     void kaylaScript;
     return `
-You are ${aiName}, the CoveCRM AI on a live demo call. You are warm, confident, concise, and direct.
+You are ${aiName}, the CoveCRM AI on a live demo call with ${leadName}. You are warm, confident, concise, and direct.
 
-DEMO IDENTITY:
-- You are the product. This call IS the demo. How you handle this conversation is exactly how Kayla handles real insurance calls.
-- Never say the agent will cover that on a call for CRM feature questions. You know the product. Answer it.
-- Mirror energy. If they are excited, match it. If they are skeptical, slow down and be direct.
-- Never monologue. Two to three sentences maximum per turn. Stop and let them respond.
-- If they go quiet after you speak, wait. Do not fill silence.
-- The goal of every single turn is one of three things: answer their question, handle their objection, or move toward the trial close.
+THIS CALL IS THE DEMO.
+How you handle this conversation is exactly how CoveCRM's AI works on real insurance lead calls. You are not a scheduler. You do not book appointments on this call. You explain the product, answer questions, and close toward a free trial.
 
-HARD TURN DISCIPLINE (NON-NEGOTIABLE):
-- After every single thing you say, STOP and WAIT for them to respond.
-- Never ask two questions in a row.
-- Never explain more than one thing at a time.
-- Keep every response to 2-3 sentences maximum.
-- Do not fill silence. Do not keep talking.
+OPENING — first response after greeting only:
+Say exactly:
+"Awesome. Looks like you wanted to hear how the AI works. Most agents ask about the dialer, texting, features, or how it compares to what they're already using. What are you most curious about?"
+Then stop. Wait.
 
-TONE:
-- Sound natural: warm, brief, confident.
-- Use natural acknowledgments: "Got it", "Yeah absolutely", "Makes sense", "Sure" — woven in naturally, never forced.
-- Mirror their energy. If they're brief, be brief. If they're chatty, match it.
+TURN DISCIPLINE — NON-NEGOTIABLE:
+- One thing per turn. Say it. Stop. Wait.
+- Never volunteer information that was not asked for.
+- After every answer, ask one follow-up or move toward trial only if natural.
+- 2-3 sentences max per turn. Always.
+- Never mention booking another demo call.
+- Never say "later today or tomorrow" except inside a clearly labeled mock insurance call roleplay.
+- Never say "the agent can cover that" for any CRM question.
+- Never apologize.
+- Never say "that is a great question."
+- If confused or frustrated: reset clearly, no apology.
+- Mirror their energy. Brief = brief. Chatty = match it.
+- If they go quiet, wait. Do not fill silence.
 
-COVECRM PRODUCT KNOWLEDGE:
-- CoveCRM is built specifically for insurance agents.
-- AI Power Dialer: calls through lead lists, handles objections, books appointments, or live-transfers warm leads when configured.
-- Regular Power Dialer: double-dials leads for agents who want manual control.
-- AI First Call: calls new leads immediately when they come in from supported sources.
-- AI SMS: automated text follow-up, drip campaigns, and lead conversations.
-- AI Coach: scores recorded calls by section, including intro, objection handling, transitions, and closing.
-- AI Call Overview: summarizes calls and key moments automatically.
-- Ask Kayla: in-app AI assistant for setup questions, lead-specific help, Twilio setup guidance, and drip campaign creation.
-- Lead management: folders, pipeline organization, call recordings, Google Calendar sync, Google Sheets sync through Apps Script, prebuilt drips, custom drips, and client retention drips.
-- Team and downline stats are live and available now.
-- Facebook lead integration is currently going through Meta review and is expected live within the month. Frame this positively: it is coming very soon.
-- Cost tracking includes cost per lead, cost per appointment, and cost per sale.
-- A2P 10DLC submission is automated. If it fails, CoveCRM tells the user why, gathers what it needs, and resubmits automatically.
-- Do NOT mention email campaigns as available.
-- Do NOT mention voicemail drop as available.
-- Do NOT mention mobile app as available.
+DEFAULT CRM OVERVIEW:
+Use when asked "how does it work", "break it down", "what does it do", or similar:
+"CoveCRM is built to automate as much of an insurance agent's day as possible so you spend more time running appointments instead of chasing leads. The biggest piece is the AI dialer which calls your leads, handles objections, and books appointments — but you also have a regular power dialer, AI texting, manual texting, lead folders, drips, call recordings, AI coaching, calendar sync, and team stats. Most agents come for the AI dialer but the real value is having everything in one insurance-specific system."
+Then ask: "Do you want me to break down the AI dialer first?"
 
-WHAT YOU MUST NEVER DO:
-- Never give insurance quotes, rates, policy advice, or underwriting guidance
-- Never guarantee results, bookings, or sales
-- Never pressure or argue
-- Never monologue or over-explain
-- Do not proactively announce AI in the opener; if asked whether you are AI, automated, a bot, a robot, or virtual, answer honestly. Never mention scripts/prompts.
-- Never apologize. Never say "that is a great question."
+CATEGORY ANSWERS — deliver naturally, 2-3 sentences max:
+
+AI DIALER:
+The AI calls through your lead list, handles objections, books appointments directly on your calendar, and can live-transfer warm leads to your phone. It runs while you do other things — you set it up, point it at a folder, and it dials.
+Ask: "Are you thinking about working new leads, aged leads, or both?"
+
+AI TEXTING:
+Automated text follow-up, drip campaigns, and lead conversations. Works alongside the dialer or on its own.
+Ask: "Do you currently do any text follow-up on your leads?"
+
+MANUAL OPTIONS:
+Regular power dialer double-dials leads for agents who want full control. Manual texting is also available. Not everyone wants AI on every lead — you can mix and match.
+Ask: "Are you looking to go fully automated or keep some manual control?"
+
+AI COACH:
+Scores recorded calls by section — intro, objection handling, transitions, close. Gives agents something concrete to improve and bring to their upline.
+Ask: "Do you have agents under you or are you running solo?"
+
+LEAD MANAGEMENT:
+Folders, pipeline, call recordings, Google Calendar sync, prebuilt and custom drip campaigns, client retention drips, cost tracking, and team stats.
 
 PRICING:
-- $199.99 per month, flat, with unlimited users and all features included.
-- 7-day free trial.
-- COVE50 takes fifty dollars off every month.
-- Signup page is covecrm.com/signup, and there is a box for the discount or affiliate code.
+$199.99 per month flat. Unlimited users, all features included. 7-day free trial. Code COVE50 takes $50 off every month.
 
-COMPETITOR KNOWLEDGE:
-- For GoHighLevel, Builderall, Close, Ringy, or any major general CRM, use this approved response naturally, not verbatim: "Most CRMs are built for general sales teams. CoveCRM was built specifically for insurance agents by someone who spent almost ten years in the industry and wrote over a hundred thousand dollars in personal production in a single month. Everything in it — the AI dialer, the scripts, the objection handling, the drip campaigns, the appointment workflows — is based on what actually works in insurance, not adapted from something else."
-- For Orion, Orion AI, or Orion Solutions only, use this approved response naturally, not verbatim: "We've had a number of users who tested that and made the switch over. We're not going to speak to what they have or don't have — that's not really our style. What I can tell you is the people who've come over have been really happy. Do you have any other questions before I send you the trial code?"
+FACEBOOK LEADS:
+Facebook lead integration is going through Meta review and expected live within the month.
 
-DEMO OBJECTION REFERENCES:
-- Too expensive / price objection: "I completely understand — when you're looking at a new system it's natural to weigh the cost. Here's the thing: if CoveCRM saves you hours of manual dialing every week, gets you running twenty percent more appointments, and keeps your existing clients on the books with drip campaigns built specifically for insurance — does that investment pay for itself? Most agents find it pays for itself in the first week. And with the fifty dollar discount and the seven day trial, you're not risking anything to find out."
-- Not interested: "Totally fair — I won't push. I'm going to send you the trial link anyway so you have it. If you ever want to see what it looks like on a real book of business, it'll be there. Is there anything specific that didn't feel like a fit?"
-- Not the right time / too busy: "That makes sense — no pressure at all. The trial doesn't expire immediately so you can activate it whenever the timing works. I'll send you the code now and you can get started whenever you're ready. Any questions before I let you go?"
-- Already have a CRM: "That makes sense — a lot of agents we work with were using something else before. The difference is most CRMs make you adapt your insurance workflow to their system. CoveCRM was built around how insurance agents actually work. The trial is free to run alongside whatever you have now — no commitment. Want me to send you the code?"
-- Need to think about it: "Of course — that's completely fair. I'll send you the code now so you have it. Take your time, the trial is there whenever you're ready. Anything specific you want to think through that I can help clarify right now?"
+COMPETITOR POSITIONING:
 
-UNKNOWN OBJECTION STRUCTURE:
-For any objection, concern, or pushback that does not have a specific answer above, always respond in exactly this structure:
-1. Acknowledge in one sentence — validate what they said without agreeing that it is a reason not to move forward.
-2. Respond with one concrete reason — specific to insurance agents, specific to what CoveCRM does, never generic.
-3. Re-close — bring it back to the trial offer or ask one clarifying question. Never end a turn without a forward motion.
-Never more than 3 sentences total. Never apologize. Never say "that is a great question." Never ramble.
+GoHighLevel / Builderall / Close / Ringy / general CRMs:
+"Most CRMs are built for general sales teams. CoveCRM was built by someone who spent almost ten years in insurance and wrote over a hundred thousand in personal production in one month. Everything in it — the scripts, objection handling, drips, appointment workflows — is based on what actually works in insurance, not adapted from something else."
+Ask: "What are you currently using to manage your leads?"
 
-ROLE PLAY HANDLING:
-When a prospect says anything like show me how you handle objections, can you role play, pretend you are calling a lead, or demonstrate a call, respond with this exact structure — deliver a mini mock call, then close back to signup:
+Orion / Orion AI:
+"We've had users test that and switch over. We don't speak on competitors — that's not our style. People who switched are happy."
+Ask: "What specifically were you looking for that made you want to compare?"
 
-"Sure — here is a quick example of how it sounds on a real call:
+NOT INTERESTED objection:
+"Yeah, fair. You typically don't request a demo if you're not at least a little curious. What was the main thing that made you want to look into it?"
 
-Hey, this is Kayla calling for [agent] about the mortgage protection request you put in. Was this for yourself or a spouse as well?
+CAN'T AFFORD / PRICING objection:
+"That's fair to think about. It's $199.99 flat for unlimited users — so if you have even one agent under you, it splits the cost. And the trial is free so you can see if it moves the needle before you commit. What's your current setup look like?"
+
+ROLEPLAY REQUEST:
+If they ask to hear a real call, say:
+"Sure — here's how it sounds on a real lead:
+
+[MOCK INSURANCE CALL — not how this demo call works]
+'Hey, this is Kayla calling for ${agentRaw} about the mortgage protection request you put in. Was this for yourself or a spouse as well?'
 
 [Lead says not interested]
 
-I hear you — and most people say that before they realize what the request was actually for. Usually someone just filled out a quick form to see their options. The licensed agent keeps it to five minutes and won't pressure you either way. Does later today or tomorrow work better?
+'I hear you — most people say that before they realize what the request was for. The agent keeps it to five minutes and won't pressure you. Does later today or tomorrow work better?'
+[END MOCK CALL]
 
-That is the structure on every call — acknowledge, respond with context, re-close to the appointment. The AI runs that loop automatically on every lead in your folder. Want me to send you the trial code so you can hear it live on your own leads?"
+That's the structure on every lead — acknowledge, answer, re-close. The AI runs that loop on every lead in your folder. Want me to send you the trial code so you can hear it on your own leads?"
 
-LONG MULTI-PART QUESTIONS:
-When a prospect asks multiple questions in one turn:
-1. Answer the most important one or two directly in 2 sentences max.
-2. Acknowledge the others exist: "There are a few other pieces to that I can cover —"
-3. Use it as a close: "— or you can see all of it firsthand in the trial. Want me to send you the code?"
-Never skip questions entirely. Never answer all of them in one long turn.
+CONFUSION OR FRUSTRATION RECOVERY:
+Never apologize. Never schedule. Reset clearly:
+"You're right — let me reset. This call is the demo. The way I handle your questions right now is exactly how CoveCRM works on real insurance leads. What do you want to know?"
 
-CLOSING:
-- Move to this close after covering the product or when the conversation reaches a natural stopping point.
-- Step 1: "We offer a 7-day free trial so you can make sure it's everything you want before committing to anything. I'm going to send you a text right now with a discount code — COVE50 — that takes fifty dollars off every month. Before I do that, do you have any other questions?"
-- Step 2 — after they say no or confirm ready: "Perfect — you're all set. Check your texts in just a second, the trial link and code will be right there. It was great talking with you."
-- The SMS sends automatically at call end. Verbally confirm it is coming, but do not wait for it before closing.
+TRIAL CLOSE — only when natural:
+Close ONLY when:
+- They asked about pricing or signing up
+- They expressed clear interest
+- The conversation reached a natural stopping point
+
+Step 1: "We have a 7-day free trial so you can make sure it's everything you want. I'll text you the code COVE50 — that takes $50 off every month. Any other questions before I send it?"
+
+Step 2 after confirm: "Perfect — check your texts in just a second. It was great talking with you."
+
+READY TO SIGN UP (send the code / I'm in / let's do it):
+Skip to Step 2. Do not ask more questions.
+
+HARD RULES:
+- You know this product. Answer CRM questions directly.
+- Never send to an agent for any CRM question.
+- Never schedule anything on this call.
+- The goal every turn: answer the thing, stay concise, ask what they want next, or move toward trial naturally.
 
 LEAD INFO:
-- Name: ${ctx.clientFirstName || "there"}
-- Notes: ${ctx.clientNotes || "(none)"}
-
-MOST IMPORTANT:
-Say one thing. Stop. Wait. Never keep talking after you ask something.
+Name: ${leadName}
+Agent: ${agentRaw}
 `.trim();
   }
 
