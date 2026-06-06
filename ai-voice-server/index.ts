@@ -38,8 +38,7 @@ import { Buffer } from "buffer";
 import { getKaylaSignupScript } from "./scripts/kaylaSignupScript";
 import {
   buildInboundGreetingInstructions,
-  buildInboundReasonLine,
-  buildInboundReasonInstructions,
+  buildInboundReasonAndRapport,
   shouldUseInboundFlow,
 } from "./flows/inbound";
 
@@ -380,6 +379,8 @@ type CallState = {
   silenceWatchdog?: NodeJS.Timeout | null;
   // greeting audio fallback: fires after 8s if OpenAI never sends audio
   greetingTimeoutId?: NodeJS.Timeout | null;
+  // inbound: true while waiting for rapport response ("how are you doing?") before step 1
+  inboundRapportPending?: boolean;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -3435,6 +3436,9 @@ function buildGreetingFirstTurnDecision(
   if (state.phase !== "awaiting_greeting_reply") return null;
   if ((state as any).rebookingMode) return null;
 
+  const isInbound = shouldUseInboundFlow(ctx);
+  const inboundRapportPending = !!(state as any).inboundRapportPending;
+
   const raw = String(intent.raw || "").trim();
   const t = normalizeTurnTextForKey(raw);
   const step1Line = (
@@ -3457,11 +3461,48 @@ function buildGreetingFirstTurnDecision(
     t.includes("you have the wrong number");
   if (hardOptOut) return null;
 
+  // Inbound second greeting turn: they answered "How are you doing today?" → advance to step 1
+  if (isInbound && inboundRapportPending) {
+    const cleanedStep = step1Line.replace(/^got it\s*[—\-–]\s*/i, "").replace(/^got it\.\s*/i, "");
+    let lineToSay: string;
+    if (isConversationalGreetingNegative(raw)) {
+      const empathyOpts = [
+        "Oh I'm sorry to hear that —",
+        "Aw I'm sorry —",
+        "Hope things turn around —",
+      ];
+      const empathy = empathyOpts[Math.floor(Math.random() * empathyOpts.length)];
+      lineToSay = `${empathy} ${cleanedStep}`;
+    } else {
+      lineToSay = `${getGreetingAckPrefix(raw)} ${cleanedStep}`.trim();
+    }
+    return {
+      handled: true,
+      routeKind: "inbound_rapport_ack",
+      responseMode: "exact_script",
+      objective: "advance_to_step_1_after_rapport",
+      lineToSay,
+      requiredClosingPivot: step1Line,
+      forbiddenTopics: [],
+      stateWrites: {
+        phase: "in_call",
+        inboundRapportPending: false,
+        greetingAdvancePending: false,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 0,
+        scriptStepIndex: 1,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  // On inbound, bare negative responses ("no", "nope", "not really") mean the caller
+  // is not returning a missed call — they called fresh. That is NOT a hearing problem;
+  // the greeting still proceeds to the reason + rapport line.
   const hearingProblem =
-    t === "no" ||
-    t === "nope" ||
-    t === "not really" ||
-    t.includes("not really") ||
+    (t === "no" && !isInbound) ||
+    (t === "nope" && !isInbound) ||
+    (!isInbound && t.includes("not really")) ||
     t.includes("barely hear") ||
     t.includes("can barely hear") ||
     t.includes("sorry what") ||
@@ -3532,6 +3573,28 @@ function buildGreetingFirstTurnDecision(
         forbiddenTopics: [],
         stateWrites: {
           phase: "in_call",
+          greetingAdvancePending: false,
+          awaitingUserAnswer: false,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+    // Inbound first confirmation turn: they answered "I see you're returning a missed call. Correct?"
+    // Say the reason + rapport question, stay in greeting phase, set inboundRapportPending.
+    if (isInbound) {
+      const confirmed = !(t === "no" || t === "nope" || t.startsWith("not ") || t.includes("no i"));
+      const lineToSay = buildInboundReasonAndRapport(ctx, confirmed);
+      return {
+        handled: true,
+        routeKind: "inbound_confirm_reason",
+        responseMode: "exact_script",
+        objective: "inbound_reason_and_rapport",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: {
+          phase: "awaiting_greeting_reply",
+          inboundRapportPending: true,
           greetingAdvancePending: false,
           awaitingUserAnswer: false,
         },

@@ -58,7 +58,13 @@ export function resolveInboundScriptLabel(ctx?: InboundFlowContext): string {
 }
 
 export function buildInboundGreeting(ctx: InboundFlowContext): string {
-  return `Hey ${getLeadFirstName(ctx)}, this is ${getAiName(ctx)}. Are you returning a missed call?`;
+  return `Hey ${getLeadFirstName(ctx)}, I see you're returning a missed call. Correct?`;
+}
+
+export function buildInboundReasonAndRapport(ctx: InboundFlowContext, confirmed: boolean = true): string {
+  const label = resolveInboundScriptLabel(ctx);
+  const prefix = confirmed ? "Awesome." : "Got it.";
+  return `${prefix} I was originally giving you a call about the ${label} you were looking into. How are you doing today?`;
 }
 
 export function buildInboundGreetingInstructions(ctx: InboundFlowContext): string {

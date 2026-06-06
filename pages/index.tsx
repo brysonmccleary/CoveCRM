@@ -381,14 +381,11 @@ export default function Home() {
         <section className="py-20 px-6 max-w-6xl mx-auto space-y-8">
 
           {/* AI Dialer */}
-          <div className="bg-[#020617] text-white rounded-3xl border border-white/8 px-8 py-10 md:px-12 md:py-12 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
+          <div className="text-white rounded-3xl border border-blue-500/30 bg-gradient-to-br from-[#0d1a35] to-[#020617] px-8 py-10 md:px-12 md:py-12 shadow-2xl shadow-blue-900/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
             <div className="max-w-xl">
               <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">Flagship Feature</p>
               <h3 className="text-2xl md:text-3xl font-bold mb-4">
-                AI Dialer – Your 24/7 Appointment Setter{" "}
-                <span className="ml-2 inline-flex items-center rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 px-3 py-1 text-xs font-bold text-white shadow-lg">
-                  Join Waitlist
-                </span>
+                AI Dialer – Your 24/7 Appointment Setter
               </h3>
               <p className="text-sm md:text-base text-gray-200 mb-5 leading-relaxed">
                 A fully autonomous calling agent that dials your leads, handles objections using proven insurance scripts, and books real appointments directly on your Google Calendar — all while you focus on closing.
@@ -409,7 +406,7 @@ export default function Home() {
           </div>
 
           {/* AI SMS Assistant */}
-          <div className="bg-[#020617] text-white rounded-3xl border border-white/8 px-8 py-10 md:px-12 md:py-12 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
+          <div className="text-white rounded-3xl border border-blue-500/30 bg-gradient-to-br from-[#0d1a35] to-[#020617] px-8 py-10 md:px-12 md:py-12 shadow-2xl shadow-blue-900/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
             <div className="max-w-xl">
               <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">Flagship Feature</p>
               <h3 className="text-2xl md:text-3xl font-bold mb-4">AI SMS Assistant – Always-On Follow-Up</h3>
