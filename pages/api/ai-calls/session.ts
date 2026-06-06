@@ -5,11 +5,14 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallSession from "@/models/AICallSession";
 import Lead from "@/models/Lead";
+import User from "@/models/User";
+import { requireBillingReady } from "@/lib/billing/requireBillingReady";
 import { Types } from "mongoose";
 
 type GetResponse =
   | { ok: false; message: string }
-  | { ok: true; session: any | null };
+  | { ok: true; session: any | null; workerKickOk?: boolean }
+  | { ok: false; error: string };
 
 type PostBody = {
   folderId?: string;
@@ -118,47 +121,37 @@ async function notifyVoiceServerStartSession(params: {
   sessionId: string;
   folderId: string;
   total: number;
-}) {
+}): Promise<boolean> {
   if (!AI_VOICE_HTTP_BASE) {
-    console.error(
-      "[AI SESSION] AI_VOICE_STREAM_URL/AI_VOICE_HTTP_BASE not set; skipping /start-session notify."
+    throw new Error(
+      "AI_VOICE_STREAM_URL/AI_VOICE_HTTP_BASE not set; cannot notify /start-session."
     );
-    return;
   }
 
   const url = `${AI_VOICE_HTTP_BASE}/start-session`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(params),
+    signal: AbortSignal.timeout(3000),
+  });
 
-  try {
-    // Fire-and-forget style; we don't want to block user on this.
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(params),
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      console.error("[AI SESSION] /start-session non-200 response:", {
-        status: resp.status,
-        text,
-      });
-    } else {
-      console.log("[AI SESSION] Notified voice server /start-session:", {
-        url,
-        email: params.userEmail,
-        sessionId: params.sessionId,
-        folderId: params.folderId,
-        total: params.total,
-      });
-    }
-  } catch (err: any) {
-    console.error(
-      "[AI SESSION] Error calling voice server /start-session:",
-      err?.message || err
-    );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`/start-session non-200 response: ${resp.status} ${text}`);
   }
+
+  console.log("[AI SESSION] Notified voice server /start-session:", {
+    url,
+    email: params.userEmail,
+    sessionId: params.sessionId,
+    folderId: params.folderId,
+    total: params.total,
+  });
+
+  return true;
 }
 
 function serializeSession(doc: any | null) {
@@ -320,6 +313,14 @@ export default async function handler(
         });
       }
 
+      const userDoc = await User.findOne({ email }).lean();
+      const billingReady = requireBillingReady(userDoc);
+      if (!userDoc || (userDoc as any).hasAI !== true || !billingReady.ok) {
+        return res
+          .status(403)
+          .json({ ok: false, error: "AI Dialer not available for this account" });
+      }
+
       const fid = new Types.ObjectId(folderId);
 
       // Pull queue snapshot from leads in that folder (per-user ownership)
@@ -391,20 +392,23 @@ export default async function handler(
 
       // 🔹 Immediately notify the AI voice server so it can kick the worker
       // This is what actually starts dialing instead of leaving the session stuck at QUEUED.
-      notifyVoiceServerStartSession({
-        userEmail: email,
-        sessionId: String((aiSession as any)?._id),
-        folderId: fid.toString(),
-        total,
-      }).catch((err) => {
+      let workerKickOk = false;
+      try {
+        workerKickOk = await notifyVoiceServerStartSession({
+          userEmail: email,
+          sessionId: String((aiSession as any)?._id),
+          folderId: fid.toString(),
+          total,
+        });
+      } catch (err: any) {
         console.error(
-          "[AI SESSION] Unexpected error in notifyVoiceServerStartSession:",
-          err
+          "[AI SESSION] Failed to notify voice server /start-session:",
+          err?.message || err
         );
-      });
+      }
 
       const payload = serializeSession(aiSession);
-      return res.status(200).json({ ok: true, session: payload });
+      return res.status(200).json({ ok: true, session: payload, workerKickOk });
     } catch (err) {
       console.error("AI session POST error:", err);
       return res

@@ -77,10 +77,10 @@ const aiRecordingUrl = (sessionId: string, leadId: string) =>
   )}&leadId=${encodeURIComponent(leadId)}`;
 
 // 🔹 Twilio posts call completion here so we can bill by dial time
-const aiCallStatusUrl = (userEmail: string) =>
+const aiCallStatusUrl = (userEmail: string, sessionId: string, leadId: string) =>
   `${BASE}/api/ai-calls/call-status-webhook?userEmail=${encodeURIComponent(
     userEmail.toLowerCase()
-  )}`;
+  )}&sessionId=${encodeURIComponent(sessionId)}&leadId=${encodeURIComponent(leadId)}`;
 
 /**
  * Parse "Authorization: Bearer <token>"
@@ -691,7 +691,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         recordingStatusCallbackMethod: "POST",
 
         // ✅ Always keep normal status callbacks (billing + chaining next lead)
-        statusCallback: aiCallStatusUrl(userEmail),
+        statusCallback: aiCallStatusUrl(userEmail, sessionId, leadIdStr),
         statusCallbackEvent: [
           "initiated",
           "ringing",
@@ -709,7 +709,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!bypassAmd) {
         callCreate.machineDetection = "Enable";
         callCreate.asyncAmd = true;
-        callCreate.asyncAmdStatusCallback = aiCallStatusUrl(userEmail);
+        callCreate.asyncAmdStatusCallback = aiCallStatusUrl(userEmail, sessionId, leadIdStr);
         callCreate.asyncAmdStatusCallbackMethod = "POST";
       }
 

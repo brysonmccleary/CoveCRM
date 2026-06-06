@@ -185,8 +185,14 @@ export default async function handler(
       params.get("AnsweredBy") || params.get("answered_by") || "";
 
     // Optional hints from statusCallback URL
-    const qs = req.query as { userEmail?: string };
+    const qs = req.query as {
+      userEmail?: string;
+      sessionId?: string;
+      leadId?: string;
+    };
     let userEmail = (qs.userEmail || "").toString().toLowerCase() || "";
+    const querySessionId = (qs.sessionId || "").toString();
+    const queryLeadId = (qs.leadId || "").toString();
 
     // We want to progress the session on terminal statuses too (not just "completed")
     const TERMINAL_STATUSES = new Set([
@@ -239,6 +245,12 @@ export default async function handler(
       // only set userEmail on insert if we actually have it (avoid overwriting real value)
       if (userEmail) {
         setOnInsert.userEmail = userEmail;
+      }
+      if (Types.ObjectId.isValid(queryLeadId)) {
+        setOnInsert.leadId = new Types.ObjectId(queryLeadId);
+      }
+      if (Types.ObjectId.isValid(querySessionId)) {
+        setOnInsert.aiCallSessionId = new Types.ObjectId(querySessionId);
       }
 
       recDoc = await AICallRecording.findOneAndUpdate(

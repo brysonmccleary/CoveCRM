@@ -8,16 +8,15 @@ const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
 
 /**
  * 🔹 What you charge the user for AI dialer:
- * Default: $0.09/min → $9/hour if talk time is ~36 minutes/hour,
- * but practically you’re thinking of it as 15¢ per connected minute.
+ * Default: $20 / 240 minutes = $0.08333/min.
  */
 const AI_DIALER_RATE_PER_MIN_USD = Number(
-  process.env.AI_DIALER_RATE_PER_MIN_USD ?? "0.09"
+  process.env.AI_DIALER_BILL_RATE_PER_MINUTE || "0.08333"
 );
 
 /**
  * 🔹 Top-up chunk size for AI dialer:
- * Default: $20 → ~133 minutes at $0.09/min.
+ * Default: $20 → 4 hours at the default per-minute rate.
  */
 const AI_DIALER_TOPUP_USD = Number(process.env.AI_DIALER_TOPUP_USD ?? "20");
 const AI_DIALER_TOPUP_CENTS = AI_DIALER_TOPUP_USD * 100;

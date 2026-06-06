@@ -37,6 +37,11 @@ export interface IAICallSession extends Document {
   completedAt?: Date | null;
   errorMessage?: string | null;
   stats?: IAICallSessionStats;
+  lockedAt?: Date | null;
+  lockOwner?: string | null;
+  lockExpiresAt?: Date | null;
+  cooldownUntil?: Date | null;
+  leadAttemptCounts?: Map<string, number> | Record<string, number> | null;
 
   // ✅ Guardrail to prevent duplicate “kick worker” loops from Twilio retries
   chainKickedAt?: Date | null;
@@ -93,6 +98,11 @@ const AICallSessionSchema = new Schema<IAICallSession>(
     startedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
     errorMessage: { type: String, default: null },
+    lockedAt: Date,
+    lockOwner: String,
+    lockExpiresAt: Date,
+    cooldownUntil: Date,
+    leadAttemptCounts: { type: Map, of: Number },
 
     // ✅ prevents duplicate chaining from Twilio callback retries
     chainKickedAt: { type: Date, default: null },

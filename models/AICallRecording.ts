@@ -18,6 +18,12 @@ export interface IAICallRecording extends Document {
   recordingSid?: string | null;
   recordingUrl?: string | null;
   durationSec?: number | null;
+  billedAt?: Date | null;
+  answeredBy?: string | null;
+  lastTwilioStatus?: string | null;
+  fallbackOutcomeFromStatus?: string | null;
+  outcomeSource?: string | null;
+  voicemailHandledAt?: Date | null;
   transferRebootPending?: boolean;
   transferRebootedAt?: Date | null;
   outcome: AICallOutcome;
@@ -51,6 +57,12 @@ const AICallRecordingSchema = new Schema<IAICallRecording>(
     recordingSid: { type: String, default: null },
     recordingUrl: { type: String, default: null },
     durationSec: { type: Number, default: null },
+    billedAt: Date,
+    answeredBy: String,
+    lastTwilioStatus: String,
+    fallbackOutcomeFromStatus: String,
+    outcomeSource: String,
+    voicemailHandledAt: Date,
     transferRebootPending: { type: Boolean, default: false },
     transferRebootedAt: { type: Date, default: null },
     outcome: {
