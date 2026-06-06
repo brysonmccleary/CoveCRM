@@ -298,8 +298,7 @@ ${leadMemory.nextBestAction || "(none)"}
 
 Conversation strategy:
 - Reference previous conversation
-- Handle known objections
-- Try to book appointment`;
+- Handle known objections${scriptKey !== "kayla_signup" ? "\n- Try to book appointment" : ""}`;
     const combinedNotes = [String(notesFromLead || "").trim(), memoryPrompt]
       .filter(Boolean)
       .join("\n\n");

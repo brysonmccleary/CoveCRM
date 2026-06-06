@@ -1115,7 +1115,7 @@ async function replayPendingCommittedTurn(
     if (!state.scriptSteps || state.scriptSteps.length === 0) {
       try {
         const selectedScript = getSelectedScriptText(state.context!);
-        state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript);
+        state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript, state.context?.scriptKey);
         state.scriptStepIndex = 0;
       } catch {
         state.scriptSteps = [];
@@ -1640,6 +1640,18 @@ function buildNonRepeatedStateAwareLine(
 ): { lineToSay: string; routeKind: string; objective: string; stateWrites: Record<string, unknown> } {
   const ctx = state.context;
   const raw = String(userText || "");
+
+  // Kayla demo calls have no booking steps — never return a scheduling/booking line.
+  // Signal the outer repeat-guard handler to route to Kayla free-response instead.
+  if (normalizeScriptKey(ctx?.scriptKey) === "kayla_signup") {
+    return {
+      lineToSay: raw,
+      routeKind: "kayla_demo_repeat",
+      objective: "kayla_free_response",
+      stateWrites: { phase: "in_call" },
+    };
+  }
+
   const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
   const explicitNowIntent =
     !!ctx &&
@@ -2179,7 +2191,7 @@ function computePromptMarkers(systemPrompt: string, uniqueLine?: string) {
  * The model never "remembers" the whole script.
  * On each user turn, we send exactly ONE next script line (1–2 sentences).
  */
-function extractScriptStepsFromSelectedScript(selectedScript: string): string[] {
+function extractScriptStepsFromSelectedScript(selectedScript: string, scriptKey?: string): string[] {
   const raw = String(selectedScript || "");
 
   // Prefer "Say: "...""
@@ -2213,7 +2225,9 @@ function extractScriptStepsFromSelectedScript(selectedScript: string): string[] 
   }
 
   // If scripts ever change and no matches are found, fallback to a safe booking-only prompt.
+  // Kayla demo calls have no booking steps — return empty so free-response handles every turn.
   if (steps.length === 0) {
+    if (normalizeScriptKey(scriptKey) === "kayla_signup") return [];
     // NOTE: do not include any other vertical/topic
     pushIf(
       "I’m just calling to get you scheduled for a quick call. Would later today or tomorrow be better?"
@@ -5666,6 +5680,26 @@ function buildConversationPolicyDecision(
   // "yep", "yeah", "what's up", etc. → advance to first script step, never reprompt.
   if (intent.kind === "greeting_ack") {
     if (!ctx) return NOT_HANDLED;
+    // Kayla demo calls have no script steps — treat the ack as a free-form opener
+    // and route directly into the Kayla demo free-response path.
+    if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
+      return {
+        handled: true,
+        routeKind: "kayla_greeting_ack_demo",
+        responseMode: "free_response",
+        objective: "kayla_demo",
+        userText: intent.raw || "",
+        lineToSay: "",
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          phase: "in_call",
+          greetingAdvancePending: false,
+          awaitingUserAnswer: false,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     const _greetingStep =
       stepCtx.steps[0] ||
       (state.scriptSteps || [])[0] ||
@@ -6631,13 +6665,19 @@ async function handleConversationTurn(
     state.context &&
     text.length > 3
   ) {
-    const currentStepLine = (state.scriptSteps || [])[
-      state.awaitingAnswerForStepIndex ?? stepCtx.idx ?? 0
-    ] || "";
-    if (currentStepLine.trim()) {
+    // Kayla: no script steps to reask — always fall through to free-response.
+    if (normalizeScriptKey(state.context.scriptKey) === "kayla_signup") {
       decision.responseMode = "free_response";
       decision.userText = text;
-      decision.requiredClosingPivot = currentStepLine.trim();
+    } else {
+      const currentStepLine = (state.scriptSteps || [])[
+        state.awaitingAnswerForStepIndex ?? stepCtx.idx ?? 0
+      ] || "";
+      if (currentStepLine.trim()) {
+        decision.responseMode = "free_response";
+        decision.userText = text;
+        decision.requiredClosingPivot = currentStepLine.trim();
+      }
     }
   }
   // Ensure free_response always knows the current required step
@@ -6844,10 +6884,12 @@ YOUR JOB:
 3. Redirect naturally toward the trial code.
 
 TRIAL CLOSE:
-End your turn by moving toward the trial. Use one of these closes naturally based on context:
-- If they seem interested: "Want me to send you the trial code?"
-- If they gave a lot of questions: "Does that help? Want me to send you the code so you can see it firsthand?"
-- If they are hesitant: "The trial is free — want me to text you the code and you can decide from there?"
+Move toward the trial close ONLY when one of these is true:
+- The prospect directly asked about pricing or signing up
+- Their question has been fully answered and there is a natural pause
+- They expressed interest or said something positive
+- They asked how to get started
+Do NOT close toward the trial after objections, skepticism, confusion, or mid-explanation. In those cases, finish the answer and wait.
 Never close with booking another demo call. Never close with "later today or tomorrow work better."
 
 KEEP IT SHORT: 2–3 sentences max.
@@ -9519,7 +9561,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     try {
       const selectedScript = getSelectedScriptText(state.context!);
-      const steps = extractScriptStepsFromSelectedScript(selectedScript);
+      const steps = extractScriptStepsFromSelectedScript(selectedScript, state.context?.scriptKey);
       const uniqueLine = steps?.[0] || "";
 
       const redacted = redactPromptForLogs(systemPrompt);
@@ -9562,7 +9604,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     try {
       const selectedScript = getSelectedScriptText(state.context!);
-      state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript);
+      state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript, state.context?.scriptKey);
       state.scriptStepIndex = 0;
 
       console.log("[AI-VOICE][STEPPER-INIT]", {
@@ -10547,7 +10589,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     if (!state.scriptSteps || state.scriptSteps.length === 0) {
       try {
         const selectedScript = getSelectedScriptText(state.context!);
-        state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript);
+        state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript, state.context?.scriptKey);
         state.scriptStepIndex = 0;
       } catch {
         state.scriptSteps = [];
