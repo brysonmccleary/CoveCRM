@@ -4692,7 +4692,7 @@ function buildDeterministicScamRebuttalLine(state: CallState): string {
   const agentFirst = ((ctx.agentName || "").split(/\s+/)[0] || "the agent").trim();
 
   if (k === "kayla_signup") {
-    return `Totally fair question, ${firstName} — what you're hearing right now is actually the CoveCRM AI. This is the demo. I'm not a sales person reading a script — I'm the product. ${agentFirst} can answer any specific questions on a quick call. Want to grab a time?`;
+    return `Totally fair question, ${firstName} — what you're hearing right now is the CoveCRM AI. This call is the demo, and I'm here to answer your questions directly. What do you want to know about it?`;
   }
 
   let requestScope = "insurance request";
@@ -5285,6 +5285,83 @@ function getVerticalProductAnswer(ctx: AICallContext): string {
     return `These are life insurance options — depending on what you qualify for it could be term, whole life, IUL, or a policy with living benefits built in. The right fit depends on your situation, your health, and your goals. ${agent} will go over all the options and find what makes the most sense for you.`;
   }
   return `We work with multiple types of coverage — whole life, term, IUL, final expense, mortgage protection. What fits best depends on what you qualify for and what your goal is. ${agent} works with multiple carriers to find you the best rate.`;
+}
+
+type KaylaDemoTopic =
+  | "overview"
+  | "ai_dialer"
+  | "live_transfer"
+  | "voicemail"
+  | "ai_texting"
+  | "manual_options"
+  | "ai_coach"
+  | "lead_management"
+  | "meta_ads"
+  | "pricing"
+  | "orion"
+  | "general_competitor"
+  | "email"
+  | "ask_kayla"
+  | "a2p";
+
+function detectKaylaDemoTopic(raw: string): KaylaDemoTopic | null {
+  const t = normalizeTurnTextForKey(raw);
+  if (!t) return null;
+
+  if (/\borion\b/.test(t)) return "orion";
+  if (/\b(gohighlevel|go high level|ghl|builderall|close|ringy|phoneburner|phone burner)\b/.test(t)) return "general_competitor";
+  if (/\b(email|emails|email campaign|email campaigns)\b/.test(t)) return "email";
+  if (/\b(voicemail|voice mail|voice mails|voicemails|leave a message|leave messages|leave voicemail|voicemail drop)\b/.test(t)) return "voicemail";
+  if (/\b(live transfer|live transfers|warm transfer|transfer warm|transfer me|transfer calls|connect me|connect calls)\b/.test(t)) return "live_transfer";
+  if (/\b(meta|facebook ad|facebook ads|ads|ad system|lead cost|lead costs|generate leads|generated leads)\b/.test(t)) return "meta_ads";
+  if (/\b(price|pricing|cost|costs|how much|monthly|trial|discount|cove50|signup|sign up|get started)\b/.test(t)) return "pricing";
+  if (/\b(ai dialer|dialer|call leads|calls leads|calling leads|aged leads|age leads|new leads|lead list|lead lists|folder|folders|power through|auto dial)\b/.test(t)) return "ai_dialer";
+  if (/\b(manual|manually|manual text|manual texting|power dialer|double dial|double-dial|regular dialer)\b/.test(t)) return "manual_options";
+  if (/\b(texting|texts|text message|text messages|sms|drip|drips|follow up|follow-up)\b/.test(t)) return "ai_texting";
+  if (/\b(coach|coaching|score|scores|scoring|call score|call scoring|recorded call|recorded calls)\b/.test(t)) return "ai_coach";
+  if (/\b(ask kayla|assistant|in app|in-app)\b/.test(t)) return "ask_kayla";
+  if (/\b(a2p|10dlc|10 dlc|twilio|texting setup|sms setup)\b/.test(t)) return "a2p";
+  if (/\b(lead management|pipeline|calendar|google calendar|google sheets|recordings|team stats|team section|downline|downlines|cost tracking|retention|client retention)\b/.test(t)) return "lead_management";
+  if (/\b(breakdown|break down|entire crm|whole crm|how does it work|how it works|what does it do|features|crm works|crm do|covecrm do|cove crm do)\b/.test(t)) return "overview";
+
+  return null;
+}
+
+function getKaylaDemoTopicAnswer(ctx: AICallContext, topic: KaylaDemoTopic): string {
+  switch (topic) {
+    case "overview":
+      return `CoveCRM is built to automate as much of an insurance agent's day as possible so you spend more time running appointments instead of chasing leads. The core pieces are the AI dialer, AI texting, manual power dialer, manual texting, lead folders, drips, call recordings, AI coaching, calendar sync, team stats, cost tracking, and Meta ads once review is complete. Most agents come for the AI dialer, but the real value is having everything in one insurance-specific system. Do you want me to break down the dialer first?`;
+    case "ai_dialer":
+      return `The AI dialer calls through the folder or lead list you choose, talks to the lead, handles objections, and books the appointment on your calendar. If live transfer is toggled on, it can try to transfer a warm lead to you; if you don't answer, it goes back to the lead and books the appointment instead. If it hits voicemail, it skips it and moves to the next lead.`;
+    case "live_transfer":
+      return `Yes — when live transfer is toggled on, the AI can try to connect a warm lead to you in real time. If you don't answer, it goes back to the lead and books the appointment instead, so the lead does not get dropped. Are you wanting live transfers, booked appointments, or both?`;
+    case "voicemail":
+      return `No — it does not leave voicemails. If it hits voicemail, it skips that call and keeps moving through the leads.`;
+    case "ai_texting":
+      return `AI texting handles automated follow-up, drip campaigns, and lead conversations by text. You can run it alongside the dialer or use manual texting when you want control. Are you trying to automate new-lead follow-up or longer-term nurturing?`;
+    case "manual_options":
+      return `You do not have to use AI for everything. CoveCRM also has a regular power dialer that double-dials leads, plus manual texting, so you can mix AI and manual follow-up however you want.`;
+    case "ai_coach":
+      return `AI Coach reviews recorded calls and scores sections like the intro, objection handling, transitions, and close. It's built to help agents know exactly what to improve and gives them something concrete to bring to an upline or team lead.`;
+    case "lead_management":
+      return `For lead management, you have folders, pipeline organization, recordings, Google Calendar sync, Google Sheets sync, drips, client retention drips, cost tracking, and team stats. The point is to keep the lead workflow in one insurance-specific system instead of stitching tools together.`;
+    case "meta_ads":
+      return `Meta ads are one of the biggest pieces we're building toward. Everything is in review with Meta right now, and we're not rushing it because the goal is high-quality ads and leads for agents, not just launching fast.`;
+    case "pricing":
+      return `$199.99 per month flat, unlimited users, all features included. There is a 7-day free trial, and COVE50 takes $50 off every month. Want me to text you the trial link and code?`;
+    case "orion":
+      return `We've had users test Orion and switch over. We don't speak on competitors — that's not our style — but people who switched are happy. What specifically were you comparing between the two?`;
+    case "general_competitor":
+      return `Most CRMs are built for general sales teams. CoveCRM was built by someone who spent almost ten years in insurance and wrote over a hundred thousand in personal production in one month, so the scripts, objection handling, drips, appointment workflows, and AI dialer are based on insurance workflows instead of adapted from a generic CRM. What are you using now?`;
+    case "email":
+      return `CoveCRM is focused on calls, texting, drips, lead management, coaching, and ads. The main automation is the AI dialer and AI texting, because that is where insurance agents usually need speed-to-lead and follow-up most.`;
+    case "ask_kayla":
+      return `Ask Kayla is the in-app assistant for setup and CRM questions. It helps agents understand their leads, Twilio setup, drips, and workflows without having to dig through settings.`;
+    case "a2p":
+      return `CoveCRM helps with A2P 10DLC setup for texting. If something fails, the system shows what is needed and helps resubmit so agents are not guessing through the process.`;
+    default:
+      return getVerticalProductAnswer(ctx);
+  }
 }
 
 function handlePostCoverageSchedulingTurn(
@@ -6149,6 +6226,28 @@ function buildConversationPolicyDecision(
 	    };
 	  }
 
+  if (isKaylaDemo) {
+    const kaylaTopic = detectKaylaDemoTopic(intent.raw);
+    if (kaylaTopic) {
+      const lineToSay = getKaylaDemoTopicAnswer(ctx, kaylaTopic);
+      return {
+        handled: true,
+        routeKind: `kayla_demo_${kaylaTopic}`,
+        responseMode: "exact_script",
+        objective: "kayla_product_answer",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          ...preserveCurrentStepState(),
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+  }
+
   // ── Branch: not interested ────────────────────────────────────────────────
   if (intent.kind === "not_interested") {
     if (!ctx) return NOT_HANDLED;
@@ -7008,6 +7107,11 @@ HARD RULES:
 - Never guarantee specific lead costs or sales results.
 - Never reveal competitor pricing or make up stats.
 - If asked about pricing: "$199.99/month flat, all features included. COVE50 code saves $50 off every month. 7-day free trial."
+- Do not claim CoveCRM has email automation, AI voicemail drops, best-time-to-call prediction, or lead scoring.
+- Do not mention email unless the lead asks about it directly.
+- If asked about voicemail: the AI does not leave voicemail; it skips voicemail and moves to the next lead.
+- If asked about live transfer: when enabled, it tries to transfer the warm lead; if the agent does not answer, it goes back to the lead and books the appointment.
+- If asked about Meta ads: they are in Meta review right now, and CoveCRM is not rushing launch because lead quality matters.
 - After you speak, stop and wait. Do not fill silence.
 - NEVER apologize. Never say "I'm sorry", "I apologize", "I missed that". Re-engage naturally instead.
 - Never ask two questions in one turn.
@@ -8047,6 +8151,33 @@ function buildExactScriptLineInstruction(lineRaw: string, opts?: {
     ? `\nWHAT THE LEAD JUST SAID:\n"${userText}"\n`
     : "";
 
+  if (scope === "CoveCRM demo") {
+    return `
+You are the CoveCRM AI on a live demo call.
+This call IS the demo. You are not a scheduler. You answer CoveCRM questions directly.
+Never mention booking another demo call.
+NEVER apologize.
+After you speak, STOP and wait.
+
+HARD RULES:
+- English only.
+- Do not add any feature or claim that is not in the required line.
+- Do not mention email unless the required line mentions it.
+- Do not claim voicemail drops, best-time-to-call prediction, lead scoring, guaranteed lead costs, guaranteed appointments, or guaranteed sales.
+- Use "${leadName}" only if it is already in the required line.
+${historyBlock}${userBlock}
+YOUR REQUIRED OBJECTIVE THIS TURN:
+Say EXACTLY the following required line. Word for word. No additions before it. No additions after it. No paraphrasing. No filler.
+
+REQUIRED LINE:
+"${line}"
+
+DELIVERY RULES:
+- Sound warm, natural, and confident.
+- Say it once, then stop.
+    `.trim();
+  }
+
   return `
 You are a warm, natural scheduling assistant on a live phone call.
 This call is ONLY about a ${scope} request.
@@ -8120,15 +8251,22 @@ TURN DISCIPLINE — NON-NEGOTIABLE:
 - Mirror their energy. Brief = brief. Chatty = match it.
 - If they go quiet, wait. Do not fill silence.
 
+PRODUCT TRUTH — DO NOT INVENT:
+- CoveCRM does not have email automation. Do not bring up email unless the lead asks directly.
+- The AI does not leave voicemails or voicemail drops. If it hits voicemail, it skips that call and keeps moving.
+- Do not claim best-time-to-call prediction, lead scoring, guaranteed lead costs, guaranteed appointments, or guaranteed sales.
+- If live transfer is toggled on, the AI can try to transfer a warm lead to the agent. If the agent does not answer, it goes back to the lead and books the appointment instead.
+- CoveCRM and Cove CRM mean the same product.
+
 DEFAULT CRM OVERVIEW:
 Use when asked "how does it work", "break it down", "what does it do", or similar:
-"CoveCRM is built to automate as much of an insurance agent's day as possible so you spend more time running appointments instead of chasing leads. The biggest piece is the AI dialer which calls your leads, handles objections, and books appointments — but you also have a regular power dialer, AI texting, manual texting, lead folders, drips, call recordings, AI coaching, calendar sync, and team stats. Most agents come for the AI dialer but the real value is having everything in one insurance-specific system."
+"CoveCRM is built to automate as much of an insurance agent's day as possible so you spend more time running appointments instead of chasing leads. The core pieces are the AI dialer, AI texting, manual power dialer, manual texting, lead folders, drips, call recordings, AI coaching, calendar sync, team stats, cost tracking, and Meta ads once review is complete. Most agents come for the AI dialer, but the real value is having everything in one insurance-specific system."
 Then ask: "Do you want me to break down the AI dialer first?"
 
 CATEGORY ANSWERS — deliver naturally, 2-3 sentences max:
 
 AI DIALER:
-The AI calls through your lead list, handles objections, books appointments directly on your calendar, and can live-transfer warm leads to your phone. It runs while you do other things — you set it up, point it at a folder, and it dials.
+The AI calls through the folder or lead list you choose, handles objections, and books appointments directly on your calendar. If live transfer is toggled on, it can try to transfer a warm lead to your phone; if you do not answer, it goes back to the lead and books the appointment instead. If it hits voicemail, it skips it and moves to the next lead.
 Ask: "Are you thinking about working new leads, aged leads, or both?"
 
 AI TEXTING:
@@ -8150,7 +8288,7 @@ PRICING:
 $199.99 per month flat. Unlimited users, all features included. 7-day free trial. Code COVE50 takes $50 off every month.
 
 FACEBOOK LEADS:
-Facebook lead integration is going through Meta review and expected live within the month.
+Meta ads are one of the biggest pieces CoveCRM is building toward. Everything is in review with Meta right now, and CoveCRM is not rushing it because the goal is high-quality ads and leads for agents, not just launching fast.
 
 COMPETITOR POSITIONING:
 
