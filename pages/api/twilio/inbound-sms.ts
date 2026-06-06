@@ -2,6 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import { LeadAIState } from "@/models/LeadAIState";
+import AISettings from "@/models/AISettings";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
@@ -1936,6 +1937,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ Cancel drips & engage AI (legacy arrays)
     lead.assignedDrips = [];
     (lead as any).dripProgress = [];
+
+    const aiSettings = await AISettings.findOne({ userEmail: user.email }).lean() as any;
+    if (aiSettings?.aiTextingEnabled !== true) {
+      lead.isAIEngaged = false;
+      await lead.save();
+      console.log("[inbound-sms] AI texting disabled — inbound recorded with no AI reply", {
+        userEmail: user.email,
+        leadId: String(lead._id || ""),
+      });
+      return res.status(200).json({ message: "Inbound received; AI texting disabled." });
+    }
+
     lead.isAIEngaged = true;
 
     const tz = pickLeadZone(lead);

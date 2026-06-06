@@ -5,6 +5,7 @@ import { checkCronAuth } from "@/lib/cronAuth";
 import { acquireLock } from "@/lib/locks";
 import { AiQueuedReply } from "@/models/AiQueuedReply";
 import { LeadAIState } from "@/models/LeadAIState";
+import AISettings from "@/models/AISettings";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 import Message from "@/models/Message";
@@ -210,6 +211,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const id = String(job._id);
 
       try {
+        const aiSettings = await AISettings.findOne({ userEmail: job.userEmail }).lean() as any;
+        if (aiSettings?.aiTextingEnabled !== true) {
+          await AiQueuedReply.updateOne(
+            { _id: job._id, status: "queued" },
+            {
+              $set: {
+                status: "failed",
+                failReason: "ai_texting_disabled",
+              },
+            }
+          );
+          failed++;
+          console.log("[send-ai-queued] AI texting disabled; skipped queued reply", {
+            queuedId: id,
+            userEmail: job.userEmail,
+            leadId: String(job.leadId || ""),
+          });
+          continue;
+        }
+
         // ✅ suppression gate — if lead hasn't replied since last human outbound,
         // do NOT send now. Push sendAfter out by COOLDOWN_HOURS from lastHumanOutboundAt.
         try {

@@ -11,7 +11,7 @@
 //   6.  Booked guard:    lead.appointmentTime set → skip (already has appointment)
 //   7.  Status guard:    terminal lead statuses → skip
 //   8.  Attempt guard:   aiFirstCallAttemptedAt already set → skip (hard one-call-max, no exceptions)
-//   9.  Folder context:  loaded for script/metadata only; account toggle controls auto-call
+//   9.  Folder toggle:   folder.aiFirstCallEnabled must still be true
 //  10.  Real-time:       if folder.aiRealTimeOnly, lead.realTimeEligible must be true
 //  11.  Age gate:        lead created before folder.aiEnabledAt → skip
 //  12.  Business hours:  aiSettings.businessHoursOnly → check timezone window (FAIL-SAFE)
@@ -228,6 +228,13 @@ export async function triggerAIFirstCall(
       return;
     }
 
+    // Guard 9 — folder-level AI first-call toggle must still be enabled.
+    const folder = await Folder.findById(folderId).lean() as any;
+    if (!folder?.aiFirstCallEnabled) {
+      console.info(`[triggerAIFirstCall] Folder ${folderId} aiFirstCallEnabled=false — skipping lead ${leadId}`);
+      return;
+    }
+
     const normalizedPhone = digitsOnly(lead.normalizedPhone || lead.Phone || lead.phone);
     const phoneLast10 = String(lead.phoneLast10 || normalizedPhone.slice(-10) || "").trim();
     const phoneOr: any[] = [];
@@ -269,10 +276,6 @@ export async function triggerAIFirstCall(
         return;
       }
     }
-
-    // Guard 9 — folder context is used for script/metadata, not as the main on/off gate.
-    // The visible Settings → AI & Automation New Lead Auto-Call toggle controls auto-calling.
-    const folder = await Folder.findById(folderId).lean() as any;
 
     // Guard 10 — aiRealTimeOnly: if set, lead must have realTimeEligible=true
     if (folder?.aiRealTimeOnly && !lead.realTimeEligible) {

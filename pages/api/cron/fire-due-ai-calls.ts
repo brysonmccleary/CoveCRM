@@ -6,6 +6,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { checkCronAuth } from "@/lib/cronAuth";
 import mongooseConnect from "@/lib/mongooseConnect";
+import AISettings from "@/models/AISettings";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import User from "@/models/User";
@@ -92,7 +93,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       continue;
     }
 
-    // Verify folder still has AI calling enabled
+    // Verify account-level AI first-call is still enabled.
+    const aiSettings = await AISettings.findOne({ userEmail }).lean() as any;
+    if (!aiSettings?.aiNewLeadCallEnabled) {
+      await Lead.updateOne({ _id: lead._id }, { $set: { aiFirstCallStatus: "failed" } });
+      console.info(`[fire-due-ai-calls] Account aiNewLeadCallEnabled=false for ${userEmail} — skipping lead ${leadId}`);
+      skipped++;
+      continue;
+    }
+
+    // Verify folder still has AI calling enabled.
     const folder = await Folder.findById(lead.folderId).lean() as any;
     if (!folder?.aiFirstCallEnabled) {
       await Lead.updateOne({ _id: lead._id }, { $set: { aiFirstCallStatus: "failed" } });

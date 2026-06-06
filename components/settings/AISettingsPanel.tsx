@@ -5,7 +5,6 @@ import toast from "react-hot-toast";
 interface AISettings {
   aiTextingEnabled?: boolean;
   aiNewLeadCallEnabled?: boolean;
-  aiDialSessionEnabled?: boolean;
   aiCallOverviewEnabled?: boolean;
   aiCallCoachingEnabled?: boolean;
   liveTransferEnabled?: boolean;
@@ -159,15 +158,6 @@ export default function AISettingsPanel() {
           )}
 
           <SettingRow
-            label="AI Dial Sessions"
-            description="Controlled from the AI Dial Session screen and protected by built-in lead-local quiet hours."
-          >
-            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-gray-300">
-              Managed in dialer
-            </span>
-          </SettingRow>
-
-          <SettingRow
             label="Live Transfer"
             description="Transfer AI calls to your phone when the lead is ready to talk."
           >
@@ -249,11 +239,13 @@ export default function AISettingsPanel() {
         <div className="px-5">
           <SettingRow
             label="AI SMS Assistant"
-            description="Controlled by account AI access and SMS compliance checks."
+            description="Let AI respond to inbound lead texts and send queued AI SMS replies."
           >
-            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-gray-300">
-              Included with AI access
-            </span>
+            <Toggle
+              checked={!!settings.aiTextingEnabled}
+              onChange={(v) => save({ aiTextingEnabled: v })}
+              disabled={saving}
+            />
           </SettingRow>
         </div>
       </div>
