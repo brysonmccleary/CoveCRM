@@ -2793,6 +2793,10 @@ function normalizeSpokenTimeText(textRaw: string): string {
   return String(textRaw || "")
     .trim()
     .toLowerCase()
+    .replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/gi, (m) => {
+      const n: Record<string, string> = { one:"1", two:"2", three:"3", four:"4", five:"5", six:"6", seven:"7", eight:"8", nine:"9", ten:"10", eleven:"11", twelve:"12" };
+      return n[m.toLowerCase()] || m;
+    })
     .replace(/\b([ap])\s*\.?\s*m\.?\b/gi, "$1m")
     .replace(/\bo\s+clock\b/gi, "o'clock")
     .replace(/\s+/g, " ")
@@ -2992,6 +2996,19 @@ function isTimeMentioned(textRaw: string): boolean {
   return isDayReferenceMentioned(t) || isTimeWindowMentioned(t) || isExactClockTimeMentioned(t);
 }
 
+
+function isTimeConfirmationYes(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase().replace(/[?.!,]+$/, "").trim();
+  if (!t) return false;
+  return (
+    t === "yep" || t === "yes" || t === "yeah" || t === "yup" ||
+    t === "sure" || t === "correct" || t === "that works" ||
+    t === "that's fine" || t === "thats fine" || t === "sounds good" ||
+    t === "perfect" || t === "works for me" || t === "absolutely" ||
+    t === "okay" || t === "ok" || t === "alright" || t === "all right" ||
+    t === "uh huh" || t === "mhm" || t === "mm-hmm" || t === "mm hmm"
+  );
+}
 
 // ✅ Confirmation detector (used to allow booking on the confirm step after a prior exact time)
 function isAffirmativeConfirmation(textRaw: string): boolean {
@@ -4905,6 +4922,7 @@ type TurnIntentKind =
   | "day_selection"
   | "time_window"
   | "exact_time"
+  | "time_confirmation_yes"
   | "scheduling_preference"
   | "live_transfer_now"
   | "live_transfer_later"
@@ -5340,6 +5358,13 @@ function classifyTurnIntent(
     }
   } catch {}
 
+  // Priority 4.9: bare confirmation word when a time is already captured → never misclassify as exact_time.
+  try {
+    if (!isKaylaDemo && state.selectedTimeText && isTimeConfirmationYes(t)) {
+      return { kind: "time_confirmation_yes", raw };
+    }
+  } catch {}
+
   // Priority 5: day/time detection — MUST run before live-transfer yes/no.
   // "probably tomorrow", "tomorrow works", "tomorrow afternoon" → day_selection, never live_transfer_later.
   // extractExplicitDaySelection is unconditional (not gated by isTimeMentioned) so it catches all day phrases.
@@ -5628,6 +5653,35 @@ function handlePostCoverageSchedulingTurn(
       };
     }
     return buildPostCoverageTimeOfferDecision(state, intent, ctx, stepCtx, "post_coverage_time_window", "window_selected");
+  }
+
+  if (intent.kind === "time_confirmation_yes" && selectedTime) {
+    const lineToSay = `Perfect — I have ${selectedTime}. Let me get that booked for you.`;
+    const timeStepIndex = Math.max(
+      Number(state.scriptStepIndex || 0),
+      Math.min(3, Math.max(0, stepCtx.steps.length - 1))
+    );
+    return {
+      handled: true,
+      routeKind: "post_coverage_exact_time_confirmed",
+      responseMode: "exact_script",
+      objective: "confirm_exact_time",
+      lineToSay,
+      requiredClosingPivot: lineToSay,
+      forbiddenTopics: [],
+      stateWrites: {
+        selectedTimeText: selectedTime,
+        lastExactTimeText: selectedTime,
+        lastExactTimeAtMs: Date.now(),
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        scriptStepIndex: timeStepIndex,
+        confirmedAppointment: true,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+      },
+      shouldAdvanceStep: true,
+    };
   }
 
     // Guard: "right now" misclassified as exact_time → redirect to live transfer
