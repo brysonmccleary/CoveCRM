@@ -317,6 +317,7 @@ type CallState = {
   step2BookingFrameAskedAtMs?: number;
   step2BookingFrameAskedCount?: number;
   lastBookingFrameNorm?: string;
+  coverageSubjectSetThisTurn?: boolean;
 
   // instrumentation: system prompt markers
   systemPromptLen?: number;
@@ -1813,6 +1814,11 @@ function applyAiOutputRepeatGuard(
 ): { lineToSay: string; routeKind: string; objective: string; stateWrites: Record<string, unknown>; suppressed: boolean } {
   const lineToSay = String(lineRaw || "").trim();
   if (!lineToSay || isCallerAskingForRepeat(args.userText)) {
+    return { lineToSay, routeKind: args.routeKind, objective: args.objective, stateWrites: {}, suppressed: false };
+  }
+
+  // Coverage subject was captured this turn — the booking frame line is new and correct, never suppress it.
+  if (state.coverageSubjectSetThisTurn === true) {
     return { lineToSay, routeKind: args.routeKind, objective: args.objective, stateWrites: {}, suppressed: false };
   }
 
@@ -6239,10 +6245,10 @@ function buildConversationPolicyDecision(
       stateWrites: {
         phase: "in_call",
         coverageSubject: coverageSubjectValue,
+        coverageSubjectSetThisTurn: true,
         pendingLiveTransferAvailabilityConfirm: liveTransferEnabled,
         pendingLiveTransferAvailabilityAttempts: 0,
-        // Advance past Step 1 when no live-transfer pending; keep at Step 1 while waiting for availability answer.
-        scriptStepIndex: liveTransferEnabled ? stepCtx.idx : advancedIdx,
+        scriptStepIndex: advancedIdx,
       },
       shouldAdvanceStep: false,
     };
@@ -7107,6 +7113,8 @@ async function handleConversationTurn(
   const text = normalizeRawTranscript(String(lastUserText || "").trim());
   if (!text) return false;
 
+  state.coverageSubjectSetThisTurn = false;
+
   const intent = classifyTurnIntent(text, state, stepCtx);
   const decision = buildConversationPolicyDecision(intent, state, stepCtx);
   // CURRENT STEP INVARIANT:
@@ -7153,6 +7161,10 @@ async function handleConversationTurn(
   let routeKindForMemory = decision.routeKind;
   let objectiveForMemory = decision.objective;
   let repeatGuardStateWrites: Record<string, unknown> = {};
+  // Hoist coverageSubjectSetThisTurn before the guard so the bypass can read it.
+  if (decision.stateWrites?.coverageSubjectSetThisTurn) {
+    state.coverageSubjectSetThisTurn = true;
+  }
   let repeatGuard: ReturnType<typeof applyAiOutputRepeatGuard> | null = null;
   if (decision.responseMode !== "free_response") {
     repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
