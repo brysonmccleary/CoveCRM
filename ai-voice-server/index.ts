@@ -2783,6 +2783,40 @@ function isTimeWindowMentioned(textRaw: string): boolean {
   return /(morning|afternoon|evening|tonight|late morning|late afternoon|early evening)/i.test(t);
 }
 
+function normalizeSpokenTimeText(textRaw: string): string {
+  return String(textRaw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\b([ap])\s*\.?\s*m\.?\b/gi, "$1m")
+    .replace(/\bo\s+clock\b/gi, "o'clock")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractExactClockText(textRaw: string): string | null {
+  const t = normalizeSpokenTimeText(textRaw);
+  if (!t) return null;
+
+  const meridiem = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  if (meridiem) {
+    const hour = String(meridiem[1] || "").trim();
+    const minute = String(meridiem[2] || "").trim();
+    const mer = String(meridiem[3] || "").trim().toUpperCase();
+    return `${hour}${minute ? `:${minute}` : ""} ${mer}`;
+  }
+
+  const clock = t.match(/\b(\d{1,2}:\d{2})\b/);
+  if (clock) return String(clock[1] || "").trim();
+
+  const bareHour = t.match(/\b(?:at|around|about|by)\s+(\d{1,2})\b/i);
+  if (bareHour) return String(bareHour[1] || "").trim();
+
+  const oclock = t.match(/\b(\d{1,2})\s?o'?clock\b/i);
+  if (oclock) return String(oclock[1] || "").trim();
+
+  return null;
+}
+
 /**
  * ✅ Exact clock-time detector (USED ONLY for allowing book_appointment control).
  * We require an unambiguous time like:
@@ -2794,7 +2828,7 @@ function isTimeWindowMentioned(textRaw: string): boolean {
  * We intentionally do NOT treat "tomorrow" / "evening" alone as an exact time.
  */
 function isExactClockTimeMentioned(textRaw: string): boolean {
-  const t = String(textRaw || "").trim().toLowerCase();
+  const t = normalizeSpokenTimeText(textRaw);
   if (!t) return false;
 
   // 3pm / 3 pm
@@ -2863,8 +2897,8 @@ function isExactClockTimeMentioned(textRaw: string): boolean {
 }
 
 function pickOfferedClockTimeFromPrompt(lastPromptLineRaw: string, userTextRaw: string): string | null {
-  const lastPromptLine = String(lastPromptLineRaw || "").toLowerCase();
-  const userText = String(userTextRaw || "").toLowerCase();
+  const lastPromptLine = normalizeSpokenTimeText(lastPromptLineRaw);
+  const userText = normalizeSpokenTimeText(userTextRaw);
   if (!lastPromptLine || !userText) return null;
 
   const choosingFirst =
@@ -2881,7 +2915,7 @@ function pickOfferedClockTimeFromPrompt(lastPromptLineRaw: string, userTextRaw: 
   // Pull the first two clock-like times from the last prompt line.
   const times: string[] = [];
   const reTime = /\b(\d{1,2}:\d{2}\s?(?:am|pm)?|\d{1,2}\s?(?:am|pm))\b/gi;
-  for (const m of lastPromptLineRaw.matchAll(reTime)) {
+  for (const m of normalizeSpokenTimeText(lastPromptLineRaw).matchAll(reTime)) {
     const t = String(m[1] || "").trim();
     if (t) times.push(t);
     if (times.length >= 2) break;
@@ -3074,6 +3108,24 @@ function isConversationalGreetingNegative(textRaw: string): boolean {
     t.includes("not doing well") ||
     t.includes("could be better") ||
     t.includes("having a hard time")
+  );
+}
+
+function isHardDncRequest(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  return (
+    t.includes("wrong number") ||
+    t.includes("you have the wrong number") ||
+    t.includes("stop calling") ||
+    t.includes("do not call") ||
+    t.includes("don t call") ||
+    t.includes("don't call") ||
+    t.includes("remove me") ||
+    t.includes("remove my number") ||
+    t.includes("take me off") ||
+    t.includes("leave me alone") ||
+    t.includes("never call")
   );
 }
 
@@ -5287,6 +5339,9 @@ function classifyTurnIntent(
   // extractExplicitDaySelection is unconditional (not gated by isTimeMentioned) so it catches all day phrases.
   try {
     if (!isKaylaDemo) {
+      if (isExactOrOfferedClockTime(String(state.lastPromptLine || ""), t)) {
+        return { kind: "exact_time", raw };
+      }
       const day = extractExplicitDaySelection(t);
       if (day === "today" || day === "tomorrow") return { kind: "day_selection", raw };
       const namedDay = extractNamedWeekday(t);
@@ -5598,7 +5653,10 @@ function handlePostCoverageSchedulingTurn(
       !isExactClockTimeMentioned(raw) &&
       (isTimeIndecisionOrAvailability(raw) || isTimeWindowMentioned(raw) || /\blater\b/.test(rawTimeKey));
     const pickedOfferedSlot = vagueTimeWithoutClock ? "" : pickOfferedClockTimeFromPrompt(String(state.lastPromptLine || ""), raw);
-    const selectedExactTime = String(pickedOfferedSlot || (!vagueTimeWithoutClock && isExactClockTimeMentioned(raw) ? raw : "")).trim();
+    const selectedExactTime = String(
+      pickedOfferedSlot ||
+      (!vagueTimeWithoutClock && isExactClockTimeMentioned(raw) ? (extractExactClockText(raw) || raw) : "")
+    ).trim();
     if (!selectedExactTime) {
       const formatSlot = (slot: string) =>
         String(slot || "").replace(/\s+/g, "").replace(/(am|pm)$/i, " $1").toUpperCase();
@@ -5703,6 +5761,36 @@ function handlePostCoverageSchedulingTurn(
   }
 
   if (intent.kind === "confusion" && intent.subKind === "i_just_said") {
+    const correctedExactTime = isExactClockTimeMentioned(raw) ? (extractExactClockText(raw) || raw) : "";
+    if (correctedExactTime) {
+      const explicitDay = extractExplicitDaySelection(raw);
+      const timeStepIndex = Math.max(
+        Number(state.scriptStepIndex || 0),
+        Math.min(3, Math.max(0, stepCtx.steps.length - 1))
+      );
+      const lineToSay = `You're right — sorry about that. I have ${correctedExactTime} as the time. Does that still work for you?`;
+      return {
+        handled: true,
+        routeKind: "post_coverage_correction_exact_time",
+        responseMode: "exact_script",
+        objective: "confirm_exact_time",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: {
+          ...(explicitDay ? { selectedDay: explicitDay } : {}),
+          selectedTimeText: correctedExactTime,
+          lastExactTimeText: correctedExactTime,
+          lastExactTimeAtMs: Date.now(),
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          scriptStepIndex: timeStepIndex,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     const explicitDay = extractExplicitDaySelection(raw);
     if (explicitDay === "today" || explicitDay === "tomorrow") {
       const decision = buildPostCoverageTimeOfferDecision(state, intent, ctx, stepCtx, "post_coverage_correction_time_offer", "i_just_said_day");
@@ -6233,6 +6321,25 @@ function buildConversationPolicyDecision(
     };
   }
 
+  if (!isKaylaDemo && isHardDncRequest(intent.raw)) {
+    return {
+      handled: true,
+      routeKind: "policy_hard_dnc",
+      responseMode: "exact_script",
+      objective: "end_call",
+      lineToSay: "I understand — I'll make a note and remove you. Sorry for the interruption. Take care.",
+      requiredClosingPivot: "",
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
   // ── Branch: angry or profane ──────────────────────────────────────────────
   if (intent.kind === "angry_or_profane") {
     const t = intent.raw.toLowerCase();
@@ -6297,6 +6404,36 @@ function buildConversationPolicyDecision(
       };
     }
     const raw = intent.raw.toLowerCase();
+    const correctedExactTime = isExactClockTimeMentioned(raw) ? (extractExactClockText(raw) || raw) : "";
+    if (correctedExactTime) {
+      const explicitDay = extractExplicitDaySelection(raw);
+      const timeStepIndex = Math.max(
+        Number(state.scriptStepIndex || 0),
+        Math.min(3, Math.max(0, stepCtx.steps.length - 1))
+      );
+      const lineToSay = `You're right — sorry about that. I have ${correctedExactTime} as the time. Does that still work for you?`;
+      return {
+        handled: true,
+        routeKind: "correction_exact_time",
+        responseMode: "exact_script",
+        objective: "confirm_exact_time",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: {
+          ...(explicitDay ? { selectedDay: explicitDay } : {}),
+          selectedTimeText: correctedExactTime,
+          lastExactTimeText: correctedExactTime,
+          lastExactTimeAtMs: Date.now(),
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          scriptStepIndex: timeStepIndex,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     let correctionDay: "today" | "tomorrow" | null = null;
     if (raw.includes("tomorrow")) correctionDay = "tomorrow";
     else if (raw.includes("today")) correctionDay = "today";
@@ -6870,14 +7007,6 @@ function maybeFireServerSideBookingTrigger(state: CallState): void {
       stepIndex: newStepIdx,
       lastExactTimeText: lastExactTime,
     });
-    void handleFinalOutcomeIntent(state, {
-      kind: "final_outcome",
-      outcome: "booked",
-      summary: `AI scheduled appointment. Lead confirmed call around ${lastExactTime}.`,
-      notesAppend: `Approximate time confirmed by lead: ${lastExactTime}. Agent should confirm exact slot.`,
-    });
-    state.finalOutcomeSent = true;
-
     try {
       const agentTz = String(state.context?.agentTimeZone || "America/Phoenix").trim();
       const leadTz = String(getLeadTimeZoneHintFromContext(state.context!) || agentTz).trim();
@@ -6898,7 +7027,9 @@ function maybeFireServerSideBookingTrigger(state: CallState): void {
       const bookingDateStr = bookingLocalDate.toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" });
 
       const extractSpokenClockForBooking = (raw: string): string => {
-        const t2 = String(raw || "").trim().toLowerCase();
+        const cleanClock = extractExactClockText(raw);
+        if (cleanClock) return cleanClock.replace(/\s+/g, "");
+        const t2 = normalizeSpokenTimeText(raw);
         const meridiem = t2.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
         if (meridiem) return `${meridiem[1]}${meridiem[2] ? `:${meridiem[2]}` : ""}${meridiem[3]}`;
         const clock = t2.match(/\b(\d{1,2}:\d{2})\b/);
@@ -6910,7 +7041,7 @@ function maybeFireServerSideBookingTrigger(state: CallState): void {
 
       const parseSpokenTime = (raw: string, dateStr: string, tz: string): Date | null => {
         try {
-          const t2 = raw.trim().toLowerCase();
+          const t2 = normalizeSpokenTimeText(raw);
           const match = t2.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
           if (!match) return null;
           let hh = Number(match[1]);
@@ -6937,6 +7068,19 @@ function maybeFireServerSideBookingTrigger(state: CallState): void {
       if (startDate && !isNaN(startDate.getTime())) {
         const diffMs = startDate.getTime() - Date.now();
         if (diffMs > -60000 && diffMs < 48 * 60 * 60 * 1000) {
+          if (!state.finalOutcomeSent) {
+            void handleFinalOutcomeIntent(state, {
+              kind: "final_outcome",
+              outcome: "booked",
+              summary: `AI scheduled appointment. Lead confirmed call around ${lastExactTime}.`,
+              notesAppend: `Approximate time confirmed by lead: ${lastExactTime}. Agent should confirm exact slot.`,
+              confirmedDate: bookingDateStr,
+              confirmedTime: timeTextForBooking,
+              confirmedYes: true,
+              repeatBackConfirmed: true,
+            });
+            state.finalOutcomeSent = true;
+          }
           void handleBookAppointmentIntent(state, {
             startTimeUtc: startDate.toISOString(),
             durationMinutes: 30,
@@ -7075,6 +7219,24 @@ async function handleConversationTurn(
   for (const [k, v] of Object.entries(repeatGuardStateWrites)) {
     if (k === "coverageSubject" || k === "pendingLiveTransferAvailabilityConfirm") continue;
     (state as any)[k] = v;
+  }
+
+  if (
+    !state.finalOutcomeSent &&
+    (decision.routeKind === "policy_hard_dnc" ||
+      decision.routeKind === "post_coverage_hard_stop" ||
+      decision.routeKind === "angry_hard_stop" ||
+      routeKindForMemory === "policy_hard_dnc" ||
+      routeKindForMemory === "post_coverage_hard_stop" ||
+      routeKindForMemory === "angry_hard_stop")
+  ) {
+    void handleFinalOutcomeIntent(state, {
+      kind: "final_outcome",
+      outcome: "do_not_call",
+      summary: "Lead requested no further calls or indicated wrong number.",
+      notesAppend: `Lead said: "${text.slice(0, 220)}"`,
+    });
+    state.finalOutcomeSent = true;
   }
 
   if (decision.shouldAdvanceStep) {
@@ -11702,6 +11864,10 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
   const outcomeRaw: string | undefined = control.outcome;
   const summary: string | undefined = control.summary;
   const notesAppend: string | undefined = control.notesAppend;
+  const confirmedDate: string | undefined = control.confirmedDate;
+  const confirmedTime: string | undefined = control.confirmedTime;
+  const confirmedYes: boolean | undefined = control.confirmedYes;
+  const repeatBackConfirmed: boolean | undefined = control.repeatBackConfirmed;
 
   if (!outcomeRaw || !allowedOutcomes.includes(outcomeRaw as any)) {
     console.warn(
@@ -11717,6 +11883,10 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
       outcome: outcomeRaw,
       summary,
       notesAppend,
+      confirmedDate,
+      confirmedTime,
+      confirmedYes,
+      repeatBackConfirmed,
       dispositionRule: outcomeRaw === "booked" ? "move_to_booked" :
         outcomeRaw === "not_interested" ? "move_to_not_interested" :
         outcomeRaw === "do_not_call" ? "move_to_do_not_call" :
