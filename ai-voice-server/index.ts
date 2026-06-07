@@ -1880,6 +1880,10 @@ function mergeDeferredTurnText(previousRaw: string, nextRaw: string): string {
   if (!next) return previous;
   const p = previous.toLowerCase();
   const n = next.toLowerCase();
+  const compactPrevious = p.replace(/\s+/g, "");
+  const compactNext = n.replace(/\s+/g, "");
+  if (compactPrevious && compactNext && compactNext.includes(compactPrevious)) return next;
+  if (compactPrevious && compactNext && compactPrevious.includes(compactNext)) return previous;
   if (n.includes(p)) return next;
   if (p.includes(n)) return previous;
   return `${previous} ${next}`.replace(/\s+/g, " ").trim();
@@ -5747,15 +5751,24 @@ function handlePostCoverageSchedulingTurn(
   }
 
   const _unknownPivot = buildPostCoverageCurrentPivot(state, intent, ctx, stepCtx);
+  const _unknownRequiredPivot =
+    extractClosingQuestionFromStepLine(stepCtx.steps[stepCtx.idx] || "") ||
+    _unknownPivot.pivot ||
+    getRequiredCurrentObjectiveLine(state, stepCtx);
   return {
     handled: true,
     routeKind: "post_coverage_unknown_free",
     responseMode: "free_response",
-    objective: "open_question",
+    objective: "guided_unknown_return_to_current_objective",
     userText: intent.raw,
     lineToSay: _unknownPivot.pivot,
-    requiredClosingPivot: _unknownPivot.pivot,
-    forbiddenTopics: [],
+    requiredClosingPivot: _unknownRequiredPivot,
+    forbiddenTopics: [
+      "advancing the script unless the lead clearly answered the pending question",
+      "changing the current objective",
+      "asking discovery questions",
+      "opening a new topic",
+    ],
     stateWrites: { ..._unknownPivot.stateWrites },
     shouldAdvanceStep: false,
   };
@@ -6502,11 +6515,16 @@ function buildConversationPolicyDecision(
 	      handled: true,
 	      routeKind: "policy_unknown",
 	      responseMode: "free_response",
-	      objective: "open_question",
+	      objective: isKaylaDemo ? "open_question" : "guided_unknown_return_to_current_objective",
 	      userText: intent.raw,
 	      lineToSay: requiredObjective,
 	      requiredClosingPivot: requiredObjective,
-	      forbiddenTopics: [],
+	      forbiddenTopics: isKaylaDemo ? [] : [
+	        "advancing the script unless the lead clearly answered the pending question",
+	        "changing the current objective",
+	        "asking discovery questions",
+	        "opening a new topic",
+	      ],
 	      stateWrites: {
 	        pendingLiveTransferAvailabilityConfirm: false,
 	        pendingLiveTransferAvailabilityAttempts: 0,
@@ -6710,6 +6728,7 @@ function buildResponseFromPolicy(
           state.awaitingAnswerForStepIndex ?? state.scriptStepIndex ?? 0
         ] || "",
       stepType: stepCtx?.stepType,
+      forbiddenTopics: decision.forbiddenTopics,
     });
   }
   if (decision.responseMode === "soft_script" && decision.lineToSay && state.context) {
@@ -6935,7 +6954,14 @@ async function handleConversationTurn(
       if (currentStepLine.trim()) {
         decision.responseMode = "free_response";
         decision.userText = text;
-        decision.requiredClosingPivot = currentStepLine.trim();
+        decision.objective = "guided_repeat_guard_return_to_current_objective";
+        decision.requiredClosingPivot = extractClosingQuestionFromStepLine(currentStepLine.trim()) || currentStepLine.trim();
+        decision.forbiddenTopics = [
+          "advancing the script unless the lead clearly answered the pending question",
+          "changing the current objective",
+          "asking discovery questions",
+          "opening a new topic",
+        ];
       }
     }
   }
@@ -7094,6 +7120,7 @@ function buildFreeResponseInstruction(
     recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
     currentStepLine?: string;
     stepType?: string;  // helps GPT know what kind of answer to steer toward
+    forbiddenTopics?: string[];
   }
 ): string {
   const leadName = (ctx.clientFirstName || "").trim() || "there";
@@ -7163,6 +7190,7 @@ KEEP IT SHORT: 2–3 sentences max.
 
   const userText = String(opts.userText || "").trim();
   const exchanges = opts.recentExchanges || [];
+  const forbiddenTopics = (opts.forbiddenTopics || []).filter(Boolean);
   const currentStep = (() => {
     if (opts.currentStepLine && opts.currentStepLine.trim()) {
       return opts.currentStepLine.trim();
@@ -7214,6 +7242,13 @@ Get the lead scheduled for a quick call with ${agent}.
 After handling what they said, your final sentence must be: "${requiredObjective}"
 `;
 
+  const forbiddenBlock = forbiddenTopics.length
+    ? `
+FORBIDDEN TOPICS FOR THIS TURN:
+${forbiddenTopics.map(t => `- ${t}`).join("\n")}
+`
+    : "";
+
   return `
 You are a natural, warm virtual assistant on a live phone call. Sound conversational and clear, not like a call-center script.
 
@@ -7234,9 +7269,10 @@ HARD RULES (non-negotiable, always):
 	- Your final sentence MUST be a natural restatement of this exact required objective and nothing else: "${requiredObjective}"
 	- Never substitute a generic scheduling question when the current objective is a specific script step question.
 	- Never skip the required objective. Never ask something different. Never freestyle a closing question.
+	- Acknowledge what the lead said naturally in 1-2 sentences. Then return to the current objective. Do not advance the script unless the lead clearly answered the pending question.
 	- Known deterministic rebuttal lines already won before this instruction. For anything not hard-coded, sound like a skilled appointment setter, not a generic assistant.
 	- You are not selling, quoting, or giving advice. Your only objective is booking the quick call or live transfer.
-	${historyBlock}${stepHint}
+	${historyBlock}${forbiddenBlock}${stepHint}
 	WHAT THE LEAD JUST SAID:
 	"${userText}"
 
