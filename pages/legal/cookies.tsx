@@ -107,6 +107,16 @@ export default function CookiePolicy() {
           update the &quot;Effective Date&quot; above.
         </p>
 
+        <h2 className="text-xl font-semibold mt-6 mb-2">
+          California Privacy Notice
+        </h2>
+        <p className="mb-4">
+          California residents may have rights under the California Consumer
+          Privacy Act (CCPA) and California Privacy Rights Act (CPRA).
+          Information regarding these rights and how to exercise them is
+          available in our Privacy Policy.
+        </p>
+
         <h2 className="text-xl font-semibold mt-6 mb-2">7. Contact Us</h2>
         <p className="mb-2">
           If you have any questions about this Cookie Policy, please contact us

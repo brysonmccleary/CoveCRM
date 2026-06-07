@@ -232,9 +232,57 @@ export default function PrivacyPolicy() {
           law (including GDPR in the EU/EEA and CCPA/CPRA in California).
         </p>
 
-        {/* 9. Changes */}
+        {/* 9. California Privacy Rights */}
         <h2 className="text-xl font-semibold mt-6 mb-2">
-          9. Changes to This Policy
+          9. California Privacy Rights (CCPA/CPRA)
+        </h2>
+        <p className="mb-2">
+          California residents may have the right to:
+        </p>
+        <ul className="list-disc list-inside space-y-1 mb-4">
+          <li>Know the categories of personal information collected.</li>
+          <li>
+            Know the categories of sources from which personal information is
+            collected.
+          </li>
+          <li>
+            Know the business or commercial purposes for collecting, using, or
+            disclosing personal information.
+          </li>
+          <li>
+            Know the categories of third parties with whom personal information
+            is shared.
+          </li>
+          <li>Access personal information we hold about them.</li>
+          <li>Request correction of inaccurate personal information.</li>
+          <li>
+            Request deletion of personal information, subject to applicable
+            exceptions.
+          </li>
+          <li>
+            Request information regarding disclosure of personal information.
+          </li>
+          <li>
+            Not be discriminated against for exercising privacy rights.
+          </li>
+        </ul>
+        <p className="mb-4">
+          CoveCRM does not sell personal information for monetary consideration.
+        </p>
+        <p className="mb-4">
+          To exercise California privacy rights, contact{" "}
+          <a
+            href="mailto:support@covecrm.com"
+            className="text-blue-400 underline"
+          >
+            support@covecrm.com
+          </a>
+          .
+        </p>
+
+        {/* 10. Changes */}
+        <h2 className="text-xl font-semibold mt-6 mb-2">
+          10. Changes to This Policy
         </h2>
         <p className="mb-4">
           We may update this Privacy Policy from time to time. If we make
@@ -244,9 +292,9 @@ export default function PrivacyPolicy() {
           policy.
         </p>
 
-        {/* 10. Contact */}
+        {/* 11. Contact */}
         <h2 className="text-xl font-semibold mt-6 mb-2">
-          10. Contact Us
+          11. Contact Us
         </h2>
         <p className="mb-2">
           If you have any questions about this Privacy Policy or how we handle
