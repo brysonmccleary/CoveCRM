@@ -2537,8 +2537,10 @@ function hasExplicitLiveTransferIntent(textRaw: string): boolean {
   if (!t) return false;
   const normalized = t.replace(/[?.!,]+$/g, "").replace(/\s+/g, " ").trim();
   const wantsAgentNow =
-    /\b(speak|talk)\s+(to|with)\s+(him|her|them|the agent|an agent|someone|a person|a real person|your agent|my agent)\b/.test(normalized) ||
-    /\b(connect|transfer|put)\s+(me|him|her|them)\b/.test(normalized);
+    /\b(speak|talk)\s+(to|with)\s+(him|her|them|the agent|an agent|someone|a person|a real person|a human|human|your agent|my agent)\b/.test(normalized) ||
+    /\b(connect|transfer|put)\s+(me|him|her|them)\b/.test(normalized) ||
+    /\b(can i speak with)\b/.test(normalized) ||
+    /\b(connect me to|get me to)\s+/.test(normalized);
   const nowIntent =
     normalized === "now" ||
     normalized === "right now" ||
@@ -2560,11 +2562,37 @@ function hasExplicitLiveTransferIntent(textRaw: string): boolean {
   return (
     normalized.includes("connect me") ||
     normalized.includes("transfer me") ||
+    normalized.includes("talk to a human") ||
+    normalized.includes("speak to a human") ||
+    normalized.includes("talk to a real person") ||
+    normalized.includes("speak to a real person") ||
+    normalized.includes("talk to someone") ||
+    normalized.includes("speak to someone") ||
+    normalized.includes("get me to a person") ||
+    normalized.includes("connect me to") ||
+    normalized.includes("can i speak with") ||
     normalized.includes("can i talk to him") ||
     normalized.includes("can i speak to the agent") ||
     normalized.includes("put him on") ||
     wantsAgentNow ||
     nowIntent
+  );
+}
+
+function isAgentIdentityQuestion(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+  const normalized = t.replace(/[?.!,]+$/g, "").replace(/\s+/g, " ").trim();
+  return (
+    normalized.includes("with who") ||
+    normalized.includes("with whom") ||
+    normalized.includes("who is it") ||
+    normalized.includes("who will i be speaking with") ||
+    normalized.includes("who will i speak with") ||
+    normalized.includes("who am i speaking with") ||
+    normalized.includes("who is calling") ||
+    normalized.includes("who are you with") ||
+    normalized.includes("what company")
   );
 }
 
@@ -3118,6 +3146,15 @@ function hasExplicitAgentTransferCommand(textRaw: string): boolean {
   return (
     t.includes("transfer me") ||
     t.includes("connect me") ||
+    t.includes("talk to a human") ||
+    t.includes("speak to a human") ||
+    t.includes("talk to a real person") ||
+    t.includes("speak to a real person") ||
+    t.includes("talk to someone") ||
+    t.includes("speak to someone") ||
+    t.includes("get me to a person") ||
+    t.includes("connect me to") ||
+    t.includes("can i speak with") ||
     t.includes("put him on") ||
     t.includes("put her on") ||
     t.includes("can i talk to him") ||
@@ -5223,6 +5260,12 @@ function classifyTurnIntent(
   } catch {}
 
   try {
+    if (!isKaylaDemo && hasExplicitLiveTransferIntent(t) && !isImmediateTransferSchedulingPreference(t)) {
+      return { kind: "live_transfer_now", raw };
+    }
+    if (!isKaylaDemo && isAgentIdentityQuestion(t)) {
+      return { kind: "question", subKind: "agent_identity_question", raw };
+    }
     const qKind = detectQuestionKindForTurn(t);
     if (qKind) return { kind: "question", subKind: qKind, raw };
   } catch {}
@@ -5549,11 +5592,46 @@ function handlePostCoverageSchedulingTurn(
     }
 
   if (intent.kind === "exact_time") {
+    const offeredSlots = Array.isArray(state.lastOfferedSlots) ? state.lastOfferedSlots.filter(Boolean) : [];
+    const rawTimeKey = normalizeTurnTextForKey(raw);
+    const vagueTimeWithoutClock =
+      !isExactClockTimeMentioned(raw) &&
+      (isTimeIndecisionOrAvailability(raw) || isTimeWindowMentioned(raw) || /\blater\b/.test(rawTimeKey));
+    const pickedOfferedSlot = vagueTimeWithoutClock ? "" : pickOfferedClockTimeFromPrompt(String(state.lastPromptLine || ""), raw);
+    const selectedExactTime = String(pickedOfferedSlot || (!vagueTimeWithoutClock && isExactClockTimeMentioned(raw) ? raw : "")).trim();
+    if (!selectedExactTime) {
+      const formatSlot = (slot: string) =>
+        String(slot || "").replace(/\s+/g, "").replace(/(am|pm)$/i, " $1").toUpperCase();
+      const slot1 = formatSlot(offeredSlots[0] || "1:30 PM");
+      const slot2 = formatSlot(offeredSlots[1] || "3 PM");
+      const lineToSay = `Got it — and which time works better, ${slot1} or ${slot2}?`;
+      const timeStepIndex = Math.max(
+        Number(state.scriptStepIndex || 0),
+        Math.min(2, Math.max(0, stepCtx.steps.length - 1))
+      );
+      return {
+        handled: true,
+        routeKind: "post_coverage_time_refinement",
+        responseMode: "exact_script",
+        objective: "time_refinement",
+        lineToSay,
+        requiredClosingPivot: lineToSay,
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          scriptStepIndex: timeStepIndex,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     const timeStepIndex = Math.max(
       Number(state.scriptStepIndex || 0),
       Math.min(3, Math.max(0, stepCtx.steps.length - 1))
     );
-    const lineToSay = `Perfect — I have ${raw} as the time. Does that still work for you?`;
+    const lineToSay = `Perfect — I have ${selectedExactTime} as the time. Does that still work for you?`;
     return {
       handled: true,
       routeKind: "post_coverage_exact_time",
@@ -5563,8 +5641,8 @@ function handlePostCoverageSchedulingTurn(
       requiredClosingPivot: lineToSay,
       forbiddenTopics: [],
       stateWrites: {
-        selectedTimeText: raw,
-        lastExactTimeText: raw,
+        selectedTimeText: selectedExactTime,
+        lastExactTimeText: selectedExactTime,
         lastExactTimeAtMs: Date.now(),
         pendingLiveTransferAvailabilityConfirm: false,
         pendingLiveTransferAvailabilityAttempts: 0,
@@ -5699,6 +5777,21 @@ function handlePostCoverageSchedulingTurn(
     }
 
     // Generic product question: guide OpenAI to answer from its vertical knowledge
+    if (sk === "agent_identity_question") {
+      const lineToSay = `With ${agentFirst}, a licensed agent. I'm just helping get it scheduled. Does later today or tomorrow work better for you?`;
+      return {
+        handled: true,
+        routeKind: "post_coverage_agent_identity",
+        responseMode: "exact_script",
+        objective: "answer_agent_identity_then_schedule",
+        lineToSay,
+        requiredClosingPivot: "Does later today or tomorrow work better for you?",
+        forbiddenTopics: [],
+        stateWrites: {},
+        shouldAdvanceStep: false,
+      };
+    }
+
     if (sk === "generic_question") {
       const productKnowledge = getVerticalProductAnswer(ctx);
       const lineToSay = `${productKnowledge} ${closingQ}`;
