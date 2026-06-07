@@ -2,6 +2,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { IncomingForm } from "formidable";
 import type { File as FormidableFile } from "formidable";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "./auth/[...nextauth]";
 import fs from "fs";
 import path from "path";
 
@@ -18,6 +20,11 @@ export default async function handler(
 ) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
+  }
+
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) {
+    return res.status(401).json({ message: "Unauthorized" });
   }
 
   const uploadDir = path.join(process.cwd(), "/public/uploads");
@@ -47,6 +54,23 @@ export default async function handler(
 
     if (!file) {
       return res.status(400).json({ message: "No file uploaded" });
+    }
+
+    const ext = path.extname(file.originalFilename || file.filepath).toLowerCase();
+    const mime = String(file.mimetype || "").toLowerCase();
+    const allowedExts = new Set([".png", ".jpg", ".jpeg", ".pdf", ".webp", ".heic", ".heif"]);
+    const allowedMimes = new Set([
+      "image/png",
+      "image/jpeg",
+      "application/pdf",
+      "image/webp",
+      "image/heic",
+      "image/heif",
+    ]);
+
+    if (!allowedExts.has(ext) || !allowedMimes.has(mime)) {
+      fs.unlink(file.filepath, () => {});
+      return res.status(400).json({ message: "Unsupported file type" });
     }
 
     const fileName = path.basename((file as FormidableFile).filepath);

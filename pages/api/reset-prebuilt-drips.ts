@@ -1,4 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Drip from "@/models/Drip"; // Create this if it doesn’t exist
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
@@ -9,6 +11,11 @@ export default async function handler(
 ) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
+  }
+
+  const session = await getServerSession(req, res, authOptions);
+  if ((session?.user as any)?.role !== "admin") {
+    return res.status(403).json({ message: "Forbidden" });
   }
 
   try {

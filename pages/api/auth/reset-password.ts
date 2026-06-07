@@ -5,6 +5,7 @@ import bcrypt from "bcrypt";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import PasswordResetToken from "@/models/PasswordResetToken";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 export default async function handler(
   req: NextApiRequest,
@@ -22,6 +23,16 @@ export default async function handler(
     return res.status(400).json({ ok: false, error: "Missing fields" });
   if (String(newPassword).length < 8)
     return res.status(400).json({ ok: false, error: "Password too short" });
+  if (
+    !enforceRateLimit(req, res, {
+      keyPrefix: "auth:password-reset",
+      subject: String(token).slice(0, 16),
+      limit: 5,
+      windowMs: 15 * 60 * 1000,
+    })
+  ) {
+    return;
+  }
 
   await mongooseConnect();
 

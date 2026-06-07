@@ -5,6 +5,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import PasswordResetToken from "@/models/PasswordResetToken";
 import { sendPasswordResetEmail } from "@/lib/email";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 const getBaseUrl = () => {
   // Prefer explicit envs, then NEXTAUTH_URL, then hard default to production URL
@@ -35,6 +36,16 @@ export default async function handler(
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+  if (
+    !enforceRateLimit(req, res, {
+      keyPrefix: "auth:password-reset-request",
+      subject: normalizedEmail,
+      limit: 3,
+      windowMs: 60 * 60 * 1000,
+    })
+  ) {
+    return;
+  }
 
   try {
     await mongooseConnect();

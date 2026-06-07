@@ -11,6 +11,7 @@ import { sendWelcomeEmail } from "@/lib/email";
 import { ensureUserTwilioIdentity } from "@/lib/twilio/provision";
 import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 import { isAccountActivated } from "@/lib/billing/requireActivatedAccount";
+import { consumeRateLimit, getClientIp } from "@/lib/rateLimit";
 
 const isDev =
   process.env.NODE_ENV === "development" ||
@@ -124,6 +125,15 @@ export const authOptions: NextAuthOptions = {
         const email = emailRaw.toLowerCase();
         const password = String(credentials.password);
         const DBG = process.env.DEBUG_LOGIN === "1";
+        const ip = getClientIp(req as any);
+        const rate = consumeRateLimit({
+          key: `auth:login:${ip}:${email}`,
+          limit: 10,
+          windowMs: 15 * 60 * 1000,
+        });
+        if (!rate.allowed) {
+          throw new Error("Too many login attempts. Please try again shortly.");
+        }
 
         await mongooseConnect();
 

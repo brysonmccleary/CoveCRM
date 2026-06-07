@@ -9,6 +9,7 @@ import A2PProfile from "@/models/A2PProfile";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { sendWelcomeEmail } from "@/lib/email";
 import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 // ---------- helpers copied from [...nextauth].ts (no changes to web auth) ----------
 
@@ -119,6 +120,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const emailRaw = String(rawEmail).trim();
     const email = emailRaw.toLowerCase();
     const pwd = String(password);
+    if (
+      !enforceRateLimit(req, res, {
+        keyPrefix: "auth:mobile-login",
+        subject: email,
+        limit: 10,
+        windowMs: 15 * 60 * 1000,
+      })
+    ) {
+      return;
+    }
 
     await mongooseConnect();
 

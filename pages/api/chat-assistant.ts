@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import OpenAI from "openai";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -14,6 +15,21 @@ export default async function handler(
   }
 
   const { message } = req.body;
+  if (typeof message !== "string" || !message.trim()) {
+    return res.status(400).json({ message: "Message is required" });
+  }
+  if (message.length > 2000) {
+    return res.status(400).json({ message: "Message is too long" });
+  }
+  if (
+    !enforceRateLimit(req, res, {
+      keyPrefix: "ai:chat-assistant",
+      limit: 5,
+      windowMs: 10 * 60 * 1000,
+    })
+  ) {
+    return;
+  }
 
   try {
     const response = await openai.chat.completions.create({

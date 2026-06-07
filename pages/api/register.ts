@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 /** Stripe */
 import Stripe from "stripe";
@@ -86,6 +87,18 @@ async function generateUniqueReferralCode(): Promise<string> {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+
+  const cleanEmailForLimit = String((req.body || {}).email || "").trim().toLowerCase();
+  if (
+    !enforceRateLimit(req, res, {
+      keyPrefix: "auth:register",
+      subject: cleanEmailForLimit,
+      limit: 5,
+      windowMs: 60 * 60 * 1000,
+    })
+  ) {
+    return;
+  }
 
   try {
     if (mongoose.connection.readyState === 0) {
