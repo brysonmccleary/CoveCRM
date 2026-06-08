@@ -43,17 +43,19 @@ async function fetchToken(): Promise<{ token: string; identity: string }> {
 
 async function fetchLeadPreviewByNumber(num: string) {
   try {
-    const r = await fetch(`/api/leads/search?q=${encodeURIComponent(num)}`, {
+    const r = await fetch(`/api/leads/by-phone/${encodeURIComponent(num)}`, {
       credentials: "include",
     });
     const j = await r.json();
-    const first = Array.isArray(j?.results) ? j.results[0] : null;
+    const first = j?.lead || null;
     if (!first) return null;
+    const firstName = first.displayName || first["First Name"] || first.firstName || "";
+    const lastName = first["Last Name"] || first.lastName || "";
     return {
       id: first._id,
-      name: first.displayName || `${first.firstName || ""} ${first.lastName || ""}`.trim(),
-      phone: first.phone || "",
-      state: first.state || "",
+      name: first.displayName || `${firstName || ""} ${lastName || ""}`.trim(),
+      phone: first.Phone || first.phone || first.normalizedPhone || num,
+      state: first.State || first.state || "",
       status: first.status || "",
     };
   } catch {
@@ -95,7 +97,6 @@ export default function SoftphoneProvider({ children }: Props) {
   const [ready, setReady] = useState(false);
   const [activeCall, setActiveCall] = useState<any | undefined>(undefined);
   const [incomingCall, setIncomingCall] = useState<any | undefined>(undefined);
-  const [incomingMeta, setIncomingMeta] = useState<any | null>(null);
   const tokenRef = useRef<string | null>(null);
   const identityRef = useRef<string | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -173,7 +174,6 @@ export default function SoftphoneProvider({ children }: Props) {
         // Incoming call handling
         dev.on("incoming", async (call: any) => {
           setIncomingCall(call);
-          // Try to parse caller
           const from =
             call?.parameters?.From ||
             call?.callerInfo?.from ||
@@ -181,13 +181,26 @@ export default function SoftphoneProvider({ children }: Props) {
             "";
           const fromNorm = normalizeE164(from);
           const meta = fromNorm ? await fetchLeadPreviewByNumber(fromNorm) : null;
-          setIncomingMeta(meta || { id: null, name: "Unknown Caller", phone: fromNorm });
+          const callSid =
+            call?.parameters?.CallSid ||
+            call?.customParameters?.get?.("CallSid") ||
+            "";
+          window.dispatchEvent(
+            new CustomEvent("crm:incomingCall", {
+              detail: {
+                callSid,
+                from: fromNorm,
+                leadName: meta?.name || "",
+                leadId: meta?.id || "",
+                phone: meta?.phone || fromNorm,
+              },
+            }),
+          );
         });
 
         dev.on("connect", (conn: any) => {
           setActiveCall(conn);
           setIncomingCall(undefined);
-          setIncomingMeta(null);
           scheduleFallbackRefresh(50);
         });
 
@@ -254,9 +267,17 @@ export default function SoftphoneProvider({ children }: Props) {
     try {
       incomingCall?.reject?.();
       setIncomingCall(undefined);
-      setIncomingMeta(null);
     } catch {}
   }, [incomingCall]);
+
+  useEffect(() => {
+    window.addEventListener("crm:incomingCall:answer", answer);
+    window.addEventListener("crm:incomingCall:decline", decline);
+    return () => {
+      window.removeEventListener("crm:incomingCall:answer", answer);
+      window.removeEventListener("crm:incomingCall:decline", decline);
+    };
+  }, [answer, decline]);
 
   const value = useMemo<SoftphoneCtx>(
     () => ({ ready, device: deviceRef.current, activeCall, incomingCall, startCall, hangup, answer, decline }),
@@ -266,48 +287,6 @@ export default function SoftphoneProvider({ children }: Props) {
   return (
     <Ctx.Provider value={value}>
       {children}
-
-      {/* Incoming Call Banner */}
-      {incomingCall && (
-        <div className="fixed top-2 left-1/2 -translate-x-1/2 z-[1000] max-w-xl w-[92%] sm:w-[640px] rounded-xl border border-zinc-600 bg-zinc-900/95 shadow-lg p-3">
-          <div className="flex items-start gap-3">
-            <div className="shrink-0 mt-0.5">📞</div>
-            <div className="flex-1">
-              <div className="text-sm text-zinc-300">Incoming call</div>
-              <div className="text-lg font-semibold">
-                {incomingMeta?.name || "Unknown Caller"}
-              </div>
-              <div className="text-sm text-zinc-400">
-                {incomingMeta?.phone || "(no number)"}{" "}
-                {incomingMeta?.state ? `• ${incomingMeta.state}` : ""}{" "}
-                {incomingMeta?.status ? `• ${incomingMeta.status}` : ""}
-              </div>
-              {incomingMeta?.id && (
-                <a
-                  href={`/dial/${incomingMeta.id}`}
-                  className="text-xs underline text-blue-400 hover:text-blue-300 cursor-pointer"
-                >
-                  View lead
-                </a>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={decline}
-                className="px-3 py-2 rounded-md bg-red-600 hover:bg-red-700 text-white cursor-pointer"
-              >
-                Decline
-              </button>
-              <button
-                onClick={answer}
-                className="px-3 py-2 rounded-md bg-green-600 hover:bg-green-700 text-white cursor-pointer"
-              >
-                Answer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </Ctx.Provider>
   );
 }

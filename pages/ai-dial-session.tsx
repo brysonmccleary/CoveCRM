@@ -168,6 +168,14 @@ export default function AIDialSessionPage() {
     [lastSession],
   );
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    (window as any).__aiDialSessionActive = Boolean(activeSession);
+    return () => {
+      (window as any).__aiDialSessionActive = false;
+    };
+  }, [activeSession]);
+
   const selectedFolderName = useMemo(
     () => folders.find((f) => f._id === selectedFolderId)?.name || "",
     [folders, selectedFolderId],

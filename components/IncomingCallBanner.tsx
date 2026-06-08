@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 
 type Payload = {
@@ -8,6 +8,10 @@ type Payload = {
   phone: string;     // E.164
 };
 
+type RingToneHandle = {
+  stop: () => void;
+};
+
 function formatPhone(p?: string) {
   const d = (p || "").replace(/\D+/g, "");
   if (d.length === 11 && d.startsWith("1")) return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
@@ -15,12 +19,92 @@ function formatPhone(p?: string) {
   return p || "";
 }
 
-export default function IncomingCallBanner() {
+export function generateRingTone(volume: number): RingToneHandle {
+  if (typeof window === "undefined") return { stop: () => {} };
+
+  const AudioContextCtor =
+    window.AudioContext || (window as any).webkitAudioContext;
+  if (!AudioContextCtor) return { stop: () => {} };
+
+  const safeVolume = Math.max(0, Math.min(1, Number(volume) || 0));
+  const context = new AudioContextCtor();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  const startTime = context.currentTime;
+  let stopped = false;
+
+  oscillator.frequency.value = 440;
+  oscillator.type = "sine";
+  gain.gain.setValueAtTime(0, startTime);
+
+  for (let t = 0; t < 10; t += 1) {
+    const cycleStart = startTime + t;
+    gain.gain.setValueAtTime(safeVolume, cycleStart);
+    gain.gain.setValueAtTime(safeVolume, cycleStart + 0.5);
+    gain.gain.setValueAtTime(0, cycleStart + 0.5);
+    gain.gain.setValueAtTime(0, cycleStart + 1);
+  }
+
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start(startTime);
+
+  return {
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      try {
+        gain.gain.cancelScheduledValues(context.currentTime);
+        gain.gain.setValueAtTime(0, context.currentTime);
+      } catch {}
+      try {
+        oscillator.stop();
+      } catch {}
+      try {
+        context.close();
+      } catch {}
+    },
+  };
+}
+
+export default function IncomingCallBanner({ volume = 1 }: { volume?: number }) {
   const router = useRouter();
   const [visible, setVisible] = useState(false);
   const [payload, setPayload] = useState<Payload | null>(null);
   const hideTimer = useRef<NodeJS.Timeout | null>(null);
-  const chimeRef = useRef<HTMLAudioElement>(null);
+  const ringRef = useRef<RingToneHandle | null>(null);
+
+  const stopRing = useCallback(() => {
+    ringRef.current?.stop();
+    ringRef.current = null;
+  }, []);
+
+  const showIncoming = useCallback(
+    (data: any) => {
+      const next: Payload = {
+        callSid: data?.callSid || undefined,
+        leadId: data?.leadId || undefined,
+        leadName: data?.leadName || undefined,
+        phone: data?.phone || data?.from || "",
+      };
+      setPayload(next);
+      setVisible(true);
+
+      stopRing();
+      const dialSessionVolume =
+        typeof window !== "undefined" && (window as any).__aiDialSessionActive === true
+          ? 0.15
+          : volume;
+      ringRef.current = generateRingTone(dialSessionVolume);
+
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      hideTimer.current = setTimeout(() => {
+        stopRing();
+        setVisible(false);
+      }, 10_000);
+    },
+    [stopRing, volume],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -28,21 +112,9 @@ export default function IncomingCallBanner() {
     let tries = 0;
     const maxTries = 80; // ~20s at 250ms
 
-    const onIncoming = (data: any) => {
-      const next: Payload = {
-        callSid: data?.callSid || undefined,
-        leadId: data?.leadId || undefined,
-        leadName: data?.leadName || undefined,
-        phone: data?.phone || "",
-      };
-      setPayload(next);
-      setVisible(true);
-
-      try { chimeRef.current?.play().catch(() => {}); } catch {}
-
-      if (hideTimer.current) clearTimeout(hideTimer.current);
-      hideTimer.current = setTimeout(() => setVisible(false), 10_000);
-    };
+    const onIncoming = (data: any) => showIncoming(data);
+    const onBrowserIncoming = (event: Event) =>
+      showIncoming((event as CustomEvent).detail || {});
 
     const attach = () => {
       if (!mounted || attached) return;
@@ -51,6 +123,8 @@ export default function IncomingCallBanner() {
       sock.on?.("call:incoming", onIncoming);
       attached = true;
     };
+
+    window.addEventListener("crm:incomingCall", onBrowserIncoming);
 
     const interval = setInterval(() => {
       tries++;
@@ -70,12 +144,14 @@ export default function IncomingCallBanner() {
         const sock: any = (globalThis as any).__crm_socket__;
         sock?.off?.("call:incoming", onIncoming);
       } catch {}
+      window.removeEventListener("crm:incomingCall", onBrowserIncoming);
       if (hideTimer.current) clearTimeout(hideTimer.current);
+      stopRing();
     };
-  }, []);
+  }, [showIncoming, stopRing]);
 
   if (!visible || !payload) {
-    return <audio ref={chimeRef} src="/incoming-soft.mp3" preload="auto" />;
+    return null;
   }
 
   const title = payload.leadName || "Incoming call";
@@ -83,6 +159,10 @@ export default function IncomingCallBanner() {
 
   const onAnswer = async () => {
     let conf = "";
+    stopRing();
+    try {
+      window.dispatchEvent(new CustomEvent("crm:incomingCall:answer", { detail: payload }));
+    } catch {}
     try {
       const r = await fetch("/api/twilio/calls/answer", {
         method: "POST",
@@ -110,6 +190,10 @@ export default function IncomingCallBanner() {
   };
 
   const onDecline = async () => {
+    stopRing();
+    try {
+      window.dispatchEvent(new CustomEvent("crm:incomingCall:decline", { detail: payload }));
+    } catch {}
     try {
       await fetch("/api/twilio/calls/decline", {
         method: "POST",
@@ -122,7 +206,6 @@ export default function IncomingCallBanner() {
 
   return (
     <>
-      <audio ref={chimeRef} src="/incoming-soft.mp3" preload="auto" />
       <div className="fixed top-4 inset-x-0 z-[5000] flex justify-center px-4" role="status" aria-live="polite">
         <div className="max-w-2xl w-full rounded-2xl shadow-xl bg-neutral-900/95 text-white border border-neutral-800 backdrop-blur p-4">
           <div className="flex items-center gap-3">

@@ -94,6 +94,12 @@ function buildAiInboundTwiml(args: {
 </Response>`;
 }
 
+function invalidInboundTwiml() {
+  const vr = new twilio.twiml.VoiceResponse();
+  vr.say("We're sorry, this number is not configured.");
+  return vr.toString();
+}
+
 function maskPhone(value: string) {
   const d = String(value || "").replace(/\D+/g, "");
   return d ? `***${d.slice(-4)}` : "";
@@ -177,19 +183,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const paramsObj: Record<string, string> = {};
   params.forEach((v, k) => (paramsObj[k] = v));
 
-  // signature check
-  try {
-    const sig = (req.headers["x-twilio-signature"] as string) || "";
-    const url = resolveFullUrl(req);
-    const token = process.env.TWILIO_AUTH_TOKEN || "";
-    if (!token) return res.status(500).send("Server misconfigured");
-    const ok = validateRequest(token, sig, url, paramsObj);
-    if (!ok) return res.status(403).send("Forbidden");
-  } catch (e) {
-    console.error("Signature validation error:", e);
-    return res.status(500).send("Server error");
-  }
-
   const callSid = params.get("CallSid") || "";
   const fromRaw  = params.get("From") || "";
   const toRaw    = params.get("To") || "";
@@ -198,16 +191,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const fromLast10 = last10(from);
 
   let ownerEmail: string | undefined;
+  let ownerDoc: any | null = null;
   let leadDoc: any | null = null;
 
   try {
     await dbConnect();
     ownerEmail = await mapDidToOwnerEmail(to);
+    if (ownerEmail) {
+      ownerDoc = await User.findOne({ email: ownerEmail }).lean();
+    }
+  } catch (e) {
+    console.error("DB mapping error:", e);
+  }
+
+  // signature check after owner lookup so subaccount-owned numbers don't fail on platform token.
+  try {
+    const sig = (req.headers["x-twilio-signature"] as string) || "";
+    const url = resolveFullUrl(req);
+    const requestAccountSid = String(params.get("AccountSid") || "").trim();
+    const ownerAccountSid = String(ownerDoc?.twilio?.accountSid || "").trim();
+
+    if (ownerAccountSid) {
+      if (!requestAccountSid || requestAccountSid !== ownerAccountSid) {
+        res.setHeader("Content-Type", "text/xml");
+        return res.status(200).send(invalidInboundTwiml());
+      }
+    } else {
+      const token = process.env.TWILIO_AUTH_TOKEN || "";
+      if (!token || !validateRequest(token, sig, url, paramsObj)) {
+        res.setHeader("Content-Type", "text/xml");
+        return res.status(200).send(invalidInboundTwiml());
+      }
+    }
+  } catch (e) {
+    console.error("Signature validation error:", e);
+    res.setHeader("Content-Type", "text/xml");
+    return res.status(200).send(invalidInboundTwiml());
+  }
+
+  try {
     if (ownerEmail && fromLast10) {
       leadDoc = await findOrCreateLeadForOwner(ownerEmail, from, fromLast10);
     }
   } catch (e) {
-    console.error("DB mapping/upsert error:", e);
+    console.error("Lead lookup/upsert error:", e);
   }
 
   // inbound debug (incoming-only)
@@ -470,9 +497,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const actionUrl = `${baseUrl()}/api/twilio/voice-status?userEmail=${encodeURIComponent(
       ownerEmail,
     )}&direction=inbound`;
+    const agentPhone = normalizeE164(String(ownerDoc?.agentPhone || ""));
+    const hasAgentPhone = Boolean(agentPhone);
     const dial = vr.dial({
       answerOnBridge: true,
-      timeout: 25,
+      timeout: hasAgentPhone ? 20 : 25,
       action: actionUrl,
       method: "POST",
     });
@@ -481,9 +510,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         statusCallback: actionUrl,
         statusCallbackMethod: "POST",
         statusCallbackEvent: ["initiated", "ringing", "answered", "completed"] as any,
+        ...(hasAgentPhone ? { timeout: 15 } : {}),
       } as any,
       ownerEmail,
     );
+    if (hasAgentPhone) {
+      dial.number(
+        {
+          statusCallback: actionUrl,
+          statusCallbackMethod: "POST",
+          statusCallbackEvent: ["initiated", "ringing", "answered", "completed"] as any,
+        } as any,
+        agentPhone,
+      );
+    }
   } else {
     const ringUrl = `${baseUrl()}/ringback.mp3`;
     // loop="0" = infinite on Twilio
