@@ -5506,11 +5506,19 @@ type KaylaDemoTopic =
   | "why_choose"
   | "email"
   | "ask_kayla"
-  | "a2p";
+  | "a2p"
+  | "privacy";
 
 function detectKaylaDemoTopic(raw: string): KaylaDemoTopic | null {
   const t = normalizeTurnTextForKey(raw);
   if (!t) return null;
+
+  if (
+    t.includes("how many") || t.includes("how often") ||
+    t.includes("how frequently") || t.includes("on average") ||
+    t.includes("average") || t.includes("per day") ||
+    t.includes("per week")
+  ) return null;
 
   if (/\borion\b/.test(t)) return "orion";
   if (/\b(why should i choose|why choose|why you|choose you|over any others|over others|what makes you different|why are you better|better than|different from|why covecrm|why cove crm)\b/.test(t)) return "why_choose";
@@ -5528,6 +5536,12 @@ function detectKaylaDemoTopic(raw: string): KaylaDemoTopic | null {
   if (/\b(a2p|10dlc|10 dlc|twilio|texting setup|sms setup)\b/.test(t)) return "a2p";
   if (/\b(lead management|pipeline|calendar|google calendar|google sheets|recordings|team stats|team section|downline|downlines|cost tracking|retention|client retention)\b/.test(t)) return "lead_management";
   if (/\b(breakdown|break down|entire crm|whole crm|how does it work|how it works|what does it do|features|crm works|crm do|covecrm do|cove crm do)\b/.test(t)) return "overview";
+  if (
+    t.includes("do you share") || t.includes("my information") || t.includes("my data") ||
+    t.includes("data privacy") || t.includes("privacy policy") || t.includes("do you sell") ||
+    t.includes("who sees this") || t.includes("is this confidential") ||
+    t.includes("what do you track") || t.includes("cookies") || t.includes("google analytics")
+  ) return "privacy";
 
   return null;
 }
@@ -5566,6 +5580,8 @@ function getKaylaDemoTopicAnswer(ctx: AICallContext, topic: KaylaDemoTopic): str
       return `Ask Kayla is the in-app assistant for setup and CRM questions. It helps agents understand their leads, Twilio setup, drips, and workflows without having to dig through settings.`;
     case "a2p":
       return `CoveCRM helps with A2P 10DLC setup for texting. If something fails, the system shows what is needed and helps resubmit so agents are not guessing through the process.`;
+    case "privacy":
+      return `We don't share agent information with anyone — not other agents, not other agencies, not brokerages. Your name, email, phone, and leads stay completely private. The only data we collect is standard website analytics through Google Analytics — things like which pages get the most traffic — so we can improve the product. That's it. No selling data, no recruiting, no sharing. Every agency and brokerage we work with gets that same professional standard.`;
     default:
       return getVerticalProductAnswer(ctx);
   }
@@ -6727,7 +6743,7 @@ function buildConversationPolicyDecision(
 	    }
 	    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
 	    const lineToSay = isKayla
-	      ? `Totally fair — I won't push. I can send you the trial code now and you can look it over whenever you're ready. Is there anything specific that didn't feel like a fit?`
+	      ? `Yeah, fair. You typically don't request a demo if you're not at least a little curious — what was the main thing that made you want to look into it?`
 	      : `Totally fair — and I'm not here to pressure you. Most people who felt that way ended up really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${requiredObjective}`;
 	    return {
 	      handled: true, routeKind: "policy_not_interested", responseMode: "exact_script",
@@ -8858,6 +8874,7 @@ HARD RULES:
 - Never send to an agent for any CRM question.
 - Never schedule anything on this call.
 - The goal every turn: answer the thing, stay concise, ask what they want next, or move toward trial naturally.
+PRIVACY: Do not share agent info with any other agents, agencies, or brokerages. We use Google Analytics for site traffic only. Agent names, emails, phone numbers, and leads are never shared or used for recruiting.
 
 LEAD INFO:
 Name: ${leadName}
