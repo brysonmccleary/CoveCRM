@@ -2824,6 +2824,10 @@ function extractExactClockText(textRaw: string): string | null {
   const oclock = t.match(/\b(\d{1,2})\s?o'?clock\b/i);
   if (oclock) return String(oclock[1] || "").trim();
 
+  // "let's do 3" / "make it 3" / "change to 3" — bare hour with action verb, no AM/PM
+  const actionTime = t.match(/\b(?:do|make it|change to|switch to|set it to|reschedule to|book it at|do it at)\s+(\d{1,2})\b/i);
+  if (actionTime) return String(actionTime[1] || "").trim();
+
   return null;
 }
 
@@ -3164,12 +3168,31 @@ function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
     "fiance", "my fiance", "fiancee", "my fiancee",
     "significant other", "my significant other",
     "family", "my family", "family member", "my family member",
+    "the whole family", "the family", "whole family",
+    "all of us", "all of our family", "everyone",
+    "my household", "the household",
     "son", "my son", "daughter", "my daughter",
     "child", "my child", "children", "my children", "kids", "my kids",
     "parent", "my parent", "mom", "my mom", "dad", "my dad",
   ].includes(t)) return true;
   return (
-    /\b(myself|my self|just me|for me|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner|girlfriend|my girlfriend|boyfriend|my boyfriend|fianc[eé]+|my fianc[eé]+|significant other|my significant other|family member|my family member|my kids|my children|my son|my daughter|my parent|my mom|my dad|my child)\b/.test(t)
+    /\b(myself|my self|just me|for me|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner|girlfriend|my girlfriend|boyfriend|my boyfriend|fianc[eé]+|my fianc[eé]+|significant other|my significant other|family member|my family member|my kids|my children|my son|my daughter|my parent|my mom|my dad|my child|the whole family|whole family|all of us|all of our family|my household|the household)\b/.test(t)
+  );
+}
+
+function isCoverageUnclearAnswer(t: string): boolean {
+  if (!t) return false;
+  return (
+    t === "it depends" || t === "depends" ||
+    t === "not sure" || t === "i m not sure" || t === "im not sure" ||
+    t === "i don t know" || t === "i dont know" || t === "i don't know" ||
+    t === "not sure yet" || t === "haven t decided" || t === "havent decided" ||
+    t === "i haven t decided" || t === "i havent decided" ||
+    t === "i m not sure yet" || t === "im not sure yet" ||
+    t === "not decided yet" || t === "haven't decided" ||
+    t.includes("not sure who") || t.includes("not sure yet") ||
+    t.includes("haven t decided") || t.includes("havent decided") ||
+    t.includes("still deciding") || t.includes("not sure which")
   );
 }
 
@@ -4452,16 +4475,8 @@ function detectObjection(textRaw: string): string | null {
     t === "nah" ||
     t === "nope" ||
     t === "not really" ||
-    t === "i m good" ||
-    t === "im good" ||
-    t === "i m all good" ||
-    t === "im all good" ||
-    t === "i m fine" ||
-    t === "im fine" ||
     t.startsWith("nah ") ||
-    t.startsWith("not really") ||
-    (t.includes("good") && t.includes("i m") && t.length < 20) ||
-    (t.includes("fine") && t.length < 15)
+    t.startsWith("not really")
   ) {
     return "not_interested";
   }
@@ -4569,7 +4584,13 @@ if (
     t.includes("in a couple of weeks") ||
     /not\s+(?:a\s+)?good\s+time/i.test(t) ||
     /(?:really|very|too)\s+busy/i.test(t) ||
-    /can.?t\s+(?:really\s+)?talk\s+(?:right\s+)?now/i.test(t)
+    /can.?t\s+(?:really\s+)?talk\s+(?:right\s+)?now/i.test(t) ||
+    t.includes("check my calendar") ||
+    t.includes("check the calendar") ||
+    t.includes("look at my calendar") ||
+    t.includes("look at my schedule") ||
+    t.includes("check my schedule") ||
+    t.includes("need to check my")
   ) {
     // If they are still actively scheduling (e.g. "tomorrow evening" / "what times do you have"),
     // do NOT treat this as an objection — let the stepper offer concrete time options.
@@ -5324,6 +5345,14 @@ function classifyTurnIntent(
     }
   } catch {}
 
+  // Priority 3.75: Unclear coverage answer at Step 1 ("it depends", "not sure") — ask clarifying question
+  // rather than letting it fall to free response or a wrong objection path.
+  try {
+    if (!isKaylaDemo && stepCtx.idx === 1 && isCoverageUnclearAnswer(t)) {
+      return { kind: "coverage_subject_answer", subKind: "unclear", raw };
+    }
+  } catch {}
+
   // Priority 4: existing detectors
   try {
     const objKind = detectObjection(t);
@@ -5359,8 +5388,14 @@ function classifyTurnIntent(
   } catch {}
 
   // Priority 4.9: bare confirmation word when a time is already captured → never misclassify as exact_time.
+  // Suppressed when pendingLiveTransferAvailabilityConfirm is true so "yes" correctly routes to live transfer.
   try {
-    if (!isKaylaDemo && state.selectedTimeText && isTimeConfirmationYes(t)) {
+    if (
+      !isKaylaDemo &&
+      state.selectedTimeText &&
+      !state.pendingLiveTransferAvailabilityConfirm &&
+      isTimeConfirmationYes(t)
+    ) {
       return { kind: "time_confirmation_yes", raw };
     }
   } catch {}
@@ -5873,7 +5908,31 @@ function handlePostCoverageSchedulingTurn(
     };
   }
 
+  // Short bare negatives ("nah", "nope", "no") when slots were just offered mean
+  // "neither of those works" — not a rejection of the product. Redirect to none_work.
   if (intent.kind === "not_interested") {
+    const bareNegative = /^(nah|nope|no)$/.test(raw.trim().toLowerCase());
+    const hadOfferedSlots =
+      Array.isArray(state.lastOfferedSlots) &&
+      (state.lastOfferedSlots as string[]).filter(Boolean).length > 0;
+    if (bareNegative && hadOfferedSlots) {
+      return {
+        handled: true,
+        routeKind: "post_coverage_none_work",
+        responseMode: "exact_script",
+        objective: "time_refinement",
+        lineToSay: "No problem — are mornings or afternoons generally better for you?",
+        requiredClosingPivot: "Are mornings or afternoons generally better for you?",
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || stepCtx.idx) - 1),
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     const lineToSay = getRebuttalLine(ctx, "not_interested");
     return {
       handled: true,
@@ -6260,6 +6319,26 @@ function buildConversationPolicyDecision(
     const advancedIdx = Math.min(stepCtx.idx + 1, Math.max(0, stepCtx.steps.length - 1));
     const coverageSubjectValue = normalizeTurnTextForKey(intent.raw) || intent.raw;
 
+    // Unclear answer ("it depends", "not sure") → ask a gentle clarifying question, don't advance.
+    if (intent.subKind === "unclear") {
+      const clarifyLine = `No problem — was this mainly for yourself, or did you want to look at coverage for a spouse or family member as well?`;
+      return {
+        handled: true,
+        routeKind: "policy_step1_coverage_clarify",
+        responseMode: "exact_script",
+        objective: "clarify_coverage_subject",
+        lineToSay: clarifyLine,
+        requiredClosingPivot: clarifyLine,
+        forbiddenTopics: [],
+        stateWrites: {
+          phase: "in_call",
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: Math.max(0, stepCtx.idx - 1),
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+
     // Compound turn: coverage answer + embedded objection (e.g. "my girlfriend, but I'm not interested").
     // Store coverageSubject to clear Step 1, then route through the existing rebuttal immediately.
     const secondaryObjKind = detectObjection(intent.raw);
@@ -6280,6 +6359,40 @@ function buildConversationPolicyDecision(
           pendingLiveTransferAvailabilityAttempts: 0,
           lastObjectionKind: secondaryObjKind,
           objectionRepeatCount: 1,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+
+    // Embedded schedule: "just me, but tomorrow morning would be best" → skip the day question
+    // and go straight to time offers for the day/window the lead already named.
+    const embeddedDay = pickDayHint(intent.raw, "");
+    const embeddedWindow = pickTimeWindowHint(intent.raw, "");
+    const hasEmbeddedSchedule = embeddedDay === "today" || embeddedDay === "tomorrow" || !!embeddedWindow;
+    if (hasEmbeddedSchedule) {
+      const timeStepIndex = Math.max(advancedIdx, Math.min(2, Math.max(0, stepCtx.steps.length - 1)));
+      const timeOfferLine = getTimeOfferLine(ctx, 0, embeddedDay || null, embeddedWindow || null, intent.raw);
+      return {
+        handled: true,
+        routeKind: "policy_step1_coverage_with_schedule",
+        responseMode: "exact_script",
+        objective: "time_selection",
+        lineToSay: timeOfferLine,
+        requiredClosingPivot: timeOfferLine,
+        forbiddenTopics: [],
+        stateWrites: {
+          phase: "in_call",
+          coverageSubject: coverageSubjectValue,
+          coverageSubjectSetThisTurn: true,
+          ...(embeddedDay ? { selectedDay: embeddedDay } : {}),
+          ...(embeddedWindow ? { selectedWindow: embeddedWindow } : {}),
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          scriptStepIndex: timeStepIndex,
+          timeOfferCountForStepIndex: timeStepIndex,
+          timeOfferCount: 1,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
         },
         shouldAdvanceStep: false,
       };
