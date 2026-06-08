@@ -53,6 +53,42 @@ function InnerApp({
 
   const router = useRouter();
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    let primed = false;
+    const primeAudio = async () => {
+      if (primed) return;
+      primed = true;
+
+      try {
+        const w = window as any;
+        const AudioContextCtor = window.AudioContext || w.webkitAudioContext;
+        if (!AudioContextCtor) return;
+
+        const ctx: AudioContext =
+          w.__crmAudioContext && w.__crmAudioContext.state !== "closed"
+            ? w.__crmAudioContext
+            : new AudioContextCtor();
+        w.__crmAudioContext = ctx;
+
+        if (ctx.state === "suspended") {
+          await ctx.resume();
+        }
+      } catch {}
+    };
+
+    window.addEventListener("click", primeAudio, { once: true });
+    window.addEventListener("keydown", primeAudio, { once: true });
+    window.addEventListener("touchstart", primeAudio, { once: true });
+
+    return () => {
+      window.removeEventListener("click", primeAudio);
+      window.removeEventListener("keydown", primeAudio);
+      window.removeEventListener("touchstart", primeAudio);
+    };
+  }, []);
+
   // ✅ Capture ?ref=CODE from affiliate share links (persist ~30 days)
   useEffect(() => {
     try {
