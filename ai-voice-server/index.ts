@@ -1052,24 +1052,42 @@ async function replayPendingCommittedTurn(
     // Do NOT clear pendingCommittedTurn until we actually have transcript text.
     // Otherwise we replay with stale lastUserTranscript and the stepper can skip / mis-handle turns.
     //
-    // Exception: greeting reply can be audio-only (no transcript yet) if the user clearly spoke.
-    // isGreetingReply computed above (do not redeclare)
+    // Greeting replies must have transcript text. Audio-only greeting replays can advance
+    // on voicemail noise or empty speech windows, so wait for text or drop safely.
     if (!restoredTranscript) {
-      const strongAudio = restoredAudioMs >= 900; // ~0.9s indicates real speech (not comfort noise)
-      const allowGreetingAudioOnly = state.phase === "awaiting_greeting_reply" && strongAudio;
-      if (!allowGreetingAudioOnly) {
-        // Wait for transcription delta/completed to populate pending.bestTranscript and replay again.
-        // If it never arrives, drop the pending safely after ~1.8s (do NOT advance steps).
-        if (pendingAgeMs < 1800) return;
-        state.pendingCommittedTurn = null;
-        return;
-      }
+      // Wait for transcription delta/completed to populate pending.bestTranscript and replay again.
+      // If it never arrives, drop the pending safely after ~1.8s (do NOT advance steps).
+      if (pendingAgeMs < 1800) return;
+      state.pendingCommittedTurn = null;
+      return;
     }
 
     // Discard micro-fragment barge-in tails (e.g. "I'm" with 0 audio ms) — not a real turn.
     if (restoredTranscript && restoredTranscript.length <= 4 && restoredAudioMs === 0) {
       if (pendingAgeMs < 1800) return;
       state.pendingCommittedTurn = null;
+      return;
+    }
+
+    if (state.phase === "awaiting_greeting_reply" && isVoicemailSystemTranscript(restoredTranscript)) {
+      state.pendingCommittedTurn = null;
+      try {
+        console.log("[AI-VOICE][VOICEMAIL] replay transcript detected — hanging up", {
+          callSid: state.callSid,
+          textHash: hash8(restoredTranscript),
+        });
+      } catch {}
+      state.voicemailSkipArmed = true;
+      if (!state.finalOutcomeSent && state.context) {
+        state.finalOutcomeSent = true;
+        void handleFinalOutcomeIntent(state, {
+          kind: "final_outcome",
+          outcome: "no_answer",
+          summary: "Voicemail detected from replay transcript.",
+          notesAppend: "Voicemail/system greeting transcript detected during replay. Call ended automatically.",
+        }).catch(() => {});
+      }
+      safelyCloseOpenAi(state, "voicemail transcript detected during replay");
       return;
     }
 
@@ -3135,6 +3153,26 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
   return false;
 }
 
+function isVoicemailSystemTranscript(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+
+  return (
+    t.includes("person trying to reach is not available") ||
+    t.includes("person you are trying to reach is not available") ||
+    t.includes("person you have called is not available") ||
+    t.includes("please leave your message") ||
+    t.includes("leave your message after the tone") ||
+    t.includes("after the tone") ||
+    t.includes("at the tone") ||
+    t.includes("mailbox is full") ||
+    t.includes("mailbox has not been set up") ||
+    t.includes("your call has been forwarded") ||
+    t.includes("record your message") ||
+    t.includes("leave a message")
+  );
+}
+
 function isConversationalGreetingNegative(textRaw: string): boolean {
   const t = normalizeTurnTextForKey(textRaw);
   if (!t) return false;
@@ -3603,6 +3641,44 @@ function buildGreetingFirstTurnDecision(
   ).trim();
   if (!step1Line) return null;
 
+  if (isVoicemailSystemTranscript(raw)) {
+    try {
+      console.log("[AI-VOICE][VOICEMAIL] greeting transcript detected — hanging up", {
+        callSid: state.callSid,
+        textHash: hash8(raw),
+      });
+    } catch {}
+    state.voicemailSkipArmed = true;
+    if (!state.finalOutcomeSent && state.context) {
+      state.finalOutcomeSent = true;
+      void handleFinalOutcomeIntent(state, {
+        kind: "final_outcome",
+        outcome: "no_answer",
+        summary: "Voicemail detected from greeting transcript.",
+        notesAppend: "Voicemail/system greeting transcript detected. Call ended automatically.",
+      }).catch(() => {});
+    }
+    safelyCloseOpenAi(state, "voicemail transcript detected during greeting");
+    return {
+      handled: true,
+      routeKind: "greeting_voicemail_detected",
+      responseMode: "exact_script",
+      objective: "voicemail_skip",
+      lineToSay: "",
+      requiredClosingPivot: "",
+      forbiddenTopics: [],
+      stateWrites: {
+        phase: "ended",
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+        greetingAdvancePending: false,
+        greetingAdvanceNextIndex: undefined,
+        greetingAdvanceNextPhase: undefined,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
   const hardOptOut =
     intent.kind === "angry_or_profane" ||
     t.includes("stop calling") ||
@@ -3691,7 +3767,7 @@ function buildGreetingFirstTurnDecision(
   const agentFirst = getAgentFirstName(ctx);
   const liveTransferEnabled = !!(ctx as any)?.liveTransferEnabled && !!(ctx as any)?.liveTransferPhone;
   let lineToSay = step1Line;
-  let routeKind = "greeting_ack";
+  let routeKind: string | null = null;
 
   if (hearingProblem) {
     routeKind = "greeting_hearing_recover";
@@ -3713,6 +3789,8 @@ function buildGreetingFirstTurnDecision(
     } else {
       lineToSay = `${aiName} is the virtual assistant helping ${agentFirst} with the request that came through. ${step1Line}`;
     }
+  } else if (intent.kind === "greeting_ack") {
+    routeKind = "greeting_ack";
   }
 
   if (routeKind === "greeting_ack") {
@@ -3772,6 +3850,8 @@ function buildGreetingFirstTurnDecision(
       lineToSay = `${getGreetingAckPrefix(raw)} ${cleanedStep1Line}`.trim();
     }
   }
+
+  if (!routeKind) return null;
 
   try {
     console.log("[AI-VOICE][GREETING-ROUTE]", {
@@ -7113,9 +7193,9 @@ function buildConversationPolicyDecision(
 	        awaitingUserAnswer: true,
 	        awaitingAnswerForStepIndex: 0,
 	        scriptStepIndex: 0,
-	        greetingAdvancePending: true,
-	        greetingAdvanceNextIndex: 1,
-	        greetingAdvanceNextPhase: "in_call",
+	        greetingAdvancePending: false,
+	        greetingAdvanceNextIndex: undefined,
+	        greetingAdvanceNextPhase: undefined,
 	      },
       shouldAdvanceStep: false,
     };
