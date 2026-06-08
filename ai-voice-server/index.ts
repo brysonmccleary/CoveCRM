@@ -2836,6 +2836,36 @@ function extractExactClockText(textRaw: string): string | null {
   const clock = t.match(/\b(\d{1,2}:\d{2})\b/);
   if (clock) return String(clock[1] || "").trim();
 
+  const compactClock = t.match(/\b(\d{3,4})\b/);
+  if (compactClock) {
+    const raw = String(compactClock[1] || "");
+    const hh = Number(raw.slice(0, raw.length - 2));
+    const mm = Number(raw.slice(-2));
+    if (hh >= 1 && hh <= 23 && mm >= 0 && mm <= 59) {
+      return `${hh}:${String(mm).padStart(2, "0")}`;
+    }
+  }
+
+  const spacedClock = t.match(/\b(\d{1,2})\s+(\d{2})\b/);
+  if (spacedClock) {
+    const hh = Number(spacedClock[1] || 0);
+    const mm = Number(spacedClock[2] || 0);
+    if (hh >= 1 && hh <= 23 && mm >= 0 && mm <= 59) {
+      return `${hh}:${String(mm).padStart(2, "0")}`;
+    }
+  }
+
+  const spokenMinute = t.match(/\b(\d{1,2})\s+(fifteen|quarter|thirty|half|forty five|forty-five|fourty five|fourty-five)\b/i);
+  if (spokenMinute) {
+    const hh = Number(spokenMinute[1] || 0);
+    const word = String(spokenMinute[2] || "").toLowerCase();
+    const mm =
+      word === "fifteen" || word === "quarter" ? 15 :
+      word === "thirty" || word === "half" ? 30 :
+      45;
+    if (hh >= 1 && hh <= 23) return `${hh}:${String(mm).padStart(2, "0")}`;
+  }
+
   const bareHour = t.match(/\b(?:at|around|about|by)\s+(\d{1,2})\b/i);
   if (bareHour) return String(bareHour[1] || "").trim();
 
@@ -2845,6 +2875,12 @@ function extractExactClockText(textRaw: string): string | null {
   // "let's do 3" / "make it 3" / "change to 3" — bare hour with action verb, no AM/PM
   const actionTime = t.match(/\b(?:do|make it|change to|switch to|set it to|reschedule to|book it at|do it at)\s+(\d{1,2})\b/i);
   if (actionTime) return String(actionTime[1] || "").trim();
+
+  const bareHourOnly = t.match(/^\s*(\d{1,2})\s*$/);
+  if (bareHourOnly) {
+    const hour = Number(bareHourOnly[1] || 0);
+    if (hour >= 1 && hour <= 12) return String(hour);
+  }
 
   return null;
 }
@@ -2877,6 +2913,9 @@ function isExactClockTimeMentioned(textRaw: string): boolean {
 
   // "at 3" / "at 4" / "around 3" / "about 3" — bare hour reference with preposition
   if (/\b(at|around|about|by)\s+\d{1,2}\b/i.test(t)) return true;
+
+  // "can we do 4" / "let's do 2" / "make it 3" — action verb + bare hour
+  if (/\b(?:do|make it|change to|switch to|set it to|reschedule to|book it at|do it at)\s+\d{1,2}\b/i.test(t)) return true;
 
   // "3 tomorrow" / "tomorrow at 3" / "3 today" — day + bare hour
   if (/\b\d{1,2}\s+(tomorrow|today|tonight|morning|afternoon|evening)\b/i.test(t)) return true;
@@ -2926,6 +2965,19 @@ function isExactClockTimeMentioned(textRaw: string): boolean {
   }
 
   return false;
+}
+
+function isBareHourSchedulingReply(textRaw: string, state?: CallState): boolean {
+  const t = normalizeSpokenTimeText(textRaw).replace(/[?.!,]+$/g, "").trim();
+  if (!/^\d{1,2}$/.test(t)) return false;
+  const hour = Number(t);
+  if (!Number.isFinite(hour) || hour < 1 || hour > 12) return false;
+
+  const rememberedDay = String(state?.selectedDay || "").trim().toLowerCase();
+  const hasSchedulingDay = rememberedDay === "today" || rememberedDay === "tomorrow";
+  const hasOfferedSlots = Array.isArray(state?.lastOfferedSlots) && state!.lastOfferedSlots!.length > 0;
+  const inSchedulingState = !!state && isPostCoverageSchedulingState(state);
+  return inSchedulingState && (hasSchedulingDay || hasOfferedSlots);
 }
 
 function pickOfferedClockTimeFromPrompt(lastPromptLineRaw: string, userTextRaw: string): string | null {
@@ -5516,6 +5568,9 @@ function classifyTurnIntent(
       if (isExactOrOfferedClockTime(String(state.lastPromptLine || ""), t)) {
         return { kind: "exact_time", raw };
       }
+      if (isBareHourSchedulingReply(t, state)) {
+        return { kind: "exact_time", raw };
+      }
       const day = extractExplicitDaySelection(t);
       if (day === "today" || day === "tomorrow") return { kind: "day_selection", raw };
       const namedDay = extractNamedWeekday(t);
@@ -5868,13 +5923,15 @@ function handlePostCoverageSchedulingTurn(
   if (intent.kind === "exact_time") {
     const offeredSlots = Array.isArray(state.lastOfferedSlots) ? state.lastOfferedSlots.filter(Boolean) : [];
     const rawTimeKey = normalizeTurnTextForKey(raw);
+    const explicitDay = extractExplicitDaySelection(raw);
     const vagueTimeWithoutClock =
       !isExactClockTimeMentioned(raw) &&
+      !isBareHourSchedulingReply(raw, state) &&
       (isTimeIndecisionOrAvailability(raw) || isTimeWindowMentioned(raw) || /\blater\b/.test(rawTimeKey));
     const pickedOfferedSlot = vagueTimeWithoutClock ? "" : pickOfferedClockTimeFromPrompt(String(state.lastPromptLine || ""), raw);
     const selectedExactTime = String(
       pickedOfferedSlot ||
-      (!vagueTimeWithoutClock && isExactClockTimeMentioned(raw) ? (extractExactClockText(raw) || raw) : "")
+      (!vagueTimeWithoutClock && (isExactClockTimeMentioned(raw) || isBareHourSchedulingReply(raw, state)) ? (extractExactClockText(raw) || raw) : "")
     ).trim();
     if (!selectedExactTime) {
       const formatSlot = (slot: string) =>
@@ -5908,26 +5965,28 @@ function handlePostCoverageSchedulingTurn(
       Number(state.scriptStepIndex || 0),
       Math.min(3, Math.max(0, stepCtx.steps.length - 1))
     );
-    const lineToSay = `Perfect — I have ${selectedExactTime} as the time. Does that still work for you?`;
+    const lineToSay = `Perfect — I'll get that set up for ${selectedExactTime}. Be on the lookout for ${agentFirst}'s call. Do you have any other questions for me?`;
     return {
       handled: true,
       routeKind: "post_coverage_exact_time",
       responseMode: "exact_script",
-      objective: "confirm_exact_time",
+      objective: "book_exact_time",
       lineToSay,
       requiredClosingPivot: lineToSay,
       forbiddenTopics: [],
       stateWrites: {
+        ...(explicitDay ? { selectedDay: explicitDay } : {}),
         selectedTimeText: selectedExactTime,
         lastExactTimeText: selectedExactTime,
         lastExactTimeAtMs: Date.now(),
         pendingLiveTransferAvailabilityConfirm: false,
         pendingLiveTransferAvailabilityAttempts: 0,
         scriptStepIndex: timeStepIndex,
-        awaitingUserAnswer: true,
+        confirmedAppointment: true,
+        awaitingUserAnswer: false,
         awaitingAnswerForStepIndex: Math.max(0, timeStepIndex - 1),
       },
-      shouldAdvanceStep: false,
+      shouldAdvanceStep: true,
     };
   }
 
@@ -7293,7 +7352,7 @@ function maybeFireServerSideBookingTrigger(state: CallState): void {
     const lastExactAt = Number((state as any).lastExactTimeAtMs || 0);
     const hasRecentExactTime =
       !!lastExactTime &&
-      isExactClockTimeMentioned(lastExactTime) &&
+      (isExactClockTimeMentioned(lastExactTime) || !!extractExactClockText(lastExactTime)) &&
       lastExactAt > 0 &&
       (Date.now() - lastExactAt) < 5 * 60 * 1000;
 
@@ -7346,6 +7405,7 @@ function maybeFireServerSideBookingTrigger(state: CallState): void {
           const mer = (match[3] || "").toLowerCase();
           if (mer === "pm" && hh !== 12) hh += 12;
           if (mer === "am" && hh === 12) hh = 0;
+          if (!mer && hh >= 1 && hh <= 7) hh += 12;
           if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
           const [mo, da, yr] = dateStr.split("/").map(Number);
           if (!mo || !da || !yr) return null;
