@@ -3004,14 +3004,30 @@ function isTimeMentioned(textRaw: string): boolean {
 function isTimeConfirmationYes(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase().replace(/[?.!,]+$/, "").trim();
   if (!t) return false;
-  return (
+  if (
     t === "yep" || t === "yes" || t === "yeah" || t === "yup" ||
     t === "sure" || t === "correct" || t === "that works" ||
     t === "that's fine" || t === "thats fine" || t === "sounds good" ||
     t === "perfect" || t === "works for me" || t === "absolutely" ||
     t === "okay" || t === "ok" || t === "alright" || t === "all right" ||
     t === "uh huh" || t === "mhm" || t === "mm-hmm" || t === "mm hmm"
-  );
+  ) return true;
+  // Handle "Yes, it does." / "Yeah, that works." / "Yes, it will." / "Yes, for sure." etc.
+  // Strip a leading affirmative word + optional comma, then check the remainder against known fillers.
+  const noLeadAffirm = t.replace(/^(yes|yeah|yep|yup|sure|ok|okay|alright|all right|absolutely|correct)\s*,?\s*/, "");
+  if (noLeadAffirm && noLeadAffirm !== t) {
+    const FILLERS = [
+      "it does", "it works", "it will", "it would", "it'll", "it's fine", "its fine",
+      "it sounds good", "it's good", "its good",
+      "that works", "that will", "that does", "that would work", "that'll work",
+      "that's fine", "thats fine", "that sounds good", "that's right", "thats right",
+      "that's great", "thats great", "that works for me", "that would be fine",
+      "sounds good", "perfect", "works for me", "go ahead",
+      "for sure", "absolutely", "definitely", "of course",
+    ];
+    if (FILLERS.some(f => noLeadAffirm === f || noLeadAffirm.startsWith(f + " "))) return true;
+  }
+  return false;
 }
 
 // ✅ Confirmation detector (used to allow booking on the confirm step after a prior exact time)
@@ -5691,7 +5707,7 @@ function handlePostCoverageSchedulingTurn(
   }
 
   if (intent.kind === "time_confirmation_yes" && selectedTime) {
-    const lineToSay = `Perfect — I have ${selectedTime}. Let me get that booked for you.`;
+    const lineToSay = `Awesome. I'm gonna set it up for ${selectedTime}. Be on the lookout for ${agentFirst}'s call. Do you have any other questions for me?`;
     const timeStepIndex = Math.max(
       Number(state.scriptStepIndex || 0),
       Math.min(3, Math.max(0, stepCtx.steps.length - 1))
@@ -11820,7 +11836,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
         const allowBooking =
           (!!lastAccepted && isExactClockTimeMentioned(lastAccepted)) ||
-          (!!lastAccepted && isAffirmativeConfirmation(lastAccepted) && hasRecentExactTime);
+          (!!lastAccepted && isAffirmativeConfirmation(lastAccepted) && hasRecentExactTime) ||
+          (!!(state as any).confirmedAppointment && hasRecentExactTime);
 
         if (!allowBooking) {
           console.log("[AI-VOICE][BOOKING][IGNORE] book_appointment without explicit time/confirm gate", {
