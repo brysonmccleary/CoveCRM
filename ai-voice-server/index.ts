@@ -2282,6 +2282,31 @@ function getGreetingAckPrefix(userTextRaw: string): string {
     return opts[Math.floor(Math.random() * opts.length)];
   }
 
+  const normalized = normalizeTurnTextForKey(t);
+  if (
+    normalized === "what s up" ||
+    normalized === "whats up" ||
+    normalized === "good what s up" ||
+    normalized === "good whats up" ||
+    normalized === "yeah what s up" ||
+    normalized === "yeah whats up" ||
+    normalized === "yep what s up" ||
+    normalized === "yep whats up" ||
+    normalized === "fine what s up" ||
+    normalized === "fine whats up" ||
+    normalized === "doing good what s up" ||
+    normalized === "doing good whats up" ||
+    normalized === "doing well what s up" ||
+    normalized === "doing well whats up" ||
+    normalized === "im good what s up" ||
+    normalized === "im good whats up" ||
+    normalized === "i m good what s up" ||
+    normalized === "i m good whats up"
+  ) {
+    const opts = ["Yeah, absolutely.", "Sure thing.", "Yeah, for sure.", "Absolutely."];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
+
   if (
     t.includes("bad day") || t.includes("not good") || t.includes("terrible") ||
     t.includes("stressed") || t.includes("pissed") || t.includes("angry") ||
@@ -2308,9 +2333,10 @@ function getGreetingAckPrefix(userTextRaw: string): string {
   if (
     t == "no" || t.includes("can't hear") || t.includes("cannot hear") ||
     t.includes("hard to hear") || t.includes("barely hear") ||
-    t.includes("what") || t.includes("huh")
+    t.includes("what did you say") || t.includes("say that again") ||
+    t.includes("repeat that") || t === "what?" || t === "huh" || t === "huh?"
   ) {
-    const opts = ["Okay.", "My bad.", "Let me try again."];
+    const opts = ["Okay.", "Sure.", "Let me repeat that."];
     return opts[Math.floor(Math.random() * opts.length)];
   }
 
