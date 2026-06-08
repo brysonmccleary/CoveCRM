@@ -8005,11 +8005,23 @@ WHAT THE LEAD JUST SAID:
     stepGoal = "Get a day commitment — today or tomorrow — so you can offer a specific time.";
   } else if (lineLower.includes("specific time") || lineLower.includes("what time") || lineLower.includes("what works best")) {
     stepGoal = "Lock in a specific clock time for the appointment.";
-  } else if (lineLower.includes("does that work") || lineLower.includes("call you around")) {
+  } else if (
+    lineLower.includes("does that work") ||
+    lineLower.includes("call you around") ||
+    lineLower.includes("have you down") ||
+    lineLower.includes("be on the lookout") ||
+    lineLower.includes("any other questions")
+  ) {
     stepGoal = "Confirm the time you just offered and close the booking.";
   } else if (lineLower.includes("yourself") || lineLower.includes("spouse")) {
     stepGoal = "Find out if the coverage is for just them or a spouse too, then move to scheduling.";
-  } else if (lineLower.includes("talk soon") || lineLower.includes("reach out")) {
+  } else if (
+    lineLower.includes("talk soon") ||
+    lineLower.includes("reach out") ||
+    lineLower.includes("if anything comes up") ||
+    lineLower.includes("great day") ||
+    lineLower.includes("have yourself a great day")
+  ) {
     stepGoal = "Wrap up warmly — they're booked. Keep it brief and positive.";
   }
 
@@ -8125,11 +8137,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
@@ -8149,11 +8161,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
@@ -8173,11 +8185,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
@@ -8197,11 +8209,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
@@ -8221,11 +8233,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
@@ -8245,11 +8257,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I'll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I'll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
@@ -8269,11 +8281,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I'll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I'll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
@@ -8293,11 +8305,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I'll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I'll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
@@ -8317,11 +8329,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I'll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I'll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
@@ -8341,11 +8353,11 @@ Then ask: "Perfect — is there a specific time you're available, or what works 
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
-Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+Say: "Awesome — I have you down for that time. Be on the lookout for ${agent}'s call. Do you have any other questions for me?"
 STOP. WAIT.
 
 STEP 5 (CLOSE)
-Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+Say: "Perfect. If anything comes up, please let us know — but otherwise, have yourself a great day."
 STOP. WAIT.
 `.trim();
 
