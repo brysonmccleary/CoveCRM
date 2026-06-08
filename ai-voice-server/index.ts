@@ -3095,8 +3095,10 @@ function isFirstTurnContinueReply(textRaw: string): boolean {
       "yeah whats up",
       "yes what s up",
       "yes whats up",
+      "good what s up",
+      "good whats up",
     ].includes(t) ||
-    /^(yeah|yes|yep|yup|sure|ok|okay|hi|hello)\s+(what s up|whats up)$/.test(t)
+    /^(yeah|yes|yep|yup|sure|ok|okay|hi|hello|good|fine|doing good|doing well|i m good|im good)\s+(what s up|whats up)$/.test(t)
   );
 }
 
@@ -3126,7 +3128,11 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
     "i can", "i hear you", "yes i hear you", "yeah i hear you",
     "loud and clear", "loud and clear yes",
     "what s up", "whats up", "yeah whats up", "yeah what s up",
-    "yep whats up", "what up", "sup", "go on", "im here",
+    "yep whats up", "good whats up", "good what s up",
+    "fine whats up", "fine what s up", "doing good whats up",
+    "doing good what s up", "doing well whats up", "doing well what s up",
+    "im good whats up", "im good what s up", "i m good whats up",
+    "i m good what s up", "what up", "sup", "go on", "im here",
     "i m here", "here", "listening", "talk to me",
   ];
 
@@ -3143,6 +3149,12 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
     t.startsWith("sure ") ||
     t.startsWith("hi ") ||
     t.startsWith("hello ") ||
+    t.startsWith("good ") ||
+    t.startsWith("fine ") ||
+    t.startsWith("doing good ") ||
+    t.startsWith("doing well ") ||
+    t.startsWith("im good ") ||
+    t.startsWith("i m good ") ||
     t.startsWith("what ") ||
     t.startsWith("sup ")
   ) return true;
