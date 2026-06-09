@@ -27,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const agentName = getQueryValue(req.query.agentName);
   const leadName = getQueryValue(req.query.leadName);
   const scope = getQueryValue(req.query.scope);
-  const answeredBy = String(req.body?.AnsweredBy || "").toLowerCase();
+  const answeredBy = String(req.body?.AnsweredBy || "unknown").toLowerCase();
 
   if (!conferenceName) {
     res.setHeader("Content-Type", "text/xml");

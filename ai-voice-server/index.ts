@@ -1165,6 +1165,7 @@ async function replayPendingCommittedTurn(
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) {
       if (
         lastUserText && lastUserText.trim().length > 0 &&
+        state.phase !== "awaiting_greeting_reply" &&
         state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN &&
         !state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking
       ) {
@@ -3727,6 +3728,7 @@ function buildGreetingFirstTurnDecision(
 
   const raw = String(intent.raw || "").trim();
   const t = normalizeTurnTextForKey(raw);
+  if (!t || t.length < 2) return null;
   const step1Line = (
     stepCtx.steps[0] ||
     (state.scriptSteps || [])[0] ||
@@ -11644,6 +11646,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     if (shouldSkipShortWindowDuplicateTurn(state, lastUserText, expectedAnswerIdx)) {
       if (
         lastUserText && lastUserText.trim().length > 0 &&
+        state.phase !== "awaiting_greeting_reply" &&
         state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN &&
         !state.waitingForResponse && !state.responseInFlight && !state.aiSpeaking
       ) {

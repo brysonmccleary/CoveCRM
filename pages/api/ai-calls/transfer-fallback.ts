@@ -6,6 +6,7 @@ import { sendEmail } from "@/lib/email";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
 import Lead from "@/models/Lead";
+import Folder from "@/models/Folder";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
@@ -202,6 +203,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.error("[TRANSFER-FALLBACK] Failed to send agent email", e);
       }
 
+      // Fire-and-forget: update lead status, optionally move to Live Transfers folder, record outcome
+      if (leadId && userEmail) {
+        const outcomeKey = process.env.AI_DIALER_AGENT_KEY || process.env.AI_DIALER_CRON_KEY || "";
+        (async () => {
+          try {
+            const liveTransferFolder = await Folder.findOne({ userEmail, name: "Live Transfers" }).lean();
+            const leadUpdate: Record<string, any> = { status: "Live Transfer", updatedAt: new Date() };
+            if (liveTransferFolder) leadUpdate.folderId = (liveTransferFolder as any)._id;
+            await Lead.updateOne({ _id: leadId }, { $set: leadUpdate });
+            console.log("[TRANSFER-FALLBACK] lead status updated to Live Transfer", { leadId, movedFolder: !!liveTransferFolder });
+          } catch (e) {
+            console.error("[TRANSFER-FALLBACK] lead status update failed (non-blocking)", e);
+          }
+        })();
+        if (outcomeKey && callSid) {
+          fetch(new URL("/api/ai-calls/outcome", COVECRM_BASE_URL).toString(), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-agent-key": outcomeKey },
+            body: JSON.stringify({
+              callSid,
+              outcome: "transferred",
+              confirmedYes: true,
+              summary: "Live transfer completed successfully.",
+              dispositionRule: "transferred",
+            }),
+          })
+            .then((r) => { if (!r.ok) console.error("[TRANSFER-FALLBACK] outcome recording failed", r.status); })
+            .catch((e) => console.error("[TRANSFER-FALLBACK] outcome recording error", e));
+        }
+      }
+
       return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Joanna-Neural" rate="90%">Thank you for your time. Have a great day!</Say>
@@ -235,11 +267,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const bookJson = await bookRes.json();
         if (bookJson.ok === true) {
           booked = true;
-          await fetch(new URL("/api/ai-calls/outcome", COVECRM_BASE_URL).toString(), {
+          const outcomeKey = process.env.AI_DIALER_AGENT_KEY || process.env.AI_DIALER_CRON_KEY || "";
+          const outcomeRes = await fetch(new URL("/api/ai-calls/outcome", COVECRM_BASE_URL).toString(), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "x-agent-key": AI_DIALER_AGENT_KEY,
+              "x-agent-key": outcomeKey,
             },
             body: JSON.stringify({
               callSid,
@@ -250,6 +283,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               dispositionRule: "move_to_booked",
             }),
           });
+          if (!outcomeRes.ok) {
+            console.error("[TRANSFER] outcome recording failed", outcomeRes.status);
+          }
         }
       } catch (err) {
         console.error("[TRANSFER-FALLBACK] Booking error:", err);
