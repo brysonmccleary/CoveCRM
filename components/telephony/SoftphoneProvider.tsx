@@ -259,7 +259,7 @@ export default function SoftphoneProvider({ children }: Props) {
 
   const answer = useCallback(() => {
     try {
-      incomingCall?.accept?.();
+      incomingCall?.ignore?.();
     } catch {}
   }, [incomingCall]);
 
