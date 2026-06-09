@@ -2058,9 +2058,12 @@ function looksLikeGeneratedTimeOfferLine(lineRaw: string): boolean {
   return slots.length >= 2 && (
     line.includes("availability at") ||
     line.includes("which would work") ||
+    line.includes("which works better") ||
     line.includes("which is easier") ||
     line.includes("put you down") ||
-    line.includes("lock in")
+    line.includes("lock in") ||
+    line.includes("which works for you") ||
+    line.includes("does that work")
   );
 }
 
@@ -9816,6 +9819,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
         const meridiem = (match[3] || "").toLowerCase();
         if (meridiem === "pm" && hh !== 12) hh += 12;
         if (meridiem === "am" && hh === 12) hh = 0;
+        if (!meridiem && hh >= 1 && hh <= 7) hh += 12;
         if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
         const [mo, da, yr] = dateStr.split("/").map(Number);
         if (!mo || !da || !yr) return null;
