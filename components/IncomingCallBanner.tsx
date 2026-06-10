@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/router";
 
 type Payload = {
   callSid?: string;
@@ -95,7 +94,6 @@ export function generateRingTone(volume: number): RingToneHandle {
 }
 
 export default function IncomingCallBanner({ volume = 1 }: { volume?: number }) {
-  const router = useRouter();
   const [visible, setVisible] = useState(false);
   const [payload, setPayload] = useState<Payload | null>(null);
   const payloadRef = useRef<Payload | null>(null);
@@ -203,38 +201,13 @@ export default function IncomingCallBanner({ volume = 1 }: { volume?: number }) 
   const title = payload.leadName || "Incoming call";
   const subtitle = payload.leadName ? formatPhone(payload.phone) : (payload.phone ? formatPhone(payload.phone) : "");
 
-  const onAnswer = async () => {
-    let conf = "";
+  const onAnswer = () => {
     stopRing();
     try {
       window.dispatchEvent(new CustomEvent("crm:incomingCall:answer", { detail: payload }));
     } catch {}
     setVisible(false);
     payloadRef.current = null;
-    try {
-      const r = await fetch("/api/twilio/calls/answer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: payload.phone, callSid: payload.callSid }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (j?.conferenceName) conf = j.conferenceName;
-    } catch {}
-
-    if (!conf) {
-      // inbound-only safety: do NOT navigate into dial-session without a conference
-      // (prevents outbound-like behavior when the inbound leg wasn't found)
-      try { console.warn("Answer failed: missing conferenceName"); } catch {}
-      return;
-    }
-
-    setVisible(false);
-    const params = new URLSearchParams();
-    params.set("inbound", "1");
-    params.set("conference", conf);
-    if (payload.leadId) params.set("leadId", payload.leadId);
-
-    router.push(`/dial-session?${params.toString()}`);
   };
 
   const onDecline = async () => {

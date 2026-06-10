@@ -108,7 +108,7 @@ async function ensureDevice(): Promise<void> {
     device.on?.("unregistered", () => { registered = false; });
 
     // No inbound in this app
-    device.on?.("incoming", (call: any) => { try { call.reject?.(); } catch {} });
+    device.on?.("incoming", (call: any) => { try { call.ignore?.(); } catch {} });
 
     // Refresh before expiry via SDK event
     device.on?.("tokenWillExpire", async () => {
