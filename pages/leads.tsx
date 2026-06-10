@@ -4,6 +4,14 @@ import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import LeadImportPanel from "@/components/LeadImportPanel";
 import LeadPreviewPanel from "@/components/LeadPreviewPanel";
+import { getNumberState } from "@/lib/twilio/localPresence";
+
+function formatPhoneNumber(phone: string): string {
+  const d = (phone || "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) return `(${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  return phone || "";
+}
 
 interface Folder {
   _id: string;
@@ -621,7 +629,7 @@ export default function LeadsPage() {
                   <option value="">-- Choose a number --</option>
                   {numbers.map((n) => (
                     <option key={n.id} value={n.phoneNumber}>
-                      {n.phoneNumber}
+                      {formatPhoneNumber(n.phoneNumber)}{getNumberState(n.phoneNumber) ? ` · ${getNumberState(n.phoneNumber)}` : ""}
                     </option>
                   ))}
                 </select>

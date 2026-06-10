@@ -3,6 +3,14 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
 import { useRouter } from "next/router";
+import { getNumberState } from "@/lib/twilio/localPresence";
+
+function formatPhoneNumber(phone: string): string {
+  const d = (phone || "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) return `(${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  return phone || "";
+}
 
 interface NumberEntry {
   id: string;
@@ -981,7 +989,7 @@ export default function LeadsPanel() {
                       <option value="LOCAL_PRESENCE">🎯 Local Presence (Auto-Match)</option>
                       {numbers.map((num) => (
                         <option key={num.id} value={num.phoneNumber}>
-                          {num.phoneNumber}
+                          {formatPhoneNumber(num.phoneNumber)}{getNumberState(num.phoneNumber) ? ` · ${getNumberState(num.phoneNumber)}` : ""}
                         </option>
                       ))}
                     </select>
@@ -1219,7 +1227,7 @@ export default function LeadsPanel() {
                       <option value="LOCAL_PRESENCE">🎯 Local Presence (Auto-Match)</option>
                       {numbers.map((num) => (
                         <option key={num.id} value={num.phoneNumber}>
-                          {num.phoneNumber}
+                          {formatPhoneNumber(num.phoneNumber)}{getNumberState(num.phoneNumber) ? ` · ${getNumberState(num.phoneNumber)}` : ""}
                         </option>
                       ))}
                     </select>

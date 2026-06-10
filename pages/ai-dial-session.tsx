@@ -5,6 +5,14 @@ import type { GetServerSideProps } from "next";
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
+import { getNumberState } from "@/lib/twilio/localPresence";
+
+function formatPhoneNumber(phone: string): string {
+  const d = (phone || "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) return `(${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  return phone || "";
+}
 
 interface Folder {
   _id: string;
@@ -604,8 +612,7 @@ export default function AIDialSessionPage() {
                 <option value="">-- Select a number --</option>
                 {numbers.map((n) => (
                   <option key={n.sid} value={n.phoneNumber}>
-                    {n.phoneNumber}{" "}
-                    {n.subscriptionStatus ? `• ${n.subscriptionStatus}` : ""}
+                    {formatPhoneNumber(n.phoneNumber)}{getNumberState(n.phoneNumber) ? ` · ${getNumberState(n.phoneNumber)}` : ""}{n.subscriptionStatus ? ` • ${n.subscriptionStatus}` : ""}
                   </option>
                 ))}
               </select>
@@ -613,7 +620,7 @@ export default function AIDialSessionPage() {
             {selectedFromNumber && (
               <p className="mt-2 text-xs text-gray-300">
                 Calls will appear as:{" "}
-                <span className="font-semibold">{selectedFromNumber}</span>
+                <span className="font-semibold">{formatPhoneNumber(selectedFromNumber)}{getNumberState(selectedFromNumber) ? ` · ${getNumberState(selectedFromNumber)}` : ""}</span>
               </p>
             )}
           </div>

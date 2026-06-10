@@ -2,6 +2,14 @@ import DashboardLayout from "@/components/DashboardLayout";
 import NumberPurchasePanel from "@/components/NumberPurchasePanel";
 import React, { useEffect, useState } from "react";
 import toast from "react-hot-toast";
+import { getNumberState } from "@/lib/twilio/localPresence";
+
+function formatPhoneNumber(phone: string): string {
+  const d = (phone || "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) return `(${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  return phone || "";
+}
 
 interface NumberEntry {
   id: string;
@@ -158,7 +166,7 @@ function NumbersPage() {
                   >
                     <div>
                       <div className="flex items-center gap-2">
-                        <p className="text-white font-semibold">{number.phoneNumber}</p>
+                        <p className="text-white font-semibold">{formatPhoneNumber(number.phoneNumber)}{getNumberState(number.phoneNumber) ? ` · ${getNumberState(number.phoneNumber)}` : ""}</p>
                         {isDefault && (
                           <span className="text-xs bg-green-800 text-green-300 px-2 py-0.5 rounded-full">
                             ✓ Primary SMS

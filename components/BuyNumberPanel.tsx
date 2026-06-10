@@ -1,6 +1,7 @@
 // components/BuyNumberPanel.tsx
 import { useState, useEffect } from "react";
 import axios from "axios";
+import { getNumberState } from "@/lib/twilio/localPresence";
 
 function formatPhoneNumber(number: string) {
   const cleaned = number.replace(/[^0-9]/g, "");
@@ -244,7 +245,7 @@ export default function BuyNumberPanel() {
               return (
                 <>
             <div className="flex justify-between items-center">
-              <span className="font-medium">{formatPhoneNumber(num.phoneNumber)}</span>
+              <span className="font-medium">{formatPhoneNumber(num.phoneNumber)}{getNumberState(num.phoneNumber) ? ` · ${getNumberState(num.phoneNumber)}` : ""}</span>
               <div className="flex items-center gap-2 relative">
                 {isPrimary ? (
                   <span className="bg-green-900/30 border border-green-800 text-green-300 px-2 py-1 rounded cursor-default text-sm">

@@ -164,10 +164,10 @@ export function inferStateFromPhone(lead: Record<string, any>): string | null {
 }
 
 /** Get state for an owned number via its area code */
-function getNumberState(phoneNumber: string): string | null {
+export function getNumberState(phoneNumber: string): string {
   const areaCode = extractAreaCode(phoneNumber);
-  if (!areaCode) return null;
-  return AREA_CODE_TO_STATE[areaCode] ?? null;
+  if (!areaCode) return "";
+  return AREA_CODE_TO_STATE[areaCode] ?? "";
 }
 
 /**

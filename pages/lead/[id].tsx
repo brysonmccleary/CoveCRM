@@ -7,6 +7,7 @@ import toast from "react-hot-toast";
 import dynamic from "next/dynamic";
 import ChatThread from "@/components/messages/ChatThread";
 import { getSocket } from "@/lib/socketClient";
+import { getNumberState } from "@/lib/twilio/localPresence";
 
 
 import { useInlineLeadCall } from "@/lib/dial/useInlineLeadCall";
@@ -1272,7 +1273,7 @@ export default function LeadProfileDial() {
               {numbers.length ? null : <option value="">No numbers</option>}
               {numbers.map((n) => (
                 <option key={n.sid || n.id || n.phoneNumber} value={n.phoneNumber}>
-                  {n.phoneNumber}
+                  {formatPhone(n.phoneNumber)}{getNumberState(n.phoneNumber) ? ` · ${getNumberState(n.phoneNumber)}` : ""}
                 </option>
               ))}
             </select>
