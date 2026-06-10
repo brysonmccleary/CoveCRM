@@ -16,6 +16,8 @@ type SoftphoneCtx = {
   device?: Device;
   activeCall?: any;
   incomingCall?: any;
+  /** true only while an inbound call accepted via answer() is the active call */
+  inboundCallAccepted: boolean;
   startCall: (toE164: string, fromTwilio: string) => Promise<void>;
   hangup: () => void;
   answer: () => void;
@@ -82,10 +84,22 @@ async function placeOutboundConferenceCall(toE164: string, fromTwilio: string): 
 }
 
 
-export function useSoftphone() {
-  const v = useContext(Ctx);
-  if (!v) throw new Error("useSoftphone must be used within <SoftphoneProvider/>");
-  return v;
+const NOOP_CTX: SoftphoneCtx = {
+  ready: false,
+  device: undefined,
+  activeCall: undefined,
+  incomingCall: undefined,
+  inboundCallAccepted: false,
+  startCall: async () => {},
+  hangup: () => {},
+  answer: () => {},
+  decline: () => {},
+};
+
+export function useSoftphone(): SoftphoneCtx {
+  // During SSR / static prerender the provider is not mounted; return a no-op stub
+  // so pages that import this hook don't crash at build time.
+  return useContext(Ctx) ?? NOOP_CTX;
 }
 
 type Props = {
@@ -97,6 +111,7 @@ export default function SoftphoneProvider({ children }: Props) {
   const [ready, setReady] = useState(false);
   const [activeCall, setActiveCall] = useState<any | undefined>(undefined);
   const [incomingCall, setIncomingCall] = useState<any | undefined>(undefined);
+  const [inboundCallAccepted, setInboundCallAccepted] = useState(false);
   const tokenRef = useRef<string | null>(null);
   const identityRef = useRef<string | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -133,8 +148,8 @@ export default function SoftphoneProvider({ children }: Props) {
           logLevel: process.env.NODE_ENV === "production" ? "error" : "warn",
           // Prefer Opus in modern browsers; fallback PCMU
           codecPreferences: ["opus", "pcmu"] as unknown as any,
-          // Allow incoming events to reach this client
-          allowIncomingWhileBusy: false,
+          // Allow incoming events to reach this client even when a call is active
+          allowIncomingWhileBusy: true,
         });
         deviceRef.current = dev;
 
@@ -204,8 +219,11 @@ export default function SoftphoneProvider({ children }: Props) {
           scheduleFallbackRefresh(50);
         });
 
-        dev.on("disconnect", () => {
-          setActiveCall(undefined);
+        dev.on("disconnect", (conn: any) => {
+          // Only clear activeCall if it's the call that just disconnected.
+          // Prevents a race where we disconnect outbound and immediately accept inbound:
+          // the outbound disconnect event must not wipe out the new inbound activeCall.
+          setActiveCall((c: any) => (c === conn ? undefined : c));
         });
 
         await dev.register();
@@ -259,9 +277,24 @@ export default function SoftphoneProvider({ children }: Props) {
 
   const answer = useCallback(() => {
     try {
-      incomingCall?.accept?.();
+      const call = incomingCall;
+      if (!call) return;
+      // If agent is on an active SoftphoneProvider-tracked call, hang it up first.
+      // voiceClient conference cleanup is handled by the inbound-direct hook in dial-session.
+      try { activeCall?.disconnect?.(); } catch {}
+      call.accept?.();
+      // Promote to activeCall immediately — Device "connect" may not fire for accepted inbound calls
+      setActiveCall(call);
+      setIncomingCall(undefined);
+      setInboundCallAccepted(true);
+      const onEnd = () => {
+        setActiveCall((c: any) => (c === call ? undefined : c));
+        setInboundCallAccepted(false);
+      };
+      try { call.on?.("disconnect", onEnd); } catch {}
+      try { call.on?.("cancel", onEnd); } catch {}
     } catch {}
-  }, [incomingCall]);
+  }, [incomingCall, activeCall]);
 
   const decline = useCallback(() => {
     try {
@@ -280,8 +313,8 @@ export default function SoftphoneProvider({ children }: Props) {
   }, [answer, decline]);
 
   const value = useMemo<SoftphoneCtx>(
-    () => ({ ready, device: deviceRef.current, activeCall, incomingCall, startCall, hangup, answer, decline }),
-    [ready, activeCall, incomingCall, startCall, hangup, answer, decline]
+    () => ({ ready, device: deviceRef.current, activeCall, incomingCall, inboundCallAccepted, startCall, hangup, answer, decline }),
+    [ready, activeCall, incomingCall, inboundCallAccepted, startCall, hangup, answer, decline]
   );
 
   return (

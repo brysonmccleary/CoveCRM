@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/router";
 
 type Payload = {
   callSid?: string;
@@ -94,6 +95,7 @@ export function generateRingTone(volume: number): RingToneHandle {
 }
 
 export default function IncomingCallBanner({ volume = 1 }: { volume?: number }) {
+  const router = useRouter();
   const [visible, setVisible] = useState(false);
   const [payload, setPayload] = useState<Payload | null>(null);
   const payloadRef = useRef<Payload | null>(null);
@@ -208,6 +210,11 @@ export default function IncomingCallBanner({ volume = 1 }: { volume?: number }) 
     } catch {}
     setVisible(false);
     payloadRef.current = null;
+    const params = new URLSearchParams();
+    params.set("inbound", "1");
+    if (payload.callSid) params.set("callSid", payload.callSid);
+    if (payload.leadId) params.set("leadId", payload.leadId);
+    router.push(`/dial-session?${params.toString()}`);
   };
 
   const onDecline = async () => {

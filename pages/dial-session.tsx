@@ -7,6 +7,7 @@ import { isCallAllowedForLead, localTimeString } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext, ensureUnlocked, armRingbackFromUserGesture } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
+import { useSoftphone } from "@/components/telephony/SoftphoneProvider";
 
 interface Lead { id: string; [key: string]: any; }
 type Json = Record<string, any>;
@@ -183,6 +184,7 @@ const compareDialPriority = (a: Lead, b: Lead) => {
 
 export default function DialSession() {
   const router = useRouter();
+  const softphone = useSoftphone();
   const {
     leads: leadIdsParam,
     fromNumber: fromNumberParam,
@@ -256,6 +258,8 @@ export default function DialSession() {
   const placingCallRef = useRef<boolean>(false);
   const activeDialLeadIdRef = useRef<string | null>(null);
   const joinedRef = useRef<boolean>(false);
+  const inboundDirectCallRef = useRef<any>(null);
+  const inboundDirectSetupRef = useRef(false);
 
   const dispositionBusyRef = useRef<boolean>(false);
 
@@ -537,6 +541,9 @@ export default function DialSession() {
       setReadyToCall(false);
       return;
     }
+
+    // In inbound mode stay on the page — agent sets disposition manually
+    if (inboundMode) return;
 
     scheduleAdvance();
   };
@@ -1168,6 +1175,49 @@ export default function DialSession() {
   }, [router.query?.inbound, router.query?.conf, router.query?.conference]);
   // 🔺🔺🔺 END INBOUND HOOK 🔺🔺🔺
 
+  // INBOUND DIRECT MODE — no conference, SoftphoneProvider call.accept() path.
+  // Runs when ?inbound=1 is set without ?conference. Binds the already-accepted
+  // Device call to local state so Mute, Hang Up, and the connected timer work.
+  useEffect(() => {
+    const q = (router.query as any) || {};
+    const inboundRaw = String(q?.inbound ?? "").toLowerCase();
+    const inbound = inboundRaw === "1" || inboundRaw === "true" || inboundRaw === "yes";
+    const conf =
+      (typeof q?.conf === "string" && q.conf) ||
+      (typeof q?.conference === "string" && q.conference) ||
+      "";
+    if (!inbound || conf) return;
+    if (inboundDirectSetupRef.current) return;
+    // Require both: the call object AND the flag that proves answer() actually accepted it.
+    // Without the flag, softphone.activeCall could be an outbound call (e.g. agent was on a
+    // conference call when the inbound banner appeared via socket.io and they clicked Answer).
+    if (!softphone.activeCall || !softphone.inboundCallAccepted) return;
+
+    // Clean up any voiceClient conference that was running (e.g. agent was on an outbound
+    // dial-session call). Same-page navigation keeps the component mounted so unmount
+    // cleanup doesn't run; we do it here before binding the inbound call.
+    void leaveIfJoined("inbound-answer");
+
+    inboundDirectSetupRef.current = true;
+    const call = softphone.activeCall;
+    inboundDirectCallRef.current = call;
+
+    // Store inbound callSid so REST hangup endpoint can target the right leg
+    const sid = typeof q?.callSid === "string" ? q.callSid : "";
+    if (sid) activeCallSidRef.current = sid;
+
+    setStatus("Connected");
+    setCallActive(true);
+    hasConnectedRef.current = true;
+    startConnectedTimer();
+
+    // Detect when lead hangs up
+    const onEnd = () => markDisconnected("inbound-disconnect");
+    try { call.on?.("disconnect", onEnd); } catch {}
+    try { call.on?.("cancel", onEnd); } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.query, softphone.activeCall]);
+
   const callLead = async (leadToCall: Lead) => {
     if (sessionEndedRef.current) return;
     const leadId = getLeadId(leadToCall);
@@ -1402,7 +1452,7 @@ export default function DialSession() {
 
       // ✅ IMPORTANT: disposition button must NOT open calendar (prevents double booking)
 
-      if (!sessionEndedRef.current) {
+      if (!sessionEndedRef.current && !inboundMode) {
         if (label === "No Answer") {
           scheduleAdvance(); // double-dial: redial same lead once before advancing
         } else {
@@ -1446,7 +1496,9 @@ export default function DialSession() {
   };
 
   const handleHangUp = () => {
-    // Agent hangup should also show Disconnected immediately.
+    if (inboundMode && inboundDirectCallRef.current) {
+      try { inboundDirectCallRef.current.disconnect?.(); } catch {}
+    }
     markDisconnected("agent-hangup");
   };
 
@@ -1455,17 +1507,22 @@ export default function DialSession() {
     setMuted(next);
 
     try {
-      sdkSetMuted(next);
-      let sdkMuted = sdkGetMuted();
-
-      if (sdkMuted !== next) {
+      if (inboundMode && inboundDirectCallRef.current) {
+        // Inbound direct: mute the SoftphoneProvider-accepted call object
+        inboundDirectCallRef.current.mute?.(next);
+      } else {
         sdkSetMuted(next);
-        sdkMuted = sdkGetMuted();
-      }
+        let sdkMuted = sdkGetMuted();
 
-      if (sdkMuted !== next) {
-        setMuted(!next);
-        toast.error(next ? "Failed to mute call" : "Failed to unmute call");
+        if (sdkMuted !== next) {
+          sdkSetMuted(next);
+          sdkMuted = sdkGetMuted();
+        }
+
+        if (sdkMuted !== next) {
+          setMuted(!next);
+          toast.error(next ? "Failed to mute call" : "Failed to unmute call");
+        }
       }
     } catch {
       setMuted(!next);
