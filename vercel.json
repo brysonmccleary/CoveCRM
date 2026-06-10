@@ -53,6 +53,10 @@
       "schedule": "*/2 * * * *"
     },
     {
+      "path": "/api/ai-calls/watchdog",
+      "schedule": "*/2 * * * *"
+    },
+    {
       "path": "/api/facebook/auto-optimize",
       "schedule": "0 */6 * * *"
     },

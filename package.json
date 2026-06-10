@@ -69,6 +69,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@swc/core": "^1.15.41",
     "@swc/jest": "^0.2.39",
     "@tailwindcss/postcss": "^4",
     "@types/bcrypt": "^5.0.2",

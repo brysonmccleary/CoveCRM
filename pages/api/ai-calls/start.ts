@@ -127,6 +127,27 @@ async function startAiDialSession(
     });
   }
 
+  // ✅ Dedup guard: return existing active session for same user+folder instead of creating duplicate
+  const existingSession = await AICallSession.findOne({
+    userEmail,
+    folderId,
+    status: { $in: ["queued", "running"] },
+    callDirection: { $ne: "inbound" },
+    scriptKey: { $ne: "kayla_signup" },
+  }).lean();
+
+  if (existingSession) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({
+      ok: true,
+      sessionId: String((existingSession as any)._id),
+      status: (existingSession as any).status,
+      total: (existingSession as any).total,
+      createdAt: (existingSession as any).createdAt,
+      resumed: true,
+    });
+  }
+
   // Create AICallSession document
   const total = leadIds.length;
   const now = new Date();

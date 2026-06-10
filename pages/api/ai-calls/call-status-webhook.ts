@@ -57,6 +57,9 @@ async function kickAiWorkerOnce(req: NextApiRequest, meta: any) {
   }
 
   const url = new URL("/api/ai-calls/worker", runtimeBase(req));
+  if (meta?.sessionId) {
+    url.searchParams.set("sessionId", String(meta.sessionId));
+  }
   // worker accepts bearer + headers + qs; bearer is cleanest
   try {
     const resp = await fetch(url.toString(), {
@@ -804,6 +807,26 @@ export default async function handler(
     try {
       if (CallSid && recDoc && recDoc.aiCallSessionId) {
         const aiCallSessionId = recDoc.aiCallSessionId as Types.ObjectId;
+
+        // ✅ Set lastCallbackAt on every callback; clear activeCallSid on terminal only if it matches this call
+        try {
+          const sessionCallbackUpdate: any = { lastCallbackAt: new Date() };
+          if (isTerminal) {
+            // Only clear if this call is the one recorded as active — prevents clearing a
+            // newer call's activeCallSid if a stale webhook fires after the next call starts.
+            const sessionForClear = await AICallSession.findById(aiCallSessionId).select("activeCallSid").lean();
+            if ((sessionForClear as any)?.activeCallSid === CallSid) {
+              sessionCallbackUpdate.activeCallSid = null;
+              sessionCallbackUpdate.activeCallSidAt = null;
+            }
+          }
+          await AICallSession.updateOne(
+            { _id: aiCallSessionId },
+            { $set: sessionCallbackUpdate }
+          ).exec();
+        } catch (e) {
+          // non-blocking
+        }
 
         const session = await AICallSession.findById(aiCallSessionId).lean();
         if (session) {

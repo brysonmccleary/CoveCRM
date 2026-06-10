@@ -23,7 +23,8 @@ type AllowedOutcome =
   | "callback"
   | "do_not_call"
   | "disconnected"
-  | "transferred"; // live transfer succeeded — do NOT move folder, agent resolves disposition
+  | "transferred" // live transfer succeeded — do NOT move folder, agent resolves disposition
+  | "voicemail"; // AMD-detected voicemail — recorded but no folder move
 
 interface OutcomeBody {
   callSid?: string;
@@ -605,8 +606,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             s.stats && typeof s.stats.completed === "number"
               ? s.stats.completed
               : 0;
+          // Require lastIndex to confirm the worker has actually reached the final lead.
+          // Stats alone can exceed total due to race conditions; this prevents early completion.
+          const lastIndex: number = typeof s.lastIndex === "number" ? s.lastIndex : -1;
 
-          if (total > 0 && completed >= total && s.status !== "completed") {
+          if (total > 0 && completed >= total && lastIndex >= total - 1 && s.status !== "completed") {
             await AICallSession.updateOne(
               { _id: aiCallSessionId, userEmail, status: { $ne: "completed" } },
               {

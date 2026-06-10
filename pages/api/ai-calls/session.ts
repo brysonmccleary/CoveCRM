@@ -116,6 +116,32 @@ const AI_VOICE_HTTP_BASE = RAW_STREAM_URL
       .replace(/\/$/, "")
   : "";
 
+const BASE_URL_SESSION = (
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  "http://localhost:3000"
+).replace(/\/$/, "");
+
+const SESSION_CRON_SECRET = (process.env.CRON_SECRET || "").trim();
+const SESSION_DIALER_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
+
+// Directly kicks the worker for a specific session.
+// Used as backup on session start (Render cold-start resilience) and on resume.
+async function kickWorkerForSession(sessionId: string): Promise<void> {
+  const secret = SESSION_CRON_SECRET || SESSION_DIALER_KEY;
+  if (!secret) return;
+  const url = `${BASE_URL_SESSION}/api/ai-calls/worker?sessionId=${encodeURIComponent(sessionId)}`;
+  await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      "x-cron-key": secret,
+      "x-cron-secret": secret,
+    },
+    signal: AbortSignal.timeout(3000),
+  });
+}
+
 async function notifyVoiceServerStartSession(params: {
   userEmail: string;
   sessionId: string;
@@ -407,6 +433,15 @@ export default async function handler(
         );
       }
 
+      // Backup direct kick with targeted sessionId — handles Render cold starts where
+      // notifyVoiceServerStartSession times out (3s) before Render warms up (~10-30s).
+      // If both this kick and the Render kick fire, the lock prevents double processing.
+      try {
+        await kickWorkerForSession(String((aiSession as any)?._id));
+      } catch {
+        // Non-fatal — session is saved; cron is the last-resort fallback
+      }
+
       const payload = serializeSession(aiSession);
       return res.status(200).json({ ok: true, session: payload, workerKickOk });
     } catch (err) {
@@ -468,6 +503,15 @@ export default async function handler(
       }
 
       await aiSession.save();
+
+      if (action === "resume") {
+        try {
+          await kickWorkerForSession(String((aiSession as any)?._id));
+        } catch {
+          // Non-fatal — session is queued; cron will pick it up as fallback
+        }
+      }
+
       const payload = serializeSession(aiSession);
       return res.status(200).json({ ok: true, session: payload });
     } catch (err) {

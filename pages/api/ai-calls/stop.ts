@@ -64,10 +64,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const now = new Date();
 
-  // 2) Mark as completed in Mongo so the UI / schedulers stop using it
-  aiSession.status = "completed";
+  // 2) Mark as stopped in Mongo so the UI / schedulers stop using it
+  aiSession.status = "stopped";
   aiSession.completedAt = now;
+  (aiSession as any).stoppedAt = now;
   aiSession.errorMessage = null;
+  (aiSession as any).activeCallSid = null;
+  (aiSession as any).activeCallSidAt = null;
   await aiSession.save();
 
   // 3) Best-effort notify the AI voice server to stop

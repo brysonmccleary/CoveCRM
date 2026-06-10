@@ -8,7 +8,9 @@ export type AICallOutcome =
   | "no_answer"
   | "callback"
   | "do_not_call"
-  | "disconnected";
+  | "disconnected"
+  | "transferred"
+  | "voicemail";
 
 export interface IAICallRecording extends Document {
   userEmail: string;
@@ -75,6 +77,8 @@ const AICallRecordingSchema = new Schema<IAICallRecording>(
         "callback",
         "do_not_call",
         "disconnected",
+        "transferred",
+        "voicemail",
       ],
       default: "unknown",
       index: true,

@@ -18,6 +18,8 @@ export interface IAICallSessionStats {
   callback: number;
   do_not_call: number;
   disconnected: number;
+  transferred?: number;
+  voicemail?: number;
 }
 
 export interface IAICallSession extends Document {
@@ -46,6 +48,15 @@ export interface IAICallSession extends Document {
   // ✅ Guardrail to prevent duplicate “kick worker” loops from Twilio retries
   chainKickedAt?: Date | null;
   chainKickCallSid?: string | null;
+
+  // ✅ Safe watchdog / active-call tracking fields
+  lastWorkerKickAt?: Date | null;
+  lastCallbackAt?: Date | null;
+  lastPlacedCallAt?: Date | null;
+  lastWatchdogKickAt?: Date | null;
+  activeCallSid?: string | null;
+  activeCallSidAt?: Date | null;
+  stoppedAt?: Date | null;
 
   createdAt: Date;
   updatedAt: Date;
@@ -108,6 +119,15 @@ const AICallSessionSchema = new Schema<IAICallSession>(
     chainKickedAt: { type: Date, default: null },
     chainKickCallSid: { type: String, default: null },
 
+    // ✅ Safe watchdog / active-call tracking fields
+    lastWorkerKickAt: { type: Date, default: null },
+    lastCallbackAt: { type: Date, default: null },
+    lastPlacedCallAt: { type: Date, default: null },
+    lastWatchdogKickAt: { type: Date, default: null },
+    activeCallSid: { type: String, default: null },
+    activeCallSidAt: { type: Date, default: null },
+    stoppedAt: { type: Date, default: null },
+
     // AI dialer stats (per session)
     stats: {
       completed: { type: Number, default: 0 },
@@ -131,6 +151,11 @@ AICallSessionSchema.index(
     partialFilterExpression: { sourceCallSid: { $type: "string" } },
   }
 );
+
+// ✅ Performance indexes for worker sweep, session lookup, and watchdog
+AICallSessionSchema.index({ status: 1, updatedAt: 1 }, { name: "session_status_updated_idx" });
+AICallSessionSchema.index({ userEmail: 1, folderId: 1, createdAt: -1 }, { name: "session_user_folder_created_idx" });
+AICallSessionSchema.index({ userEmail: 1, status: 1, createdAt: -1 }, { name: "session_user_status_created_idx" });
 
 let AICallSessionModel: Model<IAICallSession>;
 

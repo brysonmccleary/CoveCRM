@@ -38,7 +38,7 @@ const ADMIN_FREE_AI_EMAILS: string[] = (process.env.ADMIN_FREE_AI_EMAILS || "")
 const isAdminFreeEmail = (email?: string | null) =>
   !!email && ADMIN_FREE_AI_EMAILS.includes(String(email).toLowerCase());
 
-// ✅ TEMP DEBUG: bypass AMD/voicemail-fast-skip for specific emails (so calls don’t instantly end while testing)
+// ✅ TEMP DEBUG: bypass AMD/voicemail-fast-skip for specific emails (so calls don't instantly end while testing)
 // Comma-separated list, lowercased. Example: "bryson.mccleary1@gmail.com"
 const AI_DIALER_BYPASS_AMD_EMAILS: string[] = (
   process.env.AI_DIALER_BYPASS_AMD_EMAILS || ""
@@ -50,7 +50,7 @@ const AI_DIALER_BYPASS_AMD_EMAILS: string[] = (
 const isBypassAmdEmail = (email?: string | null) => {
   const e = String(email || "").toLowerCase();
   if (!e) return false;
-  // Default include Bryson’s email even if env isn’t set, since you asked for it explicitly
+  // Default include Bryson's email even if env isn't set, since you asked for it explicitly
   if (e === "bryson.mccleary1@gmail.com") return true;
   return AI_DIALER_BYPASS_AMD_EMAILS.includes(e);
 };
@@ -126,7 +126,7 @@ function isAuthorizedCron(req: NextApiRequest): boolean {
 /**
  * Hard gating:
  * - NEVER dial unless there is a truly active / fresh queued session.
- * - Prevents old “queued” sessions from being processed forever by a 1/min cron.
+ * - Prevents old "queued" sessions from being processed forever by a 1/min cron.
  *
  * You can tune this window. Minimal safe default: 15 minutes.
  */
@@ -163,6 +163,22 @@ async function releaseLock(sessionId: string) {
   }
 }
 
+// Fire-and-forget kick to chain the next lead after a skip path.
+// Does not await  -  the current request has already completed its work.
+function fireAndForgetWorkerKick(sessionId: string): void {
+  const secret = (CRON_SECRET || AI_DIALER_CRON_KEY).trim();
+  if (!secret) return;
+  const url = `${BASE}/api/ai-calls/worker?sessionId=${encodeURIComponent(sessionId)}`;
+  fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      "x-cron-key": secret,
+      "x-cron-secret": secret,
+    },
+  }).catch(() => {});
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Allow both GET (cron) and POST (manual / internal triggers)
   if (req.method !== "GET" && req.method !== "POST") {
@@ -183,8 +199,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ✅ GLOBAL HARD STOP (NO SIDE EFFECTS)
   if (AI_DIALER_DISABLED) {
-    console.log("[AI WORKER] AI_DIALER_DISABLED=true — exiting immediately");
+    console.log("[AI WORKER] AI_DIALER_DISABLED=true  -  exiting immediately");
     return res.status(200).json({ ok: true, message: "AI_DIALER_DISABLED" });
+  }
+
+  // Optional targeted sessionId  -  passed by webhook chain kicks and resume kicks.
+  // When present, worker processes ONLY that session (no global sweep).
+  const rawSessionId = String(
+    (req.query.sessionId as string | undefined) ||
+    ((req.body as any)?.sessionId as string | undefined) ||
+    ""
+  ).trim();
+  const targetSessionId: string | null = rawSessionId || null;
+
+  if (targetSessionId && !Types.ObjectId.isValid(targetSessionId)) {
+    return res.status(400).json({ ok: false, message: "Invalid sessionId" });
   }
 
   const requestId = makeRequestId();
@@ -197,62 +226,100 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       now - QUEUED_FRESH_WINDOW_MINUTES * 60 * 1000
     );
 
-    // ✅ ONLY process sessions that are actually "running",
-    // or "queued" but recently updated (fresh).
-    const candidate: any = await AICallSession.findOne({
-      total: { $gt: 0 },
-      callDirection: { $ne: "inbound" },
-      scriptKey: { $ne: "kayla_signup" },
-      $or: [
-        { status: "running" },
-        { status: "queued", updatedAt: { $gte: freshCutoff } },
-      ],
-    })
-      .sort({ updatedAt: -1, createdAt: -1 })
-      .lean()
-      .exec();
-
-    if (!candidate) {
-      console.log("[AI WORKER] no queued/running sessions (fresh window), exiting");
-      return res.status(200).json({
-        ok: true,
-        message: "no_work",
-      });
-    }
-
-    const sessionId = String(candidate._id);
-
-    // ✅ Acquire lock atomically (prevents “already dialing” duplicates)
     const lockTtlMs = Math.max(10, LOCK_TTL_SECONDS) * 1000;
     const lockExpiresAt = new Date(Date.now() + lockTtlMs);
 
-    const locked: any = await AICallSession.findOneAndUpdate(
-      {
-        _id: candidate._id,
-        $or: [
-          { lockExpiresAt: { $exists: false } },
-          { lockExpiresAt: null },
-          { lockExpiresAt: { $lt: new Date() } },
-        ],
-        status: { $in: ["queued", "running"] },
+    const buildLockFilter = (id: any) => ({
+      _id: id,
+      $or: [
+        { lockExpiresAt: { $exists: false } },
+        { lockExpiresAt: null },
+        { lockExpiresAt: { $lt: new Date() } },
+      ],
+      status: { $in: ["queued", "running"] },
+      callDirection: { $ne: "inbound" },
+      scriptKey: { $ne: "kayla_signup" },
+    });
+
+    const lockUpdate = {
+      $set: {
+        lockedAt: new Date(),
+        lockOwner: requestId,
+        lockExpiresAt,
+        lastWorkerKickAt: new Date(),
+      },
+    };
+
+    let candidate: any = null;
+    let locked: any = null;
+    let sessionId = "";
+
+    if (targetSessionId) {
+      // ✅ Targeted kick  -  only process this exact session
+      candidate = await AICallSession.findOne({
+        _id: new Types.ObjectId(targetSessionId),
+        total: { $gt: 0 },
         callDirection: { $ne: "inbound" },
         scriptKey: { $ne: "kayla_signup" },
-      },
-      {
-        $set: {
-          lockedAt: new Date(),
-          lockOwner: requestId,
-          lockExpiresAt,
-        },
-      },
-      { new: true }
-    ).exec();
+        status: { $in: ["running", "queued"] },
+      }).lean().exec();
 
-    if (!locked) {
-      console.log("[AI WORKER] session is locked by another worker; skipping", {
-        sessionId,
-      });
-      return res.status(200).json({ ok: true, message: "locked_skip", sessionId });
+      if (!candidate) {
+        console.log("[AI WORKER] targeted session not found or not active", { targetSessionId });
+        return res.status(200).json({ ok: true, message: "no_work", sessionId: targetSessionId });
+      }
+
+      sessionId = String(candidate._id);
+      locked = await AICallSession.findOneAndUpdate(
+        buildLockFilter(candidate._id),
+        lockUpdate,
+        { new: true }
+      ).exec();
+
+      if (!locked) {
+        console.log("[AI WORKER] targeted session is locked by another worker; skipping", { sessionId });
+        return res.status(200).json({ ok: true, message: "locked_skip", sessionId });
+      }
+    } else {
+      // ✅ Cron sweep  -  pick hottest active session; try up to 3 before giving up
+      const cronCandidates: any[] = await AICallSession.find({
+        total: { $gt: 0 },
+        callDirection: { $ne: "inbound" },
+        scriptKey: { $ne: "kayla_signup" },
+        $or: [
+          { status: "running" },
+          { status: "queued", updatedAt: { $gte: freshCutoff } },
+        ],
+      })
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .limit(3)
+        .lean()
+        .exec();
+
+      if (!cronCandidates.length) {
+        console.log("[AI WORKER] no queued/running sessions (fresh window), exiting");
+        return res.status(200).json({ ok: true, message: "no_work" });
+      }
+
+      for (const c of cronCandidates) {
+        const attempt: any = await AICallSession.findOneAndUpdate(
+          buildLockFilter(c._id),
+          lockUpdate,
+          { new: true }
+        ).exec();
+        if (attempt) {
+          candidate = c;
+          locked = attempt;
+          break;
+        }
+      }
+
+      if (!locked) {
+        console.log("[AI WORKER] all candidate sessions locked; skipping");
+        return res.status(200).json({ ok: true, message: "locked_skip" });
+      }
+
+      sessionId = String(locked._id);
     }
 
     const aiSession: any = locked;
@@ -270,6 +337,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         cooldownUntil: aiSession.cooldownUntil,
       });
       await releaseLock(sessionId);
+      // Best-effort delayed recovery after cooldown expires. setTimeout is unreliable in
+      // serverless (Vercel kills the function after response). The cron sweep is the
+      // authoritative recovery  -  this fires only if the instance stays warm.
+      const cooldownRemaining = Math.max(0, new Date(aiSession.cooldownUntil).getTime() - Date.now());
+      setTimeout(() => { fireAndForgetWorkerKick(sessionId); }, cooldownRemaining + 3000);
       return res.status(200).json({ ok: true, message: "cooldown_active", sessionId });
     }
 
@@ -303,8 +375,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, message: "not_ready", sessionId });
     }
 
-    // If the session is queued but stale, do nothing.
+    // If the session is queued but stale, do nothing (cron sweep only).
+    // Targeted kicks bypass this  -  explicit resume/webhook kicks should always proceed.
     if (
+      !targetSessionId &&
       aiSession.status === "queued" &&
       aiSession.updatedAt &&
       new Date(aiSession.updatedAt).getTime() < freshCutoff.getTime()
@@ -415,7 +489,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (nextIndex >= leadIds.length) {
       await AICallSession.updateOne(
         { _id: sessionId },
-        { $set: { status: "completed", completedAt: new Date() } }
+        {
+          $set: {
+            status: "completed",
+            completedAt: new Date(),
+            activeCallSid: null,
+            activeCallSidAt: null,
+          },
+        }
       );
 
       console.log("[AI WORKER] Session completed; no remaining leads", {
@@ -457,6 +538,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       await releaseLock(sessionId);
+      fireAndForgetWorkerKick(sessionId);
       return res.status(200).json({
         ok: true,
         message: "max_attempts_skipped",
@@ -481,6 +563,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       await releaseLock(sessionId);
+      fireAndForgetWorkerKick(sessionId);
       return res.status(200).json({
         ok: false,
         message: "invalid_lead_skipped",
@@ -508,10 +591,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       await releaseLock(sessionId);
+      fireAndForgetWorkerKick(sessionId);
       return res.status(200).json({
         ok: false,
         message: "lead_not_found_skipped",
         sessionId,
+        nextIndex,
+      });
+    }
+
+    // ✅ DNC guard: never call a lead marked Do Not Call / Do Not Contact
+    const isDNC =
+      leadDoc.doNotCall === true ||
+      leadDoc.status === "Do Not Call" ||
+      leadDoc.status === "Do Not Contact";
+
+    if (isDNC) {
+      console.log("[AI WORKER] lead is DNC; skipping without calling", {
+        sessionId,
+        leadId: leadIdStr,
+        nextIndex,
+        status: leadDoc.status,
+      });
+
+      await AICallRecording.create({
+        userEmail,
+        leadId,
+        aiCallSessionId: aiSession._id,
+        callSid: `AIDNC_${sessionId}_${leadIdStr}`,
+        outcome: "do_not_call",
+        notes: `Skipped: lead status=${leadDoc.status || "doNotCall=true"} — DNC guard`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      await AICallSession.updateOne(
+        { _id: sessionId },
+        { $set: { lastIndex: nextIndex, status: "running" } }
+      );
+
+      await releaseLock(sessionId);
+      fireAndForgetWorkerKick(sessionId);
+      return res.status(200).json({
+        ok: true,
+        message: "dnc_skipped",
+        sessionId,
+        leadId: leadIdStr,
         nextIndex,
       });
     }
@@ -531,6 +656,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       await releaseLock(sessionId);
+      fireAndForgetWorkerKick(sessionId);
       return res.status(200).json({
         ok: true,
         message: "lead_moved_folder_skipped",
@@ -542,7 +668,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Quiet hours gating
     const { allowed, zone } = isCallAllowedForLead(leadDoc);
     if (!allowed) {
-      console.log("[AI WORKER] quiet hours — skipping lead", {
+      console.log("[AI WORKER] quiet hours  -  skipping lead", {
         sessionId,
         leadId: leadIdStr,
         zone: zone || "unknown",
@@ -565,6 +691,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       await releaseLock(sessionId);
+      fireAndForgetWorkerKick(sessionId);
       return res.status(200).json({
         ok: true,
         message: "quiet_hours_skipped",
@@ -609,6 +736,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       await releaseLock(sessionId);
+      fireAndForgetWorkerKick(sessionId);
       return res.status(200).json({
         ok: false,
         message: "no_valid_phone_skipped",
@@ -664,6 +792,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // ✅ Active-call guard: don't place a new call if one is already in flight for this session
+    if (aiSession.activeCallSid && aiSession.activeCallSidAt) {
+      const activeAgeSec = (Date.now() - new Date(aiSession.activeCallSidAt).getTime()) / 1000;
+      if (activeAgeSec < 5 * 60) {
+        console.log("[AI WORKER] active call in progress for session; skipping", {
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+          activeAgeSec: Math.round(activeAgeSec),
+        });
+        await releaseLock(sessionId);
+        return res.status(200).json({
+          ok: true,
+          message: "active_call_in_progress",
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+        });
+      }
+    }
+
     // Place the AI outbound call via user's Twilio client
     try {
       console.log("[AI WORKER] attempting call", {
@@ -705,7 +852,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         statusCallbackMethod: "POST",
       };
 
-      // ✅ Only enable AMD when NOT bypassing (bypass prevents “voicemail fast-skip” ending calls during testing)
+      // ✅ Only enable AMD when NOT bypassing (bypass prevents "voicemail fast-skip" ending calls during testing)
       if (!bypassAmd) {
         callCreate.machineDetection = "Enable";
         callCreate.asyncAmd = true;
@@ -733,7 +880,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { upsert: true, new: true }
       );
 
-      // ✅ Success: advance lastIndex and clear cooldown
+      // ✅ Success: advance lastIndex, record active call state, clear cooldown
+      const callPlacedAt = new Date();
       await AICallSession.updateOne(
         { _id: sessionId },
         {
@@ -742,7 +890,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: "running",
             errorMessage: null,
             cooldownUntil: null,
-            startedAt: aiSession.startedAt ? aiSession.startedAt : new Date(),
+            startedAt: aiSession.startedAt ? aiSession.startedAt : callPlacedAt,
+            activeCallSid: call.sid,
+            activeCallSidAt: callPlacedAt,
+            lastPlacedCallAt: callPlacedAt,
           },
         }
       );
@@ -800,6 +951,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       await releaseLock(sessionId);
+      // Best-effort delayed recovery after cooldown expires. setTimeout is unreliable in
+      // serverless  -  the cron sweep is the authoritative recovery mechanism.
+      setTimeout(
+        () => { fireAndForgetWorkerKick(sessionId); },
+        Math.max(5, COOLDOWN_SECONDS) * 1000 + 3000
+      );
 
       // Keep 200 so cron doesn't treat it as failure and re-run aggressively
       return res.status(200).json({
