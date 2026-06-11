@@ -4,7 +4,14 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 
 type Resp =
-  | { optInUrl: string; tosUrl: string; privacyUrl: string }
+  | {
+      optInUrl: string;
+      tosUrl: string;
+      privacyUrl: string;
+      selectedFlow: "lead_generation";
+      leadGeneration: { optInUrl: string; tosUrl: string; privacyUrl: string };
+      servicing: { optInUrl: string; tosUrl: string; privacyUrl: string };
+    }
   | { error: string };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
@@ -26,10 +33,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const baseUrl = host ? `${proto}://${host}` : "";
 
   const userId = String((session.user as any).id);
-
-  return res.status(200).json({
+  const leadGeneration = {
+    optInUrl: `${baseUrl}/sms/lead-optin/${userId}`,
+    tosUrl: `${baseUrl}/sms/lead-optin-terms/${userId}`,
+    privacyUrl: `${baseUrl}/sms/lead-optin-privacy/${userId}`,
+  };
+  const servicing = {
     optInUrl: `${baseUrl}/sms/optin/${userId}`,
     tosUrl: `${baseUrl}/sms/optin-terms/${userId}`,
     privacyUrl: `${baseUrl}/sms/optin-privacy/${userId}`,
+  };
+
+  return res.status(200).json({
+    ...leadGeneration,
+    selectedFlow: "lead_generation",
+    leadGeneration,
+    servicing,
   });
 }

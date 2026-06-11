@@ -121,9 +121,14 @@ export default function A2PVerificationForm() {
     optInUrl: string;
     tosUrl: string;
     privacyUrl: string;
+    selectedFlow?: "lead_generation" | "servicing";
+    leadGeneration?: { optInUrl: string; tosUrl: string; privacyUrl: string };
+    servicing?: { optInUrl: string; tosUrl: string; privacyUrl: string };
   } | null>(null);
   const [loadingHostedLinks, setLoadingHostedLinks] = useState<boolean>(false);
   const [useHostedCompliancePages, setUseHostedCompliancePages] = useState(true);
+  const [a2pFlow, setA2PFlow] = useState<"lead_generation" | "servicing">("lead_generation");
+  const [campaignType, setCampaignType] = useState("final_expense");
   useEffect(() => {
     let cancelled = false;
 
@@ -295,26 +300,26 @@ export default function A2PVerificationForm() {
 
   // ---------- Sample Messages ----------
   const [msg1, setMsg1] = useState(
-    `Hey {{first_name}}, it’s {{agent_name}} — your insurance agent. Hope you’re doing well. If you have any questions about your current policy or need anything updated, just reply here. Reply STOP to opt out.`,
+    `Hi Sarah, this is your insurance agent following up on your insurance information request. I can help review available options. Reply STOP to opt out.`,
   );
   const [msg2, setMsg2] = useState(
-    `Hi {{first_name}}, it’s {{agent_name}}. Just checking in to make sure your coverage info is up to date (beneficiaries, address, etc.). If you’d like a quick review, tell me a good time. Reply STOP to opt out.`,
+    `Hi Sarah, this is your insurance agent. Just following up on your request for insurance information. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
   );
   const [msg3, setMsg3] = useState(
-    `Hey {{first_name}}, it’s {{agent_name}} — your insurance agent. I’m here if you need help with your policy, changes, or a quick review. Just reply with what you need. Reply STOP to opt out.`,
+    `Hi Sarah, this is your insurance agent. Reminder about your scheduled insurance review. Reply STOP to opt out.`,
   );
 
   // ---------- Opt-in Details ----------
   const [optInDetails, setOptInDetails] = useState(
-    `This campaign sends service-related SMS messages to existing insurance customers who explicitly opt in after becoming customers. Messages are used for policy updates, account servicing, retention-related communications, customer support, and other non-promotional messages related to the customer’s existing policy relationship.
+    `This campaign sends SMS messages from the sender to consumers who request information about life insurance, final expense coverage, mortgage protection, or related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests.
 
-End users opt in through a dedicated SMS opt-in page provided by CoveCRM for the sender. The form collects name and mobile phone number (and optionally email) and presents a separate, unchecked SMS consent checkbox directly above the Submit button. No marketing consent is required to submit the form.
+End users opt in through the sender’s public CoveCRM-hosted opt-in page with a separate unchecked SMS consent checkbox. The form collects name and mobile phone number (and optionally email). No marketing consent is required to submit the form.
 
 Before submission, users see a disclosure similar to:
 
-“By clicking this box, you agree to receive SMS messages using CoveCRM related to your existing policy, policy updates, account servicing, and retention-related communications. Message frequency varies. Msg & data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.”
+“By checking this box, you agree to receive SMS messages about life insurance, final expense coverage, mortgage protection, related insurance options, appointment coordination, application follow-up, customer support, and responses to your requests. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.”
 
-The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the same page as the form submission. Consent records may be retained as needed for compliance and audit purposes.`,
+The opt-in page displays SMS Terms and SMS Privacy links on the same page as the form submission. Consent records may be retained as needed for compliance and audit purposes.`,
   );
 
   // ---------- Volume + screenshot ----------
@@ -340,6 +345,9 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
             optInUrl: String(data.optInUrl || ""),
             tosUrl: String(data.tosUrl || ""),
             privacyUrl: String(data.privacyUrl || ""),
+            selectedFlow: data.selectedFlow === "servicing" ? "servicing" : "lead_generation",
+            leadGeneration: data.leadGeneration,
+            servicing: data.servicing,
           });
         }
       } finally {
@@ -625,6 +633,10 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
         landingTosUrl: landingTosUrl || undefined,
         landingPrivacyUrl: landingPrivacyUrl || undefined,
         useHostedCompliancePages,
+        a2pFlow,
+        campaignType,
+        campaignDescription:
+          "This campaign sends SMS messages from the sender to consumers who request information about life insurance, final expense coverage, mortgage protection, or related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender's public CoveCRM-hosted opt-in page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.",
       };
 
       const res = await fetch("/api/registerA2P", {
@@ -737,6 +749,11 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
     }
   };
 
+  const selectedHostedLinks =
+    a2pFlow === "servicing"
+      ? hostedComplianceLinks?.servicing || hostedComplianceLinks
+      : hostedComplianceLinks?.leadGeneration || hostedComplianceLinks;
+
   // ---------- UI ----------
   return (
     <div className="border border-black dark:border-white p-4 rounded space-y-4">
@@ -773,6 +790,35 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
           When enabled, CoveCRM provides compliant opt-in, Terms, and Privacy pages automatically.
           Disable only if you host your own compliance pages.
         </p>
+        <div className="grid md:grid-cols-2 gap-3 mt-3">
+          <label className="text-xs">
+            <span className="block mb-1 opacity-70">Hosted flow</span>
+            <select
+              value={a2pFlow}
+              onChange={(e) => setA2PFlow(e.target.value === "servicing" ? "servicing" : "lead_generation")}
+              className="border p-2 rounded w-full bg-white dark:bg-gray-950"
+            >
+              <option value="lead_generation">Lead generation</option>
+              <option value="servicing">Customer servicing</option>
+            </select>
+          </label>
+          <label className="text-xs">
+            <span className="block mb-1 opacity-70">Campaign type</span>
+            <select
+              value={campaignType}
+              onChange={(e) => setCampaignType(e.target.value)}
+              className="border p-2 rounded w-full bg-white dark:bg-gray-950"
+            >
+              <option value="final_expense">Final expense</option>
+              <option value="mortgage_protection">Mortgage protection</option>
+              <option value="iul">IUL</option>
+              <option value="veteran">Veteran</option>
+              <option value="trucker">Trucker</option>
+              <option value="retention">Retention</option>
+              <option value="sold_follow_up">Sold follow-up</option>
+            </select>
+          </label>
+        </div>
       </div>
 
       {/* Business */}
@@ -996,18 +1042,18 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
             ) : null}
           </div>
 
-          {hostedComplianceLinks?.optInUrl ? (
+          {selectedHostedLinks?.optInUrl ? (
             <div className="mt-2 space-y-2">
               <div className="text-xs opacity-80">Opt-in URL</div>
               <div className="flex gap-2">
                 <input
                   readOnly
-                  value={hostedComplianceLinks.optInUrl}
+                  value={selectedHostedLinks.optInUrl}
                   className="border p-2 rounded w-full text-xs"
                 />
                 <button
                   type="button"
-                  onClick={() => copyToClipboard(hostedComplianceLinks.optInUrl)}
+                  onClick={() => copyToClipboard(selectedHostedLinks.optInUrl)}
                   className="border px-3 rounded text-xs"
                 >
                   Copy
@@ -1018,10 +1064,10 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
                 <button
                   type="button"
                   onClick={() => {
-                    if (!hostedComplianceLinks) return;
-                    setLandingOptInUrl((v) => (v ? v : hostedComplianceLinks.optInUrl));
-                    setLandingTosUrl((v) => (v ? v : hostedComplianceLinks.tosUrl));
-                    setLandingPrivacyUrl((v) => (v ? v : hostedComplianceLinks.privacyUrl));
+                    if (!selectedHostedLinks) return;
+                    setLandingOptInUrl((v) => (v ? v : selectedHostedLinks.optInUrl));
+                    setLandingTosUrl((v) => (v ? v : selectedHostedLinks.tosUrl));
+                    setLandingPrivacyUrl((v) => (v ? v : selectedHostedLinks.privacyUrl));
                     toast.success("Filled hosted URLs");
                   }}
                   className="border px-3 py-2 rounded text-xs"
@@ -1032,10 +1078,10 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
                 <button
                   type="button"
                   onClick={() => {
-                    if (!hostedComplianceLinks) return;
-                    setLandingOptInUrl(hostedComplianceLinks.optInUrl);
-                    setLandingTosUrl(hostedComplianceLinks.tosUrl);
-                    setLandingPrivacyUrl(hostedComplianceLinks.privacyUrl);
+                    if (!selectedHostedLinks) return;
+                    setLandingOptInUrl(selectedHostedLinks.optInUrl);
+                    setLandingTosUrl(selectedHostedLinks.tosUrl);
+                    setLandingPrivacyUrl(selectedHostedLinks.privacyUrl);
                     toast.success("Replaced URL fields");
                   }}
                   className="border px-3 py-2 rounded text-xs"
@@ -1128,8 +1174,7 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
       {/* Sample Messages */}
       <div className="space-y-3">
         <label className="text-sm text-gray-500">
-          Tip: Use variables like <code>{`{{first_name}}`}</code> and include opt-out language
-          (e.g., “Reply STOP to opt out”).
+          Tip: Use realistic reviewer-safe examples and include opt-out language such as “Reply STOP to opt out”.
         </label>
         <div>
           <textarea

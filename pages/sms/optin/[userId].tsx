@@ -21,6 +21,8 @@ export default function OptInPage(props: Props) {
   const [leadEmail, setLeadEmail] = useState("");
   const [consent, setConsent] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
 
   const contactLine = useMemo(() => {
     const parts = [agentName].filter(Boolean);
@@ -30,9 +32,33 @@ export default function OptInPage(props: Props) {
     return parts.join(" ") + (tail.length ? ` • ${tail.join(" • ")}` : "");
   }, [agentName, email, phone]);
 
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitted(true);
+    setError("");
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/sms/optin/${encodeURIComponent(userId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          phone: mobile,
+          email: leadEmail,
+          consentGiven: consent,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Unable to submit right now.");
+        return;
+      }
+      setSubmitted(true);
+    } catch {
+      setError("Network error. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -139,11 +165,14 @@ export default function OptInPage(props: Props) {
               </div>
             </div>
 
+            {error && <p className="text-sm text-red-300">{error}</p>}
+
             <button
               type="submit"
+              disabled={submitting}
               className="w-full rounded-lg bg-white text-slate-900 font-semibold py-2 hover:bg-slate-200 transition"
             >
-              Submit Information
+              {submitting ? "Submitting..." : "Submit Information"}
             </button>
 
             <p className="text-xs text-slate-400">

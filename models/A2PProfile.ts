@@ -69,6 +69,9 @@ export interface IA2PProfile extends Document {
   landingOptInUrl?: string;
   landingTosUrl?: string;
   landingPrivacyUrl?: string;
+  a2pFlow?: "lead_generation" | "servicing";
+  campaignType?: string;
+  campaignDescription?: string;
 
   brandSid?: string;
   campaignSid?: string; // QE...
@@ -193,6 +196,9 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   landingOptInUrl: { type: String },
   landingTosUrl: { type: String },
   landingPrivacyUrl: { type: String },
+  a2pFlow: { type: String, enum: ["lead_generation", "servicing"] },
+  campaignType: { type: String },
+  campaignDescription: { type: String },
   useHostedCompliancePages: { type: Boolean, default: false },
 
   brandSid: { type: String },

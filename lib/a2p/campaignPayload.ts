@@ -1,3 +1,5 @@
+import { personalizeA2PSampleMessages } from "@/lib/a2p/flowSelection";
+
 type BuildA2PCampaignPayloadArgs = {
   profile: any;
   brandRegistrationSid: string;
@@ -180,16 +182,22 @@ function normalizeSamples(args: BuildA2PCampaignPayloadArgs): string[] {
     .filter(Boolean)
     .slice(0, 3);
 
-  if (list.length) return list;
+  if (list.length) return personalizeA2PSampleMessages(list, profile);
 
-  return clean(profile.sampleMessages)
+  const parsed = clean(profile.sampleMessages)
     .split(/\n{2,}|\r{2,}|\r?\n/)
     .map((sample) => sample.trim())
     .filter(Boolean)
     .slice(0, 3);
+  return personalizeA2PSampleMessages(parsed, profile);
 }
 
 function buildCampaignDescription(profile: any, usecase: string, messageFlow: string, optInUrl: string): string {
+  const storedDescription = clean(profile?.campaignDescription);
+  if (storedDescription) {
+    return storedDescription.length > 1024 ? storedDescription.slice(0, 1024) : storedDescription;
+  }
+
   const businessName = clean(profile?.businessName) || "this business";
   const useCase = clean(usecase) || "LOW_VOLUME";
 

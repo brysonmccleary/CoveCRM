@@ -12,6 +12,12 @@ import {
   TwilioResolvedAuth,
 } from "@/lib/twilio/getClientForUser";
 import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
+import {
+  buildA2PMessageFlowForFlow,
+  personalizeA2PSampleMessages,
+  resolveA2PComplianceUrls,
+  resolveA2PFlow,
+} from "@/lib/a2p/flowSelection";
 import twilio from "twilio";
 import { Agent } from "undici";
 
@@ -87,19 +93,9 @@ function resolveComplianceUrls(args: {
   landingTosUrl?: string;
   landingPrivacyUrl?: string;
   useHostedCompliancePages?: boolean;
+  flow?: "lead_generation" | "servicing";
 }) {
-  const baseUrl = (args.baseUrl || "").replace(/\/$/, "");
-  const hosted = args.useHostedCompliancePages !== false;
-
-  const hostedOptIn = `${baseUrl}/sms/optin/${args.userId}`;
-  const hostedTos = `${baseUrl}/sms/optin-terms/${args.userId}`;
-  const hostedPrivacy = `${baseUrl}/sms/optin-privacy/${args.userId}`;
-
-  const optInUrl = hosted ? hostedOptIn : (String(args.landingOptInUrl || "") || hostedOptIn);
-  const tosUrl = hosted ? hostedTos : (String(args.landingTosUrl || "") || hostedTos);
-  const privacyUrl = hosted ? hostedPrivacy : (String(args.landingPrivacyUrl || "") || hostedPrivacy);
-
-  return { optInUrl, tosUrl, privacyUrl, hosted };
+  return resolveA2PComplianceUrls(args);
 }
 
 function applyComplianceTokens(messageFlow: string, urls: { optInUrl: string; tosUrl: string; privacyUrl: string }) {
@@ -1481,6 +1477,9 @@ export default async function handler(
       landingTosUrl,
       landingPrivacyUrl,
       useHostedCompliancePages,
+      a2pFlow,
+      campaignType,
+      campaignDescription,
     } = (req.body || {}) as Record<string, unknown>;
 
     required(businessName, "businessName");
@@ -1503,7 +1502,7 @@ export default async function handler(
     const einDigits = normalizeEinDigits(ein);
     const einDisplay = formatEinDisplay(einDigits);
 
-    const samples: string[] = Array.isArray(sampleMessages)
+    const rawSamples: string[] = Array.isArray(sampleMessages)
       ? (sampleMessages as string[]).map((s) => s.trim()).filter(Boolean)
       : typeof sampleMessages === "string"
         ? (sampleMessages as string)
@@ -1511,6 +1510,11 @@ export default async function handler(
             .map((s) => s.trim())
             .filter(Boolean)
         : [];
+    const samples = personalizeA2PSampleMessages(rawSamples, {
+      contactFirstName,
+      contactLastName,
+      businessName,
+    });
 
     if (samples.length < 2) {
       throw new Error(
@@ -1519,6 +1523,11 @@ export default async function handler(
     }
 
     const userId = String(user._id);
+    const flowSelection = resolveA2PFlow({
+      explicitFlow: typeof a2pFlow === "string" ? a2pFlow : undefined,
+      campaignType: typeof campaignType === "string" ? campaignType : undefined,
+      optInDetails: typeof optInDetails === "string" ? optInDetails : undefined,
+    });
 
     const compliance = resolveComplianceUrls({
       baseUrl,
@@ -1527,6 +1536,7 @@ export default async function handler(
       landingTosUrl: typeof landingTosUrl === 'string' ? landingTosUrl : undefined,
       landingPrivacyUrl: typeof landingPrivacyUrl === 'string' ? landingPrivacyUrl : undefined,
       useHostedCompliancePages: (useHostedCompliancePages as any) !== false,
+      flow: flowSelection.flow,
     });
     const existing = await A2PProfile.findOne({ userId }).lean<
       IA2PProfile | null
@@ -1534,6 +1544,11 @@ export default async function handler(
     const now = new Date();
 
     const normalizedUseCase = String(usecaseCode || "LOW_VOLUME");
+    const generatedMessageFlow = buildA2PMessageFlowForFlow(flowSelection.flow, {
+      optInUrl: compliance.optInUrl,
+      tosUrl: compliance.tosUrl,
+      privacyUrl: compliance.privacyUrl,
+    });
 
     const setPayload: Partial<IA2PProfile> & { userId: string } = {
       userId,
@@ -1561,7 +1576,9 @@ export default async function handler(
       landingOptInUrl: compliance.optInUrl,
       landingTosUrl: compliance.tosUrl,
       landingPrivacyUrl: compliance.privacyUrl,
-usecaseCode: normalizedUseCase,
+      a2pFlow: flowSelection.flow,
+      campaignType: flowSelection.campaignType,
+      usecaseCode: normalizedUseCase,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       lastSyncedAt: now,
@@ -1579,8 +1596,12 @@ usecaseCode: normalizedUseCase,
     ).trim();
     (setPayload as any).lastSubmittedSampleMessages = samples;
     (setPayload as any).twilioAccountSidLastUsed = twilioAccountSidUsed;
+    (setPayload as any).campaignDescription =
+      typeof campaignDescription === "string" && campaignDescription.trim()
+        ? campaignDescription.trim()
+        : "This campaign sends SMS messages from the sender to consumers who request information about life insurance, final expense coverage, mortgage protection, or related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender's public CoveCRM-hosted opt-in page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.";
 
-    const messageFlowText: string = applyComplianceTokens(setPayload.optInDetails!, {
+    const messageFlowText: string = applyComplianceTokens(setPayload.optInDetails || generatedMessageFlow, {
       optInUrl: compliance.optInUrl,
       tosUrl: compliance.tosUrl,
       privacyUrl: compliance.privacyUrl,

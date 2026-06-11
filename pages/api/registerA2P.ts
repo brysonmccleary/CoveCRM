@@ -7,6 +7,7 @@ import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
 import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
+import { personalizeA2PSampleMessages } from "@/lib/a2p/flowSelection";
 
 /**
  * This endpoint orchestrates the full A2P flow:
@@ -63,6 +64,9 @@ type BodyIn = {
   landingPrivacyUrl?: string;
 
   useHostedCompliancePages?: boolean;
+  a2pFlow?: "lead_generation" | "servicing";
+  campaignType?: string;
+  campaignDescription?: string;
 };
 
 type ValidationErrors = {
@@ -339,9 +343,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const normalizedCountry = addressCountry!.trim().toUpperCase();
   const normalizedPhone = phone!.trim();
 
-  const finalSampleArray = finalSamples.length
+  const finalSampleArrayRaw = finalSamples.length
     ? finalSamples
     : samplesFromFieldsRaw.map((s) => (s || "").trim()).filter(Boolean);
+  const finalSampleArray = personalizeA2PSampleMessages(finalSampleArrayRaw, {
+    contactFirstName,
+    contactLastName,
+    businessName,
+  });
 
   const startPayload: Record<string, any> = {
     businessName: businessName!.trim(),
@@ -372,6 +381,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     volume: volDigits,
     resubmit,
     useHostedCompliancePages,
+    a2pFlow: body.a2pFlow || "lead_generation",
+    campaignType: body.campaignType || "final_expense",
+    campaignDescription: body.campaignDescription,
 
     ...(body.optInScreenshotUrl ? { optInScreenshotUrl: body.optInScreenshotUrl } : {}),
     ...(body.landingOptInUrl ? { landingOptInUrl: body.landingOptInUrl } : {}),
@@ -399,6 +411,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             sampleMessage3: finalSampleArray[2],
             optInDetails: optInDetails!,
             volume: volDigits,
+            a2pFlow: body.a2pFlow || "lead_generation",
+            campaignType: body.campaignType || "final_expense",
+            ...(body.campaignDescription ? { campaignDescription: body.campaignDescription } : {}),
 
             applicationStatus: "pending",
             registrationStatus: "profile_submitted",
