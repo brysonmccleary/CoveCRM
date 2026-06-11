@@ -5,6 +5,7 @@ import twilio from "twilio";
 const { validateRequest } = twilio;
 
 const CANONICAL_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const SILENCE_URL = `${CANONICAL_BASE}/api/twiml/silence`;
 
 export const config = {
   api: { bodyParser: false }, // Twilio posts x-www-form-urlencoded; keep raw for signature check
@@ -68,7 +69,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       beep: "false",
       startConferenceOnEnter: true,   // caller should not be kept waiting once others join
       endConferenceOnExit: false,     // keep room alive for the agent to join
-      waitUrl: "",                    // Twilio default if empty string; avoids extra prompts
+      waitUrl: SILENCE_URL,
+      waitMethod: "POST",
       maxParticipants: 2
     },
     conferenceName
