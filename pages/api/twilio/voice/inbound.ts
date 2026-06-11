@@ -497,11 +497,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const actionUrl = `${baseUrl()}/api/twilio/voice-status?userEmail=${encodeURIComponent(
       ownerEmail,
     )}&direction=inbound`;
-    const agentPhone = normalizeE164(String(ownerDoc?.agentPhone || ""));
-    const hasAgentPhone = Boolean(agentPhone);
     const dial = vr.dial({
       answerOnBridge: true,
-      timeout: hasAgentPhone ? 20 : 25,
+      timeout: 25,
       action: actionUrl,
       method: "POST",
     });
@@ -510,20 +508,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         statusCallback: actionUrl,
         statusCallbackMethod: "POST",
         statusCallbackEvent: ["initiated", "ringing", "answered", "completed"] as any,
-        ...(hasAgentPhone ? { timeout: 15 } : {}),
       } as any,
       ownerEmail,
     );
-    if (hasAgentPhone) {
-      dial.number(
-        {
-          statusCallback: actionUrl,
-          statusCallbackMethod: "POST",
-          statusCallbackEvent: ["initiated", "ringing", "answered", "completed"] as any,
-        } as any,
-        agentPhone,
-      );
-    }
   } else {
     const ringUrl = `${baseUrl()}/ringback.mp3`;
     // loop="0" = infinite on Twilio
