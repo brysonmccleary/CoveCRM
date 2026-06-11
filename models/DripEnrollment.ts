@@ -48,6 +48,10 @@ const DripEnrollmentSchema = new Schema(
       index: true,
     },
     lastError: { type: String },
+
+    // V2: when set to 2, this enrollment has ScheduledDripMessage records.
+    // Old run-drips will skip these enrollments.
+    schedulingVersion: { type: Number, default: 1, index: true },
   },
   { timestamps: true }
 );

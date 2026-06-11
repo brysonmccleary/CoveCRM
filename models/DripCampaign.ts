@@ -8,6 +8,11 @@ const StepSchema = new mongoose.Schema({
   calendarLink: { type: String, default: "" },
   views: { type: Number, default: 0 },
   responses: { type: Number, default: 0 },
+
+  // V2 scheduling fields (optional; override legacy "day" string parsing when present)
+  // delayValue is cumulative from enrollment date (e.g. 3 = "3 days/hours/months from enrollment")
+  delayValue: { type: Number },
+  delayUnit: { type: String, enum: ["hours", "days", "weeks", "months"] },
 });
 
 const CommentSchema = new mongoose.Schema({

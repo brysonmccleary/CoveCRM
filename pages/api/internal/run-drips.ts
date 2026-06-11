@@ -351,6 +351,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       status: "active",
       nextSendAt: { $lte: new Date() },
       processing: { $ne: true },
+      // V2 enrollments are handled by /api/cron/send-drip-messages
+      $or: [{ schedulingVersion: { $exists: false } }, { schedulingVersion: { $lt: 2 } }],
       $and: [
         { $or: [{ active: { $ne: false } }, { isActive: true }, { enabled: true }] },
         { $or: [{ paused: { $ne: true } }, { isPaused: { $ne: true } }] },
@@ -395,6 +397,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       status: "active",
       nextSendAt: { $lte: new Date() },
       processing: { $ne: true },
+      // V2 enrollments are handled by /api/cron/send-drip-messages — skip them here
+      $or: [{ schedulingVersion: { $exists: false } }, { schedulingVersion: { $lt: 2 } }],
       $and: [
         { $or: [{ active: { $ne: false } }, { isActive: true }, { enabled: true }] },
         { $or: [{ paused: { $ne: true } }, { isPaused: { $ne: true } }] },

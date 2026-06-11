@@ -81,14 +81,24 @@ const SCRIPT_OPTIONS = [
     description: "For leads interested in indexed UL or cash value life insurance.",
   },
   {
-    key: "veteran_leads",
-    label: "Veteran Programs",
-    description: "Veteran-specific life insurance programs and benefits.",
+    key: "veteran_mortgage",
+    label: "Veteran Mortgage Protection",
+    description: "Mortgage protection script tailored for veteran leads.",
   },
   {
-    key: "trucker_leads",
-    label: "Trucker / CDL",
-    description: "Life insurance tailored to over-the-road truck drivers.",
+    key: "veteran_iul",
+    label: "Veteran IUL / Cash Value",
+    description: "IUL / cash value script tailored for veteran leads.",
+  },
+  {
+    key: "trucker_mortgage",
+    label: "Trucker Mortgage Protection",
+    description: "Mortgage protection script tailored for over-the-road truckers.",
+  },
+  {
+    key: "trucker_iul",
+    label: "Trucker IUL / Cash Value",
+    description: "IUL / cash value script tailored for over-the-road truckers.",
   },
 ];
 

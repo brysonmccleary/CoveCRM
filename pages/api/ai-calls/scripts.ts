@@ -43,15 +43,27 @@ const SCRIPTS: ScriptOption[] = [
     leadType: "IUL",
   },
   {
-    key: "veteran_leads",
-    label: "Veteran Programs",
-    description: "Veteran-specific life insurance programs and benefits.",
+    key: "veteran_mortgage",
+    label: "Veteran Mortgage Protection",
+    description: "Mortgage protection script tailored for veteran leads.",
     leadType: "Veteran",
   },
   {
-    key: "trucker_leads",
-    label: "Trucker / CDL",
-    description: "Life insurance tailored to over-the-road truck drivers.",
+    key: "veteran_iul",
+    label: "Veteran IUL / Cash Value",
+    description: "IUL / cash value script tailored for veteran leads.",
+    leadType: "Veteran",
+  },
+  {
+    key: "trucker_mortgage",
+    label: "Trucker Mortgage Protection",
+    description: "Mortgage protection script tailored for over-the-road truckers.",
+    leadType: "Trucker",
+  },
+  {
+    key: "trucker_iul",
+    label: "Trucker IUL / Cash Value",
+    description: "IUL / cash value script tailored for over-the-road truckers.",
     leadType: "Trucker",
   },
 ];

@@ -45,6 +45,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/cron/send-drip-messages?token=@CRON_SECRET",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/enforce-twilio-inbound-webhooks",
       "schedule": "*/15 * * * *"
     },

@@ -38,9 +38,14 @@ const CANONICAL_SCRIPTS = [
   "mortgage_protection",
   "final_expense",
   "iul_cash_value",
+  "generic_life",
+  "veteran_mortgage",
+  "veteran_iul",
+  "trucker_mortgage",
+  "trucker_iul",
+  // legacy broad keys kept for backward compat with any saved sessions
   "veteran_leads",
   "trucker_leads",
-  "generic_life",
   "kayla_signup",
 ] as const;
 
@@ -75,19 +80,33 @@ function normalizeScriptKey(raw: any): CanonicalScriptKey {
     return "iul_cash_value";
   }
 
-  // Veteran variants
+  // Generic/catch-all
+  if (v === "generic" || v === "life" || v === "generic_life") {
+    return "generic_life";
+  }
+
+  // Veteran sub-variants (specific keys take priority over broad legacy key)
+  if (v === "veteran_mortgage" || v === "mortgage_veteran" || v === "veterans_mortgage") {
+    return "veteran_mortgage";
+  }
+  if (v === "veteran_iul" || v === "iul_veteran" || v === "veterans_iul") {
+    return "veteran_iul";
+  }
+  // Legacy broad veteran key
   if (v === "veterans" || v === "veteran" || v === "veteran_leads") {
     return "veteran_leads";
   }
 
-  // Trucker variants
+  // Trucker sub-variants (specific keys take priority over broad legacy key)
+  if (v === "trucker_mortgage" || v === "mortgage_trucker" || v === "truckers_mortgage") {
+    return "trucker_mortgage";
+  }
+  if (v === "trucker_iul" || v === "iul_trucker" || v === "truckers_iul") {
+    return "trucker_iul";
+  }
+  // Legacy broad trucker key
   if (v === "trucker" || v === "truckers" || v === "trucker_leads") {
     return "trucker_leads";
-  }
-
-  // Generic/catch-all
-  if (v === "generic" || v === "life" || v === "generic_life") {
-    return "generic_life";
   }
 
   // Kayla demo calls — internal only, never accessible via normal AI Dial Session UI

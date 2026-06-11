@@ -9,6 +9,7 @@ import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
 import DripEnrollment from "@/models/DripEnrollment";
 import DripCampaign from "@/models/DripCampaign";
+import { cancelScheduledDripMessages } from "@/lib/drips/cancelScheduledDripMessages";
 import { AiQueuedReply } from "@/models/AiQueuedReply";
 import twilio, { Twilio } from "twilio";
 import { OpenAI } from "openai";
@@ -1713,6 +1714,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (pausedCount > 0) {
         console.log(`⏸️ Paused ${pausedCount} DripEnrollment(s) for lead ${lead._id}`);
       }
+
+      // V2: cancel pending ScheduledDripMessage records for this lead on any reply
+      try {
+        const v2Canceled = await cancelScheduledDripMessages({
+          userEmail: user.email,
+          leadId: lead._id,
+          cancelReason: "lead_replied_inbound",
+        });
+        if (v2Canceled > 0) {
+          console.log(`⏸️ Canceled ${v2Canceled} V2 ScheduledDripMessage(s) for lead ${lead._id}`);
+        }
+      } catch (e) {
+        console.warn("⚠️ Failed to cancel V2 ScheduledDripMessages on reply:", e);
+      }
     } catch (e) {
       console.warn("⚠️ Failed to pause DripEnrollments on reply:", e);
     }
@@ -1826,6 +1841,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // === Keyword handling (flags only)
     if (isOptOut(body)) {
+      // V2: cancel all pending scheduled drip messages on STOP (belt-and-suspenders,
+      // since the reply handler above already cancels them, but STOP is permanent)
+      try {
+        await cancelScheduledDripMessages({
+          userEmail: user.email,
+          leadId: lead._id,
+          cancelReason: "lead_opted_out_stop",
+        });
+      } catch {}
+
       lead.assignedDrips = [];
       (lead as any).dripProgress = [];
       lead.isAIEngaged = false;

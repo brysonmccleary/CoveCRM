@@ -13,6 +13,7 @@ import { acquireLock } from "@/lib/locks";
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
 import { DateTime } from "luxon";
 import mongoose from "mongoose";
+import { createScheduledDripMessages } from "@/lib/drips/createScheduledDripMessages";
 
 const asObjectId = (v: any) => {
   try {
@@ -266,6 +267,7 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
           cursorStep: 0,
           nextSendAt,
           source: "manual-lead",
+          schedulingVersion: 2, // V2: ScheduledDripMessage records will be created below
         },
       },
       { upsert: true }
@@ -286,6 +288,7 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
     };
 
     // ---- Immediate first-step send (only NEW enrollments) ----
+    let step0Sent = false; // V2: gates future step scheduling — only schedule steps 1+ if step 0 succeeded
     if (wasUpserted && enrollment) {
       const steps = Array.isArray(campaign.steps) ? campaign.steps : [];
       const firstStep = steps[0];
@@ -394,6 +397,7 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
                 stepIndex: 0,
                 source: "drip",
               });
+              step0Sent = true;
 
               const nextIndex = 1;
               const sentAt = new Date();
@@ -416,6 +420,42 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
             } catch {
               // cron will retry later
             }
+          }
+        }
+      }
+    }
+
+    // ── V2: Register scheduled messages for steps 1+ ──────────────────────
+    // Only runs if step 0 was successfully sent. Prevents orphaned future-step
+    // records when step 0 fails due to transient Twilio error or lock miss.
+    if (wasUpserted && enrollment && step0Sent) {
+      const steps = Array.isArray(campaign.steps) ? campaign.steps : [];
+      if (steps.length > 1) {
+        const phoneRaw = pickLeadPhoneRaw(lead as any);
+        const toE164 = normalizeToE164Maybe(phoneRaw || undefined);
+        if (toE164) {
+          const leadFirst = pickLeadFirstName(lead as any);
+          const leadLast = pickLeadLastName(lead as any);
+          try {
+            await createScheduledDripMessages({
+              enrollmentId: String(enrollment._id),
+              campaignId: campaignIdStr,
+              leadId: leadIdStr,
+              userEmail: email,
+              enrolledAt: new Date(),
+              leadPhone: toE164,
+              leadFirstName: leadFirst,
+              leadLastName: leadLast,
+              leadState: (lead as any).State || (lead as any).state || null,
+              agentName: user.name || null,
+              campaignIsGlobal: !!(campaign as any).isGlobal,
+              campaignKey: campaign.key || null,
+              steps: steps as any[],
+              startFromIndex: 1, // step 0 handled above
+            });
+          } catch (schedErr) {
+            // Non-fatal: log but don't fail the enrollment response
+            console.error("[enroll-lead] createScheduledDripMessages failed (non-fatal):", schedErr);
           }
         }
       }

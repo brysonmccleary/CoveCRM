@@ -11,9 +11,62 @@ const EXPERIMENTAL_ADMIN = "bryson.mccleary1@gmail.com";
 
 type DripTabMode = "sms" | "email";
 
+type DripDelayUnit = "hours" | "days" | "weeks" | "months";
+
 interface MessageStep {
   text: string;
   day: string;
+  delayValue?: number;
+  delayUnit?: DripDelayUnit;
+}
+
+// ── Delay helpers ────────────────────────────────────────────────────────────
+
+function parseLegacyDayUI(day?: string | null): { value: number; unit: DripDelayUnit } {
+  if (!day) return { value: 0, unit: "days" };
+  const raw = String(day).trim().toLowerCase();
+  if (raw === "immediately" || raw === "immediate" || raw === "day 0" || raw === "0") {
+    return { value: 0, unit: "days" };
+  }
+  const monthM = raw.match(/(?:months?\s+(\d+)|(\d+)\s+months?)/);
+  if (monthM) { const n = parseInt(monthM[1] || monthM[2], 10); if (!isNaN(n)) return { value: n, unit: "months" }; }
+  const weekM = raw.match(/(?:weeks?\s+(\d+)|(\d+)\s+weeks?)/);
+  if (weekM) { const n = parseInt(weekM[1] || weekM[2], 10); if (!isNaN(n)) return { value: n, unit: "weeks" }; }
+  const hourM = raw.match(/(?:hours?\s+(\d+)|(\d+)\s+hours?)/);
+  if (hourM) { const n = parseInt(hourM[1] || hourM[2], 10); if (!isNaN(n)) return { value: n, unit: "hours" }; }
+  const dayM = raw.match(/(?:days?\s+(\d+)|(\d+)\s+days?|^day\s+(\d+)$|^(\d+)$)/);
+  if (dayM) { const n = parseInt(dayM[1] || dayM[2] || dayM[3] || dayM[4], 10); if (!isNaN(n)) return { value: n, unit: "days" }; }
+  return { value: 1, unit: "days" };
+}
+
+function delayToLegacyDay(value: number, unit: DripDelayUnit): string {
+  if (value === 0 && unit === "days") return "immediately";
+  if (unit === "hours") return `${value} hours`;
+  if (unit === "days") return `Day ${value}`;
+  if (unit === "weeks") return `Week ${value}`;
+  if (unit === "months") return `Month ${value}`;
+  return `Day ${value}`;
+}
+
+function isBirthdayStep(day?: string | null): boolean {
+  return /birthday/i.test(String(day || ""));
+}
+
+function stepDelayLabel(step: MessageStep): string {
+  if (isBirthdayStep(step.day)) return "Birthday (disabled)";
+  const v = step.delayValue ?? parseLegacyDayUI(step.day).value;
+  const u = step.delayUnit ?? parseLegacyDayUI(step.day).unit;
+  if (v === 0 && u === "days") return "Immediately";
+  return `${v} ${u} after enrollment`;
+}
+
+function normalizeStep(s: any): MessageStep {
+  const day = String(s.day || "immediately");
+  if (s.delayValue != null && s.delayUnit) {
+    return { text: String(s.text || ""), day, delayValue: Number(s.delayValue), delayUnit: s.delayUnit as DripDelayUnit };
+  }
+  const parsed = parseLegacyDayUI(day);
+  return { text: String(s.text || ""), day, delayValue: parsed.value, delayUnit: parsed.unit };
 }
 
 interface Folder {
@@ -293,28 +346,20 @@ export default function DripCampaignsPanel() {
     if (!editableDrips[dripId]) {
       const foundPrebuilt = prebuiltVisible.find((d) => getPrebuiltUiId(d) === dripId || String(d.id) === String(dripId));
       if (foundPrebuilt) {
-        const seeded = Array.isArray(foundPrebuilt.campaign?.steps) && foundPrebuilt.campaign?.steps?.length
-          ? foundPrebuilt.campaign.steps.map((s: any) => ({ day: String(s.day || "immediately"), text: String(s.text || "") }))
-          : (foundPrebuilt.defaultSteps || []).map((m: any) => ({ day: String(m.day || "immediately"), text: String(m.text || "") }));
-        setEditableDrips((prev) => ({
-          ...prev,
-          [dripId]: seeded,
-        }));
+        const rawSteps = Array.isArray(foundPrebuilt.campaign?.steps) && foundPrebuilt.campaign?.steps?.length
+          ? foundPrebuilt.campaign.steps
+          : (foundPrebuilt.defaultSteps || []);
+        const seeded = rawSteps.map((s: any) => normalizeStep(s));
+        setEditableDrips((prev) => ({ ...prev, [dripId]: seeded }));
         return;
       }
 
       const foundBackend = backendCampaigns.find((c) => c._id === dripId);
       if (foundBackend) {
         const seeded = Array.isArray(foundBackend.steps)
-          ? foundBackend.steps.map((s) => ({
-              day: String(s.day || "immediately"),
-              text: String(s.text || ""),
-            }))
+          ? foundBackend.steps.map((s) => normalizeStep(s))
           : [];
-        setEditableDrips((prev) => ({
-          ...prev,
-          [dripId]: seeded,
-        }));
+        setEditableDrips((prev) => ({ ...prev, [dripId]: seeded }));
       }
     }
   };
@@ -322,13 +367,48 @@ export default function DripCampaignsPanel() {
   const handleEditMessage = (
     dripId: string,
     index: number,
-    key: "text" | "day",
-    value: string,
+    key: "text" | "day" | "delayValue" | "delayUnit",
+    value: string | number,
   ) => {
     const updated = [...(editableDrips[dripId] || [])];
     if (!updated[index]) return;
-    updated[index] = { ...updated[index], [key]: value };
+    const step = { ...updated[index] };
+
+    if (key === "delayValue") {
+      const num = typeof value === "number" ? value : parseInt(String(value), 10);
+      step.delayValue = isNaN(num) ? 0 : Math.max(0, num);
+      const unit = step.delayUnit ?? "days";
+      step.day = delayToLegacyDay(step.delayValue, unit);
+    } else if (key === "delayUnit") {
+      step.delayUnit = value as DripDelayUnit;
+      step.day = delayToLegacyDay(step.delayValue ?? 0, step.delayUnit);
+    } else if (key === "text") {
+      step.text = String(value);
+    } else {
+      (step as any)[key] = value;
+    }
+
+    updated[index] = step;
     setEditableDrips({ ...editableDrips, [dripId]: updated });
+  };
+
+  const handleAppendEditableStep = (dripId: string) => {
+    const existing = editableDrips[dripId] || [];
+    const lastStep = existing[existing.length - 1];
+    const lastValue = lastStep?.delayValue ?? 0;
+    const lastUnit = lastStep?.delayUnit ?? "days";
+    // Default next step: +1 of same unit, or 1 day if immediately
+    const nextValue = lastUnit === "days" ? Math.max(1, lastValue + 1)
+      : lastUnit === "months" ? lastValue + 1
+      : lastUnit === "weeks" ? lastValue + 1
+      : lastValue + 1;
+    const newStep: MessageStep = {
+      text: "",
+      day: delayToLegacyDay(nextValue, lastUnit),
+      delayValue: nextValue,
+      delayUnit: lastUnit,
+    };
+    setEditableDrips((prev) => ({ ...prev, [dripId]: [...existing, newStep] }));
   };
 
   const handleRemoveNewStep = (index: number) => {
@@ -357,9 +437,14 @@ export default function DripCampaignsPanel() {
 
     // Preserve edited text as written. First-touch opt-out is enforced at send time.
     const normalized = steps.map((s) => {
-      const day = String(s.day || "immediately");
-      const text = String(s.text || "").trim();
-      return { day, text };
+      const dv = s.delayValue ?? parseLegacyDayUI(s.day).value;
+      const du = s.delayUnit ?? parseLegacyDayUI(s.day).unit;
+      return {
+        day: delayToLegacyDay(dv, du),
+        text: String(s.text || "").trim(),
+        delayValue: dv,
+        delayUnit: du,
+      };
     });
 
     try {
@@ -465,9 +550,14 @@ export default function DripCampaignsPanel() {
 
     // Preserve edited text as written. First-touch opt-out is enforced at send time.
     const normalized = steps.map((s) => {
-      const day = String(s.day || "immediately");
-      const text = String(s.text || "").trim();
-      return { day, text };
+      const dv = s.delayValue ?? parseLegacyDayUI(s.day).value;
+      const du = s.delayUnit ?? parseLegacyDayUI(s.day).unit;
+      return {
+        day: delayToLegacyDay(dv, du),
+        text: String(s.text || "").trim(),
+        delayValue: dv,
+        delayUnit: du,
+      };
     });
 
     try {
@@ -624,9 +714,14 @@ setBackendCampaigns((prev) =>
 
     // Preserve edited text as written. First-touch opt-out is enforced at send time.
     const normalized = steps.map((s: any) => {
-      const day = String(s.day || "immediately");
-      const text = String(s.text || "").trim();
-      return { day, text };
+      const dv = s.delayValue ?? parseLegacyDayUI(s.day).value;
+      const du = s.delayUnit ?? parseLegacyDayUI(s.day).unit;
+      return {
+        day: delayToLegacyDay(dv, du),
+        text: String(s.text || "").trim(),
+        delayValue: dv,
+        delayUnit: du,
+      };
     });
 
     try {
@@ -955,40 +1050,72 @@ setBackendCampaigns((prev) =>
 
             {expandedDrips[String(campaignId)] && (
               <div className="mt-4 space-y-3">
-                {editableDrips[String(campaignId)]?.map((msg, idx) => (
-                  <div key={idx} className="space-y-1">
-                    <input
-                      value={msg.day}
-                      onChange={(e) =>
-                        handleEditMessage(String(campaignId), idx, "day", e.target.value)
-                      }
-                      className="border border-black dark:border-white p-1 rounded w-32 text-sm"
-                    />
-                    <textarea
-                      value={msg.text}
-                      onChange={(e) =>
-                        handleEditMessage(String(campaignId), idx, "text", e.target.value)
-                      }
-                      className="border border-black dark:border-white p-2 rounded w-full text-sm"
-                    />
-                    <div className="flex justify-end">
-                      <button
-                        onClick={() => handleRemoveEditableStep(String(campaignId), idx)}
-                        className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs cursor-pointer"
-                      >
-                        Delete
-                      </button>
+                <p className="text-xs text-yellow-400 bg-yellow-900/30 border border-yellow-600/30 rounded px-3 py-2">
+                  ⚠️ Delay changes apply to new enrollments only. Existing active leads keep their already-scheduled messages.
+                </p>
+                {editableDrips[String(campaignId)]?.map((msg, idx) => {
+                  const isBday = isBirthdayStep(msg.day);
+                  return (
+                    <div key={idx} className="border border-white/10 rounded-lg p-3 space-y-2 bg-[#1e293b]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-400 font-medium">Step {idx + 1} — {stepDelayLabel(msg)}</span>
+                        {isBday ? (
+                          <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded">Birthday (disabled)</span>
+                        ) : (
+                          <span className="text-xs text-gray-600 cursor-not-allowed" title="Step deletion is disabled. Active enrollments have already-scheduled messages for this step.">
+                            Delete disabled
+                          </span>
+                        )}
+                      </div>
+                      {!isBday && (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={0}
+                              value={msg.delayValue ?? parseLegacyDayUI(msg.day).value}
+                              onChange={(e) => handleEditMessage(String(campaignId), idx, "delayValue", parseInt(e.target.value, 10) || 0)}
+                              className="w-20 bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
+                            />
+                            <select
+                              value={msg.delayUnit ?? parseLegacyDayUI(msg.day).unit}
+                              onChange={(e) => handleEditMessage(String(campaignId), idx, "delayUnit", e.target.value)}
+                              className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
+                            >
+                              <option value="hours">hours from enrollment</option>
+                              <option value="days">days from enrollment</option>
+                              <option value="weeks">weeks from enrollment</option>
+                              <option value="months">months from enrollment</option>
+                            </select>
+                          </div>
+                          <textarea
+                            value={msg.text}
+                            onChange={(e) => handleEditMessage(String(campaignId), idx, "text", e.target.value)}
+                            rows={3}
+                            className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
+                          />
+                        </>
+                      )}
+                      {isBday && <p className="text-xs text-gray-500">Birthday steps are currently disabled and will not be scheduled.</p>}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
-                <div className="flex space-x-2 pt-2">
+                <button
+                  onClick={() => handleAppendEditableStep(String(campaignId))}
+                  className="w-full border border-dashed border-white/20 text-gray-400 hover:text-white hover:border-white/40 rounded-lg py-2 text-sm"
+                >
+                  + Append Step
+                </button>
+
+                <div className="flex items-center gap-2 pt-1">
                   <button
                     onClick={() => handleSaveCustomDrip(String(campaignId))}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer"
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer text-sm"
                   >
                     Save Changes
                   </button>
+                  <span className="text-xs text-gray-500">Reorder and insert-between are disabled.</span>
                 </div>
               </div>
             )}
@@ -1040,46 +1167,78 @@ setBackendCampaigns((prev) =>
 
           {expandedDrips[camp._id] && (
             <div className="mt-4 space-y-3">
-              {editableDrips[camp._id]?.map((msg, idx) => (
-                <div key={idx} className="space-y-1">
-                  <input
-                    value={msg.day}
-                    onChange={(e) =>
-                      handleEditMessage(camp._id, idx, "day", e.target.value)
-                    }
-                    className="border border-black dark:border-white p-1 rounded w-32 text-sm"
-                  />
-                  <textarea
-                    value={msg.text}
-                    onChange={(e) =>
-                      handleEditMessage(camp._id, idx, "text", e.target.value)
-                    }
-                    className="border border-black dark:border-white p-2 rounded w-full text-sm"
-                  />
-                  <div className="flex justify-end">
-                    <button
-                      onClick={() => handleRemoveEditableStep(camp._id, idx)}
-                      className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs cursor-pointer"
-                    >
-                      Delete
-                    </button>
+              <p className="text-xs text-yellow-400 bg-yellow-900/30 border border-yellow-600/30 rounded px-3 py-2">
+                ⚠️ Delay changes apply to new enrollments only. Existing active leads keep their already-scheduled messages.
+              </p>
+              {editableDrips[camp._id]?.map((msg, idx) => {
+                const isBday = isBirthdayStep(msg.day);
+                return (
+                  <div key={idx} className="border border-white/10 rounded-lg p-3 space-y-2 bg-[#1e293b]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-400 font-medium">Step {idx + 1} — {stepDelayLabel(msg)}</span>
+                      {isBday ? (
+                        <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded">Birthday (disabled)</span>
+                      ) : (
+                        <span className="text-xs text-gray-600 cursor-not-allowed" title="Step deletion is disabled. Active enrollments have already-scheduled messages for this step.">
+                          Delete disabled
+                        </span>
+                      )}
+                    </div>
+                    {!isBday && (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            value={msg.delayValue ?? parseLegacyDayUI(msg.day).value}
+                            onChange={(e) => handleEditMessage(camp._id, idx, "delayValue", parseInt(e.target.value, 10) || 0)}
+                            className="w-20 bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
+                          />
+                          <select
+                            value={msg.delayUnit ?? parseLegacyDayUI(msg.day).unit}
+                            onChange={(e) => handleEditMessage(camp._id, idx, "delayUnit", e.target.value)}
+                            className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
+                          >
+                            <option value="hours">hours from enrollment</option>
+                            <option value="days">days from enrollment</option>
+                            <option value="weeks">weeks from enrollment</option>
+                            <option value="months">months from enrollment</option>
+                          </select>
+                        </div>
+                        <textarea
+                          value={msg.text}
+                          onChange={(e) => handleEditMessage(camp._id, idx, "text", e.target.value)}
+                          rows={3}
+                          className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
+                        />
+                      </>
+                    )}
+                    {isBday && <p className="text-xs text-gray-500">Birthday steps are currently disabled and will not be scheduled.</p>}
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
-              <div className="flex space-x-2 pt-2">
+              <button
+                onClick={() => handleAppendEditableStep(camp._id)}
+                className="w-full border border-dashed border-white/20 text-gray-400 hover:text-white hover:border-white/40 rounded-lg py-2 text-sm"
+              >
+                + Append Step
+              </button>
+
+              <div className="flex items-center gap-2 pt-1">
                 <button
                   onClick={() => handleSaveCustomDrip(camp._id)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer text-sm"
                 >
                   Save Changes
                 </button>
                 <button
                   onClick={() => handleDeleteCustomDrip(camp._id)}
-                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded cursor-pointer"
+                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded cursor-pointer text-sm"
                 >
                   Delete Drip
                 </button>
+                <span className="text-xs text-gray-500">Reorder and insert-between are disabled.</span>
               </div>
             </div>
           )}
