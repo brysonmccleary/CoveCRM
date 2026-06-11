@@ -500,8 +500,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const dial = vr.dial({
       answerOnBridge: true,
       timeout: 25,
-      action: actionUrl,
-      method: "POST",
     });
     dial.client(
       {
