@@ -459,7 +459,7 @@ function getScopeLabelForScriptKey(scriptKeyRaw: any): string {
   const k = normalizeScriptKey(scriptKeyRaw);
   if (k === "kayla_signup") return "CoveCRM demo";
   if (k === "mortgage_protection") return "mortgage protection";
-  if (k === "final_expense") return "final expense coverage";
+  if (k === "final_expense") return "life insurance coverage";
   if (k === "iul_cash_value") return "cash value life insurance (IUL)";
   if (k === "veteran_leads") return "veteran life insurance programs";
   if (k === "trucker_leads") return "life insurance for truckers";
@@ -4875,7 +4875,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
         return "look into veteran life insurance information, benefits, or programs";
       }
       if (scriptKey === "final_expense") {
-        return "look into burial or final expense coverage";
+        return "look into life insurance options — whether that's final expense coverage, income protection, or something to keep the family covered";
       }
       if (scriptKey === "iul_cash_value" || scriptKey === "trucker_iul") {
         return "look into life insurance, cash value, or retirement-style options";
@@ -5026,7 +5026,7 @@ function buildDeterministicScamRebuttalLine(state: CallState): string {
   } else if (k === "mortgage_protection") {
     requestScope = "mortgage protection request";
   } else if (k === "final_expense") {
-    requestScope = "final expense request";
+    requestScope = "life insurance request";
   } else if (k === "iul_cash_value") {
     requestScope = "IUL request";
   }
@@ -8332,10 +8332,10 @@ STOP. WAIT.
 `.trim();
 
   const SCRIPT_FINAL_EXPENSE = `
-BOOKING SCRIPT — FINAL EXPENSE (FOLLOW IN ORDER)
+BOOKING SCRIPT — LIFE INSURANCE / FINAL EXPENSE (FOLLOW IN ORDER)
 
 STEP 1
-Say: "I was just giving you a quick call about the request you put in for final expense coverage. Was this for yourself, or a spouse as well?"
+Say: "I was just giving you a quick call about the life insurance request you put in — the coverage that helps protect your family and take care of expenses if something were to happen to you. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
@@ -8630,11 +8630,15 @@ Stay away from calling it "life insurance" directly.
 Term lengths and coverage amounts vary — ${agent} covers specifics on the call.
 `,
     final_expense: `
-WHAT IS FINAL EXPENSE
-If asked: "Final expense coverage is designed to cover burial costs, medical bills,
-and end-of-life expenses so your family isn't left with that burden."
+WHAT THIS COVERS
+If asked what kind of coverage: "This covers whatever your family needs most —
+whether that's final expense and burial costs, income protection, or just making
+sure your family is taken care of if something happens to you."
 Most policies are whole life — they don't expire and build cash value over time.
-No medical exam required. Some policies are issued same day.
+No medical exam required for most options. Some policies are issued same day.
+If asked specifically about final expense: "Final expense is designed to cover
+burial costs, medical bills, and end-of-life expenses so your family
+isn't left with that burden."
 If asked about term vs whole life: "We work with both — ${agent} will find
 what fits your situation and budget best."
 `,

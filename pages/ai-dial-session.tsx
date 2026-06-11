@@ -62,28 +62,33 @@ interface AICallSession {
 const SCRIPT_OPTIONS = [
   {
     key: "mortgage_protection",
-    label: "Mortgage Protection Script",
-    description: "Standard mortgage protection opener, fact-find, and close.",
+    label: "Mortgage Protection",
+    description: "For leads who requested mortgage protection coverage.",
   },
   {
     key: "final_expense",
-    label: "Final Expense Script",
-    description: "Final expense, social security anchor, and simple close.",
+    label: "Life Insurance / Final Expense",
+    description: "For general life insurance or final expense leads.",
   },
   {
-    key: "iul_leads",
-    label: "IUL Script",
-    description: "Indexed UL positioning, cash value benefits, and close.",
+    key: "generic_life",
+    label: "Generic Life Insurance",
+    description: "Broad life insurance opener — works for any life insurance lead.",
+  },
+  {
+    key: "iul_cash_value",
+    label: "IUL / Cash Value",
+    description: "For leads interested in indexed UL or cash value life insurance.",
   },
   {
     key: "veteran_leads",
-    label: "Veteran Leads Script",
-    description: "Veteran program positioning and benefits-focused script.",
+    label: "Veteran Programs",
+    description: "Veteran-specific life insurance programs and benefits.",
   },
   {
     key: "trucker_leads",
-    label: "Trucker Leads Script",
-    description: "CDL / trucker lead script tailored to over-the-road drivers.",
+    label: "Trucker / CDL",
+    description: "Life insurance tailored to over-the-road truck drivers.",
   },
 ];
 
