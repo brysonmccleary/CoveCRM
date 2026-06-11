@@ -1528,11 +1528,6 @@ function normalizeRawTranscript(raw: string): string {
     t = t.replace(pattern, replacement);
   }
 
-  // Japanese/foreign greeting -> yes
-  if (/^[\u3000-\u9fff\uff00-\uffef。、！？\s.]+$/.test(t.trim())) {
-    return "yes";
-  }
-
   return t.trim();
 }
 
@@ -6431,8 +6426,8 @@ function buildConversationPolicyDecision(
       stepCtx.steps[0] ||
       (state.scriptSteps || [])[0] ||
       getBookingFallbackLine(ctx);
-    const lineToSay = (_greetingStep || "").trim() || getBookingFallbackLine(ctx);
-    if (!lineToSay) {
+    const baseStep = (_greetingStep || "").trim() || getBookingFallbackLine(ctx);
+    if (!baseStep) {
       console.warn("[AI-VOICE][GREETING-ACK] no step line available — falling to universal fallback", {
         callSid: state.callSid,
         scriptKey: ctx.scriptKey,
@@ -6441,6 +6436,14 @@ function buildConversationPolicyDecision(
       });
       return NOT_HANDLED;
     }
+    // Brief acknowledgment prefix so the pivot to Step 1 feels warm, not abrupt.
+    const rawLower = (intent.raw || "").toLowerCase();
+    const ackPrefix =
+      /\b(great|fantastic|wonderful|excellent|amazing)\b/.test(rawLower) ? "Great!" :
+      /\bgood\b/.test(rawLower) ? "Good to hear it!" :
+      /\b(fine|okay|ok|not bad|pretty good|pretty well|doing well)\b/.test(rawLower) ? "Glad to hear it!" :
+      "Good to hear it!";
+    const lineToSay = `${ackPrefix} ${baseStep}`;
     return {
       handled: true,
       routeKind: "greeting_ack",
@@ -6766,7 +6769,7 @@ function buildConversationPolicyDecision(
       routeKind: "angry_soft",
       responseMode: "exact_script",
       objective: "return_to_booking",
-	      lineToSay: `I hear you — I'm sorry about that. ${requiredObjective}`,
+	      lineToSay: `I hear you. ${requiredObjective}`,
 	      requiredClosingPivot: requiredObjective,
 	      forbiddenTopics: [],
 	      stateWrites: preserveCurrentStepState(),
@@ -10329,43 +10332,26 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     return;
   }
 
-  /**
-   * If we just barged-in and cancelled, flush the tiny buffered frames first,
-   * then continue with normal appends. This prevents losing the first words.
-   */
+  // If barge-in state is pending cleanup, clear it and fall through to normal audio forwarding.
+  // Do NOT re-commit the buffered frames: they were captured during AI speech and contain
+  // echo/bleed that produces garbage transcripts. OpenAI VAD re-captures cleanly after cancel.
   try {
     if (
       state.bargeInDetected &&
       (state.bargeInFrames?.length || 0) > 0 &&
       state.aiSpeaking !== true &&
       state.responseInFlight !== true &&
-      state.waitingForResponse !== true &&
-      state.phase !== "awaiting_greeting_reply"
+      state.waitingForResponse !== true
     ) {
-      const frames = state.bargeInFrames || [];
+      const frameCount = (state.bargeInFrames || []).length;
       state.bargeInFrames = [];
       state.bargeInDetected = false;
       state.bargeInAudioMsBuffered = 0;
-
-      for (const f of frames) {
-        state.openAiWs.send(
-          JSON.stringify({
-            type: "input_audio_buffer.append",
-            audio: f,
-          })
-        );
-      }
-      // OpenAI rejects manual commits below 100ms; let server VAD collect short tails.
-      const shouldCommit = frames.length >= 5; // 5 * 20ms = 100ms
-      if (shouldCommit) {
-        state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-      }
-      console.log("[AI-VOICE][BARGE-IN] flushed barge-in frames", {
+      console.log("[AI-VOICE][BARGE-IN] cleared barge-in frames (no replay)", {
         callSid: state.callSid,
-        frameCount: frames.length,
-        committed: shouldCommit,
+        frameCount,
       });
-      return; // we already appended the ring buffer including this frame
+      // Fall through — let this audio frame enter the normal forwarding path below.
     }
 
     // Normal path: forward only during a simple speech window.
@@ -10932,24 +10918,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           state.lastUserTranscriptPartialByItemId[itemId] = next;
           state.lastUserTranscript = next;
 
-          // ✅ FIX: delta arrives before completed; if we are waiting on a committed turn,
-          // replay immediately once we have *any* text.
+          // Accumulate transcript text into pending turn so completed-replay has full text.
+          // Do NOT call replayPendingCommittedTurn here — shouldDeferTurnRouting always
+          // defers delta-sourced replays, making that call dead code.
           try {
             const pending = (state as any).pendingCommittedTurn;
-
             const got = String(next || "").trim();
-            if (
-              pending &&
-              got &&
-              !state.aiSpeaking &&
-              !state.waitingForResponse &&
-              !state.responseInFlight &&
-              state.openAiWs &&
-              state.openAiReady &&
-              !state.voicemailSkipArmed
-            ) {
+            if (pending && got) {
               pending.bestTranscript = mergeDeferredTurnText(pending.bestTranscript || state.deferredTurnTranscript || "", got);
-              void replayPendingCommittedTurn(twilioWs, state, "transcript delta");
             }
           } catch {}
         }
@@ -11980,6 +11956,30 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           phase: state.phase,
           greetingFired,
           userTurnFired,
+        });
+      }
+    }
+
+    // FIX 2: When the greeting is cancelled (barge-in), unlock the TURN-GATE immediately.
+    // Without this, greetingAudioDone is never set on cancel, causing 8s silence while
+    // the fallback timeout runs. The human already spoke — process their turn now.
+    // greetingAdvancePending is the hard gate: it's only true before the greeting has
+    // advanced, so this block is structurally impossible to fire after Step 1.
+    if (isTerminalNoMoreAudio) {
+      const greetingFired = !!state.debugLoggedResponseCreateGreeting;
+      const userTurnFired = !!state.debugLoggedResponseCreateUserTurn;
+      const inGreetingPhase = greetingFired && !userTurnFired;
+      if (inGreetingPhase && !(state as any).greetingAudioDone && state.greetingAdvancePending) {
+        if (state.greetingTimeoutId) { clearTimeout(state.greetingTimeoutId); state.greetingTimeoutId = null; }
+        (state as any).greetingAudioDone = true;
+        finalizeGreetingAdvance(state, `OpenAI ${t} (cancelled)`);
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = 0;
+        (state as any).lastListenEnabledAtMs = Date.now();
+        (state as any).listenWarmupUntilMs = Date.now() + 2500;
+        console.log("[AI-VOICE] greetingAudioDone = true on cancel | barge-in commits now unblocked", {
+          callSid: state.callSid,
+          event: t,
         });
       }
     }
