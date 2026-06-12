@@ -157,10 +157,12 @@ export function personalizeA2PSampleMessage(sample: any, args: {
   businessName?: any;
 }): string {
   const agent = resolveA2PSampleAgentName(args);
-  return clean(sample)
+  const personalized = clean(sample)
     .replace(/\{\{\s*agentName\s*\}\}/gi, agent)
-    .replace(/\{\{\s*agent_name\s*\}\}/gi, agent)
-    .replace(/\{\{\s*first_name\s*\}\}/gi, "Sarah");
+    .replace(/\{\{\s*agent_name\s*\}\}/gi, agent);
+
+  if (agent === "your insurance agent") return personalized;
+  return personalized.replace(/\bthis is your insurance agent\b/gi, `this is ${agent}`);
 }
 
 export function personalizeA2PSampleMessages(samples: any[], args: {
@@ -174,8 +176,8 @@ export function personalizeA2PSampleMessages(samples: any[], args: {
 export function buildLeadGenerationSampleMessages(agentName = "your insurance agent"): string[] {
   const agent = clean(agentName) || "your insurance agent";
   return [
-    `Hi Sarah, this is ${agent} following up on your insurance information request. I can help review available options. Reply STOP to opt out.`,
-    `Hi Sarah, this is ${agent}. Just following up on your request for insurance information. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
-    `Hi Sarah, this is ${agent}. Reminder about your scheduled insurance review. Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent} following up on your insurance information request. I can help review available options. Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. Just following up on your request for insurance information. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. Reminder about your scheduled insurance review. Reply STOP to opt out.`,
   ];
 }

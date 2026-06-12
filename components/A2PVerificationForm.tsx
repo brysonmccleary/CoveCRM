@@ -89,6 +89,27 @@ const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
   { value: "EMERGENCY", label: "Emergency (special)" },
 ];
 
+function resolveA2PFormSampleAgentName(
+  contactFirstName: string,
+  contactLastName: string,
+  businessName: string,
+) {
+  const fullName = [contactFirstName, contactLastName]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" ");
+  return fullName || businessName.trim() || "your insurance agent";
+}
+
+function buildDefaultA2PFormSamples(agentName: string) {
+  const agent = agentName.trim() || "your insurance agent";
+  return [
+    `Hi {{first_name}}, this is ${agent} following up on your insurance information request. I can help review available options. Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. Just following up on your request for insurance information. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. Reminder about your scheduled insurance review. Reply STOP to opt out.`,
+  ];
+}
+
 const US_STATE_CODES = [
   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
 ];
@@ -299,15 +320,11 @@ export default function A2PVerificationForm() {
   const [usecase, setUsecase] = useState<UseCaseCode>("LOW_VOLUME");
 
   // ---------- Sample Messages ----------
-  const [msg1, setMsg1] = useState(
-    `Hi Sarah, this is your insurance agent following up on your insurance information request. I can help review available options. Reply STOP to opt out.`,
-  );
-  const [msg2, setMsg2] = useState(
-    `Hi Sarah, this is your insurance agent. Just following up on your request for insurance information. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
-  );
-  const [msg3, setMsg3] = useState(
-    `Hi Sarah, this is your insurance agent. Reminder about your scheduled insurance review. Reply STOP to opt out.`,
-  );
+  const initialSampleMessages = buildDefaultA2PFormSamples("your insurance agent");
+  const [lastSampleAgentName, setLastSampleAgentName] = useState("your insurance agent");
+  const [msg1, setMsg1] = useState(initialSampleMessages[0]);
+  const [msg2, setMsg2] = useState(initialSampleMessages[1]);
+  const [msg3, setMsg3] = useState(initialSampleMessages[2]);
 
   // ---------- Opt-in Details ----------
   const [optInDetails, setOptInDetails] = useState(
@@ -328,6 +345,18 @@ The opt-in page displays SMS Terms and SMS Privacy links on the same page as the
   const [optInScreenshotUrl, setOptInScreenshotUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  useEffect(() => {
+    const nextAgentName = resolveA2PFormSampleAgentName(contactFirstName, contactLastName, businessName);
+    if (nextAgentName === lastSampleAgentName) return;
+
+    const previousDefaults = buildDefaultA2PFormSamples(lastSampleAgentName);
+    const nextDefaults = buildDefaultA2PFormSamples(nextAgentName);
+    setMsg1((prev) => (prev === previousDefaults[0] ? nextDefaults[0] : prev));
+    setMsg2((prev) => (prev === previousDefaults[1] ? nextDefaults[1] : prev));
+    setMsg3((prev) => (prev === previousDefaults[2] ? nextDefaults[2] : prev));
+    setLastSampleAgentName(nextAgentName);
+  }, [businessName, contactFirstName, contactLastName, lastSampleAgentName]);
+
   useEffect(() => {
     let cancelled = false;
 
