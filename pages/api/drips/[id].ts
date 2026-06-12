@@ -5,6 +5,8 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
 
+const VALID_DELAY_UNITS = new Set(["hours", "days", "weeks", "months"]);
+
 function normalizeSteps(steps: any[]) {
   if (steps === undefined) return undefined;
   if (!Array.isArray(steps) || steps.length === 0) {
@@ -17,6 +19,18 @@ function normalizeSteps(steps: any[]) {
     const day = String(step?.day || (index === 0 ? "immediately" : `Day ${index}`)).trim();
     const time = typeof step?.time === "string" ? step.time : "9:00 AM";
 
+    // Preserve V2 delay fields when valid; reject "minutes" and unknown units.
+    const rawUnit = step?.delayUnit;
+    const rawValue = step?.delayValue;
+    const delayUnit =
+      typeof rawUnit === "string" && VALID_DELAY_UNITS.has(rawUnit)
+        ? rawUnit
+        : undefined;
+    const delayValue =
+      rawValue != null && !isNaN(Number(rawValue))
+        ? Math.max(0, Number(rawValue))
+        : undefined;
+
     return {
       text,
       day,
@@ -24,6 +38,8 @@ function normalizeSteps(steps: any[]) {
       calendarLink: typeof step?.calendarLink === "string" ? step.calendarLink : "",
       views: Number.isFinite(step?.views) ? step.views : 0,
       responses: Number.isFinite(step?.responses) ? step.responses : 0,
+      ...(delayValue !== undefined && { delayValue }),
+      ...(delayUnit !== undefined && { delayUnit }),
     };
   });
 }

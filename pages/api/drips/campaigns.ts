@@ -141,7 +141,13 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
 
     const { name, steps } = (req.body || {}) as {
       name?: string;
-      steps?: Array<{ text?: string; day?: string; time?: string }>;
+      steps?: Array<{
+        text?: string;
+        day?: string;
+        time?: string;
+        delayValue?: number | null;
+        delayUnit?: string | null;
+      }>;
     };
 
     if (!name || !Array.isArray(steps) || steps.length === 0) {
@@ -149,6 +155,8 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         error: "Missing required fields: name and at least one step",
       });
     }
+
+    const VALID_DELAY_UNITS = new Set(["hours", "days", "weeks", "months"]);
 
     const email = String(session.user.email).toLowerCase();
 
@@ -165,11 +173,25 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         day = index === 0 ? "immediately" : `Day ${index}`;
       }
 
+      // Preserve V2 delay fields when valid; reject "minutes" and unknown units.
+      const rawUnit = step.delayUnit;
+      const rawValue = step.delayValue;
+      const delayUnit =
+        typeof rawUnit === "string" && VALID_DELAY_UNITS.has(rawUnit)
+          ? rawUnit
+          : undefined;
+      const delayValue =
+        rawValue != null && !isNaN(Number(rawValue))
+          ? Math.max(0, Number(rawValue))
+          : undefined;
+
       return {
         text: trimmedText,
         day: String(day),
         time: step.time && typeof step.time === "string" ? step.time : "9:00 AM",
         calendarLink: "",
+        ...(delayValue !== undefined && { delayValue }),
+        ...(delayUnit !== undefined && { delayUnit }),
       };
     });
 

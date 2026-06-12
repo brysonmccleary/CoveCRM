@@ -119,7 +119,7 @@ export default function DripCampaignsPanel() {
       });
       const { campaignName: generatedName, description, steps } = res.data;
       if (!Array.isArray(steps) || steps.length === 0) { toast.error("AI returned no steps. Try again."); return; }
-      const filled: MessageStep[] = steps.map((s: any) => ({
+      const filled: MessageStep[] = steps.map((s: any) => normalizeStep({
         day: s.day === 0 ? "immediately" : `Day ${s.day}`,
         text: String(s.text || ""),
       }));
@@ -142,9 +142,19 @@ export default function DripCampaignsPanel() {
     }
     setAIPreviewSaving(true);
     try {
+      const normalized = aiPreviewSteps.map((s) => {
+        const dv = s.delayValue ?? parseLegacyDayUI(s.day).value;
+        const du = s.delayUnit ?? parseLegacyDayUI(s.day).unit;
+        return {
+          day: delayToLegacyDay(dv, du),
+          text: String(s.text || "").trim(),
+          delayValue: dv,
+          delayUnit: du,
+        };
+      });
       const res = await axios.post("/api/drips/campaigns", {
         name: aiPreviewName.trim(),
-        steps: aiPreviewSteps,
+        steps: normalized,
       });
       const created: ApiCampaign | undefined = res.data?.campaign;
       if (created?._id) setBackendCampaigns((prev) => [...prev, created]);
@@ -165,10 +175,9 @@ export default function DripCampaignsPanel() {
     setAIDescription("");
   };
 
-  const [messageSteps, setMessageSteps] = useState<MessageStep[]>([]);
-  const [currentText, setCurrentText] = useState("");
-  const [currentDay, setCurrentDay] = useState("immediately");
-  const [maxDayUsed, setMaxDayUsed] = useState(0);
+  const [messageSteps, setMessageSteps] = useState<MessageStep[]>([
+    { text: "", day: "immediately", delayValue: 0, delayUnit: "days" },
+  ]);
 
   const [folders, setFolders] = useState<Folder[]>([]);
 
@@ -267,55 +276,96 @@ export default function DripCampaignsPanel() {
   }, []);
 
   // ---- Step builder for new custom campaigns ----
-  const addStep = () => {
-    if (!currentText) return;
 
-    const numericDay =
-      currentDay === "immediately"
-        ? 0
-        : parseInt(currentDay.replace("Day ", ""), 10);
-
-    setMessageSteps((prev) => [...prev, { text: currentText.trim(), day: currentDay }]);
-    setCurrentText("");
-    setCurrentDay(`Day ${numericDay + 1}`);
-    setMaxDayUsed((prev) => Math.max(prev, numericDay));
+  const handleNewStepChange = (
+    idx: number,
+    key: "text" | "delayValue" | "delayUnit",
+    value: string | number,
+  ) => {
+    setMessageSteps((prev) => {
+      const updated = [...prev];
+      const step = { ...updated[idx] };
+      if (key === "delayValue") {
+        const num = typeof value === "number" ? value : parseInt(String(value), 10);
+        step.delayValue = isNaN(num) ? 0 : Math.max(0, num);
+        step.day = delayToLegacyDay(step.delayValue, step.delayUnit ?? "days");
+      } else if (key === "delayUnit") {
+        step.delayUnit = value as DripDelayUnit;
+        step.day = delayToLegacyDay(step.delayValue ?? 0, step.delayUnit);
+      } else {
+        step.text = String(value);
+      }
+      updated[idx] = step;
+      return updated;
+    });
   };
 
-  const generateDayOptions = () => {
-    const options: string[] = [];
-    if (maxDayUsed === 0) options.push("immediately");
-    const start = maxDayUsed === 0 ? 1 : maxDayUsed + 1;
-    for (let i = start; i <= 365; i++) options.push(`Day ${i}`);
-    return options;
+  const handleAppendNewStep = () => {
+    setMessageSteps((prev) => {
+      const last = prev[prev.length - 1];
+      const lastValue = last?.delayValue ?? 0;
+      const lastUnit = last?.delayUnit ?? "days";
+      const nextValue = lastValue + 1;
+      const newStep: MessageStep = {
+        text: "",
+        day: delayToLegacyDay(nextValue, lastUnit),
+        delayValue: nextValue,
+        delayUnit: lastUnit,
+      };
+      return [...prev, newStep];
+    });
   };
 
-  const insertMergeField = (field: string) => {
-    const map: Record<string, string> = {
-      client_first_name: "{{ contact.first_name }}",
-      agent_name: "{{ agent.name }}",
-      // agent_phone + folder_name intentionally not supported
-    };
+  const handleDuplicateNewStep = (idx: number) => {
+    setMessageSteps((prev) => {
+      const copy = { ...prev[idx] };
+      return [...prev.slice(0, idx + 1), copy, ...prev.slice(idx + 1)];
+    });
+  };
 
-    const token = map[field] || "";
-    if (!token) return;
+  // Step 0 is always "Send immediately" and stays at position 0.
+  // Move Up is only available for idx >= 2 (idx 1 cannot go above step 0).
+  const handleMoveNewStepUp = (idx: number) => {
+    if (idx < 2) return;
+    setMessageSteps((prev) => {
+      const next = [...prev];
+      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+      return next;
+    });
+  };
 
-    setCurrentText((prev) => {
-      const sep = prev && !prev.endsWith(" ") ? " " : "";
-      return `${prev}${sep}${token}`;
+  const handleMoveNewStepDown = (idx: number) => {
+    setMessageSteps((prev) => {
+      if (idx === 0 || idx >= prev.length - 1) return prev;
+      const next = [...prev];
+      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+      return next;
     });
   };
 
   // ---- Save new custom campaign to backend ----
   const saveCampaign = async () => {
-    if (!campaignName || messageSteps.length === 0) {
+    const hasText = messageSteps.some((s) => s.text.trim());
+    if (!campaignName.trim() || !hasText) {
       toast.error("❌ Please enter a campaign name and at least one message.");
       return;
     }
 
     try {
+      const normalized = messageSteps.map((s) => {
+        const dv = s.delayValue ?? 0;
+        const du = s.delayUnit ?? "days";
+        return {
+          day: delayToLegacyDay(dv, du),
+          text: String(s.text || "").trim(),
+          delayValue: dv,
+          delayUnit: du,
+        };
+      });
+
       const res = await axios.post("/api/drips/campaigns", {
-        name: campaignName,
-        steps: messageSteps,
+        name: campaignName.trim(),
+        steps: normalized,
       });
 
       const created: ApiCampaign | undefined = res.data?.campaign;
@@ -324,9 +374,7 @@ export default function DripCampaignsPanel() {
       }
 
       setCampaignName("");
-      setMessageSteps([]);
-      setMaxDayUsed(0);
-      setCurrentDay("immediately");
+      setMessageSteps([{ text: "", day: "immediately", delayValue: 0, delayUnit: "days" }]);
 
       toast.success("✅ Custom drip campaign saved!");
     } catch (err: any) {
@@ -412,6 +460,7 @@ export default function DripCampaignsPanel() {
   };
 
   const handleRemoveNewStep = (index: number) => {
+    if (index === 0) return; // step 0 cannot be deleted
     setMessageSteps((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -890,35 +939,68 @@ setBackendCampaigns((prev) =>
           </div>
 
           <div className="space-y-3">
-            {aiPreviewSteps.map((step, idx) => (
-              <div key={idx} className="bg-[#1e293b] border border-white/10 rounded-lg p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-400 font-medium">Step {idx + 1}</span>
-                  <button
-                    onClick={() => setAIPreviewSteps((prev) => prev.filter((_, i) => i !== idx))}
-                    className="text-xs text-red-400 hover:text-red-300"
-                  >
-                    Remove
-                  </button>
+            {aiPreviewSteps.map((step, idx) => {
+              const dv = step.delayValue ?? parseLegacyDayUI(step.day).value;
+              const du = step.delayUnit ?? parseLegacyDayUI(step.day).unit;
+              return (
+                <div key={idx} className="bg-[#1e293b] border border-white/10 rounded-lg p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-400 font-medium">Message {idx + 1}</span>
+                    {idx === 0 ? (
+                      <span className="text-xs text-gray-600">Cannot remove first message</span>
+                    ) : (
+                      <button
+                        onClick={() => setAIPreviewSteps((prev) => prev.filter((_, i) => i !== idx))}
+                        className="text-xs text-red-400 hover:text-red-300"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  {idx === 0 ? (
+                    <p className="text-xs text-gray-400">Sends immediately when a lead is enrolled.</p>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400">Wait</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={dv}
+                        onChange={(e) => {
+                          const num = parseInt(e.target.value, 10) || 1;
+                          setAIPreviewSteps((prev) => prev.map((s, i) =>
+                            i === idx ? { ...s, delayValue: num, delayUnit: du, day: delayToLegacyDay(num, du) } : s
+                          ));
+                        }}
+                        className="w-20 bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
+                      />
+                      <select
+                        value={du}
+                        onChange={(e) => {
+                          const unit = e.target.value as DripDelayUnit;
+                          setAIPreviewSteps((prev) => prev.map((s, i) =>
+                            i === idx ? { ...s, delayUnit: unit, day: delayToLegacyDay(dv, unit) } : s
+                          ));
+                        }}
+                        className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
+                      >
+                        <option value="hours">Hours</option>
+                        <option value="days">Days</option>
+                        <option value="weeks">Weeks</option>
+                        <option value="months">Months</option>
+                      </select>
+                      <span className="text-xs text-gray-500">after enrollment</span>
+                    </div>
+                  )}
+                  <textarea
+                    value={step.text}
+                    onChange={(e) => setAIPreviewSteps((prev) => prev.map((s, i) => i === idx ? { ...s, text: e.target.value } : s))}
+                    rows={3}
+                    className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
+                  />
                 </div>
-                <textarea
-                  value={step.text}
-                  onChange={(e) => setAIPreviewSteps((prev) => prev.map((s, i) => i === idx ? { ...s, text: e.target.value } : s))}
-                  rows={3}
-                  className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
-                />
-                <select
-                  value={step.day}
-                  onChange={(e) => setAIPreviewSteps((prev) => prev.map((s, i) => i === idx ? { ...s, day: e.target.value } : s))}
-                  className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-xs"
-                >
-                  <option value="immediately">immediately</option>
-                  {Array.from({ length: 60 }, (_, i) => i + 1).map((d) => (
-                    <option key={d} value={`Day ${d}`}>Day {d}</option>
-                  ))}
-                </select>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="flex gap-3">
@@ -940,83 +1022,117 @@ setBackendCampaigns((prev) =>
       )}
 
       {/* Creator */}
-      <div className="border border-black dark:border-white p-4 rounded">
-        <h2 className="text-xl font-bold mb-2">Create Custom Drip Campaign</h2>
+      <div className="border border-white/10 bg-[#0f172a] p-5 rounded-xl space-y-4">
+        <div>
+          <h2 className="text-xl font-bold">Create Custom Drip Campaign</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Changes apply to new leads going forward. Leads already in this drip keep their current schedule.
+          </p>
+        </div>
+
         <input
           value={campaignName}
           onChange={(e) => setCampaignName(e.target.value)}
           placeholder="Campaign Name"
-          className="border border-black dark:border-white p-2 w-full rounded mb-2"
+          className="bg-[#1e293b] border border-white/10 text-white px-3 py-2 w-full rounded-lg text-sm"
         />
 
-        <div className="mb-2 space-x-2">
-          <button
-            onClick={() => insertMergeField("client_first_name")}
-            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
-          >
-            Insert Client First Name
-          </button>
-          <button
-            onClick={() => insertMergeField("agent_name")}
-            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
-          >
-            Insert Agent Name
-          </button>
-        </div>
-
-        <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2">
-          <input
-            value={currentText}
-            onChange={(e) => setCurrentText(e.target.value)}
-            placeholder="Message text"
-            className="border border-black dark:border-white p-2 flex-1 rounded"
-          />
-          <select
-            value={currentDay}
-            onChange={(e) => setCurrentDay(e.target.value)}
-            className="border border-black dark:border-white p-2 rounded"
-          >
-            {generateDayOptions().map((day, idx) => (
-              <option key={idx} value={day}>
-                {day}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={addStep}
-            className="border border-black dark:border-white px-4 rounded cursor-pointer"
-          >
-            Add
-          </button>
-        </div>
-
-        {messageSteps.length > 0 && (
-          <div className="space-y-2 mt-2">
-            <h3 className="font-semibold">Messages in Campaign:</h3>
-            {messageSteps.map((step, idx) => (
-              <div key={idx} className="border border-black dark:border-white p-2 rounded">
-                <p>
-                  <strong>When:</strong> {step.day}
-                </p>
-                <p>
-                  <strong>Message:</strong> {step.text}
-                </p>
-                <div className="flex justify-end mt-2">
+        <div className="space-y-3">
+          {messageSteps.map((step, idx) => (
+            <div key={idx} className="bg-[#1e293b] border border-white/10 rounded-lg p-3 space-y-2">
+              {/* Header row */}
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-sm font-medium text-white">Message {idx + 1}</span>
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
-                    onClick={() => handleRemoveNewStep(idx)}
-                    className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs cursor-pointer"
+                    onClick={() => handleMoveNewStepUp(idx)}
+                    disabled={idx < 2}
+                    className={`text-xs px-2 py-0.5 rounded ${idx < 2 ? "text-gray-600 cursor-not-allowed" : "text-gray-400 hover:text-white hover:bg-white/10"}`}
+                    title={idx < 2 ? "Cannot move above Message 1" : "Move up"}
                   >
-                    Delete
+                    ↑ Up
                   </button>
+                  <button
+                    onClick={() => handleMoveNewStepDown(idx)}
+                    disabled={idx === 0 || idx >= messageSteps.length - 1}
+                    className={`text-xs px-2 py-0.5 rounded ${idx === 0 || idx >= messageSteps.length - 1 ? "text-gray-600 cursor-not-allowed" : "text-gray-400 hover:text-white hover:bg-white/10"}`}
+                    title="Move down"
+                  >
+                    ↓ Down
+                  </button>
+                  <button
+                    onClick={() => handleDuplicateNewStep(idx)}
+                    className="text-xs px-2 py-0.5 rounded text-blue-400 hover:text-blue-300 hover:bg-white/10"
+                  >
+                    Duplicate
+                  </button>
+                  {idx === 0 ? (
+                    <span className="text-xs text-gray-600 cursor-not-allowed" title="First message cannot be deleted">
+                      Delete disabled
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleRemoveNewStep(idx)}
+                      className="text-xs px-2 py-0.5 rounded text-red-400 hover:text-red-300 hover:bg-white/10"
+                    >
+                      Delete
+                    </button>
+                  )}
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+
+              {/* Timing */}
+              {idx === 0 ? (
+                <p className="text-xs text-gray-400">Sends immediately when a lead is enrolled.</p>
+              ) : (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-gray-400">Wait</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={step.delayValue ?? 1}
+                    onChange={(e) => handleNewStepChange(idx, "delayValue", parseInt(e.target.value, 10) || 1)}
+                    className="w-20 bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
+                  />
+                  <select
+                    value={step.delayUnit ?? "days"}
+                    onChange={(e) => handleNewStepChange(idx, "delayUnit", e.target.value)}
+                    className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
+                  >
+                    <option value="hours">Hours</option>
+                    <option value="days">Days</option>
+                    <option value="weeks">Weeks</option>
+                    <option value="months">Months</option>
+                  </select>
+                  <span className="text-xs text-gray-500">after enrollment</span>
+                </div>
+              )}
+
+              {/* Message body */}
+              <textarea
+                value={step.text}
+                onChange={(e) => handleNewStepChange(idx, "text", e.target.value)}
+                rows={3}
+                placeholder={idx === 0 ? "First message text..." : "Message text..."}
+                className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
+              />
+              <p className="text-xs text-gray-600">
+                Tokens: {`{{ contact.first_name }}`}  {`{{ agent.name }}`}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={handleAppendNewStep}
+          className="w-full border border-dashed border-white/20 text-gray-400 hover:text-white hover:border-white/40 rounded-lg py-2 text-sm transition"
+        >
+          + Add Message
+        </button>
 
         <button
           onClick={saveCampaign}
-          className="mt-2 border border-black dark:border-white px-4 py-2 rounded cursor-pointer"
+          className="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg text-sm font-semibold transition"
         >
           Save Campaign
         </button>
