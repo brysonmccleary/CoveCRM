@@ -238,7 +238,7 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
       return res.status(400).json({ error: "Campaign is not an active SMS campaign" });
     }
 
-    const user = await User.findOne({ email }).select("_id email name").lean();
+    const user = await User.findOne({ email }).select("_id email name agentPhone").lean();
     if (!user?._id) return res.status(404).json({ error: "User not found" });
 
     // Compute initial nextSendAt (immediate if unspecified)
@@ -305,7 +305,7 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
 
           const rendered = renderTemplate(String(firstStep.text || ""), {
             contact: { first_name: leadFirst, last_name: leadLast, full_name: fullName },
-            agent: { name: user.name || null, first_name: agentFirst, last_name: agentLast },
+            agent: { name: user.name || null, first_name: agentFirst, last_name: agentLast, phone: (user as any).agentPhone || null },
           });
           const finalBody = ensureOptOut(rendered);
 
@@ -448,6 +448,7 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
               leadLastName: leadLast,
               leadState: (lead as any).State || (lead as any).state || null,
               agentName: user.name || null,
+              agentPhone: (user as any).agentPhone || null,
               campaignIsGlobal: !!(campaign as any).isGlobal,
               campaignKey: campaign.key || null,
               steps: steps as any[],

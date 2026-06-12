@@ -1,5 +1,5 @@
 // /components/DripCampaignsPanel.tsx
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
 import { useSession } from "next-auth/react";
@@ -52,6 +52,43 @@ function isBirthdayStep(day?: string | null): boolean {
   return /birthday/i.test(String(day || ""));
 }
 
+// ── Merge-field token definitions ────────────────────────────────────────────
+const MERGE_TOKENS = [
+  { label: "First Name",  token: "{{ contact.first_name }}" },
+  { label: "Last Name",   token: "{{ contact.last_name }}"  },
+  { label: "Full Name",   token: "{{ contact.full_name }}"  },
+  { label: "Agent Name",  token: "{{ agent.name }}"         },
+  { label: "Agent Phone", token: "{{ agent.phone }}"        },
+] as const;
+
+// Inserts a token at the current cursor position of a textarea element, or
+// appends it if the element reference isn't available.
+function insertAtCursor(
+  el: HTMLTextAreaElement | null | undefined,
+  token: string,
+  currentValue: string,
+  setValue: (v: string) => void,
+): void {
+  if (el) {
+    const start = el.selectionStart ?? currentValue.length;
+    const end   = el.selectionEnd   ?? currentValue.length;
+    const before = currentValue.slice(0, start);
+    const after  = currentValue.slice(end);
+    const sepBefore = before.length > 0 && !before.endsWith(" ") ? " " : "";
+    const sepAfter  = after.length  > 0 && !after.startsWith(" ") ? " " : "";
+    const newVal = before + sepBefore + token + sepAfter + after;
+    setValue(newVal);
+    requestAnimationFrame(() => {
+      el.focus();
+      const cur = start + sepBefore.length + token.length + sepAfter.length;
+      el.setSelectionRange(cur, cur);
+    });
+  } else {
+    const sep = currentValue && !currentValue.endsWith(" ") ? " " : "";
+    setValue(currentValue + sep + token);
+  }
+}
+
 function stepDelayLabel(step: MessageStep): string {
   if (isBirthdayStep(step.day)) return "Birthday (disabled)";
   const v = step.delayValue ?? parseLegacyDayUI(step.day).value;
@@ -91,6 +128,17 @@ export default function DripCampaignsPanel() {
   const { data: session } = useSession();
   const isAdmin = (session?.user?.email ?? "").toLowerCase() === EXPERIMENTAL_ADMIN;
   const [dripTab, setDripTab] = useState<DripTabMode>("sms");
+
+  // Refs for cursor-aware token insertion — keyed by "scope:id:idx"
+  const textareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const insertTokenAt = useCallback((
+    refKey: string,
+    token: string,
+    currentValue: string,
+    setValue: (v: string) => void,
+  ) => {
+    insertAtCursor(textareaRefs.current[refKey], token, currentValue, setValue);
+  }, []);
   const [campaignName, setCampaignName] = useState("");
 
   // AI Builder state
@@ -993,11 +1041,23 @@ setBackendCampaigns((prev) =>
                     </div>
                   )}
                   <textarea
+                    ref={(el) => { textareaRefs.current[`ai:${idx}`] = el; }}
                     value={step.text}
                     onChange={(e) => setAIPreviewSteps((prev) => prev.map((s, i) => i === idx ? { ...s, text: e.target.value } : s))}
                     rows={3}
                     className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
                   />
+                  <div className="flex flex-wrap gap-1">
+                    {MERGE_TOKENS.map(({ label, token }) => (
+                      <button key={token} type="button"
+                        onClick={() => insertTokenAt(`ai:${idx}`, token, step.text, (v) =>
+                          setAIPreviewSteps((prev) => prev.map((s, i) => i === idx ? { ...s, text: v } : s))
+                        )}
+                        className="text-xs bg-[#0b1220] border border-white/10 text-gray-400 hover:text-white hover:border-white/20 px-2 py-0.5 rounded transition">
+                        + {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               );
             })}
@@ -1110,15 +1170,22 @@ setBackendCampaigns((prev) =>
 
               {/* Message body */}
               <textarea
+                ref={(el) => { textareaRefs.current[`new:${idx}`] = el; }}
                 value={step.text}
                 onChange={(e) => handleNewStepChange(idx, "text", e.target.value)}
                 rows={3}
                 placeholder={idx === 0 ? "First message text..." : "Message text..."}
                 className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
               />
-              <p className="text-xs text-gray-600">
-                Tokens: {`{{ contact.first_name }}`}  {`{{ agent.name }}`}
-              </p>
+              <div className="flex flex-wrap gap-1">
+                {MERGE_TOKENS.map(({ label, token }) => (
+                  <button key={token} type="button"
+                    onClick={() => insertTokenAt(`new:${idx}`, token, step.text, (v) => handleNewStepChange(idx, "text", v))}
+                    className="text-xs bg-[#0b1220] border border-white/10 text-gray-400 hover:text-white hover:border-white/20 px-2 py-0.5 rounded transition">
+                    + {label}
+                  </button>
+                ))}
+              </div>
             </div>
           ))}
         </div>
@@ -1171,16 +1238,27 @@ setBackendCampaigns((prev) =>
                 </p>
                 {editableDrips[String(campaignId)]?.map((msg, idx) => {
                   const isBday = isBirthdayStep(msg.day);
+                  const cid = String(campaignId);
+                  const stepsLen = editableDrips[cid]?.length ?? 0;
                   return (
                     <div key={idx} className="border border-white/10 rounded-lg p-3 space-y-2 bg-[#1e293b]">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-gray-400 font-medium">Step {idx + 1} — {stepDelayLabel(msg)}</span>
                         {isBday ? (
                           <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded">Birthday (disabled)</span>
+                        ) : stepsLen <= 1 ? (
+                          <span className="text-xs text-gray-600 cursor-not-allowed" title="Cannot delete the only step">Delete disabled</span>
                         ) : (
-                          <span className="text-xs text-gray-600 cursor-not-allowed" title="Step deletion is disabled. Active enrollments have already-scheduled messages for this step.">
-                            Delete disabled
-                          </span>
+                          <button
+                            onClick={() => {
+                              if (window.confirm("Delete this message from future leads? Leads already scheduled will keep their current messages.")) {
+                                handleRemoveEditableStep(cid, idx);
+                              }
+                            }}
+                            className="text-xs px-2 py-0.5 rounded text-red-400 hover:text-red-300 hover:bg-white/10"
+                          >
+                            Delete
+                          </button>
                         )}
                       </div>
                       {!isBday && (
@@ -1190,12 +1268,12 @@ setBackendCampaigns((prev) =>
                               type="number"
                               min={0}
                               value={msg.delayValue ?? parseLegacyDayUI(msg.day).value}
-                              onChange={(e) => handleEditMessage(String(campaignId), idx, "delayValue", parseInt(e.target.value, 10) || 0)}
+                              onChange={(e) => handleEditMessage(cid, idx, "delayValue", parseInt(e.target.value, 10) || 0)}
                               className="w-20 bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
                             />
                             <select
                               value={msg.delayUnit ?? parseLegacyDayUI(msg.day).unit}
-                              onChange={(e) => handleEditMessage(String(campaignId), idx, "delayUnit", e.target.value)}
+                              onChange={(e) => handleEditMessage(cid, idx, "delayUnit", e.target.value)}
                               className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
                             >
                               <option value="hours">hours from enrollment</option>
@@ -1205,11 +1283,21 @@ setBackendCampaigns((prev) =>
                             </select>
                           </div>
                           <textarea
+                            ref={(el) => { textareaRefs.current[`pre:${cid}:${idx}`] = el; }}
                             value={msg.text}
-                            onChange={(e) => handleEditMessage(String(campaignId), idx, "text", e.target.value)}
+                            onChange={(e) => handleEditMessage(cid, idx, "text", e.target.value)}
                             rows={3}
                             className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
                           />
+                          <div className="flex flex-wrap gap-1">
+                            {MERGE_TOKENS.map(({ label, token }) => (
+                              <button key={token} type="button"
+                                onClick={() => insertTokenAt(`pre:${cid}:${idx}`, token, msg.text, (v) => handleEditMessage(cid, idx, "text", v))}
+                                className="text-xs bg-[#0b1220] border border-white/10 text-gray-400 hover:text-white hover:border-white/20 px-2 py-0.5 rounded transition">
+                                + {label}
+                              </button>
+                            ))}
+                          </div>
                         </>
                       )}
                       {isBday && <p className="text-xs text-gray-500">Birthday steps are currently disabled and will not be scheduled.</p>}
@@ -1288,16 +1376,26 @@ setBackendCampaigns((prev) =>
               </p>
               {editableDrips[camp._id]?.map((msg, idx) => {
                 const isBday = isBirthdayStep(msg.day);
+                const stepsLen = editableDrips[camp._id]?.length ?? 0;
                 return (
                   <div key={idx} className="border border-white/10 rounded-lg p-3 space-y-2 bg-[#1e293b]">
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-gray-400 font-medium">Step {idx + 1} — {stepDelayLabel(msg)}</span>
                       {isBday ? (
                         <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded">Birthday (disabled)</span>
+                      ) : stepsLen <= 1 ? (
+                        <span className="text-xs text-gray-600 cursor-not-allowed" title="Cannot delete the only step">Delete disabled</span>
                       ) : (
-                        <span className="text-xs text-gray-600 cursor-not-allowed" title="Step deletion is disabled. Active enrollments have already-scheduled messages for this step.">
-                          Delete disabled
-                        </span>
+                        <button
+                          onClick={() => {
+                            if (window.confirm("Delete this message from future leads? Leads already scheduled will keep their current messages.")) {
+                              handleRemoveEditableStep(camp._id, idx);
+                            }
+                          }}
+                          className="text-xs px-2 py-0.5 rounded text-red-400 hover:text-red-300 hover:bg-white/10"
+                        >
+                          Delete
+                        </button>
                       )}
                     </div>
                     {!isBday && (
@@ -1322,11 +1420,21 @@ setBackendCampaigns((prev) =>
                           </select>
                         </div>
                         <textarea
+                          ref={(el) => { textareaRefs.current[`cust:${camp._id}:${idx}`] = el; }}
                           value={msg.text}
                           onChange={(e) => handleEditMessage(camp._id, idx, "text", e.target.value)}
                           rows={3}
                           className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
                         />
+                        <div className="flex flex-wrap gap-1">
+                          {MERGE_TOKENS.map(({ label, token }) => (
+                            <button key={token} type="button"
+                              onClick={() => insertTokenAt(`cust:${camp._id}:${idx}`, token, msg.text, (v) => handleEditMessage(camp._id, idx, "text", v))}
+                              className="text-xs bg-[#0b1220] border border-white/10 text-gray-400 hover:text-white hover:border-white/20 px-2 py-0.5 rounded transition">
+                              + {label}
+                            </button>
+                          ))}
+                        </div>
                       </>
                     )}
                     {isBday && <p className="text-xs text-gray-500">Birthday steps are currently disabled and will not be scheduled.</p>}

@@ -53,6 +53,7 @@ export interface CreateScheduledDripMessagesParams {
   leadLastName?: string | null;
   leadState?: string | null;
   agentName?: string | null;
+  agentPhone?: string | null;
   campaignIsGlobal?: boolean;
   campaignKey?: string | null;
   steps: Array<{
@@ -87,6 +88,7 @@ export async function createScheduledDripMessages(
     leadLastName,
     leadState,
     agentName,
+    agentPhone,
     campaignIsGlobal,
     campaignKey,
     steps,
@@ -134,7 +136,7 @@ export async function createScheduledDripMessages(
     const rawText = String(step.text || "").trim();
     let rendered = renderTemplate(rawText, {
       contact: { first_name: leadFirstName, last_name: leadLastName, full_name: fullName },
-      agent: { name: agentName, first_name: agentFirst, last_name: agentLast },
+      agent: { name: agentName, first_name: agentFirst, last_name: agentLast, phone: agentPhone },
     });
     rendered = applyLegacyTokens(rendered, {
       firstName: leadFirstName,

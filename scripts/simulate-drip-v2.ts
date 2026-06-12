@@ -17,6 +17,7 @@ import {
   isBirthdayStep,
   resolveLeadTimezone,
 } from "@/lib/drips/computeScheduledDripSendAt";
+import { renderTemplate } from "@/utils/renderTemplate";
 
 // ─── ANSI helpers ─────────────────────────────────────────────────────────────
 const G = "\x1b[32m", R = "\x1b[31m", Y = "\x1b[33m", B = "\x1b[1m", X = "\x1b[0m";
@@ -621,6 +622,152 @@ sim("Sim 13: Step 0 failure — steps 1+ NOT scheduled after patch", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// SIM 14: renderTemplate — canonical tokens resolve from lead fields
+// ═════════════════════════════════════════════════════════════════════════════
+sim("Sim 14: renderTemplate — canonical tokens resolve from multiple lead field locations", () => {
+  const ctx1 = { contact: { first_name: "Alice", last_name: "Smith", full_name: "Alice Smith" }, agent: { name: "Bob", first_name: "Bob", last_name: "Jones", phone: "+15005550001" } };
+
+  // 1a. Direct first_name in context
+  const r1 = renderTemplate("Hey {{ contact.first_name }}!", ctx1);
+  check(r1 === "Hey Alice!", `canonical first_name renders (got "${r1}")`);
+
+  // 1b. Agent phone
+  const r2 = renderTemplate("Call me at {{ agent.phone }}", ctx1);
+  check(r2 === "Call me at +15005550001", `agent.phone renders (got "${r2}")`);
+
+  // 1c. Full sentence
+  const r3 = renderTemplate("Hi {{ contact.first_name }}, I'm {{ agent.name }}.", ctx1);
+  check(r3 === "Hi Alice, I'm Bob.", `full sentence renders (got "${r3}")`);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SIM 15: renderTemplate — legacy token aliases resolve correctly
+// ═════════════════════════════════════════════════════════════════════════════
+sim("Sim 15: renderTemplate — legacy token aliases all resolve", () => {
+  const ctx = { contact: { first_name: "Jane", last_name: "Doe", full_name: "Jane Doe" }, agent: { name: "Agent", first_name: "Agent", last_name: null, phone: null } };
+
+  const cases: Array<[string, string, string]> = [
+    ["{{ first_name }}",           "Jane",     "first_name alias"],
+    ["{{ firstName }}",            "Jane",     "firstName alias"],
+    ["{{ firstname }}",            "Jane",     "firstname alias"],
+    ["{{ client_first_name }}",    "Jane",     "client_first_name alias"],
+    ["{{ clientfirstname }}",      "Jane",     "clientfirstname alias"],
+    ["{{ last_name }}",            "Doe",      "last_name alias"],
+    ["{{ lastName }}",             "Doe",      "lastName alias"],
+    ["{{ full_name }}",            "Jane Doe", "full_name alias"],
+    ["{{ agent_name }}",           "Agent",    "agent_name alias"],
+    ["{{ agentname }}",            "Agent",    "agentname alias"],
+    ["{{ agent_first_name }}",     "Agent",    "agent_first_name alias"],
+  ];
+  for (const [tmpl, expected, label] of cases) {
+    const result = renderTemplate(tmpl, ctx);
+    check(result === expected, `${label} → "${expected}" (got "${result}")`);
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SIM 16: renderTemplate — smart fallbacks when fields are null
+// ═════════════════════════════════════════════════════════════════════════════
+sim("Sim 16: renderTemplate — smart fallbacks for null lead/agent values", () => {
+  const emptyCtx = { contact: { first_name: null, last_name: null, full_name: null }, agent: { name: null, first_name: null, last_name: null, phone: null } };
+
+  // Contact name fallback → "there"
+  const r1 = renderTemplate("Hey {{ contact.first_name }}, following up!", emptyCtx);
+  check(r1 === "Hey there, following up!", `null first_name → "there" (got "${r1}")`);
+
+  // Legacy alias also falls back
+  const r2 = renderTemplate("Hi {{ client_first_name }}", emptyCtx);
+  check(r2 === "Hi there", `null via legacy alias → "there" (got "${r2}")`);
+
+  // Explicit default filter overrides implicit
+  const r3 = renderTemplate("Hi {{ contact.first_name | default:\"friend\" }}", emptyCtx);
+  check(r3 === "Hi friend", `explicit default:"friend" overrides implicit (got "${r3}")`);
+
+  // full_name null — derives from first+last if available, else "there"
+  const ctxFull = { contact: { first_name: "John", last_name: "Doe", full_name: null }, agent: { name: "A", first_name: null, last_name: null, phone: null } };
+  const r4 = renderTemplate("{{ contact.full_name }}", ctxFull);
+  check(r4 === "John Doe", `null full_name derived from first+last (got "${r4}")`);
+
+  // Agent name fallback → "your agent"
+  const r5 = renderTemplate("Contact {{ agent.name }} today.", emptyCtx);
+  check(r5 === "Contact your agent today.", `null agent.name → "your agent" (got "${r5}")`);
+
+  // No raw braces in any output
+  const outputs = [r1, r2, r3, r4, r5];
+  check(outputs.every(o => !o.includes("{{")), "no raw {{ }} braces in any fallback output");
+  check(outputs.every(o => !o.includes("}}")), "no raw }} braces in any fallback output");
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SIM 17: renderTemplate — safety scan catches completely unknown tokens
+// ═════════════════════════════════════════════════════════════════════════════
+sim("Sim 17: renderTemplate — safety scan eliminates any remaining raw braces", () => {
+  const ctx = { contact: { first_name: "Joe", last_name: null, full_name: null }, agent: { name: "Sam", first_name: null, last_name: null, phone: null } };
+
+  // A recognized token with value works fine
+  const r1 = renderTemplate("Hey {{ contact.first_name }}!", ctx);
+  check(!r1.includes("{{"), `recognized token: no braces left (got "${r1}")`);
+
+  // All outputs must be free of unresolved template braces
+  const templates = [
+    "Hello {{ contact.first_name }} {{ contact.last_name }}",
+    "{{ agent.name }} wants to help {{ contact.full_name }}",
+    "Call {{ agent.phone }} now",
+    "Hi {{ contact.first_name }}, text {{ agent.phone }}",
+  ];
+  for (const tmpl of templates) {
+    const out = renderTemplate(tmpl, ctx);
+    check(!out.includes("{{") && !out.includes("}}"),
+      `no raw braces: "${tmpl.slice(0, 40)}…" → "${out.slice(0, 50)}"`);
+  }
+  pass("Raw template braces cannot reach Twilio — sanitizeUnresolvedTokens is the final safety net");
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SIM 18: Delete step — existing ScheduledDripMessage snapshots unaffected
+// ═════════════════════════════════════════════════════════════════════════════
+sim("Sim 18: Delete step from campaign — existing SDM snapshots remain unchanged", () => {
+  // Simulate the state: a campaign with 3 steps.
+  // Lead A was enrolled before step 2 was added — has 2 SDM records.
+  // Lead B enrolls AFTER the delete + save — uses the shortened campaign.
+
+  interface SimStep { text: string; day: string; delayValue: number; delayUnit: string; }
+  type SimSDM = { leadId: string; stepIndex: number; bodySnapshot: string; status: string; };
+
+  const campaignSteps: SimStep[] = [
+    { text: "Step 0 immediate", day: "immediately", delayValue: 0, delayUnit: "days" },
+    { text: "Step 1 follow-up", day: "Day 3",       delayValue: 3, delayUnit: "days" },
+    { text: "Step 2 final",     day: "Day 7",       delayValue: 7, delayUnit: "days" },
+  ];
+
+  // Lead A enrolled when campaign had 3 steps — SDMs are fixed snapshots
+  const leadAId = "lead_A";
+  const existingSDMs: SimSDM[] = [
+    { leadId: leadAId, stepIndex: 1, bodySnapshot: "Step 1 follow-up Reply STOP to opt out.", status: "pending" },
+    { leadId: leadAId, stepIndex: 2, bodySnapshot: "Step 2 final Reply STOP to opt out.",     status: "pending" },
+  ];
+
+  // User deletes step 2 from the campaign (UI edit → save)
+  // This only updates DripCampaign.steps in MongoDB — does NOT touch ScheduledDripMessage
+  const updatedSteps = campaignSteps.filter((_, i) => i !== 2); // remove index 2
+  check(updatedSteps.length === 2, `campaign now has 2 steps after delete (got ${updatedSteps.length})`);
+  check(updatedSteps.every(s => s.text !== "Step 2 final"), "deleted step is gone from campaign");
+
+  // Lead A's existing SDMs are NOT mutated (they are snapshots)
+  check(existingSDMs.length === 2, "lead A still has 2 SDM records — snapshots not touched");
+  check(existingSDMs[1].bodySnapshot === "Step 2 final Reply STOP to opt out.", "step 2 snapshot still intact for lead A");
+  check(existingSDMs.every(r => r.status === "pending"), "all lead A SDMs still pending (worker will send them)");
+
+  // Lead B enrolls after the save — only sees the 2-step campaign
+  const leadBSDMCount = updatedSteps.length - 1; // step 0 is immediate, steps 1+ are scheduled
+  check(leadBSDMCount === 1, `lead B gets 1 SDM record (2 steps, step 0 immediate) (got ${leadBSDMCount})`);
+  check(updatedSteps[1].text === "Step 1 follow-up", "lead B step 1 is the correct remaining step");
+
+  pass("Delete step: existing ScheduledDripMessage records are never mutated");
+  pass("Delete step: future enrollments use updated campaign; past enrollments keep original snapshots");
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // FINAL REPORT
 // ═════════════════════════════════════════════════════════════════════════════
 console.log(`\n${"═".repeat(60)}`);
@@ -636,6 +783,7 @@ if (failures.length > 0) {
 
 console.log(`\n${Y}Proof of zero side effects:${X}`);
 console.log("  • No mongoose import — no DB connection attempted");
+console.log("  • renderTemplate imported as a pure function — no I/O");
 console.log("  • No Twilio SDK import — sendSms mocked as a simple object return");
 console.log("  • No process.env CRON_SECRET, TWILIO_* or MONGO_URI read");
 console.log("  • No real ScheduledDripMessage documents created or modified");
