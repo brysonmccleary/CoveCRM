@@ -7,6 +7,7 @@ import { Buffer } from "buffer";
 import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
+import FBLeadCampaign from "@/models/FBLeadCampaign";
 import {
   getClientForUser,
   TwilioResolvedAuth,
@@ -1538,6 +1539,18 @@ export default async function handler(
       useHostedCompliancePages: (useHostedCompliancePages as any) !== false,
       flow: flowSelection.flow,
     });
+    if ((useHostedCompliancePages as any) !== false && flowSelection.flow === "lead_generation") {
+      try {
+        const a2pStub = await (FBLeadCampaign as any)
+          .findOne({ userEmail: user.email, funnelVersion: "a2p-compliance-stub" }, { _id: 1 })
+          .lean();
+        if (a2pStub?._id) {
+          compliance.optInUrl = `${baseUrl}/f/${a2pStub._id}`;
+        }
+      } catch (stubErr: any) {
+        log("warn: A2P stub lookup failed; using fallback optInUrl", { message: stubErr?.message });
+      }
+    }
     const existing = await A2PProfile.findOne({ userId }).lean<
       IA2PProfile | null
     >();

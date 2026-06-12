@@ -148,7 +148,7 @@ export function resolveA2PSampleAgentName(args: {
     .map((part) => clean(part))
     .filter(Boolean)
     .join(" ");
-  return fullName || clean(args.businessName) || "your insurance agent";
+  return fullName || clean(args.businessName) || "a licensed insurance agent";
 }
 
 export function personalizeA2PSampleMessage(sample: any, args: {
@@ -173,11 +173,11 @@ export function personalizeA2PSampleMessages(samples: any[], args: {
   return samples.map((sample) => personalizeA2PSampleMessage(sample, args)).filter(Boolean);
 }
 
-export function buildLeadGenerationSampleMessages(agentName = "your insurance agent"): string[] {
-  const agent = clean(agentName) || "your insurance agent";
+export function buildLeadGenerationSampleMessages(agentName = "a licensed insurance agent"): string[] {
+  const agent = clean(agentName) || "a licensed insurance agent";
   return [
-    `Hi {{first_name}}, this is ${agent} following up on your insurance information request. I can help review available options. Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is ${agent}. Just following up on your request for insurance information. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is ${agent}. Reminder about your scheduled insurance review. Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. I received the Final Expense information request you submitted and wanted to help review available options. Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. Following up regarding your Final Expense request. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. Just checking in regarding your Final Expense review request. Let me know a good time to connect. Reply STOP to opt out.`,
   ];
 }

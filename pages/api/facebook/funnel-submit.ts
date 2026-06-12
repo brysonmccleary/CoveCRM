@@ -78,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const campaign = await (FBLeadCampaign as any).findOne({
       _id: campaignId,
     })
-      .select("userEmail folderId campaignName leadType webhookKey metaCampaignId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet")
+      .select("userEmail folderId campaignName leadType webhookKey metaCampaignId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet funnelVersion")
       .lean() as any;
 
     if (!campaign) {
@@ -107,6 +107,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userEmail = String(campaign.userEmail || "").toLowerCase();
     if (!userEmail) {
       return res.status(400).json({ error: "Campaign has no owner" });
+    }
+
+    if (campaign.funnelVersion === "a2p-compliance-stub") {
+      return res.status(200).json({ ok: true, complianceOnly: true } as any);
     }
 
     // Ensure the CRM folder exists

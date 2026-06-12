@@ -98,15 +98,15 @@ function resolveA2PFormSampleAgentName(
     .map((part) => part.trim())
     .filter(Boolean)
     .join(" ");
-  return fullName || businessName.trim() || "your insurance agent";
+  return fullName || businessName.trim() || "a licensed insurance agent";
 }
 
 function buildDefaultA2PFormSamples(agentName: string) {
-  const agent = agentName.trim() || "your insurance agent";
+  const agent = agentName.trim() || "a licensed insurance agent";
   return [
-    `Hi {{first_name}}, this is ${agent} following up on your insurance information request. I can help review available options. Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is ${agent}. Just following up on your request for insurance information. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is ${agent}. Reminder about your scheduled insurance review. Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. I received the Final Expense information request you submitted and wanted to help review available options. Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. Following up regarding your Final Expense request. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is ${agent}. Just checking in regarding your Final Expense review request. Let me know a good time to connect. Reply STOP to opt out.`,
   ];
 }
 
@@ -320,8 +320,8 @@ export default function A2PVerificationForm() {
   const [usecase, setUsecase] = useState<UseCaseCode>("LOW_VOLUME");
 
   // ---------- Sample Messages ----------
-  const initialSampleMessages = buildDefaultA2PFormSamples("your insurance agent");
-  const [lastSampleAgentName, setLastSampleAgentName] = useState("your insurance agent");
+  const initialSampleMessages = buildDefaultA2PFormSamples("a licensed insurance agent");
+  const [lastSampleAgentName, setLastSampleAgentName] = useState("a licensed insurance agent");
   const [msg1, setMsg1] = useState(initialSampleMessages[0]);
   const [msg2, setMsg2] = useState(initialSampleMessages[1]);
   const [msg3, setMsg3] = useState(initialSampleMessages[2]);
