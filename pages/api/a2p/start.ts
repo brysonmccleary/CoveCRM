@@ -148,6 +148,7 @@ function buildCampaignDescription(opts: {
   businessName: string;
   useCase: string;
   messageFlow: string;
+  complianceUrls: { optInUrl: string; tosUrl: string; privacyUrl: string };
 }): string {
   const businessName = (opts.businessName || "").trim() || "this business";
   const useCase = (opts.useCase || "").trim() || "LOW_VOLUME";
@@ -156,11 +157,15 @@ function buildCampaignDescription(opts: {
 
   const flowSnippet = (opts.messageFlow || "").replace(/\s+/g, " ").trim();
   if (flowSnippet) {
-    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 300)}`;
+    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 200)}`;
   } else {
     desc +=
       "Leads opt in via TCPA-compliant web forms and receive updates about their life insurance options and booked appointments.";
   }
+
+  // Append compliance URLs so they appear explicitly in the submitted description
+  const { optInUrl, tosUrl, privacyUrl } = opts.complianceUrls;
+  desc += ` Opt-in: ${optInUrl} Terms: ${tosUrl} Privacy: ${privacyUrl}`;
 
   // Trim to Twilio's max (safe 1024 chars)
   if (desc.length > 1024) desc = desc.slice(0, 1024);
@@ -1609,10 +1614,16 @@ export default async function handler(
     ).trim();
     (setPayload as any).lastSubmittedSampleMessages = samples;
     (setPayload as any).twilioAccountSidLastUsed = twilioAccountSidUsed;
-    (setPayload as any).campaignDescription =
-      typeof campaignDescription === "string" && campaignDescription.trim()
-        ? campaignDescription.trim()
-        : "This campaign sends SMS messages from the sender to consumers who request information about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender's public CoveCRM-hosted Final Expense landing page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.";
+    (setPayload as any).campaignDescription = buildCampaignDescription({
+      businessName: String(businessName),
+      useCase: normalizedUseCase,
+      messageFlow: generatedMessageFlow,
+      complianceUrls: {
+        optInUrl: compliance.optInUrl,
+        tosUrl: compliance.tosUrl,
+        privacyUrl: compliance.privacyUrl,
+      },
+    });
 
     const messageFlowText: string = applyComplianceTokens(setPayload.optInDetails || generatedMessageFlow, {
       optInUrl: compliance.optInUrl,

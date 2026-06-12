@@ -89,24 +89,11 @@ const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
   { value: "EMERGENCY", label: "Emergency (special)" },
 ];
 
-function resolveA2PFormSampleAgentName(
-  contactFirstName: string,
-  contactLastName: string,
-  businessName: string,
-) {
-  const fullName = [contactFirstName, contactLastName]
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join(" ");
-  return fullName || businessName.trim() || "a licensed insurance agent";
-}
-
-function buildDefaultA2PFormSamples(agentName: string) {
-  const agent = agentName.trim() || "a licensed insurance agent";
+function buildDefaultA2PFormSamples() {
   return [
-    `Hi {{first_name}}, this is ${agent}. I received the Final Expense information request you submitted and wanted to help review available options. Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is ${agent}. Following up regarding your Final Expense request. Are you available for a quick call today or tomorrow? Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is ${agent}. Just checking in regarding your Final Expense review request. Let me know a good time to connect. Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is {{agent_name}}. I received the Final Expense request you submitted and wanted to help you review your options. When would be a good time for a quick call? Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is {{agent_name}} following up on the Final Expense request you recently submitted. Do you have a few minutes later today or tomorrow to connect? Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is {{agent_name}}. I didn't want to miss you regarding your Final Expense request. If you're still interested in reviewing your options, let me know a good time to reach you. Reply STOP to opt out.`,
   ];
 }
 
@@ -320,8 +307,7 @@ export default function A2PVerificationForm() {
   const [usecase, setUsecase] = useState<UseCaseCode>("LOW_VOLUME");
 
   // ---------- Sample Messages ----------
-  const initialSampleMessages = buildDefaultA2PFormSamples("a licensed insurance agent");
-  const [lastSampleAgentName, setLastSampleAgentName] = useState("a licensed insurance agent");
+  const initialSampleMessages = buildDefaultA2PFormSamples();
   const [msg1, setMsg1] = useState(initialSampleMessages[0]);
   const [msg2, setMsg2] = useState(initialSampleMessages[1]);
   const [msg3, setMsg3] = useState(initialSampleMessages[2]);
@@ -343,18 +329,6 @@ The opt-in page displays SMS Terms and SMS Privacy links on the same page as the
   const [optInScreenshotUrl, setOptInScreenshotUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  useEffect(() => {
-    const nextAgentName = resolveA2PFormSampleAgentName(contactFirstName, contactLastName, businessName);
-    if (nextAgentName === lastSampleAgentName) return;
-
-    const previousDefaults = buildDefaultA2PFormSamples(lastSampleAgentName);
-    const nextDefaults = buildDefaultA2PFormSamples(nextAgentName);
-    setMsg1((prev) => (prev === previousDefaults[0] ? nextDefaults[0] : prev));
-    setMsg2((prev) => (prev === previousDefaults[1] ? nextDefaults[1] : prev));
-    setMsg3((prev) => (prev === previousDefaults[2] ? nextDefaults[2] : prev));
-    setLastSampleAgentName(nextAgentName);
-  }, [businessName, contactFirstName, contactLastName, lastSampleAgentName]);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -662,8 +636,6 @@ The opt-in page displays SMS Terms and SMS Privacy links on the same page as the
         useHostedCompliancePages,
         a2pFlow,
         campaignType,
-        campaignDescription:
-          "This campaign sends SMS messages from the sender to consumers who request information about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender's public CoveCRM-hosted Final Expense landing page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.",
       };
 
       const res = await fetch("/api/registerA2P", {

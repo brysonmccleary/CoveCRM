@@ -477,7 +477,7 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
           const base =
             "px-4 py-2 rounded-2xl text-sm max-w-[75%] w-fit whitespace-pre-wrap break-words shadow";
           const alignment = isSent
-            ? "self-end ml-auto text-white bg-green-600"
+            ? "self-end ml-auto text-white bg-[#7c3aed]"
             : "self-start text-white bg-[#334155]";
 
           // ✅ use normalized timestamp
@@ -515,7 +515,7 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
 
       <div className="p-4 border-t border-gray-800 flex gap-2 bg-[#0f172a]">
         <input
-          className="flex-1 bg-[#1e293b] text-white border border-gray-700 rounded-full px-4 py-2 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-600"
+          className="flex-1 bg-[#1e293b] text-white border border-gray-700 rounded-full px-4 py-2 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7c3aed]"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -529,7 +529,7 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
         <button
           onClick={sendMessage}
           disabled={sendingSms || !input.trim()}
-          className="bg-green-600 text-white px-5 rounded-full hover:bg-green-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
+          className="bg-[#7c3aed] text-white px-5 rounded-full hover:bg-violet-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
           aria-label="Send message"
         >
           {sendingSms ? "Sending…" : "Send"}
