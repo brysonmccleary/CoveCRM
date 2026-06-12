@@ -328,13 +328,11 @@ export default function A2PVerificationForm() {
 
   // ---------- Opt-in Details ----------
   const [optInDetails, setOptInDetails] = useState(
-    `This campaign sends SMS messages from the sender to consumers who request information about life insurance, final expense coverage, mortgage protection, or related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests.
-
-End users opt in through the sender’s public CoveCRM-hosted opt-in page with a separate unchecked SMS consent checkbox. The form collects name and mobile phone number (and optionally email). No marketing consent is required to submit the form.
+    `This campaign sends SMS messages from the sender to consumers who request information about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender’s public CoveCRM-hosted Final Expense landing page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.
 
 Before submission, users see a disclosure similar to:
 
-“By checking this box, you agree to receive SMS messages about life insurance, final expense coverage, mortgage protection, related insurance options, appointment coordination, application follow-up, customer support, and responses to your requests. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.”
+“By checking this box, you agree to receive SMS messages from the sender about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to your request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.”
 
 The opt-in page displays SMS Terms and SMS Privacy links on the same page as the form submission. Consent records may be retained as needed for compliance and audit purposes.`,
   );
@@ -665,7 +663,7 @@ The opt-in page displays SMS Terms and SMS Privacy links on the same page as the
         a2pFlow,
         campaignType,
         campaignDescription:
-          "This campaign sends SMS messages from the sender to consumers who request information about life insurance, final expense coverage, mortgage protection, or related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender's public CoveCRM-hosted opt-in page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.",
+          "This campaign sends SMS messages from the sender to consumers who request information about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender's public CoveCRM-hosted Final Expense landing page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.",
       };
 
       const res = await fetch("/api/registerA2P", {

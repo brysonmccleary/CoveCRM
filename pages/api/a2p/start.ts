@@ -1612,7 +1612,7 @@ export default async function handler(
     (setPayload as any).campaignDescription =
       typeof campaignDescription === "string" && campaignDescription.trim()
         ? campaignDescription.trim()
-        : "This campaign sends SMS messages from the sender to consumers who request information about life insurance, final expense coverage, mortgage protection, or related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender's public CoveCRM-hosted opt-in page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.";
+        : "This campaign sends SMS messages from the sender to consumers who request information about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender's public CoveCRM-hosted Final Expense landing page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.";
 
     const messageFlowText: string = applyComplianceTokens(setPayload.optInDetails || generatedMessageFlow, {
       optInUrl: compliance.optInUrl,
