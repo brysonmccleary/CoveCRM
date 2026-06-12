@@ -41,6 +41,7 @@ import {
   buildInboundReasonAndRapport,
   shouldUseInboundFlow,
 } from "./flows/inbound";
+import { getTimezoneFromState } from "../utils/timezone";
 
 /**
  * ENV + config
@@ -7400,7 +7401,10 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
     try {
       const agentTz = String(state.context?.agentTimeZone || "America/Phoenix").trim();
       const leadTz = String(getLeadTimeZoneHintFromContext(state.context!) || agentTz).trim();
+      const explicitSchedulingTz = resolveExplicitSchedulingTimeZone(lastExactTime);
+      const resolvedSchedulingTz = explicitSchedulingTz || leadTz;
       const nowInAgentTz = new Date().toLocaleString("en-US", { timeZone: agentTz });
+      const nowInSchedulingTz = new Date().toLocaleString("en-US", { timeZone: resolvedSchedulingTz });
       const explicitDay =
         extractExplicitDaySelection(lastExactTime) ||
         extractExplicitDaySelection(String(state.selectedTimeText || "")) ||
@@ -7412,7 +7416,7 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
           : rememberedDay === "today" || rememberedDay === "tomorrow"
             ? rememberedDay
             : "today";
-      const bookingLocalDate = new Date(nowInAgentTz);
+      const bookingLocalDate = new Date(nowInSchedulingTz);
       if (selectedBookingDay === "tomorrow") bookingLocalDate.setDate(bookingLocalDate.getDate() + 1);
       const bookingDateStr = bookingLocalDate.toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" });
 
@@ -7455,7 +7459,7 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
       };
 
       const timeTextForBooking = extractSpokenClockForBooking(lastExactTime);
-      const startDate = parseSpokenTime(timeTextForBooking, bookingDateStr, agentTz);
+      const startDate = parseSpokenTime(timeTextForBooking, bookingDateStr, resolvedSchedulingTz);
       if (startDate && !isNaN(startDate.getTime())) {
         if (startDate.getTime() < Date.now()) {
           const timeSelectionStepIndex = Math.max(0, Math.min(2, Math.max(0, totalSteps - 1)));
@@ -9225,6 +9229,18 @@ function isValidIanaTimeZone(tzRaw: any): boolean {
   }
 }
 
+function resolveExplicitSchedulingTimeZone(raw: string): string {
+  const text = String(raw || "").toLowerCase();
+  if (/\b(eastern|est|edt)\b/.test(text)) return "America/New_York";
+  if (/\b(central|cst|cdt)\b/.test(text)) return "America/Chicago";
+  if (/\b(mountain|mst|mdt)\b/.test(text)) return "America/Denver";
+  if (/\barizona(?:\s+time)?\b/.test(text)) return "America/Phoenix";
+  if (/\b(pacific|pst|pdt)\b/.test(text)) return "America/Los_Angeles";
+  if (/\bhawaii\b/.test(text)) return "Pacific/Honolulu";
+  if (/\balaska\b/.test(text)) return "America/Anchorage";
+  return "";
+}
+
 /**
  * ✅ ONLY NEEDED UPDATE:
  * Prefer the lead time zone from CoveCRM context (ctx.raw.lead) when present.
@@ -9244,6 +9260,20 @@ function getLeadTimeZoneHintFromContext(ctx: AICallContext): string {
 
     for (const c of candidates) {
       if (c && isValidIanaTimeZone(c)) return c;
+    }
+
+    const stateCandidates = [
+      ctx?.clientState,
+      lead?.state,
+      lead?.st,
+      lead?.State,
+      lead?.province,
+    ].map((x: any) => String(x || "").trim());
+
+    for (const stateCandidate of stateCandidates) {
+      if (!stateCandidate) continue;
+      const tz = getTimezoneFromState(stateCandidate);
+      if (tz && isValidIanaTimeZone(tz)) return tz;
     }
   } catch {}
   return "";
