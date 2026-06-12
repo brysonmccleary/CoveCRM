@@ -5,6 +5,7 @@ import AICallSession from "@/models/AICallSession";
 import AICallRecording from "@/models/AICallRecording";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
+import Booking from "@/models/Booking";
 import { google } from "googleapis";
 import { Types } from "mongoose";
 import { DateTime } from "luxon";
@@ -307,6 +308,50 @@ export default async function handler(
     });
 
     const eventData = event.data;
+
+    try {
+      await Lead.updateOne(
+        { _id: leadId },
+        {
+          $set: {
+            status: "Booked",
+            appointmentTime: startUtcDate,
+          },
+        }
+      ).exec();
+    } catch (err) {
+      console.warn(
+        "[AI-CALLS][BOOK-APPOINTMENT] Failed to update lead booking status (non-blocking):",
+        (err as any)?.message || err
+      );
+    }
+
+    try {
+      await Booking.create({
+        leadId,
+        userEmail,
+        leadEmail: "",
+        leadPhone: phoneRaw,
+        agentEmail: userEmail,
+        agentPhone: user?.phoneNumber || user?.agentPhone || user?.phone || "",
+        date: startUtcDate,
+        appointmentTime: startUtcDate,
+        source: "ai_dialer",
+        timezone: agentTz,
+        eventId: eventData.id,
+        reminderSent: {
+          confirm: false,
+          morning: false,
+          hour: false,
+          fifteen: false,
+        },
+      });
+    } catch (err) {
+      console.warn(
+        "[AI-CALLS][BOOK-APPOINTMENT] Failed to create Booking record (non-blocking):",
+        (err as any)?.message || err
+      );
+    }
 
     // ─────────────────────── Attach booking → Lead history ───────────────────────
     try {

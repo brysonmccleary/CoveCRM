@@ -7377,7 +7377,7 @@ function buildResponseFromPolicy(
   return buildExactScriptLineInstruction(getStateAwareClosingPivot(state), {});
 }
 
-function maybeFireServerSideBookingTrigger(state: CallState): void {
+function maybeFireServerSideBookingTrigger(state: CallState): string | null {
   try {
     const newStepIdx = Number(state.scriptStepIndex || 0);
     const totalSteps = (state.scriptSteps || []).length;
@@ -7390,7 +7390,7 @@ function maybeFireServerSideBookingTrigger(state: CallState): void {
       lastExactAt > 0 &&
       (Date.now() - lastExactAt) < 5 * 60 * 1000;
 
-    if (!onConfirmStep || !hasRecentExactTime || state.finalOutcomeSent) return;
+    if (!onConfirmStep || !hasRecentExactTime || state.finalOutcomeSent) return null;
 
     console.log("[AI-VOICE][BOOKING][SERVER-TRIGGER][POLICY]", {
       callSid: state.callSid,
@@ -7457,6 +7457,16 @@ function maybeFireServerSideBookingTrigger(state: CallState): void {
       const timeTextForBooking = extractSpokenClockForBooking(lastExactTime);
       const startDate = parseSpokenTime(timeTextForBooking, bookingDateStr, agentTz);
       if (startDate && !isNaN(startDate.getTime())) {
+        if (startDate.getTime() < Date.now()) {
+          const timeSelectionStepIndex = Math.max(0, Math.min(2, Math.max(0, totalSteps - 1)));
+          const clarificationLine = `I may have gotten the day mixed up there — did you mean tomorrow at ${timeTextForBooking} instead?`;
+          state.scriptStepIndex = timeSelectionStepIndex;
+          state.awaitingUserAnswer = true;
+          state.awaitingAnswerForStepIndex = timeSelectionStepIndex;
+          state.selectedDay = null as any;
+          state.lastPromptLine = clarificationLine;
+          return clarificationLine;
+        }
         const diffMs = startDate.getTime() - Date.now();
         if (diffMs > -60000 && diffMs < 48 * 60 * 60 * 1000) {
           if (!state.finalOutcomeSent) {
@@ -7481,10 +7491,14 @@ function maybeFireServerSideBookingTrigger(state: CallState): void {
           });
         }
       }
+      return null;
     } catch (bookErr: any) {
       console.warn("[AI-VOICE][BOOKING][POLICY-TRIGGER] calendar error (non-blocking):", bookErr?.message);
+      return null;
     }
-  } catch {}
+  } catch {
+    return null;
+  }
 }
 
 async function handleConversationTurn(
@@ -7606,7 +7620,7 @@ async function handleConversationTurn(
     ] || "";
     decision.requiredClosingPivot = extractClosingQuestionFromStepLine(currentStepLine.trim()) || decision.requiredClosingPivot;
   }
-  const instr = buildResponseFromPolicy(decision, state, stepCtx);
+  let instr = buildResponseFromPolicy(decision, state, stepCtx);
 
   // Apply policy decision stateWrites FIRST before repeat guard can interfere
   for (const [k, v] of Object.entries(decision.stateWrites)) {
@@ -7637,7 +7651,21 @@ async function handleConversationTurn(
   }
 
   if (decision.shouldAdvanceStep) {
-    maybeFireServerSideBookingTrigger(state);
+    const bookingClarificationLine = maybeFireServerSideBookingTrigger(state);
+    if (bookingClarificationLine) {
+      lineToSay = bookingClarificationLine;
+      decision.lineToSay = bookingClarificationLine;
+      decision.shouldAdvanceStep = false;
+      decision.stateWrites.awaitingUserAnswer = true;
+      decision.stateWrites.awaitingAnswerForStepIndex = state.awaitingAnswerForStepIndex;
+      instr = buildExactScriptLineInstruction(bookingClarificationLine, {
+        userText: text,
+        recentExchanges: state.recentExchanges,
+        scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
+        agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
+        leadName: state.context ? (state.context.clientFirstName || "there") : "there",
+      });
+    }
   }
 
   pushExchange(state, "user", text, stepCtx.expectedAnswerIdx);
