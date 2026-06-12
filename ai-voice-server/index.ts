@@ -41,7 +41,6 @@ import {
   buildInboundReasonAndRapport,
   shouldUseInboundFlow,
 } from "./flows/inbound";
-import { getTimezoneFromState } from "../utils/timezone";
 
 /**
  * ENV + config
@@ -9239,6 +9238,133 @@ function resolveExplicitSchedulingTimeZone(raw: string): string {
   if (/\bhawaii\b/.test(text)) return "Pacific/Honolulu";
   if (/\balaska\b/.test(text)) return "America/Anchorage";
   return "";
+}
+
+const STATE_NAME_TO_CODE: Record<string, string> = {
+  alabama: "AL", al: "AL",
+  alaska: "AK", ak: "AK",
+  arizona: "AZ", az: "AZ",
+  arkansas: "AR", ar: "AR",
+  california: "CA", ca: "CA",
+  colorado: "CO", co: "CO",
+  connecticut: "CT", ct: "CT",
+  delaware: "DE", de: "DE",
+  "district of columbia": "DC", district: "DC", dc: "DC", "washington dc": "DC", "washington,dc": "DC", washingtondc: "DC",
+  florida: "FL", fl: "FL",
+  georgia: "GA", ga: "GA",
+  hawaii: "HI", hi: "HI",
+  idaho: "ID", id: "ID",
+  illinois: "IL", il: "IL",
+  indiana: "IN", in: "IN",
+  iowa: "IA", ia: "IA",
+  kansas: "KS", ks: "KS",
+  kentucky: "KY", ky: "KY",
+  louisiana: "LA", la: "LA",
+  maine: "ME", me: "ME",
+  maryland: "MD", md: "MD",
+  massachusetts: "MA", ma: "MA",
+  michigan: "MI", mi: "MI",
+  minnesota: "MN", mn: "MN",
+  mississippi: "MS", ms: "MS",
+  missouri: "MO", mo: "MO",
+  montana: "MT", mt: "MT",
+  nebraska: "NE", ne: "NE",
+  nevada: "NV", nv: "NV",
+  "new hampshire": "NH", nh: "NH",
+  "new jersey": "NJ", nj: "NJ",
+  "new mexico": "NM", nm: "NM",
+  "new york": "NY", ny: "NY",
+  "north carolina": "NC", nc: "NC",
+  "north dakota": "ND", nd: "ND",
+  ohio: "OH", oh: "OH",
+  oklahoma: "OK", ok: "OK",
+  oregon: "OR", or: "OR",
+  pennsylvania: "PA", pa: "PA",
+  "rhode island": "RI", ri: "RI",
+  "south carolina": "SC", sc: "SC",
+  "south dakota": "SD", sd: "SD",
+  tennessee: "TN", tn: "TN",
+  texas: "TX", tx: "TX",
+  utah: "UT", ut: "UT",
+  vermont: "VT", vt: "VT",
+  virginia: "VA", va: "VA",
+  washington: "WA", wa: "WA",
+  "west virginia": "WV", wv: "WV",
+  wisconsin: "WI", wi: "WI",
+  wyoming: "WY", wy: "WY",
+};
+
+const stateToTimezone: Record<string, string> = {
+  AL: "America/Chicago",
+  AK: "America/Anchorage",
+  AZ: "America/Phoenix",
+  AR: "America/Chicago",
+  CA: "America/Los_Angeles",
+  CO: "America/Denver",
+  CT: "America/New_York",
+  DE: "America/New_York",
+  DC: "America/New_York",
+  FL: "America/New_York",
+  GA: "America/New_York",
+  HI: "Pacific/Honolulu",
+  ID: "America/Boise",
+  IL: "America/Chicago",
+  IN: "America/Indiana/Indianapolis",
+  IA: "America/Chicago",
+  KS: "America/Chicago",
+  KY: "America/New_York",
+  LA: "America/Chicago",
+  ME: "America/New_York",
+  MD: "America/New_York",
+  MA: "America/New_York",
+  MI: "America/Detroit",
+  MN: "America/Chicago",
+  MS: "America/Chicago",
+  MO: "America/Chicago",
+  MT: "America/Denver",
+  NE: "America/Chicago",
+  NV: "America/Los_Angeles",
+  NH: "America/New_York",
+  NJ: "America/New_York",
+  NM: "America/Denver",
+  NY: "America/New_York",
+  NC: "America/New_York",
+  ND: "America/Chicago",
+  OH: "America/New_York",
+  OK: "America/Chicago",
+  OR: "America/Los_Angeles",
+  PA: "America/New_York",
+  RI: "America/New_York",
+  SC: "America/New_York",
+  SD: "America/Chicago",
+  TN: "America/Chicago",
+  TX: "America/Chicago",
+  UT: "America/Denver",
+  VT: "America/New_York",
+  VA: "America/New_York",
+  WA: "America/Los_Angeles",
+  WV: "America/New_York",
+  WI: "America/Chicago",
+  WY: "America/Denver",
+};
+
+function resolveStateCode(input?: string | null): string | null {
+  if (!input) return null;
+  const trimmed = String(input).trim();
+  if (!trimmed) return null;
+
+  if (/^[A-Za-z]{2}$/.test(trimmed)) {
+    const code = trimmed.toUpperCase();
+    if (stateToTimezone[code]) return code;
+  }
+
+  const key = trimmed.toLowerCase().replace(/[^a-z]/g, "");
+  return STATE_NAME_TO_CODE[key] || null;
+}
+
+function getTimezoneFromState(state: string): string {
+  const code = resolveStateCode(state);
+  return (code && stateToTimezone[code]) || "America/Chicago";
 }
 
 /**
