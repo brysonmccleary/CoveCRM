@@ -4124,6 +4124,20 @@ function isFillerOnly(textRaw: string): boolean {
   return false;
 }
 
+// Step 1-only acknowledgment fillers — words that are valid answers at scheduling steps
+// (Step 2+) but are bare acks at Step 1 (the coverage question). Only used by the
+// Priority 7 classifier when awaitingAnswerForStepIndex === 0.
+function isStep1AcknowledgmentFiller(t: string): boolean {
+  const stripped = t.replace(/[?.!,]+$/, "").trim();
+  const step1Acks = new Set([
+    "got it", "gotcha", "i see", "right", "alright", "all right",
+    "sure", "yes", "mm-hmm", "mm hmm", "makes sense", "that makes sense",
+    "sounds good", "sounds right", "i understand", "understood",
+    "i hear you", "okay then", "go ahead", "yep", "noted",
+  ]);
+  return step1Acks.has(t) || step1Acks.has(stripped);
+}
+
 
 function isTimeIndecisionOrAvailability(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
@@ -5468,7 +5482,12 @@ function classifyTurnIntent(
     t.includes("i just said") || t.includes("i already said") ||
     t.includes("i already told you") || t.includes("i told you that") ||
     t.includes("you keep asking") || t.includes("stop asking") ||
-    t.includes("i just told you");
+    t.includes("i just told you") ||
+    t.includes("you just said") || t.includes("you already said") ||
+    t.includes("you said that already") || t.includes("you keep saying") ||
+    t.includes("you asked that") || t.includes("you just asked") ||
+    t.includes("you keep repeating") || t.includes("i already answered") ||
+    t.includes("i said that");
   const hasSchedulingContext =
     t.includes("today") || t.includes("tomorrow") || t.includes("morning") ||
     t.includes("afternoon") || t.includes("evening") || t.includes("time") ||
@@ -5627,6 +5646,16 @@ function classifyTurnIntent(
   try {
     if (!isKaylaDemo && state.phase === "in_call" && state.awaitingUserAnswer) {
       const audioMs = Number(state.userAudioMsBuffered || 0);
+      // At Step 1 only: bare acknowledgments ("Got it", "Sure", "Yes", etc.) are not
+      // coverage answers. Route to reprompt so Kayla re-asks cleanly without the GPT
+      // "Bryson can cover details" detour. At Step 2+ these words remain meaningful.
+      if (
+        state.awaitingAnswerForStepIndex === 0 &&
+        !(state as any).coverageSubject &&
+        isStep1AcknowledgmentFiller(t)
+      ) {
+        return { kind: "reprompt_step", raw };
+      }
       if (shouldTreatCommitAsRealAnswer(stepCtx.stepType, audioMs, t)) {
         return { kind: "script_advance", raw };
       }
@@ -7994,7 +8023,7 @@ HARD RULES (non-negotiable, always):
 	YOUR JOB:
 	1. If this is resistance or an objection: agree briefly.
 	2. Respond directly using the ${scope} context and what they likely requested.
-	3. Reclose by positioning ${agent} as the licensed person who can cover details on a quick 5-minute call.
+	3. If the lead said something substantive (a question, objection, or concern) — briefly address it and position ${agent} as the person who covers those details on the call. If the lead only acknowledged (said something like "got it", "sure", "okay", "yes", "I see", "right", "alright", "understood") — do NOT add information. Just re-ask the question naturally in one sentence.
 	4. Assume the next step by ending with the exact required objective above. Do not deviate from it.
 	5. If this is only a simple question, answer in one sentence, then still end with the exact required objective.
 
