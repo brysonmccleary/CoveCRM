@@ -9,10 +9,10 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import Message from "@/models/Message";
 import { google } from "googleapis";
-import twilioClient from "@/lib/twilioClient";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
+import { sendSms } from "@/lib/twilio/sendSMS";
 
 // NEW: email utilities
 import {
@@ -255,19 +255,15 @@ export default async function handler(
           `You're booked with ${agentName} on ${whenStr}. If you need to reschedule, reply here.`,
         );
 
-        if (msSid) {
-          await twilioClient.messages.create({
-            to: leadPhone,
-            body,
-            messagingServiceSid: msSid,
-          });
-        } else if (fromNumber) {
-          await twilioClient.messages.create({
-            to: leadPhone,
-            body,
-            from: fromNumber,
-          });
-        }
+        await sendSms({
+          to: leadPhone,
+          body,
+          userEmail: user.email,
+          leadId: String(lead._id),
+          messagingServiceSid: msSid || undefined,
+          from: fromNumber || undefined,
+          source: "booking_confirmation",
+        });
       }
     } catch (e) {
       console.warn("SMS confirmation failed:", e);

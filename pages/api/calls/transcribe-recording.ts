@@ -8,6 +8,7 @@ import AISettings from "@/models/AISettings";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { getUserByEmail } from "@/models/User";
+import { trackUsage } from "@/lib/billing/trackUsage";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 
@@ -120,6 +121,11 @@ async function markAndBillInsightsOnce(args: {
         },
       }
     );
+    await trackUsage({
+      user: { email: args.userEmail },
+      amount: costCents / 100,
+      source: "openai",
+    });
   }
 
   return { minutes, costCents, processed };

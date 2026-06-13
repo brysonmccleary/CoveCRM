@@ -17,6 +17,7 @@ import { DateTime } from "luxon";
 import { sendAppointmentBookedEmail } from "@/lib/email";
 import { sendSms } from "@/lib/twilio/sendSMS"; // thread-sticky sender for confirmation
 import { enforceBookingSettings } from "@/lib/booking/enforceBookingSettings";
+import { trackUsage } from "@/lib/billing/trackUsage";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -28,6 +29,7 @@ const BOOKING_STUB = process.env.BOOKING_STUB === "1"; // ✅ dev bypass
 const SHARED_MESSAGING_SERVICE_SID =
   process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const MIN_SCHEDULE_LEAD_MINUTES = 15;
+const SMS_COST = 0.02;
 
 // ✅ Human-like delay for AI confirmations
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
@@ -719,7 +721,9 @@ export default async function handler(
       didConfirm = true;
     } else {
       const paramsBase = await getSendParams(String((user as any)._id), to);
-      await twilioClient.messages.create({ ...paramsBase, body: confirmBody });
+      const tw = await twilioClient.messages.create({ ...paramsBase, body: confirmBody });
+      const segments = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
+      await trackUsage({ user, amount: SMS_COST * segments, source: "twilio" });
     }
 
     // Helper to send/schedule + persist Message (used for reminders only)
@@ -746,6 +750,8 @@ export default async function handler(
       }
 
       const tw = await twilioClient.messages.create(params);
+      const segments = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
+      await trackUsage({ user, amount: SMS_COST * segments, source: "twilio" });
 
       const message = await Message.create({
         leadId,

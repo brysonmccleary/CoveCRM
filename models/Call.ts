@@ -8,6 +8,9 @@ export interface ICall extends Document {
   direction: "outbound" | "inbound";
   callSid: string;
   billedAt?: Date;
+  billedMinutes?: number;
+  billedAmount?: number;
+  billedSource?: string;
 
   // ✅ dial session + GHL-style billing window
   dialKey?: string;
@@ -85,6 +88,9 @@ const CallSchema = new Schema<ICall>(
     callSid: { type: String, required: true, unique: true },
 
     billedAt: Date,
+    billedMinutes: Number,
+    billedAmount: Number,
+    billedSource: String,
 
     // ✅ dial session + GHL-style billing window
     dialKey: String,

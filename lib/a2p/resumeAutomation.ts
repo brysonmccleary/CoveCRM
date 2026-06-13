@@ -1470,10 +1470,10 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         } else {
           try {
             const createPayload = buildA2PCampaignPayload({
-              profile,
+              profile: lockedProfile,
               brandRegistrationSid: brandSid,
               baseUrl: BASE_URL,
-              userId: String(profile.userId || ""),
+              userId: String((lockedProfile as any).userId || profile.userId || ""),
               usecase: useCase,
               messageSamples: samples,
               messageFlow,

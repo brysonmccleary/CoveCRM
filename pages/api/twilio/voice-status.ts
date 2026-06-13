@@ -363,8 +363,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               if (user) {
                 const { usingPersonal } = await getClientForUser(user.email);
                 if (!usingPersonal) {
-                  await trackUsage({ user, amount: mins * VOICE_COST_PER_MIN, source: "twilio-voice" });
-                  await (Call as any).updateOne({ callSid, billedAt: { $exists: false } }, { $set: { billedAt: now } });
+                  const lock = await (Call as any).updateOne(
+                    { callSid, billedAt: { $exists: false } },
+                    {
+                      $set: {
+                        billedAt: now,
+                        billedMinutes: mins,
+                        billedAmount: mins * VOICE_COST_PER_MIN,
+                        billedSource: "twilio-voice",
+                      },
+                    },
+                  );
+
+                  if ((lock as any)?.modifiedCount > 0) {
+                    try {
+                      await trackUsage({
+                        user,
+                        amount: mins * VOICE_COST_PER_MIN,
+                        source: "twilio-voice",
+                      });
+                    } catch (billingErr) {
+                      await (Call as any).updateOne(
+                        { callSid, billedAt: now },
+                        {
+                          $unset: {
+                            billedAt: "",
+                            billedMinutes: "",
+                            billedAmount: "",
+                            billedSource: "",
+                          },
+                        },
+                      );
+                      throw billingErr;
+                    }
+                  }
                 }
               }
             }

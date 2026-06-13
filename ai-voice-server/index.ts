@@ -3304,6 +3304,8 @@ function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
   if (!t) return false;
   if ([
     "me", "myself", "my self", "just me", "for me",
+    "this me", "that me", "yeah me", "its me", "it s me",
+    "just myself", "only me", "only myself",
     "spouse", "both", "both of us", "the two of us", "us both",
     "partner", "my partner",
     "girlfriend", "my girlfriend",
@@ -3319,7 +3321,7 @@ function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
     "parent", "my parent", "mom", "my mom", "dad", "my dad",
   ].includes(t)) return true;
   return (
-    /\b(myself|my self|just me|for me|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner|girlfriend|my girlfriend|boyfriend|my boyfriend|fianc[eé]+|my fianc[eé]+|significant other|my significant other|family member|my family member|my kids|my children|my son|my daughter|my parent|my mom|my dad|my child|the whole family|whole family|all of us|all of our family|my household|the household)\b/.test(t)
+    /\b(myself|my self|just me|for me|this me|that me|yeah me|just myself|only me|only myself|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner|girlfriend|my girlfriend|boyfriend|my boyfriend|fianc[eé]+|my fianc[eé]+|significant other|my significant other|family member|my family member|my kids|my children|my son|my daughter|my parent|my mom|my dad|my child|the whole family|whole family|all of us|all of our family|my household|the household)\b/.test(t)
   );
 }
 
@@ -6823,6 +6825,36 @@ function buildConversationPolicyDecision(
         },
         shouldAdvanceStep: false,
       };
+    }
+    if (Number(state.awaitingAnswerForStepIndex ?? -1) === 0) {
+      const strippedRaw = raw
+        .replace(/\band\s+what\s+i\s+just\s+said[,]?\s*/gi, "")
+        .replace(/\bwhat\s+i\s+just\s+said[,]?\s*/gi, "")
+        .replace(/\bi\s+just\s+said[,]?\s*/gi, "")
+        .replace(/\bi\s+already\s+said[,]?\s*/gi, "")
+        .replace(/\bi\s+said[,]?\s*/gi, "")
+        .trim();
+      if (strippedRaw && isStepOneCoverageSubjectAnswer(strippedRaw)) {
+        const agentFirst = getAgentFirstName(ctx);
+        const line = `Got it — I just need to get you scheduled for a quick call with ${agentFirst}. Does later today or tomorrow work better?`;
+        return {
+          handled: true,
+          routeKind: "coverage_from_correction",
+          responseMode: "exact_script",
+          objective: "return_to_booking",
+          lineToSay: line,
+          requiredClosingPivot: line,
+          forbiddenTopics: [],
+          stateWrites: {
+            coverageSubject: strippedRaw,
+            coverageSubjectSetThisTurn: true,
+            scriptStepIndex: stepCtx.idx + 1,
+            awaitingAnswerForStepIndex: stepCtx.idx + 1,
+            awaitingUserAnswer: true,
+          },
+          shouldAdvanceStep: false,
+        };
+      }
     }
     let correctionDay: "today" | "tomorrow" | null = null;
     if (raw.includes("tomorrow")) correctionDay = "tomorrow";

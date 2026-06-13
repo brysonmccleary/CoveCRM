@@ -15,6 +15,8 @@ import {
 import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
 import {
   buildA2PMessageFlowForFlow,
+  buildLeadGenerationOptInDetails,
+  buildLeadGenerationSampleMessages,
   personalizeA2PSampleMessages,
   resolveA2PComplianceUrls,
   resolveA2PFlow,
@@ -1516,7 +1518,7 @@ export default async function handler(
             .map((s) => s.trim())
             .filter(Boolean)
         : [];
-    const samples = personalizeA2PSampleMessages(rawSamples, {
+    let samples = personalizeA2PSampleMessages(rawSamples, {
       contactFirstName,
       contactLastName,
       businessName,
@@ -1562,11 +1564,23 @@ export default async function handler(
     const now = new Date();
 
     const normalizedUseCase = String(usecaseCode || "LOW_VOLUME");
-    const generatedMessageFlow = buildA2PMessageFlowForFlow(flowSelection.flow, {
+    if (flowSelection.flow === "lead_generation") {
+      samples = personalizeA2PSampleMessages(buildLeadGenerationSampleMessages(), {
+        contactFirstName,
+        contactLastName,
+        businessName,
+      });
+    }
+
+    const generatedMessageFlow = flowSelection.flow === "lead_generation"
+      ? buildLeadGenerationOptInDetails(compliance.optInUrl)
+      : buildA2PMessageFlowForFlow(flowSelection.flow, {
       optInUrl: compliance.optInUrl,
       tosUrl: compliance.tosUrl,
       privacyUrl: compliance.privacyUrl,
     });
+    const canonicalOptInDetails =
+      flowSelection.flow === "lead_generation" ? generatedMessageFlow : String(optInDetails);
 
     const setPayload: Partial<IA2PProfile> & { userId: string } = {
       userId,
@@ -1588,7 +1602,7 @@ export default async function handler(
       contactLastName: String(contactLastName),
       sampleMessages: samples.join("\n\n"),
       sampleMessagesArr: samples,
-      optInDetails: String(optInDetails),
+      optInDetails: canonicalOptInDetails,
       volume: (volume as string) || "Low",
       optInScreenshotUrl: (optInScreenshotUrl as string) || "",
       landingOptInUrl: compliance.optInUrl,
@@ -1610,7 +1624,7 @@ export default async function handler(
     (setPayload as any).lastSubmittedAt = now;
     (setPayload as any).lastSubmittedUseCase = normalizedUseCase;
     (setPayload as any).lastSubmittedOptInDetails = String(
-      optInDetails || "",
+      canonicalOptInDetails || "",
     ).trim();
     (setPayload as any).lastSubmittedSampleMessages = samples;
     (setPayload as any).twilioAccountSidLastUsed = twilioAccountSidUsed;

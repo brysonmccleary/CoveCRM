@@ -43,6 +43,9 @@ export interface ICallCoachReport extends Document {
   callSummary: string;
   transcript?: string;
   durationSeconds?: number;
+  usageBilledAt?: Date;
+  usageBilledAmount?: number;
+  usageBilledMinutes?: number;
   generatedAt: Date;
 }
 
@@ -101,6 +104,9 @@ const CallCoachReportSchema = new Schema<ICallCoachReport>(
     callSummary: { type: String, default: "" },
     transcript: { type: String },
     durationSeconds: { type: Number },
+    usageBilledAt: { type: Date, default: null },
+    usageBilledAmount: { type: Number, default: 0 },
+    usageBilledMinutes: { type: Number, default: 0 },
     generatedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

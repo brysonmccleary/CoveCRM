@@ -1,4 +1,8 @@
-import { personalizeA2PSampleMessages } from "@/lib/a2p/flowSelection";
+import {
+  buildLeadGenerationOptInDetails,
+  buildLeadGenerationSampleMessages,
+  personalizeA2PSampleMessages,
+} from "@/lib/a2p/flowSelection";
 
 type BuildA2PCampaignPayloadArgs = {
   profile: any;
@@ -91,11 +95,49 @@ function appendLineIfMissing(lines: string[], text: string, label: string, value
   }
 }
 
+function isLeadGenerationProfile(profile: any): boolean {
+  const flow = clean(profile?.a2pFlow).toLowerCase();
+  if (flow === "servicing") return false;
+  if (flow === "lead_generation") return true;
+
+  const campaignType = clean(profile?.campaignType).toLowerCase();
+  const optInUrl = clean(profile?.landingOptInUrl);
+  const text = `${campaignType} ${profile?.optInDetails || ""} ${profile?.lastSubmittedOptInDetails || ""}`.toLowerCase();
+
+  return (
+    campaignType.includes("final_expense") ||
+    campaignType.includes("mortgage") ||
+    campaignType.includes("lead") ||
+    /\/f\/[a-f0-9]{12,}/i.test(optInUrl) ||
+    /\b(final expense|life insurance|mortgage protection|insurance information request)\b/i.test(text)
+  );
+}
+
+function looksLikeLegacyServicingText(text: string): boolean {
+  return /\b(service-related|existing insurance customers|existing policy|current policy|policy updates|account servicing|retention-related|beneficiaries)\b/i.test(text);
+}
+
+function looksLikeLegacyServicingSamples(samples: string[]): boolean {
+  return looksLikeLegacyServicingText(samples.join(" "));
+}
+
+function interpolateComplianceUrlTokens(flow: string, urls: {
+  optInUrl: string;
+  tosUrl: string;
+  privacyUrl: string;
+}): string {
+  return flow
+    .replace(/\{\{\s*LANDING_OPTIN_URL\s*\}\}/gi, urls.optInUrl)
+    .replace(/\{\{\s*OPT_IN_URL\s*\}\}/gi, urls.optInUrl)
+    .replace(/\{\{\s*TERMS_URL\s*\}\}/gi, urls.tosUrl)
+    .replace(/\{\{\s*PRIVACY_URL\s*\}\}/gi, urls.privacyUrl);
+}
+
 function ensureDisclosureText(flow: string): string {
   const additions: string[] = [];
   const checks = [
     {
-      pattern: /public\s+sms\s+opt-?in\s+page/i,
+      pattern: /public\s+sms\s+opt-?in\s+page|public.*final expense landing page|public.*landing page/i,
       text: "End users consent on a public SMS opt-in page.",
     },
     {
@@ -148,10 +190,17 @@ function buildMessageFlow(args: BuildA2PCampaignPayloadArgs): string {
     clean(profile.lastSubmittedOptInDetails) ||
     clean(profile.optInDetails) ||
     clean(profile.messageFlow);
+  const sourceFlow =
+    isLeadGenerationProfile(profile) && (!initial || looksLikeLegacyServicingText(initial))
+      ? buildLeadGenerationOptInDetails(urls.optInUrl)
+      : initial;
 
-  let flow = ensureDisclosureText(
-    initial || "End users consent on a public SMS opt-in page using a separate unchecked SMS consent checkbox.",
+  const interpolated = interpolateComplianceUrlTokens(
+    sourceFlow || "End users consent on a public SMS opt-in page using a separate unchecked SMS consent checkbox.",
+    urls,
   );
+
+  let flow = ensureDisclosureText(interpolated);
 
   const linkLines: string[] = [];
   appendLineIfMissing(linkLines, flow, "Opt-in", urls.optInUrl);
@@ -181,6 +230,10 @@ function normalizeSamples(args: BuildA2PCampaignPayloadArgs): string[] {
     .map((sample: any) => clean(sample))
     .filter(Boolean)
     .slice(0, 3);
+
+  if (isLeadGenerationProfile(profile) && (!list.length || looksLikeLegacyServicingSamples(list))) {
+    return personalizeA2PSampleMessages(buildLeadGenerationSampleMessages(), profile);
+  }
 
   if (list.length) return personalizeA2PSampleMessages(list, profile);
 

@@ -1,6 +1,10 @@
 // components/A2PVerificationForm.tsx
 import { useState, useEffect } from "react";
 import toast from "react-hot-toast";
+import {
+  buildLeadGenerationOptInDetails,
+  buildLeadGenerationSampleMessages,
+} from "@/lib/a2p/flowSelection";
 
 type UploadedFileResponse = { url: string; message?: string };
 
@@ -88,14 +92,6 @@ const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
   { value: "PROXY", label: "Proxy / P2P App (special)" },
   { value: "EMERGENCY", label: "Emergency (special)" },
 ];
-
-function buildDefaultA2PFormSamples() {
-  return [
-    `Hi {{first_name}}, this is {{agent_name}}. I received the Final Expense request you submitted and wanted to help you review your options. When would be a good time for a quick call? Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is {{agent_name}} following up on the Final Expense request you recently submitted. Do you have a few minutes later today or tomorrow to connect? Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is {{agent_name}}. I didn't want to miss you regarding your Final Expense request. If you're still interested in reviewing your options, let me know a good time to reach you. Reply STOP to opt out.`,
-  ];
-}
 
 const US_STATE_CODES = [
   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
@@ -307,21 +303,13 @@ export default function A2PVerificationForm() {
   const [usecase, setUsecase] = useState<UseCaseCode>("LOW_VOLUME");
 
   // ---------- Sample Messages ----------
-  const initialSampleMessages = buildDefaultA2PFormSamples();
+  const initialSampleMessages = buildLeadGenerationSampleMessages();
   const [msg1, setMsg1] = useState(initialSampleMessages[0]);
   const [msg2, setMsg2] = useState(initialSampleMessages[1]);
   const [msg3, setMsg3] = useState(initialSampleMessages[2]);
 
   // ---------- Opt-in Details ----------
-  const [optInDetails, setOptInDetails] = useState(
-    `This campaign sends SMS messages from the sender to consumers who request information about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender’s public CoveCRM-hosted Final Expense landing page with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.
-
-Before submission, users see a disclosure similar to:
-
-“By checking this box, you agree to receive SMS messages from the sender about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to your request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.”
-
-The opt-in page displays SMS Terms and SMS Privacy links on the same page as the form submission. Consent records may be retained as needed for compliance and audit purposes.`,
-  );
+  const [optInDetails, setOptInDetails] = useState(buildLeadGenerationOptInDetails());
 
   // ---------- Volume + screenshot ----------
   const [volume, setVolume] = useState("");
@@ -1067,6 +1055,13 @@ The opt-in page displays SMS Terms and SMS Privacy links on the same page as the
                     setLandingOptInUrl((v) => (v ? v : selectedHostedLinks.optInUrl));
                     setLandingTosUrl((v) => (v ? v : selectedHostedLinks.tosUrl));
                     setLandingPrivacyUrl((v) => (v ? v : selectedHostedLinks.privacyUrl));
+                    if (a2pFlow === "lead_generation") {
+                      setOptInDetails((v) =>
+                        !v.trim() || v.includes("{{LANDING_OPTIN_URL}}")
+                          ? buildLeadGenerationOptInDetails(selectedHostedLinks.optInUrl)
+                          : v,
+                      );
+                    }
                     toast.success("Filled hosted URLs");
                   }}
                   className="border px-3 py-2 rounded text-xs"
@@ -1081,6 +1076,9 @@ The opt-in page displays SMS Terms and SMS Privacy links on the same page as the
                     setLandingOptInUrl(selectedHostedLinks.optInUrl);
                     setLandingTosUrl(selectedHostedLinks.tosUrl);
                     setLandingPrivacyUrl(selectedHostedLinks.privacyUrl);
+                    if (a2pFlow === "lead_generation") {
+                      setOptInDetails(buildLeadGenerationOptInDetails(selectedHostedLinks.optInUrl));
+                    }
                     toast.success("Replaced URL fields");
                   }}
                   className="border px-3 py-2 rounded text-xs"

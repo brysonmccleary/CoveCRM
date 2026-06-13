@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+import { trackUsage } from "@/lib/billing/trackUsage";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 
@@ -17,6 +18,8 @@ const OPENAI_TRANSCRIBE_MODEL = (
 const OPENAI_SUMMARY_MODEL = (
   process.env.AI_OVERVIEW_MODEL || "gpt-4o-mini"
 ).trim();
+const AI_INSIGHT_COST_CENTS_PER_MINUTE = 2;
+const AI_INSIGHT_MIN_BILLABLE_SECONDS = 20;
 
 // Twilio (only used to AUTHENTICATE fetching the recording audio server-side)
 const TWILIO_ACCOUNT_SID = (process.env.TWILIO_ACCOUNT_SID || "").trim();
@@ -47,6 +50,12 @@ type Resp =
 
 function isNonEmptyString(v: any) {
   return typeof v === "string" && v.trim().length > 0;
+}
+
+function getBillableInsightMinutes(durationSeconds?: number | null): number {
+  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) return 0;
+  if (durationSeconds < AI_INSIGHT_MIN_BILLABLE_SECONDS) return 0;
+  return Math.max(1, Math.ceil(durationSeconds / 60));
 }
 
 function normalizeRecordingUrl(url: string): string {
@@ -337,6 +346,19 @@ export default async function handler(
 
     (rec as any).updatedAt = new Date();
     await rec.save();
+
+    const insightMinutes = getBillableInsightMinutes(
+      typeof (rec as any).durationSec === "number" ? (rec as any).durationSec : null,
+    );
+    const insightCostCents = insightMinutes * AI_INSIGHT_COST_CENTS_PER_MINUTE;
+    if (insightCostCents > 0 && rec.userEmail) {
+      await trackUsage({
+        user: { email: String(rec.userEmail).toLowerCase() },
+        amount: insightCostCents / 100,
+        source: "openai",
+      });
+    }
+
     const memoryBody =
       typeof rec.summary === "string" && rec.summary.trim()
         ? rec.summary.trim()

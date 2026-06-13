@@ -9,6 +9,7 @@ import User from "@/models/User";
 import Message from "@/models/Message";
 import Call from "@/models/Call";
 import { sendEmail } from "@/lib/email";
+import { trackUsage } from "@/lib/billing/trackUsage";
 
 export const config = { api: { bodyParser: false } };
 
@@ -19,6 +20,7 @@ const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && pro
 
 const TERMINAL_SMS_STATES = new Set(["delivered","failed","undelivered","canceled"]);
 const TERMINAL_VOICE_STATES = new Set(["completed","busy","failed","no-answer","canceled"]);
+const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
 
 function candidateUrls(path: string): string[] {
   if (!BASE_URL) return [];
@@ -53,6 +55,11 @@ async function resolveOwnerEmailByOwnedNumber(num: string): Promise<string | nul
 
 function normalizeAnsweredBy(v: string) {
   return (v || "").trim().toLowerCase();
+}
+
+function ceilMinutesFromSeconds(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.ceil(seconds / 60);
 }
 
 // Treat anything that is NOT explicitly "human" as voicemail/machine for stats purposes
@@ -239,6 +246,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const now = Timestamp ? new Date(Timestamp) : new Date();
       const durationSec = CallDurationStr ? parseInt(CallDurationStr, 10) || 0 : undefined;
+      const existingCall = await Call.findOne({ callSid: CallSid }).lean<any>();
 
       // Emit to UI
       try {
@@ -260,6 +268,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Persist Call document
       try {
+        const shouldStartBilling =
+          ["initiated", "ringing", "answered"].includes(CallStatus) &&
+          !existingCall?.billStartAt;
+        const isTerminalVoice = TERMINAL_VOICE_STATES.has(CallStatus);
+
         const setOnInsert: any = {
           callSid: CallSid,
           userEmail: userEmail || undefined,
@@ -281,10 +294,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (AnsweredBy) set.answeredBy = AnsweredBy;
 
         if (CallStatus === "answered" || CallStatus === "ringing" || CallStatus === "initiated") set.startedAt = now;
+        if (shouldStartBilling) set.billStartAt = now;
 
-        if (TERMINAL_VOICE_STATES.has(CallStatus)) {
+        if (isTerminalVoice) {
           set.completedAt = now;
           set.endedAt = now;
+          if (!existingCall?.billStopAt) set.billStopAt = now;
           if (typeof durationSec === "number") { set.duration = durationSec; set.durationSec = durationSec; }
           set.talkTime = CallStatus === "completed" ? Math.max(0, durationSec || 0) : 0;
 
@@ -367,6 +382,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               if (direction === "inbound") numberEntry.usage.callsReceived += 1;
               if (direction === "outbound") numberEntry.usage.callsMade += 1;
               await (userDoc as any).save();
+            }
+          }
+
+          const callForBilling = await Call.findOne({ callSid: CallSid }).lean<any>();
+          if (callForBilling && !callForBilling.billedAt && userEmail) {
+            const billStartRaw =
+              callForBilling.billStartAt ||
+              callForBilling.startedAt ||
+              callForBilling.createdAt ||
+              null;
+            const billStopRaw =
+              callForBilling.billStopAt ||
+              callForBilling.completedAt ||
+              callForBilling.endedAt ||
+              now;
+            const fallbackStopMs = new Date(now).getTime();
+            const billStart = billStartRaw ? new Date(billStartRaw as any).getTime() : 0;
+            const billStop = billStopRaw ? new Date(billStopRaw as any).getTime() : fallbackStopMs;
+            const elapsedSec =
+              billStart > 0 && billStop >= billStart
+                ? Math.max(0, (billStop - billStart) / 1000)
+                : 0;
+            const billSeconds = Math.max(elapsedSec, Number(durationSec || 0));
+            const billMinutes = ceilMinutesFromSeconds(billSeconds);
+
+            if (billMinutes > 0) {
+              const billAmount = billMinutes * VOICE_COST_PER_MIN;
+              const lock = await Call.updateOne(
+                { callSid: CallSid, billedAt: { $exists: false } },
+                {
+                  $set: {
+                    billedAt: now,
+                    billedMinutes: billMinutes,
+                    billedAmount: billAmount,
+                    billedSource: "twilio-status-callback",
+                  },
+                },
+              );
+
+              if ((lock as any)?.modifiedCount > 0) {
+                try {
+                  await trackUsage({
+                    user: { email: userEmail },
+                    amount: billAmount,
+                    source: "twilio-voice",
+                  });
+                } catch (billingErr) {
+                  await Call.updateOne(
+                    { callSid: CallSid, billedAt: now },
+                    {
+                      $unset: {
+                        billedAt: "",
+                        billedMinutes: "",
+                        billedAmount: "",
+                        billedSource: "",
+                      },
+                    },
+                  );
+                  throw billingErr;
+                }
+              }
             }
           }
         }

@@ -4,8 +4,12 @@ import { OpenAI } from "openai";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 import CallCoachReport from "@/models/CallCoachReport";
+import { trackUsage } from "@/lib/billing/trackUsage";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const CALL_COACH_COST_CENTS_PER_MINUTE = Number(
+  process.env.CALL_COACH_COST_CENTS_PER_MINUTE || "2",
+);
 
 const SYSTEM_PROMPT = `You are an elite insurance sales call coach reviewing real agent calls.
 
@@ -42,6 +46,58 @@ If the agent lost the call because they were vague, passive, too wordy, failed t
 
 Always respond with valid JSON only.`;
 
+function getBillableCoachMinutes(durationSeconds: number): number {
+  if (!Number.isFinite(durationSeconds) || durationSeconds < 60) return 0;
+  return Math.max(1, Math.ceil(durationSeconds / 60));
+}
+
+async function billCoachReportUsageOnce(args: {
+  reportId: any;
+  userEmail: string;
+  durationSeconds: number;
+}) {
+  const minutes = getBillableCoachMinutes(args.durationSeconds);
+  const amountCents = minutes * CALL_COACH_COST_CENTS_PER_MINUTE;
+  if (amountCents <= 0) return;
+
+  const now = new Date();
+  const lock = await (CallCoachReport as any).updateOne(
+    {
+      _id: args.reportId,
+      $or: [{ usageBilledAt: { $exists: false } }, { usageBilledAt: null }],
+    },
+    {
+      $set: {
+        usageBilledAt: now,
+        usageBilledAmount: amountCents / 100,
+        usageBilledMinutes: minutes,
+      },
+    },
+  );
+
+  if ((lock as any)?.modifiedCount <= 0) return;
+
+  try {
+    await trackUsage({
+      user: { email: args.userEmail },
+      amount: amountCents / 100,
+      source: "openai",
+    });
+  } catch (err) {
+    await (CallCoachReport as any).updateOne(
+      { _id: args.reportId, usageBilledAt: now },
+      {
+        $unset: {
+          usageBilledAt: "",
+          usageBilledAmount: "",
+          usageBilledMinutes: "",
+        },
+      },
+    );
+    throw err;
+  }
+}
+
 export async function generateCallCoachReport(
   callId: string,
   userEmail: string,
@@ -51,7 +107,14 @@ export async function generateCallCoachReport(
 
   // Don't regenerate if already exists
   const existing = await CallCoachReport.findOne({ callId, userEmail }).lean();
-  if (existing) return { ok: true, report: existing };
+  if (existing) {
+    await billCoachReportUsageOnce({
+      reportId: (existing as any)._id,
+      userEmail,
+      durationSeconds: Number((existing as any).durationSeconds || 0),
+    });
+    return { ok: true, report: existing };
+  }
 
   const call = await (Call as any).findOne({ _id: callId, userEmail }).lean();
   if (!call) return { ok: false, error: "Call not found" };
@@ -217,6 +280,12 @@ Return this exact JSON structure:
       transcript,
       durationSeconds,
       generatedAt: new Date(),
+    });
+
+    await billCoachReportUsageOnce({
+      reportId: (report as any)._id,
+      userEmail,
+      durationSeconds,
     });
 
     return { ok: true, report };
