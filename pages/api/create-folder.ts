@@ -44,7 +44,11 @@ export default async function handler(
       "mortgage_protection",
       "iul_cash_value",
       "veteran_leads",
+      "veteran_iul",
+      "veteran_mortgage",
       "trucker_leads",
+      "trucker_iul",
+      "trucker_mortgage",
       "generic_life",
     ];
 

@@ -243,6 +243,8 @@ type CallState = {
   transferStarting?: boolean;
   transferInProgress?: boolean;
   liveTransferIntroSpoken?: boolean;
+  pendingHangupAfterGoodbye?: boolean;
+  hangupAfterGoodbyeStarted?: boolean;
 
   // ✅ strict call phase to enforce “greet → WAIT → script”
   phase?: CallPhase;
@@ -803,6 +805,9 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
           setAiSpeaking(live, false, "pacer drained");
           (live as any).lastListenEnabledAtMs = Date.now();
           (live as any).listenWarmupUntilMs = Date.now() + 2000;
+          if (maybeCompleteCallAfterGoodbye(twilioWs, live, "pacer drained empty")) {
+            return;
+          }
           if (
             live.phase === "awaiting_greeting_reply" &&
             !live.voicemailSkipArmed &&
@@ -848,6 +853,9 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         setAiSpeaking(live, false, "pacer drained");
         (live as any).lastListenEnabledAtMs = Date.now();
         (live as any).listenWarmupUntilMs = Date.now() + 2000;
+        if (maybeCompleteCallAfterGoodbye(twilioWs, live, "pacer drained tail")) {
+          return;
+        }
         if (live.phase === "in_call") {
           // ✅ Re-arm warmup window after every AI turn so VAD gets clean audio
           (live as any).listenWarmupUntilMs = Date.now() + 2000;
@@ -1016,6 +1024,64 @@ function maybePerformPendingLiveTransfer(ws: WebSocket, state: CallState, reason
     });
   } catch {}
   void performLiveTransfer(ws, state);
+}
+
+function maybeCompleteCallAfterGoodbye(ws: WebSocket, state: CallState, reason: string) {
+  if (!state.pendingHangupAfterGoodbye) return false;
+  if (state.hangupAfterGoodbyeStarted) return true;
+  if (!state.callSid) return true;
+
+  state.hangupAfterGoodbyeStarted = true;
+  state.pendingCommittedTurn = null;
+  state.awaitingUserAnswer = false;
+  state.awaitingAnswerForStepIndex = undefined;
+  clearSilenceWatchdog(state, `goodbye hangup (${reason})`);
+
+  console.log("[AI-VOICE][GOODBYE] completing call after goodbye audio", {
+    callSid: state.callSid,
+    reason,
+  });
+
+  setTimeout(() => {
+    void (async () => {
+      try {
+        if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+          console.warn("[AI-VOICE][GOODBYE] missing Twilio credentials; cannot complete call", {
+            callSid: state.callSid,
+          });
+          return;
+        }
+        const twilioCallUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls/${state.callSid}.json`;
+        const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
+        const resp = await fetch(twilioCallUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": `Basic ${credentials}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({ Status: "completed" }).toString(),
+        });
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => "");
+          console.warn("[AI-VOICE][GOODBYE] Twilio complete call failed", {
+            callSid: state.callSid,
+            status: resp.status,
+            body: body.slice(0, 200),
+          });
+          return;
+        }
+        state.phase = "ended";
+        safelyCloseOpenAi(state, "goodbye completed");
+        try {
+          if (ws.readyState === WebSocket.OPEN) ws.close();
+        } catch {}
+      } catch (err: any) {
+        console.warn("[AI-VOICE][GOODBYE] complete call error:", err?.message || err);
+      }
+    })();
+  }, 750);
+
+  return true;
 }
 
 
@@ -5791,6 +5857,41 @@ function getKaylaDemoTopicAnswer(ctx: AICallContext, topic: KaylaDemoTopic): str
   }
 }
 
+function didAiJustAskClosingQuestion(state: CallState): boolean {
+  const candidates = [
+    String(state.lastPromptLine || ""),
+    ...((state.recentExchanges || [])
+      .filter((ex) => ex.role === "ai")
+      .slice(-2)
+      .map((ex) => ex.text)),
+  ];
+  return candidates.some((line) => {
+    const t = normalizeTurnTextForKey(line);
+    return (
+      t.includes("any other questions") ||
+      t.includes("do you have any questions") ||
+      t.includes("have any questions for me")
+    );
+  });
+}
+
+function isBareClosingNegative(raw: string): boolean {
+  const t = normalizeTurnTextForKey(raw);
+  if (!t) return false;
+  return /^(no|nah|nope|no that s it|no thats it|no questions|that s all|thats all|no i m good|no im good|nothing else|all good|that s it|thats it|no thank you|no thanks|i m good|im good)$/.test(t);
+}
+
+function getBookedGoodbyeTimePhrase(state: CallState): string {
+  const selectedTime = String((state as any).lastExactTimeText || state.selectedTimeText || "").trim();
+  const selectedDay = String(state.selectedDay || "").trim().toLowerCase();
+  if (!selectedTime) return "";
+  const normalizedTime = normalizeTurnTextForKey(selectedTime);
+  if ((selectedDay === "today" || selectedDay === "tomorrow") && !normalizedTime.includes(selectedDay)) {
+    return `${selectedDay} at ${selectedTime}`;
+  }
+  return `at ${selectedTime}`;
+}
+
 function handlePostCoverageSchedulingTurn(
   state: CallState,
   intent: TurnIntent,
@@ -5808,6 +5909,35 @@ function handlePostCoverageSchedulingTurn(
   const raw = String(intent.raw || "");
   const t = raw.toLowerCase();
   const selectedTime = String((state as any).lastExactTimeText || state.selectedTimeText || "").trim();
+
+  if (
+    !state.finalOutcomeSent &&
+    didAiJustAskClosingQuestion(state) &&
+    isBareClosingNegative(raw)
+  ) {
+    const bookedTimePhrase = getBookedGoodbyeTimePhrase(state);
+    const hasBooking = !!selectedTime || !!(state as any).confirmedAppointment;
+    const lineToSay = hasBooking && bookedTimePhrase
+      ? `Perfect — have yourself a great day! ${agentFirst} will give you a call ${bookedTimePhrase}. Bye!`
+      : "Perfect — have yourself a great day! Bye!";
+    return {
+      handled: true,
+      routeKind: "post_coverage_closing_no_goodbye",
+      responseMode: "exact_script",
+      objective: "end_call_after_closing_question",
+      lineToSay,
+      requiredClosingPivot: "",
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+        pendingHangupAfterGoodbye: true,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
 
   if (
     t.includes("wrong number") ||
@@ -7694,6 +7824,26 @@ async function handleConversationTurn(
   for (const [k, v] of Object.entries(repeatGuardStateWrites)) {
     if (k === "coverageSubject" || k === "pendingLiveTransferAvailabilityConfirm") continue;
     (state as any)[k] = v;
+  }
+
+  if (
+    !state.finalOutcomeSent &&
+    (decision.routeKind === "post_coverage_closing_no_goodbye" ||
+      routeKindForMemory === "post_coverage_closing_no_goodbye")
+  ) {
+    const confirmedTime = String((state as any).lastExactTimeText || state.selectedTimeText || "").trim();
+    const booked = !!confirmedTime || !!(state as any).confirmedAppointment;
+    void handleFinalOutcomeIntent(state, {
+      kind: "final_outcome",
+      outcome: booked ? "booked" : "unknown",
+      summary: booked
+        ? `AI scheduled appointment. Lead had no other questions and call was closed.`
+        : "Lead had no other questions and call was closed.",
+      notesAppend: `Lead said: "${text.slice(0, 220)}"`,
+      ...(confirmedTime ? { confirmedTime } : {}),
+      ...(booked ? { confirmedYes: true, repeatBackConfirmed: true } : {}),
+    });
+    state.finalOutcomeSent = true;
   }
 
   if (

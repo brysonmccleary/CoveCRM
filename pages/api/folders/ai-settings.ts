@@ -21,7 +21,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ message: "Invalid folderId" });
   }
 
-  const VALID_SCRIPT_KEYS = ["default","final_expense","mortgage_protection","iul_cash_value","veteran_leads","trucker_leads","generic_life"];
+  const VALID_SCRIPT_KEYS = [
+    "default",
+    "final_expense",
+    "mortgage_protection",
+    "iul_cash_value",
+    "veteran_leads",
+    "veteran_iul",
+    "veteran_mortgage",
+    "trucker_leads",
+    "trucker_iul",
+    "trucker_mortgage",
+    "generic_life",
+  ];
 
   const update: any = { aiFirstCallEnabled: !!aiFirstCallEnabled };
 

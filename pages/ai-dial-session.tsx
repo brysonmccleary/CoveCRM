@@ -81,6 +81,11 @@ const SCRIPT_OPTIONS = [
     description: "For leads interested in indexed UL or cash value life insurance.",
   },
   {
+    key: "veteran_leads",
+    label: "Veterans (Life Insurance)",
+    description: "General life insurance script tailored for veteran leads.",
+  },
+  {
     key: "veteran_mortgage",
     label: "Veteran Mortgage Protection",
     description: "Mortgage protection script tailored for veteran leads.",
@@ -89,6 +94,11 @@ const SCRIPT_OPTIONS = [
     key: "veteran_iul",
     label: "Veteran IUL / Cash Value",
     description: "IUL / cash value script tailored for veteran leads.",
+  },
+  {
+    key: "trucker_leads",
+    label: "Truckers (Life Insurance)",
+    description: "General life insurance script tailored for over-the-road truckers.",
   },
   {
     key: "trucker_mortgage",
