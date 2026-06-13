@@ -200,10 +200,17 @@ export interface IUser {
    * ✅ Usage billing (GHL-style): accrue billed usage and charge $10 when threshold reached.
    * - usageAccruedCents: unbilled running total (cents)
    * - usageBilledTotalCents: lifetime billed total (cents)
+   * - billingLock*: atomic mutex preventing double-charges under concurrent webhooks
    */
   usageAccruedCents?: number;
   usageBilledTotalCents?: number;
   usageLastInvoicedAt?: Date;
+  billingLockAt?: Date | null;
+  billingLockOwner?: string | null;
+  billingLockExpiresAt?: Date | null;
+  aiDialerBillingLockAt?: Date | null;
+  aiDialerBillingLockOwner?: string | null;
+  aiDialerBillingLockExpiresAt?: Date | null;
 
   notifications?: {
     emailReminders?: boolean;
@@ -242,6 +249,8 @@ export interface IUser {
   /** Billing enforcement fields */
   hasEverPaid?: boolean;
   pastDueSince?: Date | null;
+  billingBlocked?: boolean;
+  billingBlockedReason?: string | null;
   callingBlocked?: boolean;
 
   // ✅ TwiML App SID (account-scoped) used for Twilio Voice JS
@@ -502,6 +511,13 @@ const UserSchema = new Schema<IUser>({
   usageAccruedCents: { type: Number, default: 0 },
   usageBilledTotalCents: { type: Number, default: 0 },
   usageLastInvoicedAt: { type: Date, default: null },
+  // Atomic billing lock — prevents double-charging under concurrent webhooks
+  billingLockAt: { type: Date, default: null },
+  billingLockOwner: { type: String, default: null },
+  billingLockExpiresAt: { type: Date, default: null },
+  aiDialerBillingLockAt: { type: Date, default: null },
+  aiDialerBillingLockOwner: { type: String, default: null },
+  aiDialerBillingLockExpiresAt: { type: Date, default: null },
 
   notifications: {
     emailReminders: { type: Boolean, default: true },
@@ -547,6 +563,8 @@ const UserSchema = new Schema<IUser>({
 
   hasEverPaid: { type: Boolean, default: false },
   pastDueSince: { type: Date, default: null },
+  billingBlocked: { type: Boolean, default: false },
+  billingBlockedReason: { type: String, default: null },
   callingBlocked: { type: Boolean, default: false },
 
   numbersLastSyncedAt: Date,

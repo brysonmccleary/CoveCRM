@@ -4,15 +4,18 @@ import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import { stripe } from "@/lib/stripe";
 
-
 /** ========= Env / Flags ========= */
 const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
-const TOPUP_AMOUNT_USD = 10; // Auto top-up when balance < $1
+const TOPUP_AMOUNT_USD = 10;
 const TOPUP_AMOUNT_CENTS = TOPUP_AMOUNT_USD * 100;
 
 const A2P_APPROVAL_FEE_USD = 15;
 const A2P_APPROVAL_FEE_CENTS = A2P_APPROVAL_FEE_USD * 100;
+
+// Lock ownership window. Stripe charges complete in <15s in practice; 10min is a
+// very generous TTL that only matters if the process dies mid-charge.
+const BILLING_LOCK_TTL_MS = 10 * 60 * 1000;
 
 /** ========= Admin allow-list ========= */
 function isAdminEmail(email?: string | null) {
@@ -47,36 +50,86 @@ async function ensureDb() {
     await mongoose.connect(process.env.MONGODB_URI as string);
   }
 }
-async function createAndChargeInvoice(params: {
+
+/**
+ * Create an invoice item, draft an invoice, finalize it, and pay immediately.
+ *
+ * Replaces the old auto_advance:true pattern, which scheduled an async Stripe
+ * sweep instead of charging now. Idempotency keys make retries safe.
+ *
+ * If invoice creation fails after the item is created, the orphaned item is
+ * deleted to prevent it from attaching to a future invoice unexpectedly.
+ */
+export async function createFinalizePayInvoice(params: {
   customerId: string;
   amountCents: number;
   description: string;
-}) {
-  const { customerId, amountCents, description } = params;
+  idempotencyKey: string;
+}): Promise<void> {
+  const { customerId, amountCents, description, idempotencyKey } = params;
+  let invoiceItemId: string | undefined;
+  let invoiceId: string | undefined;
 
-  await stripe.invoiceItems.create({
-    customer: customerId,
-    amount: amountCents,
-    currency: "usd",
-    description,
-  });
-  await stripe.invoices.create({
-    customer: customerId,
-    collection_method: "charge_automatically",
-    auto_advance: true,
-  });
+  try {
+    const item = await stripe.invoiceItems.create(
+      { customer: customerId, amount: amountCents, currency: "usd", description },
+      { idempotencyKey: `item_${idempotencyKey}` },
+    );
+    invoiceItemId = item.id;
+
+    const invoice = await stripe.invoices.create(
+      {
+        customer: customerId,
+        collection_method: "charge_automatically",
+        auto_advance: false,
+      },
+      { idempotencyKey: `inv_${idempotencyKey}` },
+    );
+    invoiceId = invoice.id;
+
+    await stripe.invoices.finalizeInvoice(
+      invoiceId!,
+      {},
+      { idempotencyKey: `fin_${idempotencyKey}` },
+    );
+
+    await stripe.invoices.pay(
+      invoiceId!,
+      {},
+      { idempotencyKey: `pay_${idempotencyKey}` },
+    );
+  } catch (err) {
+    // Clean up orphaned item if invoice was never created
+    if (invoiceItemId && !invoiceId) {
+      try {
+        await stripe.invoiceItems.del(invoiceItemId);
+      } catch {
+        /* ignore cleanup failure */
+      }
+    }
+    throw err;
+  }
 }
 
 /** ========= Public APIs ========= */
 
-type UsageSource = "twilio" | "twilio-self" | "twilio-voice" | "openai";
+type UsageSource =
+  | "twilio"
+  | "twilio-self"
+  | "twilio-voice"
+  | "openai"
+  | "ai-dialer"; // Deprecated: pass source:"ai-dialer" is now a no-op; use trackAiDialerUsage directly
 
 /**
- * Track usage (Twilio/OpenAI).
- * - We maintain analytics on *raw* vendor costs (no markup) in userDoc.aiUsage.
- * - We decrement usageBalance by the *billed* amount (raw * MARKUP_FACTOR)
- *   for platform-billed sources: "twilio", "twilio-voice", "openai".
- * - "twilio-self" should pass amount=0 — nothing is billed (still counted in totals if you want).
+ * Track billable usage for the REGULAR bucket ($10 threshold).
+ *
+ * Covers: browser dialer, manual dialer, inbound voice, SMS/MMS, drips,
+ * appointment texts, transcriptions, call coaching, and non-AI-voice OpenAI.
+ *
+ * AI Voice is a separate bucket handled entirely by trackAiDialerUsage().
+ * Passing source:"ai-dialer" here does NOT accrue to the regular bucket.
+ *
+ * Accrual and threshold charging are fully atomic — no read-modify-write race.
  */
 export async function trackUsage({
   user,
@@ -84,7 +137,7 @@ export async function trackUsage({
   source = "twilio",
 }: {
   user: any;
-  amount: number; // raw vendor cost in USD (e.g., your Twilio/OpenAI cost)
+  amount: number;
   source?: UsageSource;
 }) {
   await ensureDb();
@@ -96,84 +149,145 @@ export async function trackUsage({
     return;
   }
 
-  if (!userDoc?.trialGranted && userDoc?.role !== "admin") {
-    console.warn(`[BLOCKED USAGE] ${userDoc?.email} has no trialGranted`);
-    return null;
-  }
+  // ai-dialer has its own $20 bucket in trackAiDialerUsage — excluded here
+  const platformBilled =
+    source === "twilio" || source === "twilio-voice" || source === "openai";
 
-  // ---- Analytics (store RAW costs) ----
   const addToTwilio =
     source === "twilio" || source === "twilio-voice" || source === "twilio-self";
   const addToOpenAI = source === "openai";
 
-  userDoc.aiUsage = {
-    ...userDoc.aiUsage,
-    twilioCost: (userDoc.aiUsage?.twilioCost || 0) + (addToTwilio ? amount : 0),
-    openAiCost: (userDoc.aiUsage?.openAiCost || 0) + (addToOpenAI ? amount : 0),
-    totalCost: (userDoc.aiUsage?.totalCost || 0) + amount,
-  };
+  // Analytics fields to increment (atomic — always runs, even for admins)
+  const analyticsInc: Record<string, number> = {};
+  if (amount !== 0) {
+    analyticsInc["aiUsage.totalCost"] = amount;
+    if (addToTwilio) analyticsInc["aiUsage.twilioCost"] = amount;
+    if (addToOpenAI) analyticsInc["aiUsage.openAiCost"] = amount;
+  }
 
-    // Admins never charged
+  // Admins get analytics only — never billed
   if (!shouldBill(userDoc.email)) {
-    await userDoc.save();
+    if (Object.keys(analyticsInc).length > 0) {
+      await User.updateOne({ email: userDoc.email }, { $inc: analyticsInc });
+    }
     return;
   }
 
-  // Platform-billed sources only (twilio, twilio-voice, openai). Self-billed should pass amount=0.
-  const platformBilled =
-    source === "twilio" || source === "twilio-voice" || source === "openai";
+  const addCents =
+    platformBilled && amount > 0 ? Math.max(0, Math.round(amount * 100)) : 0;
+
+  if (!userDoc.stripeCustomerId && isProd && platformBilled && amount > 0) {
+    if (Object.keys(analyticsInc).length > 0) {
+      await User.updateOne({ email: userDoc.email }, { $inc: analyticsInc });
+    }
+    throw new Error("User missing or not linked to Stripe");
+  }
 
   const canBill = !!userDoc.stripeCustomerId && !(DEV_SKIP_BILLING && isProd);
 
-  // Missing Stripe linkage in prod should block billing
-  if (!userDoc.stripeCustomerId) {
-    if (isProd && platformBilled && amount > 0) {
-      await userDoc.save();
-      throw new Error("User missing or not linked to Stripe");
-    }
+  // One atomic round trip: update analytics + accrue usage
+  const incFields: Record<string, number> = { ...analyticsInc };
+  if (addCents > 0) incFields["usageAccruedCents"] = addCents;
+
+  const updated = await User.findOneAndUpdate(
+    { email: userDoc.email },
+    { $inc: incFields },
+    { new: true, projection: { usageAccruedCents: 1, stripeCustomerId: 1 } },
+  );
+
+  if (!updated) return;
+
+  const newAccrued = Number((updated as any).usageAccruedCents || 0);
+
+  if (!canBill && !isProd && platformBilled && newAccrued >= TOPUP_AMOUNT_CENTS) {
+    console.warn(
+      "[DEV billing] Threshold reached but billing unavailable; accrual remains until enabled.",
+    );
+    return;
   }
 
-  // ✅ GHL-style: accrue billed usage (NOT vendor cost) and invoice only when threshold reached.
-  // Amount is USD you charge (no markup).
-  const addCents = platformBilled && amount > 0 ? Math.max(0, Math.round(amount * 100)) : 0;
+  if (!canBill || !platformBilled || newAccrued < TOPUP_AMOUNT_CENTS) return;
 
-  if (addCents > 0) {
-    userDoc.usageAccruedCents = (userDoc.usageAccruedCents || 0) + addCents;
+  // ── Acquire exclusive billing lock ──────────────────────────────────────────
+  // Conditional update: only succeeds if no lock is held (or existing lock has
+  // expired). The unique lockOwner ID ensures only this process can commit.
+  const lockOwner = new mongoose.Types.ObjectId().toString();
+  const lockExpiresAt = new Date(Date.now() + BILLING_LOCK_TTL_MS);
+
+  const locked = await User.findOneAndUpdate(
+    {
+      email: userDoc.email,
+      usageAccruedCents: { $gte: TOPUP_AMOUNT_CENTS },
+      $or: [
+        { billingLockAt: null },
+        { billingLockExpiresAt: { $lt: new Date() } },
+      ],
+    },
+    {
+      $set: {
+        billingLockAt: new Date(),
+        billingLockOwner: lockOwner,
+        billingLockExpiresAt: lockExpiresAt,
+      },
+    },
+    { new: true, projection: { usageAccruedCents: 1 } },
+  );
+
+  if (!locked) return; // another process holds the lock; accrual is safely stored
+
+  const accrued = Number((locked as any).usageAccruedCents || 0);
+  const increments = Math.floor(accrued / TOPUP_AMOUNT_CENTS);
+  const billCents = increments * TOPUP_AMOUNT_CENTS;
+
+  if (billCents <= 0) {
+    await User.updateOne(
+      { email: userDoc.email, billingLockOwner: lockOwner },
+      { $set: { billingLockAt: null, billingLockOwner: null, billingLockExpiresAt: null } },
+    );
+    return;
   }
 
-  // Invoice in $10 increments when accrued reaches threshold
-  if (platformBilled && canBill && (userDoc.usageAccruedCents || 0) >= TOPUP_AMOUNT_CENTS) {
-    try {
-      const accrued = Number(userDoc.usageAccruedCents || 0);
-      const increments = Math.floor(accrued / TOPUP_AMOUNT_CENTS);
-      const billCents = increments * TOPUP_AMOUNT_CENTS;
+  // lockOwner is unique per billing attempt → idempotency key is stable for retries
+  const idempotencyKey = `reg_${userDoc.email}_${lockOwner}`;
+  const stripeCustomerId = (userDoc.stripeCustomerId as string);
 
-      if (billCents > 0) {
-        await createAndChargeInvoice({
-          customerId: userDoc.stripeCustomerId!,
-          amountCents: billCents,
-          description: `Cove CRM usage charge ($${(billCents / 100).toFixed(2)})`,
-        });
+  try {
+    await createFinalizePayInvoice({
+      customerId: stripeCustomerId,
+      amountCents: billCents,
+      description: `Cove CRM usage charge ($${(billCents / 100).toFixed(2)})`,
+      idempotencyKey,
+    });
 
-        userDoc.usageAccruedCents = accrued - billCents;
-        userDoc.usageBilledTotalCents = (userDoc.usageBilledTotalCents || 0) + billCents;
-        userDoc.usageLastInvoicedAt = new Date();
-        console.log(`💳 Usage invoice: $${(billCents / 100).toFixed(2)} charged to ${userDoc.email}`);
-      }
-    } catch (err) {
-      console.error("❌ Stripe usage threshold charge failed:", err);
-      // Do not throw; keep accrued so we can retry next usage
-    }
-  } else if (!canBill && !isProd && platformBilled && (userDoc.usageAccruedCents || 0) >= TOPUP_AMOUNT_CENTS) {
-    console.warn("[DEV billing] Threshold reached but billing disabled/unavailable; accrued will remain until enabled.");
+    // Commit: only our lockOwner can execute this write
+    await User.findOneAndUpdate(
+      { email: userDoc.email, billingLockOwner: lockOwner },
+      {
+        $inc: { usageAccruedCents: -billCents, usageBilledTotalCents: billCents },
+        $set: {
+          usageLastInvoicedAt: new Date(),
+          billingLockAt: null,
+          billingLockOwner: null,
+          billingLockExpiresAt: null,
+        },
+      },
+    );
+    console.log(
+      `💳 Usage invoice: $${(billCents / 100).toFixed(2)} charged to ${userDoc.email}`,
+    );
+  } catch (err) {
+    console.error("❌ Stripe usage threshold charge failed:", err);
+    // Release lock only — keep accrual so next event retries the charge
+    await User.updateOne(
+      { email: userDoc.email, billingLockOwner: lockOwner },
+      { $set: { billingLockAt: null, billingLockOwner: null, billingLockExpiresAt: null } },
+    );
+    // Do NOT throw — must not crash Twilio webhooks or block active calls
   }
-
-  await userDoc.save();
 }
 
-
 /**
- * One-time A2P approval charge (idempotent)
+ * One-time A2P approval charge (idempotent via Stripe customer metadata).
  */
 export async function chargeA2PApprovalIfNeeded({
   user,
@@ -198,18 +312,12 @@ export async function chargeA2PApprovalIfNeeded({
 
   const a2p = userDoc.a2p || {};
 
-  // Align with syncA2PForUser:
-  //  - a2p.messagingReady === true
-  //  - a2p.applicationStatus === 'approved'
-  //  - a2p.registrationStatus === 'ready'
-  //  - legacy: twilio.a2pStatus === 'approved'
   let approved =
     a2p.messagingReady === true ||
     a2p.applicationStatus === "approved" ||
     a2p.registrationStatus === "ready" ||
-    userDoc?.twilio?.a2pStatus === "approved";
+    (userDoc as any)?.twilio?.a2pStatus === "approved";
 
-  // ✅ Also accept A2PProfile as truth (our A2P system now writes here)
   if (!approved) {
     try {
       const prof: any = await A2PProfile.findOne({ userId: String(userDoc._id) });
@@ -249,10 +357,12 @@ export async function chargeA2PApprovalIfNeeded({
 
   if (already) return { charged: false, reason: "already-charged" };
 
-  await createAndChargeInvoice({
+  // Idempotency key is stable per-customer — safe to retry if this call fails
+  await createFinalizePayInvoice({
     customerId: userDoc.stripeCustomerId,
     amountCents: A2P_APPROVAL_FEE_CENTS,
     description: `A2P 10DLC registration approval fee ($${A2P_APPROVAL_FEE_USD})`,
+    idempotencyKey: `a2p_${userDoc.stripeCustomerId}`,
   });
 
   await stripe.customers.update(userDoc.stripeCustomerId, {

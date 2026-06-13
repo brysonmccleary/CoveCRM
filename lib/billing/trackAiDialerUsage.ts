@@ -1,27 +1,21 @@
 // /lib/billing/trackAiDialerUsage.ts
 import mongoose from "mongoose";
 import User from "@/models/User";
-import { stripe } from "@/lib/stripe";
+import { createFinalizePayInvoice } from "@/lib/billing/trackUsage";
 
 const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
 
-/**
- * 🔹 What you charge the user for AI dialer:
- * Default: $20 / 240 minutes = $0.08333/min.
- */
+// $5/hour = $0.08333/minute
 const AI_DIALER_RATE_PER_MIN_USD = Number(
-  process.env.AI_DIALER_BILL_RATE_PER_MINUTE || "0.08333"
+  process.env.AI_DIALER_BILL_RATE_PER_MINUTE || "0.08333",
 );
 
-/**
- * 🔹 Top-up chunk size for AI dialer:
- * Default: $20 → 4 hours at the default per-minute rate.
- */
-const AI_DIALER_TOPUP_USD = Number(process.env.AI_DIALER_TOPUP_USD ?? "20");
-const AI_DIALER_TOPUP_CENTS = AI_DIALER_TOPUP_USD * 100;
+// AI Voice uses a separate $20 threshold — never shares the $10 regular bucket
+const AI_DIALER_THRESHOLD_CENTS = 2000;
 
-/** ========= Admin allow-list (same pattern as other billing) ========= */
+const BILLING_LOCK_TTL_MS = 10 * 60 * 1000; // 10 min ownership window
+
 function isAdminEmail(email?: string | null) {
   if (!email) return false;
   const list = (process.env.ADMIN_EMAILS || "")
@@ -52,35 +46,20 @@ async function ensureMongooseDoc(user: any) {
   return null;
 }
 
-async function createAndChargeInvoice(params: {
-  customerId: string;
-  amountCents: number;
-  description: string;
-}) {
-  const { customerId, amountCents, description } = params;
-
-  await stripe.invoiceItems.create({
-    customer: customerId,
-    amount: amountCents,
-    currency: "usd",
-    description,
-  });
-
-  await stripe.invoices.create({
-    customer: customerId,
-    collection_method: "charge_automatically",
-    auto_advance: true,
-  });
-}
-
+/**
+ * Track AI Voice usage and charge in $20 increments from the dedicated AI bucket.
+ *
+ * This does NOT route through trackUsage or the regular $10 bucket.
+ * Accrual and threshold charging are fully atomic.
+ */
 export async function trackAiDialerUsage({
   user,
   minutes,
   vendorCostUsd,
 }: {
   user: any;
-  minutes: number; // total connected minutes for this call
-  vendorCostUsd: number; // your raw cost (Twilio + OpenAI) for those minutes
+  minutes: number;
+  vendorCostUsd: number;
 }) {
   await ensureDb();
   const userDoc = await ensureMongooseDoc(user);
@@ -94,101 +73,147 @@ export async function trackAiDialerUsage({
     return;
   }
 
-  // Always track analytics (raw vendor cost + billed minutes).
-  const prevUsage = userDoc.aiDialerUsage || {
-    vendorCost: 0,
-    billedMinutes: 0,
-    billedAmount: 0,
-    lastChargedAt: null,
-  };
+  // Always track analytics regardless of billing eligibility
+  await User.updateOne(
+    { email: userDoc.email },
+    {
+      $inc: {
+        "aiDialerUsage.vendorCost": vendorCostUsd,
+        "aiDialerUsage.billedMinutes": minutes,
+      },
+    },
+  );
+
+  // Admin: analytics only, never billed
+  if (isAdminEmail(userDoc.email)) return;
+
+  // Must have AI upgrade to accrue AI dialer billing
+  if (!userDoc.hasAI) {
+    console.log(`[AI Dialer billing] Skipping — hasAI=false for ${userDoc.email}`);
+    return;
+  }
 
   const billableAmountUsd = minutes * AI_DIALER_RATE_PER_MIN_USD;
+  const addCents =
+    billableAmountUsd > 0 ? Math.max(0, Math.round(billableAmountUsd * 100)) : 0;
 
-  // Note: billedAmount is kept as ACTUAL charged total (updated when invoices are created).
-  const billedTotalUsd = Number((userDoc as any).aiDialerBilledTotalCents || 0) / 100;
-  userDoc.aiDialerUsage = {
-    vendorCost: prevUsage.vendorCost + vendorCostUsd,
-    billedMinutes: prevUsage.billedMinutes + minutes,
-    billedAmount: billedTotalUsd,
-    lastChargedAt: prevUsage.lastChargedAt || null,
-  };
+  if (addCents <= 0) return;
 
-
-  /**
-   * ✅ POSTPAID AI DIALER BILLING (LOCKED):
-   * - Do NOT use "aiDialerBalance" top-ups.
-   * - Accrue billed usage in cents.
-   * - Charge Stripe in $20 increments when accrued reaches threshold.
-   * - Admin allow-list is unchanged (admins never billed).
-   */
-
-  // Admins never billed for AI dialer, but we keep stats
-  if (isAdminEmail(userDoc.email)) {
-    await userDoc.save();
+  if (!userDoc.stripeCustomerId) {
+    if (isProd)
+      console.error(`[AI Dialer billing] No stripeCustomerId for ${userDoc.email}`);
     return;
   }
 
-  // ✅ Must have AI upgrade to accrue/charge AI dialer usage
-  // (We still track vendorCost + minutes analytics above)
-  if (!userDoc.hasAI) {
-    await userDoc.save();
+  const canBill = !!userDoc.stripeCustomerId && !(DEV_SKIP_BILLING && isProd);
+
+  // Atomic accrual into the AI-voice-only bucket
+  const updated = await User.findOneAndUpdate(
+    { email: userDoc.email },
+    { $inc: { aiDialerAccruedCents: addCents } },
+    { new: true, projection: { aiDialerAccruedCents: 1 } },
+  );
+
+  if (!updated) return;
+
+  const newAccrued = Number((updated as any).aiDialerAccruedCents || 0);
+
+  if (!canBill && !isProd && newAccrued >= AI_DIALER_THRESHOLD_CENTS) {
+    console.warn(
+      "[DEV billing] AI Dialer threshold reached but billing unavailable; accrual remains.",
+    );
     return;
   }
 
-  // Initialize accrual fields if missing
-  if (typeof (userDoc as any).aiDialerAccruedCents !== "number") {
-    (userDoc as any).aiDialerAccruedCents = 0;
-  }
-  if (typeof (userDoc as any).aiDialerBilledTotalCents !== "number") {
-    (userDoc as any).aiDialerBilledTotalCents = 0;
-  }
+  if (!canBill || newAccrued < AI_DIALER_THRESHOLD_CENTS) return;
 
-  const billableCents = Math.max(0, Math.round(billableAmountUsd * 100));
-  if (billableCents > 0) {
-    (userDoc as any).aiDialerAccruedCents = Number((userDoc as any).aiDialerAccruedCents || 0) + billableCents;
-  }
+  // ── Acquire exclusive AI billing lock ───────────────────────────────────────
+  const lockOwner = new mongoose.Types.ObjectId().toString();
+  const lockExpiresAt = new Date(Date.now() + BILLING_LOCK_TTL_MS);
 
-  const canBill = !!userDoc.stripeCustomerId && !DEV_SKIP_BILLING;
+  const locked = await User.findOneAndUpdate(
+    {
+      email: userDoc.email,
+      aiDialerAccruedCents: { $gte: AI_DIALER_THRESHOLD_CENTS },
+      $or: [
+        { aiDialerBillingLockAt: null },
+        { aiDialerBillingLockExpiresAt: { $lt: new Date() } },
+      ],
+    },
+    {
+      $set: {
+        aiDialerBillingLockAt: new Date(),
+        aiDialerBillingLockOwner: lockOwner,
+        aiDialerBillingLockExpiresAt: lockExpiresAt,
+      },
+    },
+    { new: true, projection: { aiDialerAccruedCents: 1 } },
+  );
 
-  // Charge in $20 increments when accrued reaches threshold
-  if (canBill && Number((userDoc as any).aiDialerAccruedCents || 0) >= AI_DIALER_TOPUP_CENTS) {
-    try {
-      const accrued = Number((userDoc as any).aiDialerAccruedCents || 0);
-      const increments = Math.floor(accrued / AI_DIALER_TOPUP_CENTS);
-      const billCents = increments * AI_DIALER_TOPUP_CENTS;
+  if (!locked) return; // another process holds the lock; accrual is safely stored
 
-      if (billCents > 0) {
-        await createAndChargeInvoice({
-          customerId: userDoc.stripeCustomerId!,
-          amountCents: billCents,
-          description: `CoveCRM AI Dialer usage charge ($${(billCents / 100).toFixed(2)})`,
-        });
+  const accrued = Number((locked as any).aiDialerAccruedCents || 0);
+  const increments = Math.floor(accrued / AI_DIALER_THRESHOLD_CENTS);
+  const billCents = increments * AI_DIALER_THRESHOLD_CENTS;
 
-        (userDoc as any).aiDialerAccruedCents = accrued - billCents;
-        (userDoc as any).aiDialerBilledTotalCents =
-          Number((userDoc as any).aiDialerBilledTotalCents || 0) + billCents;
-        (userDoc as any).aiDialerLastInvoicedAt = new Date();
-
-        // Keep aiDialerUsage.billedAmount aligned with ACTUAL billed total
-        const billedTotalUsd = Number((userDoc as any).aiDialerBilledTotalCents || 0) / 100;
-        userDoc.aiDialerUsage = {
-          vendorCost: prevUsage.vendorCost + vendorCostUsd,
-          billedMinutes: prevUsage.billedMinutes + minutes,
-          billedAmount: billedTotalUsd,
-          lastChargedAt: new Date(),
-        };
-
-        console.log(
-          `💳 AI Dialer invoice: $${(billCents / 100).toFixed(2)} charged to ${userDoc.email}`
-        );
-      }
-    } catch (err) {
-      console.error("❌ Stripe AI Dialer threshold charge failed:", err);
-      // Do not throw; keep accrued so we can retry next usage
-    }
-  } else if (!canBill && !isProd && Number((userDoc as any).aiDialerAccruedCents || 0) >= AI_DIALER_TOPUP_CENTS) {
-    console.warn("[DEV AI Dialer billing] Threshold reached but billing disabled/unavailable; accrued will remain until enabled.");
+  if (billCents <= 0) {
+    await User.updateOne(
+      { email: userDoc.email, aiDialerBillingLockOwner: lockOwner },
+      {
+        $set: {
+          aiDialerBillingLockAt: null,
+          aiDialerBillingLockOwner: null,
+          aiDialerBillingLockExpiresAt: null,
+        },
+      },
+    );
+    return;
   }
 
-  await userDoc.save();
+  const idempotencyKey = `ai_${userDoc.email}_${lockOwner}`;
+
+  try {
+    await createFinalizePayInvoice({
+      customerId: userDoc.stripeCustomerId as string,
+      amountCents: billCents,
+      description: `Cove CRM AI Voice usage charge ($${(billCents / 100).toFixed(2)})`,
+      idempotencyKey,
+    });
+
+    // Commit: only our lockOwner can execute this write
+    await User.findOneAndUpdate(
+      { email: userDoc.email, aiDialerBillingLockOwner: lockOwner },
+      {
+        $inc: {
+          aiDialerAccruedCents: -billCents,
+          aiDialerBilledTotalCents: billCents,
+          "aiDialerUsage.billedAmount": billCents / 100,
+        },
+        $set: {
+          aiDialerLastInvoicedAt: new Date(),
+          "aiDialerUsage.lastChargedAt": new Date(),
+          aiDialerBillingLockAt: null,
+          aiDialerBillingLockOwner: null,
+          aiDialerBillingLockExpiresAt: null,
+        },
+      },
+    );
+    console.log(
+      `💳 AI Voice invoice: $${(billCents / 100).toFixed(2)} charged to ${userDoc.email}`,
+    );
+  } catch (err) {
+    console.error("❌ Stripe AI Voice threshold charge failed:", err);
+    // Release lock only — keep accrual so next event retries the charge
+    await User.updateOne(
+      { email: userDoc.email, aiDialerBillingLockOwner: lockOwner },
+      {
+        $set: {
+          aiDialerBillingLockAt: null,
+          aiDialerBillingLockOwner: null,
+          aiDialerBillingLockExpiresAt: null,
+        },
+      },
+    );
+    // Do NOT throw — must not crash webhooks or block active calls
+  }
 }
