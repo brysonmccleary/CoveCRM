@@ -231,6 +231,8 @@ export default function DialSession() {
   // UI
   const [showBookModal, setShowBookModal] = useState(false);
   const [notes, setNotes] = useState("");
+  const [smsText, setSmsText] = useState("");
+  const [sendingSms, setSendingSms] = useState(false);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [latestAiOverview, setLatestAiOverview] = useState<DialAICallOverview["call"] | null>(null);
 
@@ -1377,6 +1379,35 @@ export default function DialSession() {
     }
   };
 
+  const handleSendSms = async () => {
+    if (!isPaused) return;
+    if ((lead as any)?.quickDial) return toast.error("Quick Dial calls are not tied to a saved lead");
+
+    const leadId = getLeadId(lead);
+    const cleanText = smsText.trim();
+    if (!leadId) return toast.error("No active lead to text");
+    if (!cleanText || sendingSms) return;
+
+    try {
+      setSendingSms(true);
+      const r = await fetch("/api/message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId, text: cleanText, direction: "outbound" }),
+      });
+      const payload = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(payload?.error || payload?.message || "Failed to send text");
+
+      setSmsText("");
+      toast.success("Text sent");
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || "Failed to send text");
+    } finally {
+      setSendingSms(false);
+    }
+  };
+
   const persistDisposition = async (leadId: string, label: string) => {
     // ❌ Do NOT move folders or touch disposition endpoints for "No Answer"
     if (label !== "No Answer") {
@@ -1854,6 +1885,7 @@ export default function DialSession() {
     !lead ||
     callActive ||
     sessionEndedRef.current;
+  const canTextPausedLead = isPaused && !!lead && !(lead as any)?.quickDial;
   const showConnectedTimer =
     callActive &&
     connectedAtRef.current !== null &&
@@ -2035,6 +2067,35 @@ export default function DialSession() {
             <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
               Save Note
             </button>
+
+            {canTextPausedLead && (
+              <div className="mt-4 border border-gray-600 rounded p-3 bg-gray-800">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-lg font-bold">Text Lead</h3>
+                  <span className="text-xs text-gray-400">Paused</span>
+                </div>
+                <textarea
+                  value={smsText}
+                  onChange={(e) => setSmsText(e.target.value)}
+                  className="w-full p-2 text-white rounded bg-gray-900 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  rows={3}
+                  placeholder="Type your message..."
+                />
+                <div className="mt-2 flex justify-end">
+                  <button
+                    onClick={handleSendSms}
+                    disabled={!smsText.trim() || sendingSms}
+                    className={`px-4 py-2 rounded text-white ${
+                      !smsText.trim() || sendingSms
+                        ? "bg-gray-600 cursor-not-allowed opacity-70"
+                        : "bg-green-600 hover:bg-green-700"
+                    }`}
+                  >
+                    {sendingSms ? "Sending..." : "Send Text"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             <h3 className="text-lg font-bold mb-2 mt-4">Interaction History</h3>
             <div className="bg-gray-800 p-3 rounded max-h-60 overflow-y-auto">

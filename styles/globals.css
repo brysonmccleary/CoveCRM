@@ -106,6 +106,18 @@ textarea {
   cursor: text;
 }
 
+/* Native dropdown readability across light/dark mode. */
+select {
+  color-scheme: light;
+  background-color: #ffffff;
+  color: #111827;
+}
+
+select option {
+  background-color: #ffffff;
+  color: #111827;
+}
+
 
 /* ===== Cove Dark Mode Safety Overrides =====
    Goal: force a consistent dark UI even if some components still use light Tailwind classes.
@@ -138,9 +150,15 @@ html.dark .border-neutral-200 {
 html.dark input:not([type="checkbox"]):not([type="radio"]),
 html.dark textarea,
 html.dark select {
+  color-scheme: dark;
   background-color: rgba(255,255,255,0.04) !important;
   color: #ffffff !important;
   border-color: rgba(255,255,255,0.18) !important;
+}
+
+html.dark select option {
+  background-color: var(--cove-bg-dark) !important;
+  color: #ffffff !important;
 }
 
 html.dark input::placeholder,
