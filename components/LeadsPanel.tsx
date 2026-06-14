@@ -1,7 +1,8 @@
 // components/LeadsPanel.tsx
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
+import FolderLeadsTable from "./FolderLeadsTable";
 import { useRouter } from "next/router";
 import { getNumberState } from "@/lib/twilio/localPresence";
 
@@ -766,70 +767,19 @@ export default function LeadsPanel() {
     );
   };
 
-  // ✅ UI-only helper: treat empty values as "empty" for column hiding
-  const isEffectivelyEmpty = (v: any) => {
-    if (v === null || v === undefined) return true;
-    if (typeof v === "string") return v.trim() === "" || v.trim() === "-" || v.trim().toLowerCase() === "null";
-    if (typeof v === "number") return v === 0 || Number.isNaN(v);
-    return false;
+  const handleScriptKeyChange = async (nextKey: string) => {
+    setFolderScriptKey(nextKey);
+    setSavingScript(true);
+    try {
+      await fetch("/api/folders/ai-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderId: expandedFolder, aiScriptKey: nextKey }),
+      });
+    } finally {
+      setSavingScript(false);
+    }
   };
-
-  const getLeadValue = (lead: any, key: "firstName" | "lastName" | "phone" | "email" | "state" | "age") => {
-    if (!lead) return undefined;
-    if (key === "firstName") return lead.firstName ?? lead["First Name"];
-    if (key === "lastName") return lead.lastName ?? lead["Last Name"];
-    if (key === "phone") return lead.phone ?? lead["Phone"];
-    if (key === "email") return lead.email ?? lead["Email"];
-    if (key === "state") return lead.state ?? lead["State"];
-    if (key === "age") return lead.age ?? lead["Age"];
-    return undefined;
-  };
-
-  const flattenLeadFieldsForDisplay = (lead: any) => {
-    const merged: Record<string, any> = {};
-    const merge = (source: any) => {
-      if (!source || typeof source !== "object" || Array.isArray(source)) return;
-      for (const [key, value] of Object.entries(source)) {
-        if (merged[key] === undefined) merged[key] = value;
-      }
-    };
-    merge(lead);
-    merge(lead?.customFields);
-    merge(lead?.fields);
-    merge(lead?.data);
-    merge(lead?.sheet);
-    merge(lead?.payload);
-    merge(lead?.rawRow);
-    return merged;
-  };
-
-  const getLeadDisplayName = (lead: any) => {
-    const fields = flattenLeadFieldsForDisplay(lead);
-    const clean = (value: any) => (typeof value === "string" ? value.trim() : value ? String(value).trim() : "");
-    const fromCamel = [clean(fields.firstName), clean(fields.lastName)].filter(Boolean).join(" ").trim();
-    if (fromCamel) return fromCamel;
-    const fromTitle = [clean(fields["First Name"]), clean(fields["Last Name"])].filter(Boolean).join(" ").trim();
-    if (fromTitle) return fromTitle;
-    return (
-      clean(fields.name) ||
-      clean(fields.Name) ||
-      clean(fields.fullName) ||
-      clean(fields["Full Name"]) ||
-      clean(fields.email) ||
-      clean(fields.Email) ||
-      clean(fields.phone) ||
-      clean(fields.Phone) ||
-      "Unknown Lead"
-    );
-  };
-
-  const showColFirstName = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadDisplayName(l))), [leads]);
-  const showColLastName = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "lastName"))), [leads]);
-  const showColPhone = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "phone"))), [leads]);
-  const showColEmail = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "email"))), [leads]);
-  const showColState = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "state"))), [leads]);
-  const showColAge = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "age"))), [leads]);
-
 
   return (
     <div className="space-y-4 p-4">
@@ -976,205 +926,28 @@ export default function LeadsPanel() {
             </div>
 
             {expandedFolder === folder._id && leads.length > 0 && (
-              <div className="border p-4 rounded mt-2 overflow-auto bg-gray-100 dark:bg-gray-800">
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-                  <div>
-                    <label className="font-semibold">Select Number to Call From:</label>
-                    <select
-                      value={selectedNumber}
-                      onChange={(e) => setSelectedNumber(e.target.value)}
-                      className="border p-2 rounded w-full cursor-pointer"
-                    >
-                      <option value="">-- Choose a number --</option>
-                      <option value="LOCAL_PRESENCE">🎯 Local Presence (Auto-Match)</option>
-                      {numbers.map((num) => (
-                        <option key={num.id} value={num.phoneNumber}>
-                          {formatPhoneNumber(num.phoneNumber)}{getNumberState(num.phoneNumber) ? ` · ${getNumberState(num.phoneNumber)}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label style={{ display: "block", fontSize: "13px", fontWeight: 500, marginBottom: "4px" }}>
-                      AI Script / Lead Type
-                    </label>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <select
-                        value={folderScriptKey}
-                        onChange={async (e) => {
-                          const nextKey = e.target.value;
-                          setFolderScriptKey(nextKey);
-                          setSavingScript(true);
-                          try {
-                            await fetch("/api/folders/ai-settings", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ folderId: expandedFolder, aiScriptKey: nextKey }),
-                            });
-                          } finally {
-                            setSavingScript(false);
-                          }
-                        }}
-                        style={{ backgroundColor: "#1e293b", border: "1px solid #475569", borderRadius: "4px", color: "#e2e8f0", padding: "6px 8px", fontSize: "13px", flex: 1 }}
-                      >
-                        <option value="mortgage_protection">Mortgage Protection</option>
-                        <option value="final_expense">Final Expense</option>
-                        <option value="iul_cash_value">IUL / Cash Value Life</option>
-                        <option value="veteran_leads">Veterans (Life Insurance)</option>
-                        <option value="veteran_iul">Veterans IUL</option>
-                        <option value="veteran_mortgage">Veterans Mortgage Protection</option>
-                        <option value="trucker_leads">Truckers (Life Insurance)</option>
-                        <option value="trucker_iul">Truckers IUL</option>
-                        <option value="trucker_mortgage">Truckers Mortgage Protection</option>
-                        <option value="default">Default (Generic)</option>
-                      </select>
-                      {savingScript && <span style={{ fontSize: "12px", color: "#64748b" }}>Saving...</span>}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-between items-center mb-2">
-                  <div className="flex space-x-2">
-                    {/* ✅ FIX: this button now actually works */}
-                    <button
-                      onClick={handleSelectAll}
-                      className="border px-3 py-1 rounded cursor-pointer"
-                    >
-                      {selectAll ? "Deselect All" : "Select All"}
-                    </button>
-                    <span className="text-sm">{selectedLeads.length} leads selected</span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={startDialSession}
-                      className={`${
-                        selectedLeads.length > 0
-                          ? "bg-green-600 hover:bg-green-700"
-                          : "bg-gray-400 cursor-not-allowed"
-                      } text-white px-3 py-1 rounded cursor-pointer`}
-                      disabled={selectedLeads.length === 0}
-                    >
-                      Start Dial Session
-                    </button>
-
-                    <button
-                      onClick={handleResumeQuickButton}
-                      className={`${
-                        hasResume && !!selectedNumber && leads.length > 0
-                          ? "bg-blue-600 hover:bg-blue-700"
-                          : "bg-gray-400 cursor-not-allowed"
-                      } text-white px-3 py-1 rounded cursor-pointer`}
-                      disabled={!(hasResume && !!selectedNumber && leads.length > 0)}
-                      title={hasResume ? "Resume where you left off" : "No server resume available yet"}
-                    >
-                      Resume
-                    </button>
-                  </div>
-                </div>
-
-                {/* Aging filter */}
-                <div className="flex items-center gap-2 mb-3">
-                  <label className="text-sm text-gray-400">Filter by age:</label>
-                  <select
-                    value={agingFilter}
-                    onChange={(e) => setAgingFilter(e.target.value as any)}
-                    className="border border-gray-600 bg-gray-700 text-white text-sm rounded px-2 py-1"
-                  >
-                    <option value="all">All</option>
-                    <option value="fresh">Fresh (&lt; 1 day)</option>
-                    <option value="warm">Warm (1–3 days)</option>
-                    <option value="stale">Stale (3–7 days)</option>
-                    <option value="cold">Cold (&gt; 7 days)</option>
-                  </select>
-                </div>
-
-                <table className="min-w-full text-base">
-                  <thead>
-                    <tr>
-                      <th></th>
-                      <th>#</th>
-                      {showColFirstName && <th>First Name</th>}
-                      {showColLastName && <th>Last Name</th>}
-                      {showColPhone && <th>Phone</th>}
-                      {showColEmail && <th>Email</th>}
-                      {showColState && <th>State</th>}
-                      {showColAge && <th>Age</th>}
-                      <th title="Lead score">Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leads
-                      .filter((lead) => {
-                        if (agingFilter === "all") return true;
-                        const ageMs = Date.now() - new Date(lead.createdAt ?? 0).getTime();
-                        const ageDays = ageMs / (1000 * 60 * 60 * 24);
-                        if (agingFilter === "fresh") return ageDays < 1;
-                        if (agingFilter === "warm") return ageDays >= 1 && ageDays < 3;
-                        if (agingFilter === "stale") return ageDays >= 3 && ageDays < 7;
-                        if (agingFilter === "cold") return ageDays >= 7;
-                        return true;
-                      })
-                      .map((lead, index) => {
-                        const ageMs = Date.now() - new Date(lead.createdAt ?? 0).getTime();
-                        const ageDays = ageMs / (1000 * 60 * 60 * 24);
-                        const agingClass =
-                          ageDays < 1 ? "" :
-                          ageDays < 3 ? "bg-yellow-950/30" :
-                          ageDays < 7 ? "bg-orange-950/40" :
-                          "bg-red-950/30";
-                        return (
-                        <tr key={lead._id} className={`border-t ${agingClass}`}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={selectedLeads.includes(lead._id)}
-                              onChange={() => toggleLeadSelection(lead._id)}
-                              className="cursor-pointer"
-                            />
-                          </td>
-                          <td>{index + 1}</td>
-
-                          {showColFirstName && (
-                            <td>
-                              <button
-                                onClick={() => setPreviewLead(typeof expandedFolder === "string" && expandedFolder ? { ...lead, folderId: expandedFolder } : lead)}
-                                className="text-blue-500 underline cursor-pointer"
-                              >
-                                {getLeadDisplayName(lead)}
-                              </button>
-                            </td>
-                          )}
-
-                          {showColLastName && <td>{getLeadValue(lead, "lastName") || "-"}</td>}
-                          {showColPhone && <td>{getLeadValue(lead, "phone") || "-"}</td>}
-                          {showColEmail && <td>{getLeadValue(lead, "email") || "-"}</td>}
-                          {showColState && <td>{getLeadValue(lead, "state") || "-"}</td>}
-                          {showColAge && <td>{getLeadValue(lead, "age") ?? "-"}</td>}
-                          <td>
-                            {typeof (lead as any).score === "number" ? (
-                              <span
-                                className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-                                  (lead as any).score >= 70
-                                    ? "bg-green-900 text-green-300"
-                                    : (lead as any).score >= 40
-                                    ? "bg-yellow-900 text-yellow-300"
-                                    : "bg-red-900 text-red-300"
-                                }`}
-                              >
-                                {(lead as any).score}
-                              </span>
-                            ) : (
-                              <span className="text-gray-600 text-xs">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <FolderLeadsTable
+                folder={folder}
+                isSystemFolder={false}
+                leads={leads}
+                selectedLeads={selectedLeads}
+                toggleLeadSelection={toggleLeadSelection}
+                selectAll={selectAll}
+                onSelectAll={handleSelectAll}
+                agingFilter={agingFilter}
+                setAgingFilter={setAgingFilter}
+                numbers={numbers}
+                selectedNumber={selectedNumber}
+                setSelectedNumber={setSelectedNumber}
+                folderScriptKey={folderScriptKey}
+                onScriptKeyChange={handleScriptKeyChange}
+                savingScript={savingScript}
+                hasResume={hasResume}
+                canResume={canResume}
+                onStartDialSession={startDialSession}
+                onResume={handleResumeQuickButton}
+                onPreviewLead={setPreviewLead}
+              />
             )}
           </div>
         ))}
@@ -1214,205 +987,28 @@ export default function LeadsPanel() {
             </div>
 
             {expandedFolder === folder._id && leads.length > 0 && (
-              <div className="border p-4 rounded mt-2 overflow-auto bg-gray-100 dark:bg-gray-800">
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-                  <div>
-                    <label className="font-semibold">Select Number to Call From:</label>
-                    <select
-                      value={selectedNumber}
-                      onChange={(e) => setSelectedNumber(e.target.value)}
-                      className="border p-2 rounded w-full cursor-pointer"
-                    >
-                      <option value="">-- Choose a number --</option>
-                      <option value="LOCAL_PRESENCE">🎯 Local Presence (Auto-Match)</option>
-                      {numbers.map((num) => (
-                        <option key={num.id} value={num.phoneNumber}>
-                          {formatPhoneNumber(num.phoneNumber)}{getNumberState(num.phoneNumber) ? ` · ${getNumberState(num.phoneNumber)}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label style={{ display: "block", fontSize: "13px", fontWeight: 500, marginBottom: "4px" }}>
-                      AI Script / Lead Type
-                    </label>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <select
-                        value={folderScriptKey}
-                        onChange={async (e) => {
-                          const nextKey = e.target.value;
-                          setFolderScriptKey(nextKey);
-                          setSavingScript(true);
-                          try {
-                            await fetch("/api/folders/ai-settings", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ folderId: expandedFolder, aiScriptKey: nextKey }),
-                            });
-                          } finally {
-                            setSavingScript(false);
-                          }
-                        }}
-                        style={{ backgroundColor: "#1e293b", border: "1px solid #475569", borderRadius: "4px", color: "#e2e8f0", padding: "6px 8px", fontSize: "13px", flex: 1 }}
-                      >
-                        <option value="mortgage_protection">Mortgage Protection</option>
-                        <option value="final_expense">Final Expense</option>
-                        <option value="iul_cash_value">IUL / Cash Value Life</option>
-                        <option value="veteran_leads">Veterans (Life Insurance)</option>
-                        <option value="veteran_iul">Veterans IUL</option>
-                        <option value="veteran_mortgage">Veterans Mortgage Protection</option>
-                        <option value="trucker_leads">Truckers (Life Insurance)</option>
-                        <option value="trucker_iul">Truckers IUL</option>
-                        <option value="trucker_mortgage">Truckers Mortgage Protection</option>
-                        <option value="default">Default (Generic)</option>
-                      </select>
-                      {savingScript && <span style={{ fontSize: "12px", color: "#64748b" }}>Saving...</span>}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-between items-center mb-2">
-                  <div className="flex space-x-2">
-                    {/* ✅ FIX: this button now actually works */}
-                    <button
-                      onClick={handleSelectAll}
-                      className="border px-3 py-1 rounded cursor-pointer"
-                    >
-                      {selectAll ? "Deselect All" : "Select All"}
-                    </button>
-                    <span className="text-sm">{selectedLeads.length} leads selected</span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={startDialSession}
-                      className={`${
-                        selectedLeads.length > 0
-                          ? "bg-green-600 hover:bg-green-700"
-                          : "bg-gray-400 cursor-not-allowed"
-                      } text-white px-3 py-1 rounded cursor-pointer`}
-                      disabled={selectedLeads.length === 0}
-                    >
-                      Start Dial Session
-                    </button>
-
-                    <button
-                      onClick={handleResumeQuickButton}
-                      className={`${
-                        hasResume && !!selectedNumber && leads.length > 0
-                          ? "bg-blue-600 hover:bg-blue-700"
-                          : "bg-gray-400 cursor-not-allowed"
-                      } text-white px-3 py-1 rounded cursor-pointer`}
-                      disabled={!(hasResume && !!selectedNumber && leads.length > 0)}
-                      title={hasResume ? "Resume where you left off" : "No server resume available yet"}
-                    >
-                      Resume
-                    </button>
-                  </div>
-                </div>
-
-                {/* Aging filter */}
-                <div className="flex items-center gap-2 mb-3">
-                  <label className="text-sm text-gray-400">Filter by age:</label>
-                  <select
-                    value={agingFilter}
-                    onChange={(e) => setAgingFilter(e.target.value as any)}
-                    className="border border-gray-600 bg-gray-700 text-white text-sm rounded px-2 py-1"
-                  >
-                    <option value="all">All</option>
-                    <option value="fresh">Fresh (&lt; 1 day)</option>
-                    <option value="warm">Warm (1–3 days)</option>
-                    <option value="stale">Stale (3–7 days)</option>
-                    <option value="cold">Cold (&gt; 7 days)</option>
-                  </select>
-                </div>
-
-                <table className="min-w-full text-base">
-                  <thead>
-                    <tr>
-                      <th></th>
-                      <th>#</th>
-                      {showColFirstName && <th>First Name</th>}
-                      {showColLastName && <th>Last Name</th>}
-                      {showColPhone && <th>Phone</th>}
-                      {showColEmail && <th>Email</th>}
-                      {showColState && <th>State</th>}
-                      {showColAge && <th>Age</th>}
-                      <th title="Lead score">Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leads
-                      .filter((lead) => {
-                        if (agingFilter === "all") return true;
-                        const ageMs = Date.now() - new Date(lead.createdAt ?? 0).getTime();
-                        const ageDays = ageMs / (1000 * 60 * 60 * 24);
-                        if (agingFilter === "fresh") return ageDays < 1;
-                        if (agingFilter === "warm") return ageDays >= 1 && ageDays < 3;
-                        if (agingFilter === "stale") return ageDays >= 3 && ageDays < 7;
-                        if (agingFilter === "cold") return ageDays >= 7;
-                        return true;
-                      })
-                      .map((lead, index) => {
-                        const ageMs = Date.now() - new Date(lead.createdAt ?? 0).getTime();
-                        const ageDays = ageMs / (1000 * 60 * 60 * 24);
-                        const agingClass =
-                          ageDays < 1 ? "" :
-                          ageDays < 3 ? "bg-yellow-950/30" :
-                          ageDays < 7 ? "bg-orange-950/40" :
-                          "bg-red-950/30";
-                        return (
-                        <tr key={lead._id} className={`border-t ${agingClass}`}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={selectedLeads.includes(lead._id)}
-                              onChange={() => toggleLeadSelection(lead._id)}
-                              className="cursor-pointer"
-                            />
-                          </td>
-                          <td>{index + 1}</td>
-
-                          {showColFirstName && (
-                            <td>
-                              <button
-                                onClick={() => setPreviewLead(typeof expandedFolder === "string" && expandedFolder ? { ...lead, folderId: expandedFolder } : lead)}
-                                className="text-blue-500 underline cursor-pointer"
-                              >
-                                {getLeadDisplayName(lead)}
-                              </button>
-                            </td>
-                          )}
-
-                          {showColLastName && <td>{getLeadValue(lead, "lastName") || "-"}</td>}
-                          {showColPhone && <td>{getLeadValue(lead, "phone") || "-"}</td>}
-                          {showColEmail && <td>{getLeadValue(lead, "email") || "-"}</td>}
-                          {showColState && <td>{getLeadValue(lead, "state") || "-"}</td>}
-                          {showColAge && <td>{getLeadValue(lead, "age") ?? "-"}</td>}
-                          <td>
-                            {typeof (lead as any).score === "number" ? (
-                              <span
-                                className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-                                  (lead as any).score >= 70
-                                    ? "bg-green-900 text-green-300"
-                                    : (lead as any).score >= 40
-                                    ? "bg-yellow-900 text-yellow-300"
-                                    : "bg-red-900 text-red-300"
-                                }`}
-                              >
-                                {(lead as any).score}
-                              </span>
-                            ) : (
-                              <span className="text-gray-600 text-xs">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <FolderLeadsTable
+                folder={folder}
+                isSystemFolder={true}
+                leads={leads}
+                selectedLeads={selectedLeads}
+                toggleLeadSelection={toggleLeadSelection}
+                selectAll={selectAll}
+                onSelectAll={handleSelectAll}
+                agingFilter={agingFilter}
+                setAgingFilter={setAgingFilter}
+                numbers={numbers}
+                selectedNumber={selectedNumber}
+                setSelectedNumber={setSelectedNumber}
+                folderScriptKey={folderScriptKey}
+                onScriptKeyChange={handleScriptKeyChange}
+                savingScript={savingScript}
+                hasResume={hasResume}
+                canResume={canResume}
+                onStartDialSession={startDialSession}
+                onResume={handleResumeQuickButton}
+                onPreviewLead={setPreviewLead}
+              />
             )}
           </div>
         ))}

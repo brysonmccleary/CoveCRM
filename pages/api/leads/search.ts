@@ -5,6 +5,8 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -29,24 +31,23 @@ export default async function handler(
 
   await dbConnect();
 
-  const or: any[] = [];
-  const rx = new RegExp(q, "i");
+  const rx = new RegExp(escapeRegex(q), "i");
   const digits = q.replace(/\D+/g, "");
 
-  // Name/email (support both legacy "First Name"/"Last Name" and camelCase)
-  or.push({ "First Name": rx });
-  or.push({ "Last Name": rx });
-  or.push({ firstName: rx });
-  or.push({ lastName: rx });
-  or.push({ Email: rx });
-  or.push({ email: rx });
+  const or: any[] = [
+    { "First Name": rx },
+    { "Last Name": rx },
+    { firstName: rx },
+    { lastName: rx },
+    { Email: rx },
+    { email: rx },
+  ];
 
-  // Phone (raw + last10 if present)
-  if (digits.length >= 4) {
-    const last = digits.slice(-10);
-    or.push({ Phone: new RegExp(digits, "i") });
-    or.push({ phone: new RegExp(digits, "i") });
-    or.push({ phoneLast10: new RegExp(`${last}$`, "i") }); // ok if field doesn't exist
+  if (digits.length >= 2) {
+    or.push({ Phone: { $regex: digits, $options: "i" } });
+    or.push({ phone: { $regex: digits, $options: "i" } });
+    or.push({ normalizedPhone: { $regex: digits, $options: "i" } });
+    or.push({ phoneLast10: { $regex: digits, $options: "i" } });
   }
 
   const results = await Lead.find({ userEmail, $or: or })
@@ -69,7 +70,7 @@ export default async function handler(
     .limit(20)
     .lean();
 
-  const shaped = results.map((r: any) => {
+  const shaped = (results as any[]).map((r) => {
     const first = r["First Name"] || r.firstName || "";
     const last = r["Last Name"] || r.lastName || "";
     const phone = r.Phone || r.phone || "";
