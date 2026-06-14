@@ -8,6 +8,20 @@ import { playRingback, stopRingback, primeAudioContext, ensureUnlocked, armRingb
 import toast from "react-hot-toast";
 import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
 import { useSoftphone } from "@/components/telephony/SoftphoneProvider";
+import {
+  FaChevronDown,
+  FaCircle,
+  FaMicrophone,
+  FaMicrophoneSlash,
+  FaPaperPlane,
+  FaPause,
+  FaPhoneSlash,
+  FaPlay,
+  FaRedo,
+  FaRobot,
+  FaSignOutAlt,
+  FaStickyNote,
+} from "react-icons/fa";
 
 interface Lead { id: string; [key: string]: any; }
 type Json = Record<string, any>;
@@ -19,6 +33,13 @@ const LEADS_URL = "/dashboard?tab=leads"; // ✅ canonical destination
 type HistoryRow =
   | { kind: "text"; text: string }
   | { kind: "link"; text: string; href: string; download?: boolean };
+
+type SmsThreadMessage = {
+  id?: string;
+  dir: "inbound" | "outbound" | "ai";
+  text: string;
+  date: string;
+};
 
 type DialAICallOverview = {
   call?: {
@@ -159,6 +180,26 @@ const isJunkHistoryText = (t: string) => {
   return false;
 };
 
+function formatSmsThreadTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
+function sameSmsMessage(a: SmsThreadMessage, b: SmsThreadMessage) {
+  if (a.id && b.id && String(a.id) === String(b.id)) return true;
+  return (
+    a.dir === b.dir &&
+    a.text === b.text &&
+    Math.abs(new Date(a.date).getTime() - new Date(b.date).getTime()) < 2000
+  );
+}
+
 const toTimeValue = (value: any, fallback = 0) => {
   if (!value) return fallback;
   const time = new Date(value).getTime();
@@ -231,8 +272,10 @@ export default function DialSession() {
   // UI
   const [showBookModal, setShowBookModal] = useState(false);
   const [notes, setNotes] = useState("");
+  const [aiOverviewExpanded, setAiOverviewExpanded] = useState(false);
   const [smsText, setSmsText] = useState("");
   const [sendingSms, setSendingSms] = useState(false);
+  const [messages, setMessages] = useState<SmsThreadMessage[]>([]);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [latestAiOverview, setLatestAiOverview] = useState<DialAICallOverview["call"] | null>(null);
 
@@ -246,6 +289,9 @@ export default function DialSession() {
   // sockets + watchdogs + guards
   const socketRef = useRef<any>(null);
   const userEmailRef = useRef<string>("");
+  const currentLeadIdRef = useRef<string>("");
+  const showBookModalRef = useRef<boolean>(false);
+  const deferredAdvanceRef = useRef<(() => void) | null>(null);
   const callWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const advanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextLeadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -255,6 +301,7 @@ export default function DialSession() {
 
   const advanceScheduledRef = useRef<boolean>(false);
   const sessionEndedRef = useRef<boolean>(false);
+  const isPausedRef = useRef<boolean>(false);
   const activeCallSidRef = useRef<string | null>(null);
   const activeConferenceRef = useRef<string | null>(null);
   const placingCallRef = useRef<boolean>(false);
@@ -294,6 +341,11 @@ export default function DialSession() {
   };
 
   const applyRingbackDesired = async (desired: boolean) => {
+    if (desired && (isPausedRef.current || sessionEndedRef.current)) {
+      stopRingbackNow();
+      return;
+    }
+
     const opSeq = ringbackOpSeqRef.current + 1;
     ringbackOpSeqRef.current = opSeq;
     ringbackDesiredRef.current = desired;
@@ -306,7 +358,7 @@ export default function DialSession() {
           ringbackOpSeqRef.current !== opSeq ||
           !ringbackDesiredRef.current ||
           sessionEndedRef.current ||
-          isPaused
+          isPausedRef.current
         ) {
           if (ringbackOpSeqRef.current === opSeq) stopRingbackNow();
           return;
@@ -516,6 +568,14 @@ export default function DialSession() {
     }
   };
 
+  const requestAdvance = (fn: () => void) => {
+    if (showBookModalRef.current) {
+      deferredAdvanceRef.current = fn;
+      return;
+    }
+    fn();
+  };
+
   const handleTerminalCall = async (opts: { status: string; reason: string; hangup?: boolean }) => {
     // One terminal owner per call attempt: poller, socket, watchdog, and SDK events can race.
     if (terminalHandledRef.current || sessionEndedRef.current) return;
@@ -547,7 +607,7 @@ export default function DialSession() {
     // In inbound mode stay on the page — agent sets disposition manually
     if (inboundMode) return;
 
-    scheduleAdvance();
+    requestAdvance(scheduleAdvance);
   };
 
   const scheduleWatchdog = () => {
@@ -843,11 +903,25 @@ export default function DialSession() {
     }
   }, [currentLeadIndex, progressKey, leadQueue.length]);
 
+  useEffect(() => {
+    currentLeadIdRef.current = getLeadId(lead);
+    setAiOverviewExpanded(false);
+  }, [lead]);
+
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
+
+  useEffect(() => {
+    showBookModalRef.current = showBookModal;
+  }, [showBookModal]);
+
   // Clear + load history for each lead (per-lead only, newest-first)
   useEffect(() => {
     const loadHistory = async () => {
-      if (!lead?.id) { setHistory([]); return; }
+      if (!lead?.id) { setHistory([]); setMessages([]); return; }
       setHistory([]);
+      setMessages([]);
       try {
         const j = await fetchJson<{
           events: Array<
@@ -859,6 +933,7 @@ export default function DialSession() {
         }>(`/api/leads/history?id=${encodeURIComponent(lead.id)}&limit=50&includeCalls=1`);
 
         const rows: HistoryRow[] = [];
+        const smsMessages: SmsThreadMessage[] = [];
 
         // 🔒 PINNED SAVED NOTES — only if it looks like a real human note (not fallback junk)
         const savedNotes = (lead as any)?.Notes;
@@ -926,7 +1001,12 @@ export default function DialSession() {
             const sms = ev as any;
             const t = String(sms.text || "");
             if (isJunkHistoryText(t)) continue;
-            rows.push({ kind: "text", text: `💬 ${sms.dir.toUpperCase()} • ${when} — ${t}` });
+            smsMessages.push({
+              id: sms.id ? String(sms.id) : undefined,
+              dir: sms.dir === "outbound" || sms.dir === "ai" ? sms.dir : "inbound",
+              text: t,
+              date: String(sms.date || new Date().toISOString()),
+            });
           } else if ((ev as any).type === "status") {
             const t = String((ev as any).to || "");
             if (isJunkHistoryText(t)) continue;
@@ -941,8 +1021,14 @@ export default function DialSession() {
           }
         }
         setHistory(rows);
+        setMessages(
+          smsMessages.sort(
+            (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+          ),
+        );
       } catch {
         setHistory([]);
+        setMessages([]);
       }
     };
     loadHistory();
@@ -1070,6 +1156,8 @@ export default function DialSession() {
 
     statusPollRef.current = setInterval(async () => {
       try {
+        if (isPausedRef.current || sessionEndedRef.current) return;
+
         const j = await fetch(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`, { cache: "no-store" }).then(r => r.json());
         const s = interpret(j?.status);
         lastCallStatusRef.current = s;
@@ -1380,7 +1468,6 @@ export default function DialSession() {
   };
 
   const handleSendSms = async () => {
-    if (!isPaused) return;
     if ((lead as any)?.quickDial) return toast.error("Quick Dial calls are not tied to a saved lead");
 
     const leadId = getLeadId(lead);
@@ -1398,6 +1485,17 @@ export default function DialSession() {
       const payload = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(payload?.error || payload?.message || "Failed to send text");
 
+      const sentAt = new Date().toISOString();
+      const message = payload?.message || {};
+      setMessages((prev) => {
+        const next: SmsThreadMessage = {
+          id: message?._id ? String(message._id) : undefined,
+          dir: "outbound",
+          text: cleanText,
+          date: String(message?.createdAt || message?.date || sentAt),
+        };
+        return prev.some((m) => sameSmsMessage(m, next)) ? prev : [...prev, next];
+      });
       setSmsText("");
       toast.success("Text sent");
     } catch (e: any) {
@@ -1499,6 +1597,19 @@ export default function DialSession() {
     }
   };
 
+  const handleBookedAppointmentBooked = async () => {
+    deferredAdvanceRef.current = null;
+    setShowBookModal(false);
+    await handleDisposition("Booked Appointment");
+  };
+
+  const handleBookModalClose = () => {
+    setShowBookModal(false);
+    const deferred = deferredAdvanceRef.current;
+    deferredAdvanceRef.current = null;
+    if (deferred) deferred();
+  };
+
   /** flow controls **/
   const nextLead = () => {
     if (sessionEndedRef.current) return;
@@ -1583,7 +1694,11 @@ export default function DialSession() {
   };
 
   const togglePause = () => {
-    setIsPaused((p) => !p);
+    setIsPaused((p) => {
+      const next = !p;
+      isPausedRef.current = next;
+      return next;
+    });
     if (!isPaused) {
       stopRingbackNow();
       stopConnectedTimer();
@@ -1673,7 +1788,7 @@ export default function DialSession() {
 
         socket.on("call:status", async (payload: any) => {
           try {
-            if (sessionEndedRef.current) return;
+            if (isPausedRef.current || sessionEndedRef.current) return;
 
             const s = String(payload?.status || "").toLowerCase();
             lastCallStatusRef.current = s;
@@ -1726,12 +1841,39 @@ export default function DialSession() {
             }
           } catch {}
         });
+
+        socket.on("message:new", (payload: any) => {
+          try {
+            const activeLeadId = currentLeadIdRef.current;
+            const payloadLeadId = payload?.leadId ? String(payload.leadId) : "";
+            if (!activeLeadId || !payloadLeadId || activeLeadId !== payloadLeadId) return;
+
+            const dirRaw = String(payload?.direction || payload?.dir || payload?.type || "").toLowerCase();
+            if (dirRaw !== "inbound") return;
+
+            const text = String(payload?.text || payload?.body || "").trim();
+            if (!text || isJunkHistoryText(text)) return;
+
+            const next: SmsThreadMessage = {
+              id: payload?._id ? String(payload._id) : undefined,
+              dir: "inbound",
+              text,
+              date: String(payload?.date || payload?.createdAt || payload?.receivedAt || new Date().toISOString()),
+            };
+
+            setMessages((prev) => (prev.some((m) => sameSmsMessage(m, next)) ? prev : [...prev, next]));
+          } catch {}
+        });
       } catch {}
     })();
 
     return () => {
       mounted = false;
-      try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
+      try {
+        socketRef.current?.off?.("call:status");
+        socketRef.current?.off?.("message:new");
+        socketRef.current?.disconnect?.();
+      } catch {}
       stopRingbackNow();
       killAllTimers();
       leaveIfJoined("unmount");
@@ -1813,7 +1955,7 @@ export default function DialSession() {
       "_id","id","folderid","createdat","updatedat","__v","ownerid","userid","useremail",
       "assigneddrips","dripprogress","history","interactionhistory",
       "normalizedphone","phonelast10",
-      "rawrow",
+      "rawrow","calendareventid",
       // Internal scoring/AI flags — not useful to agents
       "scorebreakdown","aiconversationactive","scoreversion","scoreupdatedat",
       "sheetmeta","sourcetype","realtimeeligible",
@@ -1826,7 +1968,15 @@ export default function DialSession() {
     const bannedTopNorm = new Set<string>();
     rows.forEach((r) => bannedTopNorm.add(normalizeKey(r.key)));
 
-    const extras = Object.entries(flat)
+    const maybeFormatExtraValue = (value: any) => {
+      if (typeof value !== "string") return value;
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return value;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    };
+
+    const filteredExtras = Object.entries(flat)
       .filter(([k, v]) => {
         const nk = normalizeKey(k);
         if (!k) return false;
@@ -1850,11 +2000,28 @@ export default function DialSession() {
         if (typeof v === "object") return false;
 
         return true;
+      });
+
+    const folderEntry = filteredExtras.find(([k]) => normalizeKey(k) === "folder");
+    const folderNameEntry = filteredExtras.find(([k]) => normalizeKey(k) === "foldername");
+    const shouldDropFolder =
+      folderEntry &&
+      folderNameEntry &&
+      String(folderEntry[1] || "").trim() === String(folderNameEntry[1] || "").trim();
+
+    const usedExtraNorm = new Set<string>();
+    const extras = filteredExtras
+      .filter(([k]) => {
+        const nk = normalizeKey(k);
+        if (shouldDropFolder && nk === "folder") return false;
+        if (usedExtraNorm.has(nk)) return false;
+        usedExtraNorm.add(nk);
+        return true;
       })
       .map(([k, v]) => ({
         label: normalizeKeyLabel(k),
         key: k,
-        value: v,
+        value: maybeFormatExtraValue(v),
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
 
@@ -1874,6 +2041,31 @@ export default function DialSession() {
     (lead as any)?.lastname ??
     (lead as any)?.lastName ??
     "";
+  const leadDisplayName = [firstName, lastName].filter(Boolean).join(" ").trim() || "Unknown Lead";
+  const phoneRow = leadInfoRows.find((r) => normalizeKey(r.key) === "phone" || normalizeKey(r.label) === "phone");
+  const leadPhoneDisplay = phoneRow?.value ? String(phoneRow.value) : "";
+  const extraLeadInfoRows = leadInfoRows.filter((r) => {
+    const nk = String(r.key || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const label = String(r.label || "").toLowerCase().trim();
+    if (["firstname", "lastname", "phone"].includes(nk)) return false;
+    if (label === "first name" || label === "last name" || label === "phone") return false;
+    if (nk === "leadtype" || label === "lead type") return false;
+    return true;
+  });
+  const statusLower = String(status || "").toLowerCase();
+  const statusDotColor =
+    statusLower.includes("connected")
+      ? "text-emerald-400"
+      : statusLower.includes("ring") || statusLower.includes("dial")
+      ? "text-amber-300"
+      : statusLower.includes("failed") ||
+        statusLower.includes("busy") ||
+        statusLower.includes("no answer") ||
+        statusLower.includes("ended") ||
+        statusLower.includes("completed") ||
+        statusLower.includes("disconnected")
+      ? "text-red-400"
+      : "text-slate-400";
 
   const latestAiBullets = Array.isArray((latestAiOverview as any)?.aiOverview?.overviewBullets)
     ? (latestAiOverview as any).aiOverview.overviewBullets
@@ -1885,7 +2077,7 @@ export default function DialSession() {
     !lead ||
     callActive ||
     sessionEndedRef.current;
-  const canTextPausedLead = isPaused && !!lead && !(lead as any)?.quickDial;
+  const canTextLead = !!lead && !(lead as any)?.quickDial;
   const showConnectedTimer =
     callActive &&
     connectedAtRef.current !== null &&
@@ -1894,7 +2086,7 @@ export default function DialSession() {
   return (
     // ✅ UI ONLY: make the area to the right of Sidebar a constrained flex container (Safari-safe scroll)
     <div className="flex bg-[#0f172a] text:white h-screen min-h-0">
-      <Sidebar />
+      <Sidebar collapsed />
 
       {/* Safari gesture banner: audio/WebRTC requires a user interaction to begin */}
       {tapToStart && (
@@ -1924,110 +2116,84 @@ export default function DialSession() {
       {/* ✅ main content wrapper (full viewport height + allow children to shrink) */}
       <div className="flex flex-1 h-full min-h-0">
         {/* ✅ left column split — top scrolls, bottom pinned */}
-        <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] flex flex-col h-full min-h-0">
+        <div className="w-72 p-3 border-r border-gray-600 bg-[#1e293b] flex flex-col h-full min-h-0">
           {/* Top (scrollable) */}
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            <p className="text-yellow-500 mb-2">Status: {status}</p>
-            {showConnectedTimer && (
-              <p className="text-sm text-green-300 mb-2">Call Time: {formatDuration(connectedDurationSec)}</p>
-            )}
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="min-w-0 flex items-center gap-2">
+                <FaCircle className={`${statusDotColor} text-[9px] flex-none`} />
+                <span className="truncate text-xs font-semibold text-slate-100">{status}</span>
+              </div>
+              {showConnectedTimer ? (
+                <span className="text-xs text-green-300 tabular-nums">{formatDuration(connectedDurationSec)}</span>
+              ) : null}
+            </div>
 
-            <p className="text-sm text-gray-400 mb-2">
+            <p className="text-xs text-gray-400 mb-3">
               Lead {Math.min(currentLeadIndex + 1, Math.max(leadQueue.length, 1))} of {leadQueue.length || 1}
             </p>
 
-            {/* Top-name block with correct spacing */}
-            {(firstName || lastName) && (
+            <div className="mb-4">
+              <div className="text-lg font-bold leading-tight text-white break-words">{leadDisplayName}</div>
+              <div className="mt-1 text-sm text-slate-300 break-words">{leadPhoneDisplay || "No phone"}</div>
+            </div>
+
+            {extraLeadInfoRows.length > 0 ? (
               <div className="mb-3">
-                {firstName && (
-                  <p>
-                    <strong>First Name:</strong> {firstName}
-                  </p>
-                )}
-                {lastName && (
-                  <p>
-                    <strong>Last Name:</strong> {lastName}
-                  </p>
-                )}
-                <hr className="border-gray-700 my-2" />
+                {extraLeadInfoRows.map((r) => {
+                  const key = r.key;
+                  const value = r.value;
+                  const rawRowAny = (lead as any)?.rawRow;
+                  const displayLabel =
+                    rawRowAny && Object.prototype.hasOwnProperty.call(rawRowAny, key) ? String(key) : r.label;
+                  let display = "";
+                  if (typeof value === "string") display = looksLikePhoneKey(key) ? formatPhone(value) : value;
+                  else if (typeof value === "number" || typeof value === "boolean") display = String(value);
+                  if (!display || isJunkHistoryText(display)) return null;
+                  return (
+                    <div key={key}>
+                      <p>
+                        <strong>{displayLabel}:</strong> {display}
+                      </p>
+                      <hr className="border-gray-700 my-1" />
+                    </div>
+                  );
+                })}
               </div>
-            )}
-
-            {/* ✅ Ordered + extras (hide empties, no duplicates, include rawRow headers) */}
-            {lead &&
-              leadInfoRows.map((r) => {
-                const key = r.key;
-                const label = r.label;
-                const value = r.value;
-
-                // ✅ Avoid duplicate name display (name is already rendered in the top-name block)
-                const nk = String(key || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-                if (nk === "firstname" || nk === "lastname") return null;
-
-                // ✅ Remove Lead Type everywhere in regular dial session UI
-                if (nk === "leadtype" || String(label || "").toLowerCase().trim() === "lead type") return null;
-
-                // ✅ If this value comes from rawRow, display the label exactly as the original CSV header
-                const rawRowAny = (lead as any)?.rawRow;
-                const displayLabel =
-                  rawRowAny && Object.prototype.hasOwnProperty.call(rawRowAny, key) ? String(key) : label;
-
-
-                let display: string = "";
-
-                if (typeof value === "string") {
-                  display = looksLikePhoneKey(key) ? formatPhone(value) : value;
-                } else if (typeof value === "number" || typeof value === "boolean") {
-                  display = String(value);
-                } else {
-                  return null;
-                }
-
-                if (!display || isJunkHistoryText(display)) return null;
-
-                return (
-                  <div key={key}>
-                    <p>
-                      <strong>{displayLabel}:</strong> {display}
-                    </p>
-                    <hr className="border-gray-700 my-1" />
-                  </div>
-                );
-              })}
+            ) : null}
           </div>
 
           {/* Bottom (pinned) */}
           <div className="flex flex-col space-y-2 mt-4 flex-none">
             <button
               onClick={handleToggleMute}
-              className="bg-purple-600 hover:bg-purple-700 px-3 py-2 rounded"
+              className="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded flex items-center justify-center gap-2"
             >
+              {muted ? <FaMicrophoneSlash className="text-amber-300" /> : <FaMicrophone className="text-slate-300" />}
               {muted ? "Unmute" : "Mute"}
             </button>
 
             <button
               onClick={handleHangUp}
-              className={`px-3 py-2 rounded ${callActive ? "bg-red-600 hover:bg-red-700" : "bg-gray-600 hover:bg-gray-700"}`}
+              className={`px-3 py-2 rounded flex items-center justify-center gap-2 ${callActive ? "bg-slate-700 hover:bg-slate-600" : "bg-slate-800 hover:bg-slate-700 text-slate-300"}`}
             >
+              <FaPhoneSlash className="text-red-400" />
               Hang Up
-            </button>
-
-            <button onClick={() => setShowBookModal(true)} className="bg-blue-700 hover:bg-blue-800 px-3 py-2 rounded">
-              📅 Book Appointment
             </button>
 
             <button
               onClick={handleRedialLead}
               disabled={redialLeadDisabled}
-              className={`px-3 py-2 rounded font-semibold transition-all ${
+              className={`px-3 py-2 rounded font-semibold transition-all flex items-center justify-center gap-2 border ${
                 redialLeadDisabled
-                  ? "bg-gray-600 cursor-not-allowed opacity-60"
+                  ? "bg-slate-800 border-slate-700 cursor-not-allowed opacity-60"
                   : callEnded
-                  ? "bg-emerald-500 hover:bg-emerald-600 ring-2 ring-emerald-300 animate-pulse"
-                  : "bg-emerald-600 hover:bg-emerald-700"
+                  ? "bg-slate-700 hover:bg-slate-600 border-emerald-300 ring-2 ring-emerald-300"
+                  : "bg-slate-700 hover:bg-slate-600 border-slate-600"
                 }`}
             >
-              {callEnded ? "📞 Call Again" : "Redial Lead"}
+              <FaRedo className={`text-emerald-300 ${callEnded && !redialLeadDisabled ? "animate-pulse" : ""}`} />
+              {callEnded ? "Call Again" : "Redial"}
             </button>
           </div>
         </div>
@@ -2035,88 +2201,136 @@ export default function DialSession() {
         {/* ✅ right panel: top can scroll if needed; bottom controls pinned to bottom */}
         <div className="flex-1 p-6 bg-[#1e293b] flex flex-col h-full min-h-0">
           {/* Top content (scrollable container so it never pushes bottom controls off-screen) */}
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            {latestAiBullets.length > 0 ? (
-              <div className="mb-4 border border-gray-600 rounded p-3 bg-gray-800">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-lg font-bold">Latest AI Call Overview</h3>
-                  <div className="text-xs text-gray-400">
-                    {((latestAiOverview as any)?.aiOverview?.outcome || "") ? `Outcome: ${(latestAiOverview as any).aiOverview.outcome}` : ""}
-                    {((latestAiOverview as any)?.aiOverview?.outcome || "") && ((latestAiOverview as any)?.aiOverview?.sentiment || "") ? " • " : ""}
-                    {((latestAiOverview as any)?.aiOverview?.sentiment || "") ? `Sentiment: ${(latestAiOverview as any).aiOverview.sentiment}` : ""}
-                  </div>
-                </div>
-                <ul className="list-disc ml-5 space-y-1 text-sm text-gray-200">
-                  {latestAiBullets.map((b: string, i: number) => (
-                    <li key={i}>{b}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-
-            <h3 className="text-lg font-bold mb-2">Notes</h3>
-            <div className="border border-gray-500 rounded p-2 mb-2">
-              <textarea
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+            <div className="mb-4 flex items-center gap-2">
+              <input
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                className="w-full p-2 text-white rounded bg-transparent border-none focus:outline-none"
-                rows={3}
-                placeholder="Type notes here..."
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleSaveNote();
+                  }
+                }}
+                className="flex-1 rounded border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Add a note..."
               />
+              <button
+                type="button"
+                onClick={handleSaveNote}
+                className="h-10 w-10 rounded bg-slate-700 hover:bg-slate-600 text-white inline-flex items-center justify-center"
+                aria-label="Save note"
+                title="Save note"
+              >
+                <FaStickyNote className="text-blue-300" />
+              </button>
             </div>
-            <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
-              Save Note
-            </button>
 
-            {canTextPausedLead && (
-              <div className="mt-4 border border-gray-600 rounded p-3 bg-gray-800">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-lg font-bold">Text Lead</h3>
-                  <span className="text-xs text-gray-400">Paused</span>
+            <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1 min-h-0">
+              <div className="border border-gray-600 rounded bg-gray-800 flex-1 min-h-0 flex flex-col">
+                <div className="px-3 py-2 border-b border-gray-700 flex items-center justify-between">
+                  <h3 className="text-lg font-bold">Messages</h3>
+                  <span className="text-xs text-gray-400">{messages.length} total</span>
                 </div>
-                <textarea
-                  value={smsText}
-                  onChange={(e) => setSmsText(e.target.value)}
-                  className="w-full p-2 text-white rounded bg-gray-900 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  rows={3}
-                  placeholder="Type your message..."
-                />
-                <div className="mt-2 flex justify-end">
-                  <button
-                    onClick={handleSendSms}
-                    disabled={!smsText.trim() || sendingSms}
-                    className={`px-4 py-2 rounded text-white ${
-                      !smsText.trim() || sendingSms
-                        ? "bg-gray-600 cursor-not-allowed opacity-70"
-                        : "bg-green-600 hover:bg-green-700"
-                    }`}
-                  >
-                    {sendingSms ? "Sending..." : "Send Text"}
-                  </button>
+                <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3 flex flex-col">
+                  {messages.length === 0 ? (
+                    <p className="text-gray-400 text-sm">No messages yet.</p>
+                  ) : (
+                    messages.map((msg, idx) => {
+                      const isSent = msg.dir === "outbound" || msg.dir === "ai";
+                      return (
+                        <div key={`${msg.id || msg.date}-${idx}`} className="flex flex-col gap-1">
+                          <div className="w-full flex justify-center">
+                            <span className="text-[11px] text-gray-300 bg-[#111827] border border-gray-700 rounded-full px-3 py-1">
+                              {formatSmsThreadTime(msg.date)}
+                            </span>
+                          </div>
+                          <div
+                            className={`px-4 py-2 rounded-2xl text-sm max-w-[78%] w-fit whitespace-pre-wrap break-words shadow ${
+                              isSent
+                                ? "self-end ml-auto text-white bg-[#7c3aed]"
+                                : "self-start text-white bg-[#334155]"
+                            }`}
+                          >
+                            {msg.text}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="border-t border-gray-700 p-3 bg-gray-900/40">
+                  <textarea
+                    value={smsText}
+                    onChange={(e) => setSmsText(e.target.value)}
+                    className="w-full p-2 text-white rounded bg-gray-900 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    rows={2}
+                    placeholder="Type your message..."
+                  />
+                  <div className="mt-2 flex justify-end">
+                    <button
+                      onClick={handleSendSms}
+                      disabled={!canTextLead || !smsText.trim() || sendingSms}
+                      className={`px-4 py-2 rounded text-white inline-flex items-center gap-2 ${
+                        !canTextLead || !smsText.trim() || sendingSms
+                          ? "bg-slate-800 cursor-not-allowed opacity-70"
+                          : "bg-slate-700 hover:bg-slate-600"
+                      }`}
+                    >
+                      <FaPaperPlane className="text-emerald-300" />
+                      {sendingSms ? "Sending..." : "Send Text"}
+                    </button>
+                  </div>
                 </div>
               </div>
-            )}
 
-            <h3 className="text-lg font-bold mb-2 mt-4">Interaction History</h3>
-            <div className="bg-gray-800 p-3 rounded max-h-60 overflow-y-auto">
-              {history.length === 0 ? (
-                <p className="text-gray-400">No interactions yet.</p>
-              ) : (
-                history
-                  .filter((item) => {
-                    if (item.kind !== "text") return true;
-                    return !isJunkHistoryText(item.text);
-                  })
-                  .map((item, idx) =>
-                    item.kind === "text" ? (
-                      <p key={idx} className="border-b border-gray-700 py-1">{item.text}</p>
-                    ) : (
-                      <p key={idx} className="border-b border-gray-700 py-1">
-                        <a href={item.href} target="_blank" rel="noreferrer" className="text-blue-400 underline">{item.text}</a>
-                      </p>
-                    )
-                  )
-              )}
+              <div className="border border-gray-600 rounded bg-gray-800 flex-1 min-h-0 flex flex-col">
+                <div className="px-3 py-2 border-b border-gray-700">
+                  <h3 className="text-lg font-bold">Interaction History</h3>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto p-3">
+                  {latestAiBullets.length > 0 ? (
+                    <div className="mb-3 rounded border border-slate-700 bg-slate-900/40">
+                      <button
+                        type="button"
+                        onClick={() => setAiOverviewExpanded((v) => !v)}
+                        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm text-slate-100 hover:bg-slate-800"
+                      >
+                        <span className="flex items-center gap-2">
+                          <FaRobot className="text-blue-300" />
+                          AI overview available
+                        </span>
+                        <FaChevronDown className={`text-slate-400 transition-transform ${aiOverviewExpanded ? "rotate-180" : ""}`} />
+                      </button>
+                      {aiOverviewExpanded ? (
+                        <ul className="list-disc space-y-1 px-8 pb-3 text-sm text-gray-200">
+                          {latestAiBullets.map((b: string, i: number) => (
+                            <li key={i}>{b}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {history.length === 0 ? (
+                    <p className="text-gray-400">No interactions yet.</p>
+                  ) : (
+                    history
+                      .filter((item) => {
+                        if (item.kind !== "text") return true;
+                        return !isJunkHistoryText(item.text);
+                      })
+                      .map((item, idx) =>
+                        item.kind === "text" ? (
+                          <p key={idx} className="border-b border-gray-700 py-1 whitespace-pre-wrap">{item.text}</p>
+                        ) : (
+                          <p key={idx} className="border-b border-gray-700 py-1">
+                            <a href={item.href} target="_blank" rel="noreferrer" className="text-blue-400 underline">{item.text}</a>
+                          </p>
+                        )
+                      )
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -2125,16 +2339,18 @@ export default function DialSession() {
             <div className="flex justify-center flex-wrap gap-2">
               <button onClick={() => handleDisposition("Sold")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Sold</button>
               <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
-              <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
+              <button onClick={() => setShowBookModal(true)} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
               <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Not Interested</button>
               <button onClick={() => handleDisposition("Bad Number")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Bad Number</button>
             </div>
 
             <div className="flex gap-2 mt-2">
-              <button onClick={togglePause} className="bg-yellow-400 hover:bg-yellow-500 text-black px-4 py-2 rounded">
+              <button onClick={togglePause} className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded inline-flex items-center gap-2">
+                {isPaused ? <FaPlay className="text-amber-300" /> : <FaPause className="text-amber-300" />}
                 {isPaused ? "Resume Dial Session" : "Pause Dial Session"}
               </button>
-              <button onClick={handleEndSession} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded">
+              <button onClick={handleEndSession} className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded inline-flex items-center gap-2">
+                <FaSignOutAlt className="text-red-400" />
                 End Dial Session
               </button>
             </div>
@@ -2142,7 +2358,14 @@ export default function DialSession() {
         </div>
       </div>
 
-      {lead && <BookAppointmentModal isOpen={showBookModal} onClose={() => setShowBookModal(false)} lead={lead} />}
+      {lead && (
+        <BookAppointmentModal
+          isOpen={showBookModal}
+          onClose={handleBookModalClose}
+          lead={lead}
+          onBooked={handleBookedAppointmentBooked}
+        />
+      )}
     </div>
   );
 }

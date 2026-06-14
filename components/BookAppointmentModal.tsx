@@ -2,8 +2,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Modal from "react-modal";
 import { format } from "date-fns";
-import { useLeadMemoryProfile } from "@/lib/ai/memory/useLeadMemoryProfile";
-import { getSuggestedTaskLabel } from "@/lib/ai/memory/nextBestAction";
 
 if (typeof window !== "undefined") {
   Modal.setAppElement("#__next");
@@ -54,12 +52,11 @@ export default function BookAppointmentModal({
   lead,
   onBooked,
 }: BookAppointmentModalProps) {
-  const memoryProfile = useLeadMemoryProfile(lead?.id);
   const initial = useMemo(() => nextHalfHour(), [isOpen]);
   const [selectedDate, setSelectedDate] = useState<string>(toDateInputValue(initial));
   const [selectedTime, setSelectedTime] = useState<string>(toTimeInputValue(initial));
   const [durationMin, setDurationMin] = useState<number>(30);
-  const [note, setNote] = useState<string>(lead?.Notes || "");
+  const [note, setNote] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -68,13 +65,11 @@ export default function BookAppointmentModal({
       setSelectedDate(toDateInputValue(n));
       setSelectedTime(toTimeInputValue(n));
       setDurationMin(30);
-      setNote(lead?.Notes || "");
+      setNote("");
     }
-  }, [isOpen, lead?.Notes]);
+  }, [isOpen]);
 
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
-  const nextBestAction = String(memoryProfile?.nextBestAction || "").trim();
-  const suggestedTask = getSuggestedTaskLabel(nextBestAction);
 
   const handleSubmit = async () => {
     if (!selectedDate || !selectedTime) {
@@ -134,8 +129,8 @@ export default function BookAppointmentModal({
       isOpen={isOpen}
       onRequestClose={() => (!submitting ? onClose() : undefined)}
       shouldCloseOnOverlayClick={!submitting}
-      className="bg-[#1e293b] text-white max-w-md mx-auto mt-20 p-6 rounded-lg shadow-lg border border-gray-600 outline-none"
-      overlayClassName="fixed inset-0 bg-black/60 flex justify-center items-start z-[1000]"
+      className="bg-[#1e293b] text-white max-w-md mx-auto my-6 p-6 rounded-lg shadow-lg border border-gray-600 outline-none max-h-[90vh] overflow-y-auto"
+      overlayClassName="fixed inset-0 bg-black/60 flex justify-center items-start z-[1000] overflow-y-auto py-4"
     >
       <h2 className="text-xl font-bold mb-4">Book Appointment</h2>
 
@@ -143,40 +138,6 @@ export default function BookAppointmentModal({
         {(lead["First Name"] || "")} {(lead["Last Name"] || "")} — {lead.Phone || "No phone"} —{" "}
         {lead.Email || "No email"}
       </p>
-
-      {memoryProfile ? (
-        <div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-950/20 p-3">
-          {memoryProfile.shortSummary ? (
-            <div className="mb-2">
-              <div className="text-xs text-blue-300 uppercase tracking-wide">Lead summary</div>
-              <p className="mt-1 text-sm text-blue-50">{memoryProfile.shortSummary}</p>
-            </div>
-          ) : null}
-
-          {Array.isArray(memoryProfile.keyFacts) && memoryProfile.keyFacts.length > 0 ? (
-            <div className="mb-2">
-              <div className="text-xs text-blue-300 uppercase tracking-wide">Key facts</div>
-              <ul className="mt-1 space-y-1">
-                {memoryProfile.keyFacts.slice(0, 5).map((fact, idx) => (
-                  <li key={`${fact.key}-${idx}`} className="text-sm text-blue-50">
-                    • {fact.key}: {fact.value}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          {nextBestAction ? (
-            <div>
-              <div className="text-xs text-blue-300 uppercase tracking-wide">Next best action</div>
-              <p className="mt-1 text-sm text-blue-50">{nextBestAction}</p>
-              {suggestedTask ? (
-                <p className="mt-2 text-xs text-blue-200/80">{suggestedTask}</p>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
 
       <div className="grid grid-cols-1 gap-3">
         <div>
@@ -219,7 +180,7 @@ export default function BookAppointmentModal({
           <textarea
             className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white"
             rows={3}
-            placeholder="e.g., Prefers afternoon calls"
+            placeholder="Optional note..."
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />

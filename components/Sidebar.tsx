@@ -7,7 +7,11 @@ import { connectAndJoin } from "@/lib/socketClient";
 
 const EXPERIMENTAL_ADMIN = "bryson.mccleary1@gmail.com";
 
-export default function Sidebar() {
+type SidebarProps = {
+  collapsed?: boolean;
+};
+
+export default function Sidebar({ collapsed = false }: SidebarProps) {
   const { data: session } = useSession();
   const router = useRouter();
   const [unreadCount, setUnreadCount] = useState(0);
@@ -59,7 +63,7 @@ export default function Sidebar() {
   const badge = (count: number) =>
     count > 0 && (
       <span
-        className="ml-2 inline-flex items-center justify-center text-xs font-bold bg-red-600 text-white rounded-full px-2 py-0.5"
+        className={`${collapsed ? "ml-0 absolute -right-1 -top-1 min-w-4 h-4 px-1 text-[10px]" : "ml-2 px-2 py-0.5 text-xs"} inline-flex items-center justify-center font-bold bg-red-600 text-white rounded-full`}
         aria-label={`${count} unread messages`}
       >
         {count > 99 ? "99+" : count}
@@ -80,8 +84,9 @@ export default function Sidebar() {
     return {
       display: "flex",
       alignItems: "center",
-      gap: 10,
-      padding: "8px 12px",
+      justifyContent: collapsed ? "center" : "flex-start",
+      gap: collapsed ? 0 : 10,
+      padding: collapsed ? "9px 0" : "8px 12px",
       borderRadius: 8,
       fontSize: 13,
       fontWeight: 500,
@@ -89,8 +94,9 @@ export default function Sidebar() {
       textDecoration: "none",
       transition: "background 0.15s",
       borderLeft: active ? "2px solid #2563eb" : "2px solid transparent",
-      paddingLeft: active ? 10 : 12,
+      paddingLeft: collapsed ? 0 : active ? 10 : 12,
       background: active ? "#1a2535" : "transparent",
+      position: "relative" as const,
     };
   };
 
@@ -105,9 +111,9 @@ export default function Sidebar() {
   const navIconStyle = { fontSize: 15, width: 20, textAlign: "center" as const, flexShrink: 0 };
 
   return (
-    <div className="bg-[#0f172a] text-white w-60 p-4 min-h-screen flex flex-col justify-between">
+    <div className={`bg-[#0f172a] text-white ${collapsed ? "w-14 px-2 py-4" : "w-60 p-4"} min-h-screen flex flex-col justify-between`}>
       <div>
-        <div className="flex items-center gap-2 mb-6">
+        <div className={`flex items-center ${collapsed ? "justify-center mb-6" : "gap-2 mb-6"}`}>
           <Image
             src="/logo.png"
             alt="Cove CRM Logo"
@@ -116,96 +122,105 @@ export default function Sidebar() {
             className="rounded"
             priority
           />
-          <h1 className="text-xl font-bold">Cove CRM</h1>
+          {!collapsed && <h1 className="text-xl font-bold">Cove CRM</h1>}
         </div>
 
         <nav className="space-y-2">
           <Link
             href="/dashboard?tab=home"
+            title="Home"
             style={getNavStyle("/dashboard?tab=home")}
             onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=home")}
             onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=home")}
           >
             <span style={navIconStyle}>🏠</span>
-            <span>Home</span>
+            {!collapsed && <span>Home</span>}
           </Link>
           <Link
             href="/dashboard?tab=leads"
+            title="Folders"
             style={getNavStyle("/dashboard?tab=leads")}
             onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=leads")}
             onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=leads")}
           >
             <span style={navIconStyle}>📁</span>
-            <span>Folders</span>
+            {!collapsed && <span>Folders</span>}
           </Link>
           <Link
             href="/dashboard?tab=drip-campaigns"
+            title="Drip Campaigns"
             style={getNavStyle("/dashboard?tab=drip-campaigns")}
             onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=drip-campaigns")}
             onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=drip-campaigns")}
           >
             <span style={navIconStyle}>📧</span>
-            <span>Drip Campaigns</span>
+            {!collapsed && <span>Drip Campaigns</span>}
           </Link>
 
           <Link
             href="/dashboard?tab=conversations"
+            title="Conversations"
             style={getNavStyle("/dashboard?tab=conversations")}
             onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=conversations")}
             onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=conversations")}
           >
             <span style={navIconStyle}>💬</span>
-            <span>Conversations</span>{badge(unreadCount)}
+            {!collapsed && <span>Conversations</span>}{badge(unreadCount)}
           </Link>
 
           <Link
             href="/dashboard?tab=calendar"
+            title="Calendar"
             style={getNavStyle("/dashboard?tab=calendar")}
             onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=calendar")}
             onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=calendar")}
           >
             <span style={navIconStyle}>📅</span>
-            <span>Calendar</span>
+            {!collapsed && <span>Calendar</span>}
           </Link>
           <Link
             href="/dashboard?tab=numbers"
+            title="Numbers"
             style={getNavStyle("/dashboard?tab=numbers")}
             onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=numbers")}
             onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=numbers")}
           >
             <span style={navIconStyle}>📞</span>
-            <span>Numbers</span>
+            {!collapsed && <span>Numbers</span>}
           </Link>
           {isAdmin && (
             <Link
               href="/facebook-leads"
+              title="FB Leads"
               style={getNavStyle("/facebook-leads")}
               onMouseEnter={(event) => setHoverBackground(event, "/facebook-leads")}
               onMouseLeave={(event) => clearHoverBackground(event, "/facebook-leads")}
             >
               <span style={navIconStyle}>📣</span>
-              <span>FB Leads</span>
+              {!collapsed && <span>FB Leads</span>}
             </Link>
           )}
           {isAdmin && (
             <Link
               href="/recruiting"
+              title="Recruiting"
               style={getNavStyle("/recruiting")}
               onMouseEnter={(event) => setHoverBackground(event, "/recruiting")}
               onMouseLeave={(event) => clearHoverBackground(event, "/recruiting")}
             >
               <span style={navIconStyle}>🎯</span>
-              <span>Recruiting</span>
+              {!collapsed && <span>Recruiting</span>}
             </Link>
           )}
           <Link
             href="/dashboard?tab=settings"
+            title="Settings"
             style={getNavStyle("/dashboard?tab=settings")}
             onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=settings")}
             onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=settings")}
           >
             <span style={navIconStyle}>⚙️</span>
-            <span>Settings</span>
+            {!collapsed && <span>Settings</span>}
           </Link>
         </nav>
       </div>
@@ -213,16 +228,18 @@ export default function Sidebar() {
       <div className="mt-8 space-y-3">
         <button
           onClick={() => setAssistantOpen(true)}
-          className="w-full rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+          className={`${collapsed ? "h-9 w-9 px-0" : "w-full px-4 py-2"} rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 text-sm font-semibold text-white hover:opacity-90`}
+          title="Ask Assistant"
         >
-          ✨ Ask Assistant
+          {collapsed ? "✨" : "✨ Ask Assistant"}
         </button>
         <button
           onClick={() => signOut({ callbackUrl: "/auth/signin" })}
-          className="block text-red-500 hover:underline"
+          className={`${collapsed ? "block mx-auto text-lg" : "block"} text-red-500 hover:underline`}
           aria-label="Log out and return to Home"
+          title="Log Out"
         >
-          Log Out
+          {collapsed ? "⎋" : "Log Out"}
         </button>
       </div>
 
