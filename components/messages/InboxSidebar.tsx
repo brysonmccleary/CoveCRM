@@ -74,12 +74,14 @@ export default function InboxSidebar({
   socket,
   mode,
   onModeChange,
+  showEmailToggle = true,
 }: {
   onSelect: (id: string) => void;
   selectedId: string | null;
   socket?: Socket | null;
   mode: InboxMode;
   onModeChange: (m: InboxMode) => void;
+  showEmailToggle?: boolean;
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,28 +128,30 @@ export default function InboxSidebar({
   return (
     <div className="w-[350px] bg-[#1e293b] h-full flex flex-col border-r border-gray-800">
       {/* SMS / Email toggle */}
-      <div className="flex items-center gap-1 px-3 pt-3 pb-2">
-        <button
-          onClick={() => onModeChange("sms")}
-          className={`flex-1 py-1.5 rounded-full text-sm font-medium transition-colors ${
-            mode === "sms"
-              ? "bg-green-600 text-white"
-              : "bg-[#334155] text-gray-300 hover:bg-[#3e5068]"
-          }`}
-        >
-          SMS
-        </button>
-        <button
-          onClick={() => onModeChange("email")}
-          className={`flex-1 py-1.5 rounded-full text-sm font-medium transition-colors ${
-            mode === "email"
-              ? "bg-blue-600 text-white"
-              : "bg-[#334155] text-gray-300 hover:bg-[#3e5068]"
-          }`}
-        >
-          Email
-        </button>
-      </div>
+      {showEmailToggle && (
+        <div className="flex items-center gap-1 px-3 pt-3 pb-2">
+          <button
+            onClick={() => onModeChange("sms")}
+            className={`flex-1 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              mode === "sms"
+                ? "bg-green-600 text-white"
+                : "bg-[#334155] text-gray-300 hover:bg-[#3e5068]"
+            }`}
+          >
+            SMS
+          </button>
+          <button
+            onClick={() => onModeChange("email")}
+            className={`flex-1 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              mode === "email"
+                ? "bg-blue-600 text-white"
+                : "bg-[#334155] text-gray-300 hover:bg-[#3e5068]"
+            }`}
+          >
+            Email
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto">
         {loading && (

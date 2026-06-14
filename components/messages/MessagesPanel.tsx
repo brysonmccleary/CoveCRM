@@ -45,6 +45,7 @@ export default function MessagesPanel() {
           socket={getSocket()}
           mode={mode}
           onModeChange={(m) => { setMode(m); setSelectedId(null); }}
+          showEmailToggle={false}
         />
       </div>
 
