@@ -134,7 +134,19 @@ function isRealisticAge(raw: any): boolean {
 
 function isBlockedPhoneFallbackKey(key: any): boolean {
   const normalized = normalizeHeaderKey(key);
-  return new Set(["age", "zip", "zipcode", "postalcode", "dob", "dateofbirth", "birthdate"]).has(normalized);
+  return new Set([
+    "age",
+    "zip",
+    "zipcode",
+    "postalcode",
+    "dob",
+    "dateofbirth",
+    "birthdate",
+    "email",
+    "emailaddress",
+    "e-mail",
+    "e-mailaddress",
+  ]).has(normalized);
 }
 
 function recoverSinglePhoneFromRow(row: Record<string, any>) {
@@ -582,7 +594,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const phoneRaw = pickRowValue(row, ["Phone", "Phone Number", "Mobile", "Cell", "Primary Phone", "phone", "phoneNumber", "phonenumber", "Phone 1", "Phone1", "phone1", "Contact Phone", "Telephone", "Cell Phone"]);
     const emailRaw = pickRowValue(row, ["Email", "Email Address", "E-mail", "E-mail Address", "email", "emailAddress", "email_address", "Contact Email"]);
-    let phoneClean = phoneRaw && /\d{7,}/.test(phoneRaw)
+    let phoneClean = phoneRaw && String(phoneRaw).replace(/\D+/g, "").length >= 7
       ? phoneRaw
       : undefined;
     const recoveredPhone = phoneClean ? null : recoverSinglePhoneFromRow(row);
@@ -783,6 +795,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         return res.status(200).json({ ok: true, updated: "duplicate_externalId" });
       }
+    }
+
+    if (!normalizedPhone && !emailLower) {
+      console.log("[sheets/webhook] skip invalid row", {
+        requestId,
+        reason: "missing_phone_or_email",
+        externalId,
+        rowNumber,
+      });
+
+      await touchFolderUpdatedAt(folder._id as any, userEmail);
+      await persistConnectionTouch({ user, gs, synced, match });
+      return res.status(200).json({ ok: true, skipped: "missing_phone_or_email" });
     }
 
     // ✅ Dedupe (log WHY)

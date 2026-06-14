@@ -119,7 +119,17 @@ function isRealisticAge(raw: any): boolean {
 
 function isBlockedPhoneFallbackKey(key: any): boolean {
   const normalized = normalizeHeaderKey(key);
-  return new Set(["age", "zip", "zipcode", "postalcode", "dob", "dateofbirth", "birthdate"]).has(normalized);
+  return new Set([
+    "age",
+    "zip",
+    "zipcode",
+    "postalcode",
+    "dob",
+    "dateofbirth",
+    "birthdate",
+    "email",
+    "emailaddress",
+  ]).has(normalized);
 }
 
 function recoverSinglePhoneFromRow(row: Record<string, any>) {
@@ -422,6 +432,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const normalizedPhone = normalizePhone(phoneRaw);
       const phoneLast10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
       const emailLower = normalizeEmail(emailRaw);
+
+      if (!normalizedPhone && !emailLower) continue;
 
       if (normalizedPhone) {
         phones.push(normalizedPhone);

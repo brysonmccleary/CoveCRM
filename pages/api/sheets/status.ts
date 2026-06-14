@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!user) return res.status(404).json({ error: "User not found" });
 
   const gs: any = (user as any).googleSheets || {};
-  const syncedSheets = Array.isArray(gs.syncedSheets) ? gs.syncedSheets : [];
+  const syncedSheets = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
 
   return res.status(200).json({
     ok: true,

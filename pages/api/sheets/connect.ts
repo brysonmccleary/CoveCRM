@@ -92,9 +92,11 @@ const BACKFILL_TRIGGER_FN = "covecrmBackfillWorker";
 
 // ✅ Catch-up behavior (guarantees rows are not missed if onEdit events are flaky)
 const CATCHUP_TRIGGER_FN = "covecrmCatchupWorker";
+const CHANGE_TRIGGER_FN = "covecrmOnChange";
 const CATCHUP_EVERY_MINUTES = 5;
-const CATCHUP_MAX_ROWS_PER_RUN = 25;
+const CATCHUP_MAX_ROWS_PER_RUN = 100;
 const CATCHUP_MAX_MS = 20000;
+const RECENT_ROWS_TO_SCAN = 75;
 
 function _propKey(suffix) {
   return "covecrm:" + COVECRM_SHEET_ID + ":" + (COVECRM_GID || "any") + ":" + suffix;
@@ -131,7 +133,13 @@ function covecrmInstall() {
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => {
     const fn = t.getHandlerFunction();
-    if (fn === "covecrmOnEdit" || fn === BACKFILL_TRIGGER_FN || fn === CATCHUP_TRIGGER_FN) {
+    if (
+      fn === "covecrmOnEdit" ||
+      fn === CHANGE_TRIGGER_FN ||
+      fn === "covecrmOnFormSubmit" ||
+      fn === BACKFILL_TRIGGER_FN ||
+      fn === CATCHUP_TRIGGER_FN
+    ) {
       ScriptApp.deleteTrigger(t);
     }
   });
@@ -140,6 +148,12 @@ function covecrmInstall() {
   ScriptApp.newTrigger("covecrmOnEdit")
     .forSpreadsheet(COVECRM_SHEET_ID)
     .onEdit()
+    .create();
+
+  // ✅ onChange catches row inserts and vendor appends that onEdit may miss
+  ScriptApp.newTrigger(CHANGE_TRIGGER_FN)
+    .forSpreadsheet(COVECRM_SHEET_ID)
+    .onChange()
     .create();
 
   // ✅ Catch-up trigger
@@ -259,6 +273,7 @@ function covecrmBackfillWorker() {
       const values = sheet.getRange(nextRow, 1, numRows, lastCol).getValues();
 
       const rows = [];
+      const rowMarks = [];
       for (let i = 0; i < values.length; i++) {
         const rowNumber = nextRow + i;
         const rowVals = values[i];
@@ -278,10 +293,12 @@ function covecrmBackfillWorker() {
         if (!hasAnyValue) continue;
 
         rows.push({ rowNumber: rowNumber, row: rowObj });
+        rowMarks.push({ rowNumber: rowNumber, row: rowObj, values: rowVals });
       }
 
       if (rows.length) {
         _postBackfillBatch(runId, rows, lastRow); // ✅ will THROW if non-2xx
+        _markBackfilledRows(rowMarks);
       }
 
       nextRow = endRow + 1;
@@ -307,6 +324,23 @@ function covecrmBackfillWorker() {
   } finally {
     try { lock.releaseLock(); } catch {}
   }
+}
+
+function _markBackfilledRows(rowMarks) {
+  const props = PropertiesService.getScriptProperties();
+  (rowMarks || []).forEach(item => {
+    const rowNumber = item && item.rowNumber;
+    if (!rowNumber) return;
+
+    try {
+      props.setProperty(_rowHashKey(rowNumber), _hashRow(item.values || []));
+      if (_rowHasPhoneOrEmail(item.row || {})) {
+        props.setProperty(_rowImportedKey(rowNumber), "true");
+      } else {
+        props.deleteProperty(_rowImportedKey(rowNumber));
+      }
+    } catch {}
+  });
 }
 
 function _postBackfillBatch(runId, rows, totalRows) {
@@ -366,6 +400,40 @@ function covecrmOnEdit(e) {
   } catch {}
 }
 
+function covecrmOnChange(e) {
+  try {
+    _sendRecentRows(RECENT_ROWS_TO_SCAN);
+  } catch {}
+}
+
+function _sendRecentRows(limit) {
+  const ss = SpreadsheetApp.openById(COVECRM_SHEET_ID);
+
+  let sheet = null;
+  if (COVECRM_GID) {
+    const sheets = ss.getSheets();
+    for (let i = 0; i < sheets.length; i++) {
+      if (String(sheets[i].getSheetId()) === String(COVECRM_GID)) {
+        sheet = sheets[i];
+        break;
+      }
+    }
+  }
+  if (!sheet) sheet = ss.getActiveSheet();
+  if (!sheet) return;
+
+  if (COVECRM_TAB_NAME && sheet.getName() !== COVECRM_TAB_NAME) return;
+  if (COVECRM_GID && String(sheet.getSheetId()) !== String(COVECRM_GID)) return;
+
+  const lastRow = sheet.getLastRow();
+  if (!lastRow || lastRow < 2) return;
+
+  const startRow = Math.max(2, lastRow - Math.max(1, Number(limit || 25)) + 1);
+  for (let r = lastRow; r >= startRow; r--) {
+    _sendRowIfChanged(sheet, r);
+  }
+}
+
 function covecrmCatchupWorker() {
   const start = Date.now();
   const lock = LockService.getScriptLock();
@@ -394,7 +462,7 @@ function covecrmCatchupWorker() {
     if (!lastRow || lastRow < 2) return;
 
     let processed = 0;
-    for (let r = 2; r <= lastRow; r++) {
+    for (let r = lastRow; r >= 2; r--) {
       if (Date.now() - start > CATCHUP_MAX_MS) break;
       if (processed >= CATCHUP_MAX_ROWS_PER_RUN) break;
 
