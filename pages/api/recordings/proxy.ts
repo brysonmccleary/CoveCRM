@@ -13,6 +13,18 @@ function asString(v: string | string[] | undefined) {
   return Array.isArray(v) ? v[0] : String(v);
 }
 
+function wantsDownload(v: string | string[] | undefined) {
+  const raw = asString(v).toLowerCase().trim();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+function safeFilenamePart(value: string) {
+  return String(value || "")
+    .replace(/[^a-z0-9_-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
 // Pull RecordingSid out of a Twilio RecordingUrl if needed.
 // RecordingUrl usually looks like: https://api.twilio.com/2010-04-01/Accounts/AC.../Recordings/RE... (no extension)
 function extractRecordingSidFromUrl(url: string): string | null {
@@ -75,6 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const callId = asString(req.query.callId);
   const callSidQ = asString(req.query.callSid);
+  const download = wantsDownload(req.query.download);
 
   if (!callId && !callSidQ) {
     return res.status(400).json({ message: "Missing callId or callSid" });
@@ -199,6 +212,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader("Expires", "0");
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Type", "audio/mpeg");
+    if (download) {
+      const namePart =
+        safeFilenamePart(String(call.callSid || callSidQ || recordingSid)) || "recording";
+      res.setHeader("Content-Disposition", `attachment; filename="call-${namePart}.mp3"`);
+    }
 
     // If upstream already sent partial content, we mirror it (best path).
     // Otherwise, we may still respond with 206 if the client asked Range.

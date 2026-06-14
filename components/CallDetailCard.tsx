@@ -135,6 +135,19 @@ export default function CallDetailCard({
   }
 
   const sentimentLabel = useMemo(() => call?.aiSentiment || "neutral", [call?.aiSentiment]);
+  const recordingSrc = useMemo(() => {
+    if (!call?.recordingUrl && !call?.hasRecording) return "";
+    const id = call?.id || call?._id;
+    if (id) return `/api/recordings/proxy?callId=${encodeURIComponent(id)}`;
+    if (call?.callSid) return `/api/recordings/proxy?callSid=${encodeURIComponent(call.callSid)}`;
+    return call?.recordingUrl || "";
+  }, [call?._id, call?.callSid, call?.hasRecording, call?.id, call?.recordingUrl]);
+  const recordingDownloadSrc = useMemo(() => {
+    if (!recordingSrc) return "";
+    if (!recordingSrc.startsWith("/api/recordings/proxy")) return "";
+    const joiner = recordingSrc.includes("?") ? "&" : "?";
+    return `${recordingSrc}${joiner}download=1`;
+  }, [recordingSrc]);
   const bullets = useMemo(() => {
     const primary = Array.isArray((call as any)?.aiOverview?.overviewBullets)
       ? (call as any).aiOverview.overviewBullets.map((x: any) => String(x || "").trim()).filter(Boolean)
@@ -200,10 +213,20 @@ export default function CallDetailCard({
         <div className="bg-white/5 rounded-lg p-3"><div className="text-xs text-gray-400">AI</div><div className="font-semibold">{canShowAI ? "Ready" : userHasAI ? "Pending" : "Disabled"}</div></div>
       </div>
 
-      {call?.recordingUrl ? (
+      {recordingSrc ? (
         <div className="mt-3">
-          <div className="text-sm text-gray-300 mb-1">Recording</div>
-          <audio controls preload="none" src={call.recordingUrl} className="w-full" />
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="text-sm text-gray-300">Recording</div>
+            {recordingDownloadSrc ? (
+              <a
+                href={recordingDownloadSrc}
+                className="text-xs text-blue-300 hover:text-blue-200 underline"
+              >
+                Download
+              </a>
+            ) : null}
+          </div>
+          <audio controls preload="none" src={recordingSrc} className="w-full" />
         </div>
       ) : null}
 

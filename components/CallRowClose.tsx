@@ -61,6 +61,11 @@ export default function CallRowClose({ row }: CallRowCloseProps) {
     if (row.callSid) return `/api/recordings/proxy?callSid=${encodeURIComponent(row.callSid)}`;
     return "";
   }, [hasRecording, row.id, row.callSid]);
+  const downloadSrc = useMemo(() => {
+    if (!audioSrc) return "";
+    const joiner = audioSrc.includes("?") ? "&" : "?";
+    return `${audioSrc}${joiner}download=1`;
+  }, [audioSrc]);
 
   return (
     <div className="rounded-lg">
@@ -99,7 +104,15 @@ export default function CallRowClose({ row }: CallRowCloseProps) {
       <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] p-3">
         {hasRecording && audioSrc ? (
           <>
-            <div className="text-xs text-gray-400 mb-1">Recording</div>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <div className="text-xs text-gray-400">Recording</div>
+              <a
+                href={downloadSrc}
+                className="text-xs text-blue-300 hover:text-blue-200 underline"
+              >
+                Download
+              </a>
+            </div>
             <audio controls preload="none" src={audioSrc} className="w-full" />
           </>
         ) : (
