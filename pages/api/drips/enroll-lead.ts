@@ -184,6 +184,19 @@ function pickLeadPhoneRaw(lead: Record<string, any>): string | null {
   return null;
 }
 
+function dedupeFirstLast(first: string | null, last: string | null): { first: string | null; last: string | null } {
+  const f = (first || "").trim();
+  const l = (last || "").trim();
+  if (f && l && f.length > l.length) {
+    const splitAt = f.length - l.length;
+    if (f[splitAt - 1] === " " && f.slice(splitAt).toLowerCase() === l.toLowerCase()) {
+      const stripped = f.slice(0, splitAt).trim();
+      if (stripped) return { first: stripped, last: l };
+    }
+  }
+  return { first: f || null, last: l || null };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = asObjectId(req.body?.campaignId);
   if (req.method !== "POST")
@@ -299,8 +312,10 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
 
         if (to) {
           const { first: agentFirst, last: agentLast } = splitName(user.name || "");
-          const leadFirst = pickLeadFirstName(lead as any);
-          const leadLast = pickLeadLastName(lead as any);
+          const { first: leadFirst, last: leadLast } = dedupeFirstLast(
+            pickLeadFirstName(lead as any),
+            pickLeadLastName(lead as any)
+          );
           const fullName = [leadFirst, leadLast].filter(Boolean).join(" ") || null;
 
           const rendered = renderTemplate(String(firstStep.text || ""), {
@@ -434,8 +449,10 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
         const phoneRaw = pickLeadPhoneRaw(lead as any);
         const toE164 = normalizeToE164Maybe(phoneRaw || undefined);
         if (toE164) {
-          const leadFirst = pickLeadFirstName(lead as any);
-          const leadLast = pickLeadLastName(lead as any);
+          const { first: leadFirst, last: leadLast } = dedupeFirstLast(
+            pickLeadFirstName(lead as any),
+            pickLeadLastName(lead as any)
+          );
           try {
             await createScheduledDripMessages({
               enrollmentId: String(enrollment._id),

@@ -61,16 +61,32 @@ function cleanNamePart(value: any) {
   return typeof value === "string" ? value.trim() : value ? String(value).trim() : "";
 }
 
+function dedupeFirstLast(first: string, last: string): { first: string; last: string } {
+  const f = (first || "").trim();
+  const l = (last || "").trim();
+  if (f && l && f.length > l.length) {
+    const splitAt = f.length - l.length;
+    if (f[splitAt - 1] === " " && f.slice(splitAt).toLowerCase() === l.toLowerCase()) {
+      const stripped = f.slice(0, splitAt).trim();
+      if (stripped) return { first: stripped, last: l };
+    }
+  }
+  return { first: f, last: l };
+}
+
 function resolveLeadNameParts(lead: any) {
   const fields = flattenLeadFieldsForDisplay(lead);
-  const fromCamel = [cleanNamePart(fields.firstName), cleanNamePart(fields.lastName)]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-  const fromTitle = [cleanNamePart(fields["First Name"]), cleanNamePart(fields["Last Name"])]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
+
+  const camelFirst = cleanNamePart(fields.firstName);
+  const camelLast = cleanNamePart(fields.lastName);
+  const { first: dcCamelFirst, last: dcCamelLast } = dedupeFirstLast(camelFirst, camelLast);
+  const fromCamel = [dcCamelFirst, dcCamelLast].filter(Boolean).join(" ").trim();
+
+  const titleFirst = cleanNamePart(fields["First Name"]);
+  const titleLast = cleanNamePart(fields["Last Name"]);
+  const { first: dcTitleFirst, last: dcTitleLast } = dedupeFirstLast(titleFirst, titleLast);
+  const fromTitle = [dcTitleFirst, dcTitleLast].filter(Boolean).join(" ").trim();
+
   const fullName =
     fromCamel ||
     fromTitle ||
