@@ -101,6 +101,16 @@ type AIActivityResponse = {
   };
 };
 
+type UpcomingAppointment = {
+  _id: string;
+  displayName: string;
+  phone: string;
+  state: string | null;
+  appointmentTime: string;
+  folderId: string | null;
+  folderName: string | null;
+};
+
 const NumbersPanel = () => (
   <div className="p-4 space-y-6">
     <h1 className="text-2xl font-bold">Manage Numbers</h1>
@@ -162,6 +172,41 @@ function formatActivityTime(value: string) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function sameLocalDay(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function addLocalDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatAppointmentTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const now = new Date();
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+
+  if (sameLocalDay(date, now)) return `Today at ${time}`;
+  if (sameLocalDay(date, addLocalDays(now, 1))) return `Tomorrow at ${time}`;
+
+  const day = new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+  return `${day} at ${time}`;
 }
 
 function AIActivityCard({
@@ -466,12 +511,15 @@ function LeadSourceROIWidget() {
 }
 
 function DashboardOverview() {
+  const router = useRouter();
   const [view, setView] = useState<"dial" | "ai">("dial");
   const [range, setRange] = useState<"today" | "last7" | "last30">("last30");
   const [loading, setLoading] = useState(true);
   const [resp, setResp] = useState<ApiResponse | null>(null);
   const [moneyStats, setMoneyStats] = useState<MoneyStats | null>(null);
   const [aiActivity, setAiActivity] = useState<AIActivityResponse | null>(null);
+  const [appointments, setAppointments] = useState<UpcomingAppointment[]>([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(true);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; dials: number; connects: number; label: string } | null>(null);
 
   const fetchStats = async (r: typeof range) => {
@@ -498,6 +546,39 @@ function DashboardOverview() {
     fetchStats(range);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAppointments = async () => {
+      setAppointmentsLoading(true);
+      try {
+        const res = await fetch("/api/dashboard/upcoming-appointments", { cache: "no-store" });
+        const data = await res.json();
+        if (!cancelled) setAppointments(Array.isArray(data?.appointments) ? data.appointments : []);
+      } catch {
+        if (!cancelled) setAppointments([]);
+      } finally {
+        if (!cancelled) setAppointmentsLoading(false);
+      }
+    };
+    loadAppointments();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const removeExpiredAppointments = () => {
+      const now = new Date();
+      setAppointments((prev) =>
+        prev.filter((appointment) => new Date(appointment.appointmentTime) >= now),
+      );
+    };
+
+    removeExpiredAppointments();
+    const interval = window.setInterval(removeExpiredAppointments, 45000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const k = resp?.kpis;
   const dailySeries =
@@ -529,6 +610,14 @@ function DashboardOverview() {
 
   const maxDials = dailySeries.length > 0 ? Math.max(...dailySeries.map((d: any) => d.dials || 0), 1) : 1;
   const chartHeight = 220;
+
+  const openLead = (leadId: string) => {
+    router.push(`/dial/${encodeURIComponent(leadId)}`).catch(() => {});
+  };
+
+  const callLead = (leadId: string) => {
+    router.push(`/dial-session?leadId=${encodeURIComponent(leadId)}`).catch(() => {});
+  };
 
   return (
     <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12, background: "#0b1220", minHeight: "100vh" }}>
@@ -776,41 +865,143 @@ function DashboardOverview() {
             <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#374151", marginBottom: 8 }}>
               Upcoming Appointments
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-              {bookedAppointments > 0 && (
+            <div
+              style={{
+                background: "#0B1220",
+                border: "1px solid rgba(255,255,255,0.04)",
+                borderRadius: 10,
+                padding: appointmentsLoading || appointments.length === 0 ? 0 : 2,
+              }}
+            >
+              {appointmentsLoading ? (
+                <div style={{ padding: "14px 16px", fontSize: 13, color: "#94A3B8" }}>
+                  Loading appointments...
+                </div>
+              ) : appointments.length === 0 ? (
+                <div style={{ padding: "14px 16px", fontSize: 13, color: "#6B7280" }}>
+                  No upcoming appointments
+                </div>
+              ) : (
                 <div
                   style={{
-                    background: "#111D35",
-                    border: "1px solid rgba(255,255,255,0.06)",
-                    borderTop: "2px solid #F97316",
-                    borderRadius: 8,
-                    padding: "12px 14px",
                     display: "flex",
-                    flexDirection: "column",
-                    gap: 4,
+                    gap: 10,
+                    overflowX: "auto",
+                    padding: "8px",
                   }}
                 >
-                  <div style={{ fontSize: 10, fontWeight: 600, color: "#F97316" }}>📅 Today</div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#F1F5F9" }}>{bookedAppointments} Booked</div>
-                  <div style={{ fontSize: 10, color: "#6B7280" }}>View in Calendar</div>
+                  {appointments.map((appointment) => (
+                    <div
+                      key={appointment._id}
+                      style={{
+                        position: "relative",
+                        flex: "0 0 160px",
+                        width: 160,
+                        height: 126,
+                        background: "#111D35",
+                        border: "1px solid rgba(255,255,255,0.06)",
+                        borderRadius: 10,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => callLead(appointment._id)}
+                        title={`Call ${appointment.displayName || "lead"}`}
+                        aria-label={`Call ${appointment.displayName || "lead"}`}
+                        style={{
+                          position: "absolute",
+                          top: 8,
+                          right: 8,
+                          zIndex: 2,
+                          width: 26,
+                          height: 26,
+                          borderRadius: 7,
+                          border: "1px solid rgba(52,211,153,0.28)",
+                          background: "rgba(16,185,129,0.14)",
+                          color: "#6EE7B7",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <FaPhoneAlt size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openLead(appointment._id)}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          border: "none",
+                          background: "transparent",
+                          padding: "12px",
+                          paddingRight: 40,
+                          textAlign: "left",
+                          cursor: "pointer",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                          gap: 6,
+                        }}
+                      >
+                        <div
+                          style={{
+                            color: "#F8FAFC",
+                            fontSize: 14,
+                            fontWeight: 700,
+                            lineHeight: 1.25,
+                            maxWidth: "100%",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {appointment.displayName || "Unknown Lead"}
+                        </div>
+                        <div style={{ color: "#CBD5E1", fontSize: 12, lineHeight: 1.25 }}>
+                          {formatAppointmentTime(appointment.appointmentTime)}
+                        </div>
+                        {appointment.folderName ? (
+                          <span
+                            style={{
+                              border: "1px solid rgba(96,165,250,0.25)",
+                              background: "rgba(96,165,250,0.1)",
+                              color: "#93C5FD",
+                              borderRadius: 999,
+                              padding: "2px 8px",
+                              fontSize: 10,
+                              fontWeight: 700,
+                              lineHeight: 1.4,
+                              maxWidth: "100%",
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {appointment.folderName}
+                          </span>
+                        ) : null}
+                        <div
+                          style={{
+                            marginTop: "auto",
+                            color: "#94A3B8",
+                            fontSize: 11,
+                            lineHeight: 1.2,
+                            maxWidth: "100%",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          State: {appointment.state || "Unknown"}
+                        </div>
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
-              <div
-                style={{
-                  background: "#111D35",
-                  border: "1px dashed rgba(255,255,255,0.07)",
-                  borderRadius: 8,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: "14px",
-                  fontSize: 12,
-                  color: "#374151",
-                  gridColumn: bookedAppointments > 0 ? "span 3" : "span 4",
-                }}
-              >
-                Connect Google Calendar to see upcoming appointments
-              </div>
             </div>
           </div>
 
