@@ -16,7 +16,7 @@ const config: Config = {
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
   },
-  testMatch: ["**/__tests__/ai-session.sim.test.ts"],
+  testMatch: ["**/__tests__/ai-session.sim.test.ts", "**/__tests__/ai-voice.sim.test.ts"],
   testTimeout: 15000,
   verbose: true,
 };

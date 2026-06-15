@@ -3623,6 +3623,28 @@ function buildRebookingPolicyDecision(
     };
   }
 
+  // After booking confirmed, treat any bare closing negative as goodbye
+  if ((state as any).rebookingBookingConfirmed && isBareClosingNegative(raw)) {
+    if (!state.finalOutcomeSent && state.context) {
+      state.finalOutcomeSent = true;
+      void handleFinalOutcomeIntent(state, {
+        kind: "final_outcome",
+        outcome: "booked",
+        summary: "AI scheduled callback after failed live transfer. Lead had no further questions.",
+        notesAppend: `Lead said: "${raw.slice(0, 220)}"`,
+        ...(priorExactTime ? { confirmedTime: priorExactTime, confirmedYes: true, repeatBackConfirmed: true } : {}),
+      }).catch(() => {});
+    }
+    return decision(
+      "rebooking_goodbye",
+      `Perfect — have yourself a great day! ${agentFirst} will give you a call then. Bye!`,
+      {
+        pendingHangupAfterGoodbye: true,
+        awaitingUserAnswer: false,
+      }
+    );
+  }
+
   if (intent.kind === "hearing_problem") {
     const repeatLine = String(state.lastPromptLine || "").trim();
     return decision(
@@ -3648,6 +3670,8 @@ function buildRebookingPolicyDecision(
         awaitingUserAnswer: false,
         awaitingAnswerForStepIndex: undefined,
         scriptStepIndex: 3,
+        confirmedAppointment: true,
+        rebookingBookingConfirmed: true,
       },
       true
     );
