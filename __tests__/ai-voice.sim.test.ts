@@ -35,7 +35,23 @@ function normalizeTurnTextForKey(textRaw: string): string {
 function isBareClosingNegative(raw: string): boolean {
   const t = normalizeTurnTextForKey(raw);
   if (!t) return false;
-  return /^(no|nah|nope|no that s it|no thats it|no questions|that s all|thats all|no i m good|no im good|nothing else|all good|that s it|thats it|no thank you|no thanks|i m good|im good)$/.test(t);
+
+  if (/^(no|nah|nope|no that s it|no thats it|no questions|that s all|thats all|no i m good|no im good|nothing else|all good|that s it|thats it|no thank you|no thanks|i m good|im good|negative|nuh uh|mm mm|uh uh)$/.test(t)) return true;
+
+  const CORE_CLOSINGS = new Set([
+    "that s it", "thats it", "that s all", "thats all",
+    "all good", "im all good", "i m all good",
+    "all set", "im all set", "i m all set", "we re all set", "were all set",
+    "we re good", "were good", "we good",
+    "im good", "i m good", "good",
+    "nothing else", "nothing comes to mind",
+    "everything", "thats everything", "that s everything",
+    "covers it", "that covers it",
+  ]);
+  let core = t.replace(/^(no|nope|nah|yeah)\s+/, "");
+  core = core.replace(/^i think\s+/, "");
+  core = core.replace(/\s+(thanks|thank you|for now|though)$/, "").trim();
+  return CORE_CLOSINGS.has(core);
 }
 
 function isAffirmativeConfirmation(textRaw: string): boolean {
@@ -1097,5 +1113,109 @@ describe("pickOfferedClockTimeFromPrompt: time extraction logic", () => {
   test("user says 'later' with two options → picks second", () => {
     const result = pickOfferedClockTimeFromPrompt("I have 10 AM or 2 PM available.", "the later one");
     expect(result).toBe("2 pm");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+describe("Fix 1: isBareClosingNegative — expanded coverage", () => {
+// ══════════════════════════════════════════════════════════════════════════════
+
+  test("Layer 1 exact matches still work", () => {
+    for (const phrase of ["no", "nah", "nope", "that s all", "all good", "im good", "i m good", "no thank you", "no thanks", "nothing else"]) {
+      expect(isBareClosingNegative(phrase)).toBe(true);
+    }
+  });
+
+  test("new Layer 1 verbal negatives match", () => {
+    expect(isBareClosingNegative("negative")).toBe(true);
+    expect(isBareClosingNegative("nuh uh")).toBe(true);
+    expect(isBareClosingNegative("mm mm")).toBe(true);
+    expect(isBareClosingNegative("uh uh")).toBe(true);
+  });
+
+  test("Layer 2 — real-world audit variants now match", () => {
+    const variants = [
+      "Nah we're good",
+      "No I think that covers it",
+      "Yeah I think we're good",
+      "I think that's everything",
+      "I think we're all set",
+      "No I think that's all",
+      "No I think we're good",
+      "Nothing comes to mind",
+      "No I'm all set",
+      "I think that's it for now",
+      "Nah I'm all good",
+      "Yeah I'm all set",
+      "No that covers it",
+    ];
+    for (const phrase of variants) {
+      expect(isBareClosingNegative(phrase)).toBe(true);
+    }
+  });
+
+  test("critical negative: 'No, actually, can we change the time?' → false", () => {
+    expect(isBareClosingNegative("No, actually, can we change the time?")).toBe(false);
+  });
+
+  test("critical negative: 'No, I have one more question' → false", () => {
+    expect(isBareClosingNegative("No, I have one more question")).toBe(false);
+  });
+
+  test("real follow-up questions → false", () => {
+    const notClosing = [
+      "What time was that again?",
+      "Actually can we do Thursday instead?",
+      "No wait, morning works better",
+      "I do have a question actually",
+      "Can you remind me what time we said?",
+    ];
+    for (const phrase of notClosing) {
+      expect(isBareClosingNegative(phrase)).toBe(false);
+    }
+  });
+
+  test("filler variations → true", () => {
+    expect(isBareClosingNegative("no that's all thanks")).toBe(true);
+    expect(isBareClosingNegative("yeah we're good for now")).toBe(true);
+    expect(isBareClosingNegative("nah all set")).toBe(true);
+    expect(isBareClosingNegative("I think we're good")).toBe(true);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+describe("Fix 2: not_interested booking guard in handlePostCoverageSchedulingTurn", () => {
+// ══════════════════════════════════════════════════════════════════════════════
+
+  // We test the isBareClosingNegative gate directly since handlePostCoverageSchedulingTurn
+  // is not mirrored in the sim file. These tests verify the logic the guard depends on.
+
+  test("confirmedAppointment + expanded closing → isBareClosingNegative is true (gate fires)", () => {
+    // The guard: (state as any).confirmedAppointment && isBareClosingNegative(raw)
+    const confirmedAppointment = true;
+    const variants = ["I'm all set", "Nah we're good", "Yeah I think that covers it", "nothing comes to mind"];
+    for (const raw of variants) {
+      expect(confirmedAppointment && isBareClosingNegative(raw)).toBe(true);
+    }
+  });
+
+  test("no confirmedAppointment + expanded closing → gate does NOT fire (rebuttal path unchanged)", () => {
+    const confirmedAppointment = false;
+    const variants = ["I'm all set", "Nah we're good"];
+    for (const raw of variants) {
+      expect(confirmedAppointment && isBareClosingNegative(raw)).toBe(false);
+    }
+  });
+
+  test("confirmedAppointment + real objection → gate does NOT fire", () => {
+    const confirmedAppointment = true;
+    const notInterested = "No, actually, can we change the time?";
+    expect(confirmedAppointment && isBareClosingNegative(notInterested)).toBe(false);
+  });
+
+  test("confirmedAppointment + genuine not_interested phrase → gate does NOT fire (rebuttal path active)", () => {
+    const confirmedAppointment = true;
+    const notInterested = "I'm not really interested anymore";
+    expect(confirmedAppointment && isBareClosingNegative(notInterested)).toBe(false);
   });
 });

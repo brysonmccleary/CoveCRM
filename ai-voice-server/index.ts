@@ -5902,7 +5902,25 @@ function didAiJustAskClosingQuestion(state: CallState): boolean {
 function isBareClosingNegative(raw: string): boolean {
   const t = normalizeTurnTextForKey(raw);
   if (!t) return false;
-  return /^(no|nah|nope|no that s it|no thats it|no questions|that s all|thats all|no i m good|no im good|nothing else|all good|that s it|thats it|no thank you|no thanks|i m good|im good)$/.test(t);
+
+  // Layer 1: exact matches
+  if (/^(no|nah|nope|no that s it|no thats it|no questions|that s all|thats all|no i m good|no im good|nothing else|all good|that s it|thats it|no thank you|no thanks|i m good|im good|negative|nuh uh|mm mm|uh uh)$/.test(t)) return true;
+
+  // Layer 2: strip leading/trailing fillers, check core closing phrase
+  const CORE_CLOSINGS = new Set([
+    "that s it", "thats it", "that s all", "thats all",
+    "all good", "im all good", "i m all good",
+    "all set", "im all set", "i m all set", "we re all set", "were all set",
+    "we re good", "were good", "we good",
+    "im good", "i m good", "good",
+    "nothing else", "nothing comes to mind",
+    "everything", "thats everything", "that s everything",
+    "covers it", "that covers it",
+  ]);
+  let core = t.replace(/^(no|nope|nah|yeah)\s+/, "");
+  core = core.replace(/^i think\s+/, "");
+  core = core.replace(/\s+(thanks|thank you|for now|though)$/, "").trim();
+  return CORE_CLOSINGS.has(core);
 }
 
 function getBookedGoodbyeTimePhrase(state: CallState): string {
@@ -6305,6 +6323,31 @@ function handlePostCoverageSchedulingTurn(
   // Short bare negatives ("nah", "nope", "no") when slots were just offered mean
   // "neither of those works" — not a rejection of the product. Redirect to none_work.
   if (intent.kind === "not_interested") {
+    // When a booking is already confirmed, treat expanded closing negatives as goodbye
+    if ((state as any).confirmedAppointment && isBareClosingNegative(raw)) {
+      const bookedTimePhrase = getBookedGoodbyeTimePhrase(state);
+      const lineToSay = bookedTimePhrase
+        ? `Perfect — have yourself a great day! ${agentFirst} will give you a call ${bookedTimePhrase}. Bye!`
+        : "Perfect — have yourself a great day! Bye!";
+      return {
+        handled: true,
+        routeKind: "post_coverage_closing_no_goodbye",
+        responseMode: "exact_script",
+        objective: "end_call_after_closing_question",
+        lineToSay,
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+          pendingHangupAfterGoodbye: true,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+
     const bareNegative = /^(nah|nope|no)$/.test(raw.trim().toLowerCase());
     const hadOfferedSlots =
       Array.isArray(state.lastOfferedSlots) &&
