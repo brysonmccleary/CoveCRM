@@ -212,6 +212,13 @@ export interface IUser {
   aiDialerBillingLockOwner?: string | null;
   aiDialerBillingLockExpiresAt?: Date | null;
 
+  aiCallingCertificationAccepted?: boolean;
+  aiCallingCertificationAcceptedAt?: Date | null;
+  aiCallingCertificationVersion?: string;
+  aiCallingCertificationText?: string;
+  aiCallingCertificationIp?: string;
+  aiCallingCertificationUserAgent?: string;
+
   notifications?: {
     emailReminders?: boolean;
     dripAlerts?: boolean;
@@ -518,6 +525,13 @@ const UserSchema = new Schema<IUser>({
   aiDialerBillingLockAt: { type: Date, default: null },
   aiDialerBillingLockOwner: { type: String, default: null },
   aiDialerBillingLockExpiresAt: { type: Date, default: null },
+
+  aiCallingCertificationAccepted: { type: Boolean, default: false },
+  aiCallingCertificationAcceptedAt: { type: Date, default: null },
+  aiCallingCertificationVersion: { type: String, default: "" },
+  aiCallingCertificationText: { type: String, default: "" },
+  aiCallingCertificationIp: { type: String, default: "" },
+  aiCallingCertificationUserAgent: { type: String, default: "" },
 
   notifications: {
     emailReminders: { type: Boolean, default: true },

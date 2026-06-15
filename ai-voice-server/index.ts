@@ -3578,10 +3578,9 @@ function buildRebookingPolicyDecision(
       ? rememberedDay
       : namedDay || null;
   const windowHint = pickTimeWindowHint(raw, String(state.lastAcceptedUserText || ""));
-  const offeredTime = pickOfferedClockTimeFromPrompt(String(state.lastPromptLine || ""), raw);
+  const offeredTime = isBareClosingNegative(raw) ? null : pickOfferedClockTimeFromPrompt(String(state.lastPromptLine || ""), raw);
   const selectedTime = String(offeredTime || raw).trim();
   const priorExactTime = String((state as any).lastExactTimeText || state.selectedTimeText || "").trim();
-  const callbackObjective = `The only objective is scheduling ${agentFirst}'s callback after the failed transfer.`;
   const baseState = {
     phase: "in_call",
     coverageSubject: "rebooking_callback",
@@ -3764,7 +3763,7 @@ function buildRebookingPolicyDecision(
 
   const fallbackLine = t.includes("tomorrow") || t.includes("today")
     ? "Got it — would morning, afternoon, or evening work better?"
-    : `I hear you. ${callbackObjective} Would later today or tomorrow work better?`;
+    : `Got it — should ${agentFirst} try you later today or tomorrow?`;
   return decision(
     "rebooking_fallback",
     fallbackLine,
@@ -10409,7 +10408,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   const rebookingMode = String(custom.rebookingMode || "").trim() === "true";
   const rebookingLeadName = String(custom.leadName || "").trim();
   const rebookingAgentRaw = String(custom.agentName || "").trim();
-  const rebookingAgentFirst = (rebookingAgentRaw.split(" ")[0] || "our agent").trim();
+  const rebookingAgentFirst = (rebookingAgentRaw.split(" ")[0] || "").trim();
 
   console.log(
     `[AI-VOICE] start: callSid=${state.callSid}, streamSid=${state.streamSid}, sessionId=${sessionId}, leadId=${leadId}`
@@ -10446,7 +10445,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
     state.context = context;
     (state as any).rebookingMode = rebookingMode;
     (state as any).rebookingLeadName = rebookingLeadName;
-    (state as any).rebookingAgentFirst = rebookingAgentFirst;
+    (state as any).rebookingAgentFirst = rebookingAgentFirst || getAgentFirstName(context) || "our agent";
 
     console.log(
       `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId}, scriptKey: ${context.scriptKey}, answeredBy: ${

@@ -137,6 +137,8 @@ const VOICE_OPTIONS = [
   },
 ];
 
+const AI_CALLING_CERTIFICATION_VERSION = "ai_calling_consent_v1";
+
 
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const session = await getServerSession(ctx.req as any, ctx.res as any, authOptions as any);
@@ -181,6 +183,13 @@ export default function AIDialSessionPage() {
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [lastSession, setLastSession] = useState<AICallSession | null>(null);
+  const [certificationLoading, setCertificationLoading] = useState(true);
+  const [certificationAccepted, setCertificationAccepted] = useState(false);
+  const [certificationChecked, setCertificationChecked] = useState(false);
+  const [certificationSubmitting, setCertificationSubmitting] = useState(false);
+  const [certificationError, setCertificationError] = useState<string | null>(
+    null,
+  );
 
   // 🔹 AI Dialer billing state (separate from SMS AI)
   const [aiBillingLoading, setAiBillingLoading] = useState(true);
@@ -210,6 +219,33 @@ export default function AIDialSessionPage() {
       (window as any).__aiDialSessionActive = false;
     };
   }, [activeSession]);
+
+  useEffect(() => {
+    const loadCertification = async () => {
+      try {
+        setCertificationLoading(true);
+        setCertificationError(null);
+        const res = await fetch("/api/legal/ai-calling-certification");
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || "Failed to load AI calling certification");
+        }
+        setCertificationAccepted(
+          data?.accepted === true &&
+            data?.version === AI_CALLING_CERTIFICATION_VERSION,
+        );
+      } catch (e: any) {
+        console.error("AI Dial: certification status error", e);
+        setCertificationAccepted(false);
+        setCertificationError(
+          e?.message || "Failed to load AI calling certification",
+        );
+      } finally {
+        setCertificationLoading(false);
+      }
+    };
+    loadCertification();
+  }, []);
 
   const selectedFolderName = useMemo(
     () => folders.find((f) => f._id === selectedFolderId)?.name || "",
@@ -370,6 +406,45 @@ export default function AIDialSessionPage() {
     !!selectedFromNumber;
 
   const aiDialerLocked = !hasAiDialer;
+  const certificationRequired =
+    !certificationLoading && !certificationAccepted;
+
+  const handleCertificationRequired = () => {
+    setCertificationAccepted(false);
+    setCertificationError(
+      "Confirm the AI calling certification before starting an AI dial session.",
+    );
+  };
+
+  const handleConfirmCertification = async () => {
+    if (!certificationChecked) {
+      setCertificationError("Check the certification box to continue.");
+      return;
+    }
+
+    try {
+      setCertificationSubmitting(true);
+      setCertificationError(null);
+      const res = await fetch("/api/legal/ai-calling-certification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accepted: true }),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.accepted !== true) {
+        throw new Error(data?.error || "Failed to save AI calling certification");
+      }
+      setCertificationAccepted(true);
+      setCertificationChecked(false);
+    } catch (e: any) {
+      console.error("AI Dial: certification save error", e);
+      setCertificationError(
+        e?.message || "Failed to save AI calling certification",
+      );
+    } finally {
+      setCertificationSubmitting(false);
+    }
+  };
 
   /** Start a brand new AI dial session for the selected folder (mode: fresh) */
   const handleStartSession = async () => {
@@ -387,6 +462,10 @@ export default function AIDialSessionPage() {
       alert(
         "You already have an AI dial session in progress for this folder. End it first.",
       );
+      return;
+    }
+    if (certificationRequired) {
+      handleCertificationRequired();
       return;
     }
 
@@ -415,6 +494,10 @@ export default function AIDialSessionPage() {
 
       const data = await res.json();
       if (!res.ok || !data?.ok) {
+        if (data?.code === "AI_CALLING_CERTIFICATION_REQUIRED") {
+          handleCertificationRequired();
+          return;
+        }
         throw new Error(data?.message || "Failed to create AI dial session");
       }
 
@@ -447,6 +530,10 @@ export default function AIDialSessionPage() {
       alert("You already have an AI dial session in progress for this folder.");
       return;
     }
+    if (certificationRequired) {
+      handleCertificationRequired();
+      return;
+    }
 
     try {
       setSessionLoading(true);
@@ -472,6 +559,10 @@ export default function AIDialSessionPage() {
 
       const data = await res.json();
       if (!res.ok || !data?.ok) {
+        if (data?.code === "AI_CALLING_CERTIFICATION_REQUIRED") {
+          handleCertificationRequired();
+          return;
+        }
         throw new Error(data?.message || "Failed to resume AI dial session");
       }
 
@@ -708,6 +799,10 @@ export default function AIDialSessionPage() {
                 anywhere in CoveCRM while it calls leads from the selected
                 folder.
               </p>
+              <p className="mt-1 text-xs text-gray-400">
+                By using AI-assisted calling, you are responsible for obtaining
+                all consent required by applicable law.
+              </p>
               {aiDialerLocked && !aiBillingLoading && (
                 <p className="mt-1 text-xs text-yellow-300">
                   AI Dialer is currently locked. Complete billing in Settings →
@@ -723,12 +818,16 @@ export default function AIDialSessionPage() {
                   aiDialerLocked ||
                   !canConfigure ||
                   !!activeSession ||
+                  certificationLoading ||
+                  certificationRequired ||
                   sessionLoading
                 }
                 className={`px-4 py-2 rounded text-white ${
                   aiDialerLocked ||
                   !canConfigure ||
                   !!activeSession ||
+                  certificationLoading ||
+                  certificationRequired ||
                   sessionLoading
                     ? "bg-gray-600 cursor-not-allowed"
                     : "bg-emerald-600 hover:bg-emerald-700"
@@ -744,6 +843,8 @@ export default function AIDialSessionPage() {
                   !canConfigure ||
                   !lastSession ||
                   !!activeSession ||
+                  certificationLoading ||
+                  certificationRequired ||
                   sessionLoading
                 }
                 className={`px-4 py-2 rounded text-white ${
@@ -751,6 +852,8 @@ export default function AIDialSessionPage() {
                   !canConfigure ||
                   !lastSession ||
                   !!activeSession ||
+                  certificationLoading ||
+                  certificationRequired ||
                   sessionLoading
                     ? "bg-gray-600 cursor-not-allowed"
                     : "bg-blue-600 hover:bg-blue-700"
@@ -770,8 +873,73 @@ export default function AIDialSessionPage() {
               >
                 End AI Dial Session
               </button>
+              {certificationRequired && (
+                <p className="basis-full text-xs text-yellow-300">
+                  Complete the AI Calling Certification below to start or resume
+                  AI dialing.
+                </p>
+              )}
             </div>
           </div>
+
+          {certificationRequired && (
+            <div className="mt-4 rounded border border-yellow-500 bg-yellow-950/40 p-4 text-sm">
+              <h3 className="font-semibold text-yellow-100">
+                AI Calling Certification Required
+              </h3>
+              <p className="mt-1 text-xs text-yellow-50">
+                Confirm this once before starting AI-assisted calling. Review the{" "}
+                <a
+                  href="/legal/terms"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline"
+                >
+                  Terms of Service
+                </a>{" "}
+                and{" "}
+                <a
+                  href="/legal/acceptable-use"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline"
+                >
+                  Acceptable Use Policy
+                </a>
+                .
+              </p>
+              <label className="mt-3 flex items-start gap-2 text-xs text-yellow-50">
+                <input
+                  type="checkbox"
+                  checked={certificationChecked}
+                  onChange={(e) => setCertificationChecked(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  I certify that I have obtained all consent required by
+                  applicable law before using CoveCRM&apos;s AI-assisted calling
+                  features.
+                </span>
+              </label>
+              {certificationError && (
+                <p className="mt-2 text-xs text-red-200">
+                  {certificationError}
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={handleConfirmCertification}
+                disabled={!certificationChecked || certificationSubmitting}
+                className={`mt-3 px-4 py-2 rounded text-white ${
+                  !certificationChecked || certificationSubmitting
+                    ? "bg-gray-600 cursor-not-allowed"
+                    : "bg-yellow-600 hover:bg-yellow-700"
+                }`}
+              >
+                {certificationSubmitting ? "Saving..." : "Confirm Certification"}
+              </button>
+            </div>
+          )}
 
           {/* Current session summary */}
           <div className="mt-4 border-t border-slate-700 pt-4 text-sm">

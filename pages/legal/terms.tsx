@@ -62,6 +62,35 @@ export default function Terms() {
         features are provided to assist your workflow and do not replace your
         professional judgment or legal compliance obligations.
       </p>
+      <p className="mb-4">
+        You are solely responsible for obtaining all consent required by
+        applicable law before using CoveCRM for calls, SMS, email, artificial
+        voice, prerecorded voice, AI-assisted communications, automated
+        communications, or similar outreach. CoveCRM and Vault Commerce Group
+        LLC do not obtain consent on your behalf and do not independently verify
+        whether you have obtained consent from any lead, customer, prospect, or
+        recipient.
+      </p>
+      <p className="mb-4">
+        You represent and warrant that your use of CoveCRM, including any
+        AI-assisted calling, artificial voice, prerecorded voice, automated
+        calling, SMS, email, or similar outreach, complies with the Telephone
+        Consumer Protection Act, Telemarketing Sales Rule, FCC rules, CAN-SPAM,
+        state telemarketing laws, insurance marketing rules, privacy laws, and
+        all other applicable laws, rules, regulations, and industry requirements.
+        You must not use AI calling unless you have obtained all consent required
+        by applicable law for AI-assisted, artificial voice, prerecorded voice,
+        automated, or similar communications.
+      </p>
+      <p className="mb-4">
+        You agree to defend, indemnify, and hold harmless CoveCRM, Vault Commerce
+        Group LLC, and their owners, officers, employees, contractors,
+        affiliates, and service providers from and against any claims, damages,
+        fines, penalties, fees, costs, attorney fees, liabilities, or expenses
+        arising from or related to your outreach, consent failures, unlawful
+        calling, unlawful messaging, AI calling misuse, or violation of
+        applicable law.
+      </p>
 
       <h2 className="text-xl font-semibold mt-6 mb-2">5. Accounts</h2>
       <p className="mb-4">

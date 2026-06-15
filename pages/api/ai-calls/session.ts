@@ -12,7 +12,7 @@ import { Types } from "mongoose";
 type GetResponse =
   | { ok: false; message: string }
   | { ok: true; session: any | null; workerKickOk?: boolean }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: string };
 
 type PostBody = {
   folderId?: string;
@@ -143,6 +143,7 @@ const BASE_URL_SESSION = (
 
 const SESSION_CRON_SECRET = (process.env.CRON_SECRET || "").trim();
 const SESSION_DIALER_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
+const AI_CALLING_CERTIFICATION_VERSION = "ai_calling_consent_v1";
 
 // Directly kicks the worker for a specific session.
 // Used as backup on session start (Render cold-start resilience) and on resume.
@@ -366,6 +367,17 @@ export default async function handler(
         return res
           .status(403)
           .json({ ok: false, error: "AI Dialer not available for this account" });
+      }
+      if (
+        (userDoc as any).aiCallingCertificationAccepted !== true ||
+        (userDoc as any).aiCallingCertificationVersion !==
+          AI_CALLING_CERTIFICATION_VERSION
+      ) {
+        return res.status(403).json({
+          ok: false,
+          error: "AI_CALLING_CERTIFICATION_REQUIRED",
+          code: "AI_CALLING_CERTIFICATION_REQUIRED",
+        });
       }
 
       const fid = new Types.ObjectId(folderId);
