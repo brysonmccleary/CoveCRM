@@ -2707,7 +2707,8 @@ function isAgentIdentityQuestion(textRaw: string): boolean {
     normalized.includes("who am i speaking with") ||
     normalized.includes("who is calling") ||
     normalized.includes("who are you with") ||
-    normalized.includes("what company")
+    normalized.includes("what company") ||
+    /^who (is|s) \w/.test(normalized)
   );
 }
 
@@ -5934,7 +5935,7 @@ function handlePostCoverageSchedulingTurn(
   const selectedTime = String((state as any).lastExactTimeText || state.selectedTimeText || "").trim();
 
   if (
-    !state.finalOutcomeSent &&
+    (!state.finalOutcomeSent || !!(state as any).confirmedAppointment) &&
     didAiJustAskClosingQuestion(state) &&
     isBareClosingNegative(raw)
   ) {
@@ -6378,7 +6379,7 @@ function handlePostCoverageSchedulingTurn(
 
     // Generic product question: guide OpenAI to answer from its vertical knowledge
     if (sk === "agent_identity_question") {
-      const lineToSay = `With ${agentFirst}, a licensed agent. I'm just helping get it scheduled. Does later today or tomorrow work better for you?`;
+      const lineToSay = `${agentFirst} is the licensed agent who will go over everything with you — I'm just helping get it scheduled. Does later today or tomorrow work better for you?`;
       return {
         handled: true,
         routeKind: "post_coverage_agent_identity",
