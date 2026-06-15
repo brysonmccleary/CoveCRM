@@ -5981,6 +5981,36 @@ function handlePostCoverageSchedulingTurn(
     };
   }
 
+  // When booking is confirmed and AI just asked the closing question, treat
+  // "No, Thursday at 1." as the lead reiterating their slot — not a new request.
+  if (
+    (state as any).confirmedAppointment &&
+    didAiJustAskClosingQuestion(state) &&
+    /^(no|nah|nope|negative|nuh uh|uh uh|mm mm)[,.\s!]/i.test(raw.trim())
+  ) {
+    const bookedTimePhrase = getBookedGoodbyeTimePhrase(state);
+    const lineToSay = bookedTimePhrase
+      ? `Perfect — have yourself a great day! ${agentFirst} will give you a call ${bookedTimePhrase}. Bye!`
+      : "Perfect — have yourself a great day! Bye!";
+    return {
+      handled: true,
+      routeKind: "post_coverage_closing_no_goodbye",
+      responseMode: "exact_script",
+      objective: "end_call_after_closing_question",
+      lineToSay,
+      requiredClosingPivot: "",
+      forbiddenTopics: [],
+      stateWrites: {
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+        pendingHangupAfterGoodbye: true,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
   if (
     t.includes("wrong number") ||
     t.includes("stop calling") ||
@@ -7648,7 +7678,7 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
       lastExactAt > 0 &&
       (Date.now() - lastExactAt) < 5 * 60 * 1000;
 
-    if (!onConfirmStep || !hasRecentExactTime || state.finalOutcomeSent) return null;
+    if (!onConfirmStep || !hasRecentExactTime || state.finalOutcomeSent || (state as any).confirmedAppointment) return null;
 
     console.log("[AI-VOICE][BOOKING][SERVER-TRIGGER][POLICY]", {
       callSid: state.callSid,
