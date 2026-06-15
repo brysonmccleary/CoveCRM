@@ -17,7 +17,6 @@ import { sendSms } from "@/lib/twilio/sendSMS";
 // NEW: email utilities
 import {
   sendEmail,
-  renderLeadBookingEmail,
   renderAgentBookingEmail,
 } from "@/lib/email";
 
@@ -224,7 +223,7 @@ export default async function handler(
         attendees: attendees as any,
         reminders: { useDefault: true },
       },
-      sendUpdates: attendees ? "all" : "none",
+      sendUpdates: "none",
     });
 
     const eventId = event.data.id || "";
@@ -269,25 +268,8 @@ export default async function handler(
       console.warn("SMS confirmation failed:", e);
     }
 
-    // EMAIL confirmations (best-effort; failures do not break booking)
+    // Agent email confirmation (best-effort; failures do not break booking)
     try {
-      // Lead email (if present)
-      if (leadEmail) {
-        const html = renderLeadBookingEmail({
-          leadName:
-            [firstName, lastName].filter(Boolean).join(" ") || undefined,
-          agentName,
-          // Ensure plain string type
-          startISO: startAgent.toJSDate().toISOString(),
-          endISO: endAgent.toJSDate().toISOString(),
-          timezone: agentTz,
-          title: summary,
-          description: desc,
-          eventUrl,
-        });
-        await sendEmail(leadEmail, "Your appointment is confirmed", html);
-      }
-
       // Agent email (always to the signed-in user)
       {
         const leadUrl = `${process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || ""}/lead/${lead._id}`;
@@ -315,7 +297,7 @@ export default async function handler(
         await sendEmail(userEmail, "New booking scheduled", html);
       }
     } catch (e) {
-      console.warn("Email confirmations failed:", e);
+      console.warn("Agent email confirmation failed:", e);
     }
 
     // Move to "Booked Appointment" + set status

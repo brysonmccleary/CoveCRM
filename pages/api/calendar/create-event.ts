@@ -320,7 +320,7 @@ export default async function handler(
     const created = await calendar.events.insert({
       calendarId: (user as any).calendarId || "primary",
       requestBody,
-      sendUpdates: "all",
+      sendUpdates: "none",
     });
 
     const eventId = created.data.id;

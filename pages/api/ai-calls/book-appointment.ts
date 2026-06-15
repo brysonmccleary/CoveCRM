@@ -304,7 +304,7 @@ export default async function handler(
         attendees: attendees as any,
         reminders: { useDefault: true },
       },
-      sendUpdates: attendees ? "all" : "none",
+      sendUpdates: "none",
     });
 
     const eventData = event.data;

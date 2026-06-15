@@ -50,6 +50,8 @@ interface AICallSession {
     booked?: number;
     notInterested?: number;
     noAnswers?: number;
+    skipped?: number;
+    transferred?: number;
   };
   startedAt?: string;
   endedAt?: string;
@@ -832,6 +834,73 @@ export default function AIDialSessionPage() {
             )}
           </div>
         </div>
+
+        {/* Live progress widget */}
+        {lastSession && (
+          <div className="bg-slate-800 rounded-xl p-5 shadow border border-indigo-700/30 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <h2 className="text-sm font-semibold text-white">
+                  Kayla is calling{" "}
+                  <span className="text-indigo-300">{stats.totalLeads ?? 0}</span> leads
+                </h2>
+                {lastSession.status === "running" && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-600 text-white">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse inline-block" />
+                    LIVE
+                  </span>
+                )}
+              </div>
+              {lastSession.status === "completed" && (
+                <span className="text-xs text-emerald-400 font-semibold">Session complete</span>
+              )}
+            </div>
+
+            {(() => {
+              const total = stats.totalLeads ?? 0;
+              const done = (stats.completed ?? 0) + (stats.skipped ?? 0);
+              const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+              return (
+                <div className="mb-4">
+                  <div className="flex justify-between text-xs text-gray-400 mb-1">
+                    <span>{done} of {total} processed</span>
+                    <span>{pct}%</span>
+                  </div>
+                  <div className="w-full bg-slate-700 rounded-full h-2">
+                    <div
+                      className="bg-indigo-500 h-2 rounded-full transition-all duration-500"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              {(
+                [
+                  { label: "Booked", value: stats.booked ?? 0, color: "text-emerald-400" },
+                  { label: "Transferred", value: stats.transferred ?? 0, color: "text-sky-400" },
+                  { label: "Not Interested", value: stats.notInterested ?? 0, color: "text-orange-400" },
+                  { label: "No Answer", value: stats.noAnswers ?? 0, color: "text-gray-400" },
+                  {
+                    label: "Remaining",
+                    value: Math.max(
+                      0,
+                      (stats.totalLeads ?? 0) - (stats.completed ?? 0) - (stats.skipped ?? 0)
+                    ),
+                    color: "text-indigo-300",
+                  },
+                ] as { label: string; value: number; color: string }[]
+              ).map(({ label, value, color }) => (
+                <div key={label} className="bg-slate-900/60 rounded-lg p-3 text-center">
+                  <div className={`text-xl font-bold ${color}`}>{value}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

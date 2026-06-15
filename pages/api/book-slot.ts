@@ -3,14 +3,7 @@ import { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import { Twilio } from "twilio";
-import { trackUsage } from "@/lib/billing/trackUsage";
-
-const twilioClient = new Twilio(
-  process.env.TWILIO_ACCOUNT_SID!,
-  process.env.TWILIO_AUTH_TOKEN!,
-);
-const SMS_COST = 0.02;
+import { sendSms } from "@/lib/twilio/sendSMS";
 
 export default async function handler(
   req: NextApiRequest,
@@ -65,17 +58,17 @@ export default async function handler(
           useDefault: true,
         },
       },
+      sendUpdates: "none",
     });
 
     // Optional: send SMS confirmation to guest
     if (phone) {
-      const tw = await twilioClient.messages.create({
+      await sendSms({
         to: phone,
-        from: process.env.TWILIO_PHONE_NUMBER!,
         body: `Your meeting with ${googleEmail} is confirmed for ${start.toLocaleString()}`,
+        userEmail: user.email,
+        source: "booking_confirmation",
       });
-      const segments = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
-      await trackUsage({ user, amount: SMS_COST * segments, source: "twilio" });
     }
 
     res

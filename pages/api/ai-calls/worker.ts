@@ -534,6 +534,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             lastIndex: nextIndex,
             status: "running",
           },
+          $inc: { "stats.skipped": 1 },
         }
       );
 
@@ -559,6 +560,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             errorMessage: "Encountered invalid leadId; skipping.",
             status: "running",
           },
+          $inc: { "stats.skipped": 1 },
         }
       );
 
@@ -587,7 +589,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await AICallSession.updateOne(
         { _id: sessionId },
-        { $set: { lastIndex: nextIndex, status: "running" } }
+        { $set: { lastIndex: nextIndex, status: "running" }, $inc: { "stats.skipped": 1 } }
       );
 
       await releaseLock(sessionId);
@@ -627,7 +629,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await AICallSession.updateOne(
         { _id: sessionId },
-        { $set: { lastIndex: nextIndex, status: "running" } }
+        { $set: { lastIndex: nextIndex, status: "running" }, $inc: { "stats.skipped": 1 } }
       );
 
       await releaseLock(sessionId);
@@ -652,7 +654,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await AICallSession.updateOne(
         { _id: sessionId },
-        { $set: { lastIndex: nextIndex, status: "running" } }
+        { $set: { lastIndex: nextIndex, status: "running" }, $inc: { "stats.skipped": 1 } }
       );
 
       await releaseLock(sessionId);
@@ -687,7 +689,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await AICallSession.updateOne(
         { _id: sessionId },
-        { $set: { lastIndex: nextIndex, status: "running" } }
+        { $set: { lastIndex: nextIndex, status: "running" }, $inc: { "stats.skipped": 1 } }
       );
 
       await releaseLock(sessionId);
@@ -732,7 +734,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await AICallSession.updateOne(
         { _id: sessionId },
-        { $set: { lastIndex: nextIndex, status: "running" } }
+        { $set: { lastIndex: nextIndex, status: "running" }, $inc: { "stats.skipped": 1 } }
       );
 
       await releaseLock(sessionId);

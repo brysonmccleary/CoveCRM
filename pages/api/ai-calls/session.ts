@@ -247,6 +247,8 @@ function serializeSession(doc: any | null) {
     booked: rawStats.booked ?? 0,
     notInterested: rawStats.notInterested ?? rawStats.not_interested ?? 0,
     noAnswers: rawStats.noAnswers ?? rawStats.no_answer ?? 0,
+    skipped: rawStats.skipped ?? 0,
+    transferred: rawStats.transferred ?? 0,
   };
 
   return json;

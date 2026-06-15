@@ -20,6 +20,7 @@ export interface IAICallSessionStats {
   disconnected: number;
   transferred?: number;
   voicemail?: number;
+  skipped?: number;
 }
 
 export interface IAICallSession extends Document {
@@ -137,6 +138,7 @@ const AICallSessionSchema = new Schema<IAICallSession>(
       callback: { type: Number, default: 0 },
       do_not_call: { type: Number, default: 0 },
       disconnected: { type: Number, default: 0 },
+      skipped: { type: Number, default: 0 },
     },
   },
   {
