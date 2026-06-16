@@ -50,6 +50,43 @@ const googleColorMap: Record<string, string> = {
 
 const toISO = (d: Date) => new Date(d.getTime()).toISOString();
 
+function localDateKey(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function parseLocalDateKey(value?: string | null) {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, y, m, d] = match;
+  const parsed = new Date(Number(y), Number(m) - 1, Number(d), 12, 0, 0, 0);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseCalendarDate(value?: string) {
+  if (!value) return new Date();
+  const localDate = parseLocalDateKey(value);
+  if (localDate) return localDate;
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function parseSavedCalendarDate(value?: string | null) {
+  if (!value) return null;
+  const localDate = parseLocalDateKey(value);
+  if (localDate) return localDate;
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function persistCalendarDate(date: Date) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem("calendar:date", localDateKey(date));
+}
+
 function startOfWeek(d: Date) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -99,17 +136,21 @@ function sanitizeEventText(input?: string) {
   if (!input) return "";
   const raw = String(input);
 
-  // Block dialer/call logs and any internal debug dumps from ever showing in the calendar modal.
-  const looksLikeLogs =
-    /callsid=|durations?ec=|ai dialer fallback|twilio status=|outcome=disconnected|twilio status=completed|\[ai dialer/i.test(raw);
-
-  if (looksLikeLogs) return "";
+  const internalPattern =
+    /\b(callSid|call_sid|recordingSid|recording_sid|recordingId|recording_id|recordingUrl|calendarEventId|eventId|leadId|bookingId|aiCallSessionId|conferenceName|twilio status|durationsec|outcome=|metadata|debug)\b/i;
 
   // Normalize + cap
-  const cleaned = raw.replace(/\r?\n/g, "\n").trim();
+  const cleaned = raw
+    .replace(/\[[^\]]*\bcallSid\s*:[^\]]*\]/gi, "")
+    .replace(/\[[^\]]*\brecording(?:Sid|Id)\s*:[^\]]*\]/gi, "")
+    .replace(/\r?\n/g, "\n")
+    .trim();
 
   // Keep it readable but never "dump": limit lines + line length
-  const lines = cleaned.split("\n").map((l) => l.trim()).filter(Boolean);
+  const lines = cleaned
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !internalPattern.test(l));
 
   const MAX_LINES = 6;
   const MAX_LINE_LEN = 140;
@@ -141,8 +182,9 @@ export default function CalendarView() {
   const [currentDate, setCurrentDate] = useState<Date>(() => {
     if (typeof window === "undefined") return new Date();
     const saved = localStorage.getItem("calendar:date");
-    return saved ? new Date(saved) : new Date();
+    return parseSavedCalendarDate(saved) || new Date();
   });
+  const currentDateRef = useRef(currentDate);
 
   // Visible range + debounced fetch
   const rangeRef = useRef<{ start?: Date; end?: Date }>({});
@@ -188,8 +230,8 @@ export default function CalendarView() {
       const parsed: EventType[] = (data.events || []).map((e: any) => ({
         id: e.id,
         title: e.summary || "",
-        start: new Date(e.start),
-        end: new Date(e.end),
+        start: parseCalendarDate(e.start),
+        end: parseCalendarDate(e.end),
         description: e.description,
         location: e.location,
         colorId: e.colorId || undefined,
@@ -231,8 +273,9 @@ export default function CalendarView() {
   };
 
   const handleNavigate = (date: Date) => {
+    currentDateRef.current = date;
     setCurrentDate(date);
-    if (typeof window !== "undefined") localStorage.setItem("calendar:date", date.toISOString());
+    persistCalendarDate(date);
     rangeRef.current = computeRange(view, date);
     scheduleFetch();
   };
@@ -240,9 +283,13 @@ export default function CalendarView() {
   const handleView = (nextView: View) => {
     setView(nextView);
     if (typeof window !== "undefined") localStorage.setItem("calendar:view", String(nextView));
-    rangeRef.current = computeRange(nextView, currentDate);
+    rangeRef.current = computeRange(nextView, currentDateRef.current);
     scheduleFetch();
   };
+
+  useEffect(() => {
+    currentDateRef.current = currentDate;
+  }, [currentDate]);
 
   // Day click / empty slot click → go to canonical calendar tab (no interim page)
   const handleDrillDown = () => {
@@ -388,8 +435,8 @@ export default function CalendarView() {
         isOpen={modalOpen}
         onRequestClose={closeModal}
         contentLabel="Event Details"
-        className="bg-[#1c1c1c] rounded-lg p-6 max-w-md mx-auto mt-20 outline-none"
-        overlayClassName="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center"
+        className="bg-[#1c1c1c] rounded-lg p-6 w-[calc(100vw-2rem)] max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto outline-none"
+        overlayClassName="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-start sm:items-center justify-center p-4"
       >
         {selectedEvent && (
           <div className="text-white space-y-2">
@@ -399,10 +446,17 @@ export default function CalendarView() {
             {(() => {
               const d = sanitizeEventText(selectedEvent.description);
               return d ? (
-                <p className="whitespace-pre-wrap"><strong>Description:</strong> {d}</p>
+                <p className="whitespace-pre-wrap"><strong>Notes:</strong> {d}</p>
               ) : null;
             })()}
-            {selectedEvent.location && <p><strong>Location:</strong> {selectedEvent.location}</p>}
+            <p>
+              <strong>Source:</strong>{" "}
+              {selectedEvent.source === "crm"
+                ? "CoveCRM"
+                : selectedEvent.source === "manual"
+                ? "Google Calendar"
+                : "Calendar"}
+            </p>
             {lead ? (
               <>
                 <hr className="my-2 border-gray-700" />
@@ -411,7 +465,7 @@ export default function CalendarView() {
                 <p><strong>Phone:</strong> {lead.Phone}</p>
                 {(() => {
                   const n = sanitizeEventText(lead.Notes);
-                  return <p><strong>Notes:</strong> {n || "—"}</p>;
+                  return n ? <p><strong>Notes:</strong> {n}</p> : null;
                 })()}
                 <button
                   onClick={() => lead?._id && router.push(`/dashboard?tab=leads&leadId=${lead._id}`)}

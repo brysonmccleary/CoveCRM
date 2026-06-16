@@ -57,6 +57,69 @@ Modal.setAppElement("#__next");
 
 const toISO = (d: Date) => new Date(d.getTime()).toISOString();
 
+function localDateKey(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function parseLocalDateKey(value?: string | null) {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, y, m, d] = match;
+  const parsed = new Date(Number(y), Number(m) - 1, Number(d), 12, 0, 0, 0);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseCalendarDate(value?: string) {
+  if (!value) return new Date();
+  const localDate = parseLocalDateKey(value);
+  if (localDate) return localDate;
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function parseSavedCalendarDate(value?: string | null) {
+  if (!value) return null;
+  const localDate = parseLocalDateKey(value);
+  if (localDate) return localDate;
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function persistCalendarDate(date: Date) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem("calendar:date", localDateKey(date));
+}
+
+function sanitizeUserFacingText(input?: string) {
+  if (!input) return "";
+  const raw = String(input);
+  const internalPattern =
+    /\b(callSid|call_sid|recordingSid|recording_sid|recordingId|recording_id|recordingUrl|calendarEventId|eventId|leadId|bookingId|aiCallSessionId|conferenceName|twilio status|durationsec|outcome=|metadata|debug)\b/i;
+
+  const lines = raw
+    .replace(/\[[^\]]*\bcallSid\s*:[^\]]*\]/gi, "")
+    .replace(/\[[^\]]*\brecording(?:Sid|Id)\s*:[^\]]*\]/gi, "")
+    .replace(/\r?\n/g, "\n")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !internalPattern.test(l));
+
+  const MAX_LINES = 6;
+  const MAX_LINE_LEN = 140;
+  const MAX_TOTAL = 420;
+  const sliced = lines
+    .slice(0, MAX_LINES)
+    .map((l) => (l.length > MAX_LINE_LEN ? `${l.slice(0, MAX_LINE_LEN)}...` : l));
+
+  let out = sliced.join("\n").trim();
+  if (out.length > MAX_TOTAL) out = `${out.slice(0, MAX_TOTAL)}...`;
+  return out;
+}
+
 function shouldReconnect(resStatus: number, data: any) {
   if (data?.needsReconnect === true) return true;
   if (resStatus === 401) return true;
@@ -120,8 +183,9 @@ export default function CalendarBookings() {
   const [currentDate, setCurrentDate] = useState<Date>(() => {
     if (typeof window === "undefined") return new Date();
     const saved = localStorage.getItem("calendar:date");
-    return saved ? new Date(saved) : new Date();
+    return parseSavedCalendarDate(saved) || new Date();
   });
+  const currentDateRef = useRef(currentDate);
 
   // Range & debounced fetch
   const rangeRef = useRef<{ start?: Date; end?: Date }>({});
@@ -185,8 +249,8 @@ export default function CalendarBookings() {
       const parsed: EventType[] = ((data && data.events) || []).map((e: any) => ({
         id: e.id,
         title: e.summary || "",
-        start: new Date(e.start),
-        end: new Date(e.end),
+        start: parseCalendarDate(e.start),
+        end: parseCalendarDate(e.end),
         description: e.description,
         location: e.location,
         colorId: e.colorId ?? null,
@@ -304,10 +368,9 @@ export default function CalendarBookings() {
   };
 
   const handleNavigate = (date: Date) => {
+    currentDateRef.current = date;
     setCurrentDate(date);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("calendar:date", date.toISOString());
-    }
+    persistCalendarDate(date);
     rangeRef.current = computeRange(view, date);
     scheduleFetch();
   };
@@ -317,9 +380,13 @@ export default function CalendarBookings() {
     if (typeof window !== "undefined") {
       localStorage.setItem("calendar:view", String(nextView));
     }
-    rangeRef.current = computeRange(nextView, currentDate);
+    rangeRef.current = computeRange(nextView, currentDateRef.current);
     scheduleFetch();
   };
+
+  useEffect(() => {
+    currentDateRef.current = currentDate;
+  }, [currentDate]);
 
   // Initial fetch after connection status is known
   useEffect(() => {
@@ -575,8 +642,8 @@ export default function CalendarBookings() {
         isOpen={modalOpen}
         onRequestClose={closeModal}
         contentLabel="Event Details"
-        className="bg-[#0f172a] rounded-lg p-6 max-w-md mx-auto mt-20 outline-none"
-        overlayClassName="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center"
+        className="bg-[#0f172a] rounded-lg p-6 w-[calc(100vw-2rem)] max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto outline-none"
+        overlayClassName="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-start sm:items-center justify-center p-4"
       >
         {selectedEvent && (
           <div className="text-white space-y-2">
@@ -587,34 +654,20 @@ export default function CalendarBookings() {
             <p>
               <strong>End:</strong> {selectedEvent.end.toLocaleString()}
             </p>
-            {selectedEvent.location && (
-              <p>
-                <strong>Location:</strong> {selectedEvent.location}
-              </p>
-            )}
+            <p>
+              <strong>Source:</strong>{" "}
+              {selectedEvent.source === "crm"
+                ? "CoveCRM"
+                : selectedEvent.source === "manual"
+                ? "Google Calendar"
+                : "Calendar"}
+            </p>
             {(() => {
-              const raw = String(selectedEvent.description || "");
-              const looksLikeLogs =
-                /callsid=|durations?ec=|ai dialer fallback|twilio status=|outcome=disconnected|twilio status=completed|\[ai dialer/i.test(raw);
-
-              if (looksLikeLogs) return null;
-
-              const cleaned = raw.replace(/\r?\n/g, "\n").trim();
-const lines = cleaned.split("\n").map((l) => l.trim()).filter(Boolean);
-const MAX_LINES = 6;
-              const MAX_LINE_LEN = 140;
-              const MAX_TOTAL = 420;
-
-              const sliced = lines
-                .slice(0, MAX_LINES)
-                .map((l) => (l.length > MAX_LINE_LEN ? l.slice(0, MAX_LINE_LEN) + "…" : l));
-
-              let out = sliced.join("\n");
-if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + "…";
+              const out = sanitizeUserFacingText(selectedEvent.description);
 
               return out ? (
                 <p className="whitespace-pre-wrap">
-                  <strong>Description:</strong> {out}
+                  <strong>Notes:</strong> {out}
                 </p>
               ) : null;
             })()}
@@ -638,36 +691,12 @@ if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + "…";
                   <strong>Phone:</strong> {lead.Phone}
                 </p>
                 {(() => {
-                    const raw = String(lead?.Notes || "");
-                    const looksLikeLogs =
-                      /callsid=|durations?ec=|ai dialer fallback|twilio status=|outcome=disconnected|twilio status=completed|\[ai dialer/i.test(raw);
-
-                    if (looksLikeLogs) {
-                      return (
-                        <p>
-                          <strong>Notes:</strong> —
-                        </p>
-                      );
-                    }
-
-                    const cleaned = raw.replace(/\r?\n/g, "\n").trim();
-const lines = cleaned.split("\n").map((l) => l.trim()).filter(Boolean);
-const MAX_LINES = 6;
-                    const MAX_LINE_LEN = 140;
-                    const MAX_TOTAL = 420;
-
-                    const sliced = lines
-                      .slice(0, MAX_LINES)
-                      .map((l) => (l.length > MAX_LINE_LEN ? l.slice(0, MAX_LINE_LEN) + "…" : l));
-
-                    let out = sliced.join("\n");
-if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + "…";
-
-                    return (
+                    const out = sanitizeUserFacingText(lead?.Notes);
+                    return out ? (
                       <p>
-                        <strong>Notes:</strong> {out || "—"}
+                        <strong>Notes:</strong> {out}
                       </p>
-                    );
+                    ) : null;
                   })()}
                 <button
                   onClick={() => lead?._id && router.push(`/dashboard?tab=leads&leadId=${lead._id}`)}
