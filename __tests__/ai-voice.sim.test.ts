@@ -1312,12 +1312,15 @@ describe("Early voicemail/non-human transcript skip guards", () => {
     );
   });
 
-  test("early voicemail replay completes Twilio call instead of creating a policy response", () => {
+  test("early voicemail replay closes OpenAI instead of creating a policy response", () => {
     expect(source).toContain("function completeTwilioCallNow");
     expect(replaySource).toContain(
+      'safelyCloseOpenAi(state, "voicemail transcript detected during replay");'
+    );
+    expect(replaySource).not.toContain(
       'completeTwilioCallNow(twilioWs, state, "voicemail transcript detected during replay");'
     );
-    expect(replaySource.indexOf("completeTwilioCallNow")).toBeLessThan(
+    expect(replaySource.indexOf('safelyCloseOpenAi(state, "voicemail transcript detected during replay")')).toBeLessThan(
       replaySource.indexOf("[AI-VOICE][TURN-GATE][REPLAY]")
     );
   });

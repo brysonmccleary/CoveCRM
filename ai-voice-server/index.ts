@@ -1214,7 +1214,7 @@ async function replayPendingCommittedTurn(
           notesAppend: "Voicemail/system greeting transcript detected during replay. Call ended automatically.",
         }).catch(() => {});
       }
-      completeTwilioCallNow(twilioWs, state, "voicemail transcript detected during replay");
+      safelyCloseOpenAi(state, "voicemail transcript detected during replay");
       return;
     }
 
@@ -3387,8 +3387,7 @@ function isVoicemailSystemTranscript(textRaw: string): boolean {
     t.includes("mailbox is full") ||
     t.includes("mailbox has not been set up") ||
     t.includes("your call has been forwarded") ||
-    t.includes("record your message") ||
-    t.includes("leave a message")
+    t.includes("record your message")
   );
 }
 
@@ -10823,7 +10822,8 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       state.aiSpeaking === true &&
       state.responseInFlight === true &&
       state.outboundOpenAiDone !== true &&
-      !isSilence
+      !isSilence &&
+      state.phase !== "awaiting_greeting_reply"
     ) {
       // Track sustained caller speech while AI is speaking.
       state.bargeInDetected = true;
@@ -10845,12 +10845,12 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 650;
 
       // Require sustained speech: at least 200ms of non-silence while AI is speaking
-      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 700;
+      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 1200;
 
       if (cooldownOk && sustainedOk) {
         // ✅ Patch 5: ignore micro-interjections ("um", quick noises). Require truly sustained speech.
         const ms = Number(state.bargeInAudioMsBuffered || 0);
-        if (ms >= 700) {
+        if (ms >= 1200) {
           // Cancel only for validated barge-in while AI is speaking
           tryCancelOpenAiResponse(state, "ai-speaking");
         }
