@@ -55,7 +55,7 @@ interface Props {
 
 // Consent copy used on the consent step and as footer note.
 const COMPLIANT_CONSENT_TEXT =
-  "By clicking Continue, you agree to be contacted by a licensed insurance agent via calls, texts/SMS, and email, including automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase.";
+  "You may choose whether to receive SMS messages about your Final Expense request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.";
 
 const DISCLAIMER_TEXT =
   "Availability varies by state and carrier. This is a no-obligation review with a licensed independent agent.";
@@ -81,6 +81,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [done, setDone] = useState(false);
+  const [smsConsentGiven, setSmsConsentGiven] = useState(false);
 
   if (notFound || !funnelData) {
     return (
@@ -104,6 +105,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   // pass the just-selected value without waiting on a React state flush.
   const getStepError = (step: FunnelStep, override?: string): string => {
     if (!step) return "";
+    if (step.id === "consent") return "";
 
     if (step.type === "contact") {
       if (contact.firstName.trim().length < 2) return "Please enter your first name.";
@@ -162,6 +164,11 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
       setSubmitError("We currently do not service your state for this campaign.");
       return;
     }
+    const finalAnswers = {
+      ...answers,
+      smsConsentGiven: smsConsentGiven ? "yes" : "no",
+      smsConsentText: smsConsentLabel,
+    };
     setSubmitting(true);
     setSubmitError("");
     try {
@@ -177,7 +184,9 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
           state: selectedState || answers.state,
           age: answers.age,
           selectedOption: answers.coverage || answers.mortgageAmount || "",
-          answers,
+          smsConsentGiven,
+          smsConsentText: smsConsentLabel,
+          answers: finalAnswers,
           stateRestrictionWarning: false,
           stateOutsidePrimaryLicensedArea: false,
         }),
@@ -203,6 +212,12 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
 
   // ── Step renderer ───────────────────────────────────────────────────────────
 
+  const agent = funnelData.publicAgentProfile || {};
+  const consentSenderName =
+    agent.displayName?.trim() || agent.businessName?.trim() || "the sender";
+  const smsConsentLabel =
+    `Yes, I agree to receive SMS messages from ${consentSenderName} about my Final Expense request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`;
+
   const consentText =
     funnelData.complianceProfile?.consentText?.trim() || COMPLIANT_CONSENT_TEXT;
 
@@ -222,10 +237,40 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               {consentText}
             </p>
           </div>
+          <label style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            border: "1px solid rgba(15,23,42,0.14)",
+            borderRadius: 8,
+            padding: "14px 16px",
+            marginBottom: 16,
+            cursor: "pointer",
+          }}>
+            <input
+              type="checkbox"
+              checked={smsConsentGiven}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setSmsConsentGiven(checked);
+                setAnswer(step.id, checked ? "Yes, I agree" : "No SMS consent");
+              }}
+              style={{
+                width: 18,
+                height: 18,
+                marginTop: 2,
+                flexShrink: 0,
+                accentColor: theme.button,
+                cursor: "pointer",
+              }}
+            />
+            <span style={{ fontSize: 12, lineHeight: 1.55, color: theme.text }}>
+              {smsConsentLabel}
+            </span>
+          </label>
           <button
             onClick={() => {
-              setAnswer(step.id, "Yes, I agree");
-              next("Yes, I agree");
+              next(smsConsentGiven ? "Yes, I agree" : "No SMS consent");
             }}
             disabled={submitting}
             style={{
@@ -241,7 +286,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               cursor: submitting ? "wait" : "pointer",
             }}
           >
-            {submitting ? "Submitting…" : "Continue — I Agree"}
+            {submitting ? "Submitting…" : "Submit Request"}
           </button>
         </div>
       );
@@ -386,7 +431,6 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   const inputStyle = getInputStyle(theme);
   const selectStyle = getSelectStyle(theme);
 
-  const agent = funnelData.publicAgentProfile || {};
   const agentPhoneDigits = normalizeDigits(agent.phone || "");
   const agentTel = agentPhoneDigits.length >= 10 ? `tel:+1${agentPhoneDigits.slice(-10)}` : "";
   const compliance = funnelData.complianceProfile || {};
