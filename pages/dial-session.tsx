@@ -1716,7 +1716,7 @@ export default function DialSession() {
     }
   };
 
-  const handleEndSession = () => {
+  const handleEndSession = async () => {
     const ok = window.confirm(
       `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
     );
@@ -1735,12 +1735,13 @@ export default function DialSession() {
     setIsPaused(false);
     setStatus("Session ended");
 
+    // persist final index to server so Resume starts after it
+    await serverPersist(currentLeadIndex);
+
     // clear saved LOCAL progress if provided
     if (typeof progressKey === "string") {
       try { localStorage.removeItem(progressKey); } catch {}
     }
-    // persist final index to server so Resume starts after it
-    serverPersist(currentLeadIndex);
 
     showSessionSummary();
   };

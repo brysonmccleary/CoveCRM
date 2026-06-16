@@ -1085,6 +1085,67 @@ function maybeCompleteCallAfterGoodbye(ws: WebSocket, state: CallState, reason: 
 }
 
 
+function completeTwilioCallNow(ws: WebSocket, state: CallState, reason: string) {
+  if (!state.callSid) return;
+  if ((state as any).twilioCompleteStarted) return;
+  (state as any).twilioCompleteStarted = true;
+  state.phase = "ended";
+  state.pendingCommittedTurn = null;
+  state.awaitingUserAnswer = false;
+  state.awaitingAnswerForStepIndex = undefined;
+  clearSilenceWatchdog(state, `complete call (${reason})`);
+  stopOutboundPacer(ws, state, `complete call (${reason})`);
+  safelyCloseOpenAi(state, reason);
+
+  void (async () => {
+    try {
+      if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+        console.warn("[AI-VOICE][TWILIO] missing credentials; cannot complete call", {
+          callSid: state.callSid,
+          reason,
+        });
+        try {
+          if (ws.readyState === WebSocket.OPEN) ws.close();
+        } catch {}
+        return;
+      }
+      const twilioCallUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls/${state.callSid}.json`;
+      const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
+      const resp = await fetch(twilioCallUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${credentials}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ Status: "completed" }).toString(),
+      });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        console.warn("[AI-VOICE][TWILIO] complete call failed", {
+          callSid: state.callSid,
+          reason,
+          status: resp.status,
+          body: body.slice(0, 200),
+        });
+        try {
+          if (ws.readyState === WebSocket.OPEN) ws.close();
+        } catch {}
+        return;
+      }
+      try {
+        if (ws.readyState === WebSocket.OPEN) ws.close();
+      } catch {}
+    } catch (err: any) {
+      console.warn("[AI-VOICE][TWILIO] complete call error:", {
+        callSid: state.callSid,
+        reason,
+        error: err?.message || err,
+      });
+    }
+  })();
+}
+
+
 
 async function replayPendingCommittedTurn(
   twilioWs: WebSocket,
@@ -1153,7 +1214,7 @@ async function replayPendingCommittedTurn(
           notesAppend: "Voicemail/system greeting transcript detected during replay. Call ended automatically.",
         }).catch(() => {});
       }
-      safelyCloseOpenAi(state, "voicemail transcript detected during replay");
+      completeTwilioCallNow(twilioWs, state, "voicemail transcript detected during replay");
       return;
     }
 
@@ -3315,13 +3376,18 @@ function isVoicemailSystemTranscript(textRaw: string): boolean {
 
   return (
     t.includes("person trying to reach is not available") ||
+    t.includes("person you re trying to reach is not available") ||
     t.includes("person you are trying to reach is not available") ||
     t.includes("person you have called is not available") ||
     t.includes("please leave your message") ||
+    t.includes("please leave a message") ||
     t.includes("leave your message after the tone") ||
     t.includes("after the tone") ||
     t.includes("at the tone") ||
+    t.includes("voice mail") ||
+    t.includes("voicemail") ||
     t.includes("mailbox is full") ||
+    t.includes("mailbox") ||
     t.includes("mailbox has not been set up") ||
     t.includes("your call has been forwarded") ||
     t.includes("record your message") ||
@@ -7678,7 +7744,7 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
       lastExactAt > 0 &&
       (Date.now() - lastExactAt) < 5 * 60 * 1000;
 
-    if (!onConfirmStep || !hasRecentExactTime || state.finalOutcomeSent || (state as any).confirmedAppointment) return null;
+    if (!onConfirmStep || !hasRecentExactTime || state.finalOutcomeSent) return null;
 
     console.log("[AI-VOICE][BOOKING][SERVER-TRIGGER][POLICY]", {
       callSid: state.callSid,
@@ -7697,15 +7763,34 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
         extractExplicitDaySelection(String(state.selectedTimeText || "")) ||
         extractExplicitDaySelection(String(state.lastAcceptedUserText || ""));
       const rememberedDay = String(state.selectedDay || "").trim().toLowerCase();
+      const isNamedWeekday = (day: string | null | undefined): day is string =>
+        !!day && /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/.test(day);
       const selectedBookingDay =
-        explicitDay === "today" || explicitDay === "tomorrow"
+        explicitDay === "today" || explicitDay === "tomorrow" || isNamedWeekday(explicitDay)
           ? explicitDay
-          : rememberedDay === "today" || rememberedDay === "tomorrow"
+          : rememberedDay === "today" || rememberedDay === "tomorrow" || isNamedWeekday(rememberedDay)
             ? rememberedDay
             : "today";
       const bookingLocalDate = new Date(nowInSchedulingTz);
       if (selectedBookingDay === "tomorrow") bookingLocalDate.setDate(bookingLocalDate.getDate() + 1);
-      const bookingDateStr = bookingLocalDate.toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" });
+      if (isNamedWeekday(selectedBookingDay)) {
+        const weekdayIndex: Record<string, number> = {
+          sunday: 0,
+          monday: 1,
+          tuesday: 2,
+          wednesday: 3,
+          thursday: 4,
+          friday: 5,
+          saturday: 6,
+        };
+        const targetDay = weekdayIndex[selectedBookingDay];
+        const currentDay = bookingLocalDate.getDay();
+        const daysUntil = (targetDay - currentDay + 7) % 7;
+        bookingLocalDate.setDate(bookingLocalDate.getDate() + daysUntil);
+      }
+      const formatBookingDate = (date: Date): string =>
+        date.toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" });
+      let bookingDateStr = formatBookingDate(bookingLocalDate);
 
       const extractSpokenClockForBooking = (raw: string): string => {
         const cleanClock = extractExactClockText(raw);
@@ -7746,7 +7831,12 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
       };
 
       const timeTextForBooking = extractSpokenClockForBooking(lastExactTime);
-      const startDate = parseSpokenTime(timeTextForBooking, bookingDateStr, resolvedSchedulingTz);
+      let startDate = parseSpokenTime(timeTextForBooking, bookingDateStr, resolvedSchedulingTz);
+      if (startDate && isNamedWeekday(selectedBookingDay) && startDate.getTime() < Date.now()) {
+        bookingLocalDate.setDate(bookingLocalDate.getDate() + 7);
+        bookingDateStr = formatBookingDate(bookingLocalDate);
+        startDate = parseSpokenTime(timeTextForBooking, bookingDateStr, resolvedSchedulingTz);
+      }
       if (startDate && !isNaN(startDate.getTime())) {
         if (startDate.getTime() < Date.now()) {
           const timeSelectionStepIndex = Math.max(0, Math.min(2, Math.max(0, totalSteps - 1)));
@@ -7759,7 +7849,10 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
           return clarificationLine;
         }
         const diffMs = startDate.getTime() - Date.now();
-        if (diffMs > -60000 && diffMs < 48 * 60 * 60 * 1000) {
+        const maxBookingWindowMs = isNamedWeekday(selectedBookingDay)
+          ? 8 * 24 * 60 * 60 * 1000
+          : 48 * 60 * 60 * 1000;
+        if (diffMs > -60000 && diffMs < maxBookingWindowMs) {
           if (!state.finalOutcomeSent) {
             void handleFinalOutcomeIntent(state, {
               kind: "final_outcome",

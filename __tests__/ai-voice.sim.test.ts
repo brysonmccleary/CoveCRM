@@ -21,6 +21,9 @@
  * 10. Concurrent sessions: state isolation between two simultaneous rebooking calls
  */
 
+import * as fs from "fs";
+import * as path from "path";
+
 // ─── Mirrored pure utility functions (verbatim from ai-voice-server/index.ts) ──
 
 function normalizeTurnTextForKey(textRaw: string): string {
@@ -1217,5 +1220,102 @@ describe("Fix 2: not_interested booking guard in handlePostCoverageSchedulingTur
     const confirmedAppointment = true;
     const notInterested = "I'm not really interested anymore";
     expect(confirmedAppointment && isBareClosingNegative(notInterested)).toBe(false);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+describe("Booking trigger regression guards", () => {
+// ══════════════════════════════════════════════════════════════════════════════
+
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "ai-voice-server", "index.ts"),
+    "utf8"
+  );
+  const triggerSource = source.slice(
+    source.indexOf("function maybeFireServerSideBookingTrigger"),
+    source.indexOf("async function handleConversationTurn")
+  );
+
+  test("confirmedAppointment does not block the server-side booking trigger", () => {
+    expect(triggerSource).toContain(
+      "if (!onConfirmStep || !hasRecentExactTime || state.finalOutcomeSent) return null;"
+    );
+    expect(triggerSource).not.toContain(
+      "state.finalOutcomeSent || (state as any).confirmedAppointment"
+    );
+    expect(triggerSource).toContain("void handleBookAppointmentIntent(state,");
+  });
+
+  test("named weekdays resolve inside the booking trigger instead of falling back to today", () => {
+    expect(triggerSource).toContain("const isNamedWeekday");
+    expect(triggerSource).toContain("isNamedWeekday(explicitDay)");
+    expect(triggerSource).toContain("isNamedWeekday(rememberedDay)");
+    expect(triggerSource).toContain("const daysUntil = (targetDay - currentDay + 7) % 7;");
+    expect(triggerSource).toContain("bookingLocalDate.setDate(bookingLocalDate.getDate() + daysUntil);");
+  });
+
+  test("same-day named weekday in the past rolls to next week, not the tomorrow clarification loop", () => {
+    expect(triggerSource).toContain(
+      "if (startDate && isNamedWeekday(selectedBookingDay) && startDate.getTime() < Date.now())"
+    );
+    expect(triggerSource).toContain("bookingLocalDate.setDate(bookingLocalDate.getDate() + 7);");
+    expect(triggerSource).toContain("bookingDateStr = formatBookingDate(bookingLocalDate);");
+  });
+
+  test("named weekdays can book beyond the old 48-hour tomorrow-only window", () => {
+    expect(triggerSource).toContain("const maxBookingWindowMs = isNamedWeekday(selectedBookingDay)");
+    expect(triggerSource).toContain("? 8 * 24 * 60 * 60 * 1000");
+    expect(triggerSource).toContain(": 48 * 60 * 60 * 1000");
+  });
+
+  test("post-booking no-plus-time closing guard remains in place", () => {
+    expect(source).toContain("(state as any).confirmedAppointment &&");
+    expect(source).toContain("didAiJustAskClosingQuestion(state) &&");
+    expect(source).toContain("/^(no|nah|nope|negative|nuh uh|uh uh|mm mm)[,.\\s!]/i.test(raw.trim())");
+    expect(source).toContain("routeKind: \"post_coverage_closing_no_goodbye\"");
+    expect(source).toContain("pendingHangupAfterGoodbye: true");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+describe("Early voicemail/non-human transcript skip guards", () => {
+// ══════════════════════════════════════════════════════════════════════════════
+
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "ai-voice-server", "index.ts"),
+    "utf8"
+  );
+  const voicemailHelperSource = source.slice(
+    source.indexOf("function isVoicemailSystemTranscript"),
+    source.indexOf("function isConversationalGreetingNegative")
+  );
+  const replaySource = source.slice(
+    source.indexOf("async function replayPendingCommittedTurn"),
+    source.indexOf("/**\n * ✅ Voicemail detection helpers")
+  );
+
+  test("carrier unavailable transcript phrase is detected before normal routing", () => {
+    expect(voicemailHelperSource).toContain("person you re trying to reach is not available");
+    expect(voicemailHelperSource).toContain("please leave a message");
+    expect(voicemailHelperSource).toContain("your call has been forwarded");
+    expect(voicemailHelperSource).toContain("at the tone");
+    expect(voicemailHelperSource).toContain("voicemail");
+    expect(voicemailHelperSource).toContain("mailbox");
+  });
+
+  test("voicemail replay skip is restricted to the early greeting phase", () => {
+    expect(replaySource).toContain(
+      'if (state.phase === "awaiting_greeting_reply" && isVoicemailSystemTranscript(restoredTranscript))'
+    );
+  });
+
+  test("early voicemail replay completes Twilio call instead of creating a policy response", () => {
+    expect(source).toContain("function completeTwilioCallNow");
+    expect(replaySource).toContain(
+      'completeTwilioCallNow(twilioWs, state, "voicemail transcript detected during replay");'
+    );
+    expect(replaySource.indexOf("completeTwilioCallNow")).toBeLessThan(
+      replaySource.indexOf("[AI-VOICE][TURN-GATE][REPLAY]")
+    );
   });
 });
