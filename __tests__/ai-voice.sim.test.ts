@@ -1296,11 +1296,14 @@ describe("Early voicemail/non-human transcript skip guards", () => {
 
   test("carrier unavailable transcript phrase is detected before normal routing", () => {
     expect(voicemailHelperSource).toContain("person you re trying to reach is not available");
-    expect(voicemailHelperSource).toContain("please leave a message");
+    expect(voicemailHelperSource).toContain("please leave your message");
     expect(voicemailHelperSource).toContain("your call has been forwarded");
     expect(voicemailHelperSource).toContain("at the tone");
-    expect(voicemailHelperSource).toContain("voicemail");
-    expect(voicemailHelperSource).toContain("mailbox");
+    expect(voicemailHelperSource).toContain("mailbox is full");
+    expect(voicemailHelperSource).toContain("mailbox has not been set up");
+    // broad false-positive patterns removed — real humans say these mid-call
+    expect(voicemailHelperSource).not.toContain('"voicemail"');
+    expect(voicemailHelperSource).not.toContain('"please leave a message"');
   });
 
   test("voicemail replay skip is restricted to the early greeting phase", () => {

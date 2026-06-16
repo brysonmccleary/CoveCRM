@@ -3339,6 +3339,7 @@ function isConversationalGreetingContinue(textRaw: string): boolean {
     "im good whats up", "im good what s up", "i m good whats up",
     "i m good what s up", "what up", "sup", "go on", "im here",
     "i m here", "here", "listening", "talk to me",
+    "yo whats up", "yo what s up",
   ];
 
   if (exactMatches.includes(t)) return true;
@@ -3380,14 +3381,10 @@ function isVoicemailSystemTranscript(textRaw: string): boolean {
     t.includes("person you are trying to reach is not available") ||
     t.includes("person you have called is not available") ||
     t.includes("please leave your message") ||
-    t.includes("please leave a message") ||
     t.includes("leave your message after the tone") ||
     t.includes("after the tone") ||
     t.includes("at the tone") ||
-    t.includes("voice mail") ||
-    t.includes("voicemail") ||
     t.includes("mailbox is full") ||
-    t.includes("mailbox") ||
     t.includes("mailbox has not been set up") ||
     t.includes("your call has been forwarded") ||
     t.includes("record your message") ||
@@ -3439,6 +3436,7 @@ function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
     "me", "myself", "my self", "just me", "for me",
     "this me", "that me", "yeah me", "its me", "it s me",
     "just myself", "only me", "only myself",
+    "this myself", "this is myself",
     "spouse", "both", "both of us", "the two of us", "us both",
     "partner", "my partner",
     "girlfriend", "my girlfriend",
@@ -3454,7 +3452,7 @@ function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
     "parent", "my parent", "mom", "my mom", "dad", "my dad",
   ].includes(t)) return true;
   return (
-    /\b(myself|my self|just me|for me|this me|that me|yeah me|just myself|only me|only myself|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner|girlfriend|my girlfriend|boyfriend|my boyfriend|fianc[eé]+|my fianc[eé]+|significant other|my significant other|family member|my family member|my kids|my children|my son|my daughter|my parent|my mom|my dad|my child|the whole family|whole family|all of us|all of our family|my household|the household)\b/.test(t)
+    /\b(myself|my self|just me|for me|this me|that me|yeah me|just myself|this myself|this is myself|only me|only myself|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner|girlfriend|my girlfriend|boyfriend|my boyfriend|fianc[eé]+|my fianc[eé]+|significant other|my significant other|family member|my family member|my kids|my children|my son|my daughter|my parent|my mom|my dad|my child|the whole family|whole family|all of us|all of our family|my household|the household)\b/.test(t)
   );
 }
 
