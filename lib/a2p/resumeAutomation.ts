@@ -1299,12 +1299,23 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
           brandSid = preExisting;
           log("A2P][BRAND_RECOVERED", { userEmail: normalizedEmail, brandSid, reason: "pre-scan" });
         } else {
+          const brandPayload = {
+            customerProfileBundleSid: profile.profileSid,
+            a2PProfileBundleSid: trustProductSid,
+            brandType: "LOW_VOLUME_STANDARD",
+          };
+          console.log("[A2P][BRAND_CREATE_DIAGNOSTIC]", {
+            userEmail: normalizedEmail,
+            accountSidUsed: trusthubAccountSid,
+            profileSid: profile.profileSid,
+            profileSidType: typeof profile.profileSid,
+            trustProductSid,
+            trustProductSidType: typeof trustProductSid,
+            brandTypeSent: brandPayload.brandType,
+            payloadJson: JSON.stringify(brandPayload),
+          });
           try {
-            const created: any = await trusthubClient.messaging.v1.brandRegistrations.create({
-              customerProfileBundleSid: profile.profileSid,
-              a2PProfileBundleSid: trustProductSid,
-              brandType: "LOW_VOLUME_STANDARD",
-            });
+            const created: any = await trusthubClient.messaging.v1.brandRegistrations.create(brandPayload);
             const sidCandidate = created?.sid || created?.brandSid || created?.id;
             if (isSidLike(sidCandidate, "BN")) {
               brandSid = sidCandidate;
@@ -1325,18 +1336,27 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
               // Don't throw — store the error and let the function continue so
               // trustProductStatus: TWILIO_APPROVED is persisted to the DB.
               // The next sync will retry brand creation with brandSid still null.
+              let responseBody: string | undefined;
+              try { responseBody = JSON.stringify(err?.response?.body ?? err?.response ?? err?.body); } catch { /* ignore */ }
               log("A2P ERROR", {
                 step: "brand_create",
                 userEmail: normalizedEmail,
+                accountSidUsed: trusthubAccountSid,
+                profileSid: profile.profileSid,
+                trustProductSid,
                 message: err?.message || String(err),
                 code: err?.code,
                 status: err?.status,
+                moreInfo: err?.moreInfo,
+                details: err?.details,
+                responseBody,
               });
               const errParts = [err?.message || String(err)];
               if (err?.code != null) errParts.push(`code=${err.code}`);
               if (err?.status != null) errParts.push(`status=${err.status}`);
               if (err?.moreInfo) errParts.push(`moreInfo=${err.moreInfo}`);
               if (err?.details) errParts.push(`details=${JSON.stringify(err.details)}`);
+              if (responseBody && responseBody !== "undefined") errParts.push(`responseBody=${responseBody}`);
               update.lastError = errParts.join(" | ");
             }
           }
