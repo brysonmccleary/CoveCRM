@@ -371,12 +371,12 @@ function mapRow(
   };
 }
 /* ---- dedupe helpers ---- */
-function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
+function buildFilter(userEmail: string, folderId: any, phoneKey?: string, emailKey?: string) {
   if (phoneKey) {
-    return { userEmail, $or: [{ phoneLast10: phoneKey }] };
+    return { userEmail, folderId, $or: [{ phoneLast10: phoneKey }] };
   }
   if (emailKey) {
-    return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
+    return { userEmail, folderId, $or: [{ Email: emailKey }, { email: emailKey }] };
   }
   return null;
 }
@@ -474,7 +474,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const existing = ors.length
-        ? await Lead.find({ userEmail, $or: ors }).select(
+        ? await Lead.find({ userEmail, folderId: safeFolderId, $or: ors }).select(
             "_id phone phoneLast10 normalizedPhone Email email folderId"
           )
         : [];
@@ -512,7 +512,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           continue;
         }
 
-        const filter = buildFilter(userEmail, phoneKey, emailKey);
+        const filter = buildFilter(userEmail, safeFolderId, phoneKey, emailKey);
         if (!filter) {
           skipped++;
           continue;
@@ -804,7 +804,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const existing = ors.length
-        ? await Lead.find({ userEmail, $or: ors }).select(
+        ? await Lead.find({ userEmail, folderId: safeFolderId, $or: ors }).select(
             "_id phone phoneLast10 normalizedPhone Email email folderId"
           )
         : [];
@@ -842,7 +842,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           continue;
         }
 
-        const filter = buildFilter(userEmail, phoneKey, emailKey);
+        const filter = buildFilter(userEmail, safeFolderId, phoneKey, emailKey);
         if (!filter) {
           skipped++;
           continue;
