@@ -127,6 +127,12 @@ function resolveConfiguredCallerId(user: any): string {
     if (fallbackPhone) return fallbackPhone;
   }
 
+  const firstOwned = ((user as any)?.numbers || []).find((entry: any) =>
+    normalizeE164(String(entry?.phoneNumber || "")),
+  );
+  const firstOwnedPhone = normalizeE164(String(firstOwned?.phoneNumber || ""));
+  if (firstOwnedPhone) return firstOwnedPhone;
+
   return "";
 }
 
