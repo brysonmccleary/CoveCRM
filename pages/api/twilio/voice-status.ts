@@ -407,6 +407,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // Auto-trigger AI transcription + overview for completed calls with a recording.
+    // The transcribe-recording endpoint is idempotent (skips if already done).
+    if (status === "completed" && recordingUrl && userEmail) {
+      const baseUrl = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+      const cronKey = (process.env.AI_DIALER_CRON_KEY || "").trim();
+      if (baseUrl && cronKey) {
+        fetch(`${baseUrl}/api/calls/transcribe-recording`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-cron-key": cronKey,
+          },
+          body: JSON.stringify({ callSid }),
+        }).catch(() => {});
+      }
+    }
+
     console.log(
       `[voice-status] callSid=${callSid} status=${status} hadUserEmail=${Boolean(
         userEmail,

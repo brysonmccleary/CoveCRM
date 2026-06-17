@@ -13,7 +13,7 @@ const AISettingsSchema = new Schema(
     aiInboundVoiceKey: { type: String, default: "" },
     aiInboundScriptKey: { type: String, default: "" },
     aiCallOverviewEnabled: { type: Boolean, default: true },
-    aiCallCoachingEnabled: { type: Boolean, default: false },
+    aiCallCoachingEnabled: { type: Boolean, default: true },
     liveTransferEnabled: { type: Boolean, default: false },
     liveTransferPhone: { type: String, default: "" },
     // New lead call config

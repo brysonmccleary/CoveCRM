@@ -22,6 +22,15 @@ const CallPanelClose = dynamic<{
   loading: () => null,
 });
 
+const CallCoachReport = dynamic<{
+  callId: string;
+  leadName?: string;
+  userHasAI?: boolean;
+}>(() => import("@/components/CallCoachReport"), {
+  ssr: false,
+  loading: () => null,
+});
+
 type Lead = {
   id: string;
   _id?: string;
@@ -1463,6 +1472,21 @@ export default function LeadProfileDial() {
               </div>
             )}
           </div>
+
+          {/* AI Call Coach — renders below overview, self-fetches its report */}
+          {latestOverviewCall && (
+            <div className="mb-4">
+              <CallCoachReport
+                callId={String((latestOverviewCall as any).id)}
+                leadName={
+                  [lead?.["First Name"] || lead?.firstName, lead?.["Last Name"] || lead?.lastName]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
+                userHasAI={userHasAI}
+              />
+            </div>
+          )}
 
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold mb-2">Interaction History</h3>

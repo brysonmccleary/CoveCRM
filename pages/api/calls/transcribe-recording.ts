@@ -9,6 +9,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { getUserByEmail } from "@/models/User";
 import { trackUsage } from "@/lib/billing/trackUsage";
+import { generateCallCoachReport } from "@/lib/ai/generateCallCoachReport";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 
@@ -622,8 +623,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         ? call.recordingDuration
         : undefined;
 
+    let settings: any = null;
     if (callUserEmail) {
-      const settings: any = await AISettings.findOne({ userEmail: callUserEmail }).lean();
+      settings = await AISettings.findOne({ userEmail: callUserEmail }).lean();
       if (settings?.aiCallOverviewEnabled === false) {
         return res.status(200).json({
           ok: true,
@@ -710,6 +712,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
 
     await call.save();
+
+    // Fire-and-forget coach report unless user has explicitly disabled it
+    if (overview && callUserEmail && settings?.aiCallCoachingEnabled !== false) {
+      generateCallCoachReport(String(call._id), callUserEmail).catch(() => {});
+    }
+
     if (overview && callUserEmail) {
       aiInsightsBilled = await markAndBillInsightsOnce({
         callId: call._id,
