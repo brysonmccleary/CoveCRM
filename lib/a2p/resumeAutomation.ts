@@ -1332,7 +1332,12 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
                 code: err?.code,
                 status: err?.status,
               });
-              update.lastError = err?.message || String(err);
+              const errParts = [err?.message || String(err)];
+              if (err?.code != null) errParts.push(`code=${err.code}`);
+              if (err?.status != null) errParts.push(`status=${err.status}`);
+              if (err?.moreInfo) errParts.push(`moreInfo=${err.moreInfo}`);
+              if (err?.details) errParts.push(`details=${JSON.stringify(err.details)}`);
+              update.lastError = errParts.join(" | ");
             }
           }
         }
