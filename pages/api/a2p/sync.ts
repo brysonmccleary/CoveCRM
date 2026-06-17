@@ -896,7 +896,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ...(campStatus ? { campaignStatus: campStatus } : {}),
           },
           $unset: {
-            lastError: 1,
             declinedReason: 1,
             brandErrors: 1,
             brandErrorsText: 1,
