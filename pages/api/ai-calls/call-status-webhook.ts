@@ -807,6 +807,7 @@ export default async function handler(
     try {
       if (CallSid && recDoc && recDoc.aiCallSessionId) {
         const aiCallSessionId = recDoc.aiCallSessionId as Types.ObjectId;
+        let clearedActiveCallForTerminal = false;
 
         // ✅ Set lastCallbackAt on every callback; clear activeCallSid on terminal only if it matches this call
         try {
@@ -818,6 +819,7 @@ export default async function handler(
             if ((sessionForClear as any)?.activeCallSid === CallSid) {
               sessionCallbackUpdate.activeCallSid = null;
               sessionCallbackUpdate.activeCallSidAt = null;
+              clearedActiveCallForTerminal = true;
             }
           }
           await AICallSession.updateOne(
@@ -971,7 +973,7 @@ export default async function handler(
 
             const modified = (lockResult as any)?.modifiedCount ?? 0;
 
-            if (modified > 0) {
+            if (modified > 0 || clearedActiveCallForTerminal) {
               console.log(
                 "[AI Dialer] Chaining next lead: kicking worker after terminal call",
                 {
@@ -980,11 +982,14 @@ export default async function handler(
                   callStatus: CallStatus,
                   lastIndex,
                   leadCount,
+                  clearedActiveCallForTerminal,
                 }
               );
 
               await kickAiWorkerOnce(req, {
-                reason: "call_terminal_chain_next",
+                reason: clearedActiveCallForTerminal
+                  ? "terminal_active_call_cleared"
+                  : "call_terminal_chain_next",
                 sessionId: String(aiCallSessionId),
                 callSid: CallSid,
                 callStatus: CallStatus,

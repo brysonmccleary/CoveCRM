@@ -123,16 +123,8 @@ function isAuthorizedCron(req: NextApiRequest): boolean {
   return allowDialerKey || allowCronSecret;
 }
 
-/**
- * Hard gating:
- * - NEVER dial unless there is a truly active / fresh queued session.
- * - Prevents old "queued" sessions from being processed forever by a 1/min cron.
- *
- * You can tune this window. Minimal safe default: 15 minutes.
- */
-const QUEUED_FRESH_WINDOW_MINUTES = Number(
-  process.env.AI_DIALER_QUEUED_FRESH_WINDOW_MINUTES || "15"
-);
+// If a call is marked active but Twilio never sends a terminal callback, recover it.
+const ACTIVE_CALL_STALE_MS = 10 * 60 * 1000;
 
 // ✅ Guardrails (lock + cooldown + max attempts)
 const LOCK_TTL_SECONDS = Number(process.env.AI_DIALER_LOCK_TTL_SECONDS || "120");
@@ -222,9 +214,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await mongooseConnect();
 
     const now = Date.now();
-    const freshCutoff = new Date(
-      now - QUEUED_FRESH_WINDOW_MINUTES * 60 * 1000
-    );
+    const activeCallStaleCutoff = new Date(now - ACTIVE_CALL_STALE_MS);
 
     const lockTtlMs = Math.max(10, LOCK_TTL_SECONDS) * 1000;
     const lockExpiresAt = new Date(Date.now() + lockTtlMs);
@@ -281,14 +271,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ ok: true, message: "locked_skip", sessionId });
       }
     } else {
-      // ✅ Cron sweep  -  pick hottest active session; try up to 3 before giving up
+      // ✅ Cron sweep  -  pick active sessions with remaining leads and no fresh call in flight.
       const cronCandidates: any[] = await AICallSession.find({
         total: { $gt: 0 },
         callDirection: { $ne: "inbound" },
         scriptKey: { $ne: "kayla_signup" },
+        status: { $in: ["queued", "running"] },
+        $expr: {
+          $lt: ["$lastIndex", { $subtract: [{ $size: "$leadIds" }, 1] }],
+        },
         $or: [
-          { status: "running" },
-          { status: "queued", updatedAt: { $gte: freshCutoff } },
+          { activeCallSid: { $exists: false } },
+          { activeCallSid: null },
+          { activeCallSid: "" },
+          { activeCallSidAt: { $lt: activeCallStaleCutoff } },
         ],
       })
         .sort({ updatedAt: -1, createdAt: -1 })
@@ -297,7 +293,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .exec();
 
       if (!cronCandidates.length) {
-        console.log("[AI WORKER] no queued/running sessions (fresh window), exiting");
+        console.log("[AI WORKER] no queued/running sessions with remaining leads, exiting");
         return res.status(200).json({ ok: true, message: "no_work" });
       }
 
@@ -375,21 +371,97 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, message: "not_ready", sessionId });
     }
 
-    // If the session is queued but stale, do nothing (cron sweep only).
-    // Targeted kicks bypass this  -  explicit resume/webhook kicks should always proceed.
-    if (
-      !targetSessionId &&
-      aiSession.status === "queued" &&
-      aiSession.updatedAt &&
-      new Date(aiSession.updatedAt).getTime() < freshCutoff.getTime()
-    ) {
-      console.log("[AI WORKER] queued session is stale; exiting without dialing", {
+    // ✅ Active-call guard: a fresh active call means Twilio is still working.
+    // If the active call is stale, clear it and continue to the next lead.
+    if (aiSession.activeCallSid) {
+      if (!aiSession.activeCallSidAt) {
+        console.warn("[AI WORKER] active call sid has no timestamp; skipping to avoid duplicate dialing", {
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+        });
+        await releaseLock(sessionId);
+        return res.status(200).json({
+          ok: true,
+          message: "active_call_missing_timestamp",
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+        });
+      }
+
+      const activeAgeMs = Date.now() - new Date(aiSession.activeCallSidAt).getTime();
+      const activeAgeSec = activeAgeMs / 1000;
+      if (!Number.isFinite(activeAgeMs) || activeAgeMs < ACTIVE_CALL_STALE_MS) {
+        console.log("[AI WORKER] active call in progress for session; skipping", {
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+          activeAgeSec: Math.round(activeAgeSec),
+        });
+        await releaseLock(sessionId);
+        return res.status(200).json({
+          ok: true,
+          message: "active_call_in_progress",
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+        });
+      }
+
+      let twilioCallStatus = "";
+      try {
+        const { client } = await getClientForUser(userEmail);
+        const twilioCall = await client.calls(String(aiSession.activeCallSid)).fetch();
+        twilioCallStatus = String((twilioCall as any)?.status || "").toLowerCase();
+      } catch (err: any) {
+        console.warn("[AI WORKER] stale active call status check failed; skipping to avoid duplicate dialing", {
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+          activeAgeSec: Math.round(activeAgeSec),
+          error: err?.message || err,
+        });
+        await releaseLock(sessionId);
+        return res.status(200).json({
+          ok: true,
+          message: "active_call_status_check_failed",
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+        });
+      }
+
+      const twilioStillActive = ["queued", "initiated", "ringing", "in-progress"].includes(twilioCallStatus);
+      if (twilioStillActive) {
+        console.log("[AI WORKER] stale active call timestamp but Twilio call is still active; skipping", {
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+          activeAgeSec: Math.round(activeAgeSec),
+          twilioCallStatus,
+        });
+        await releaseLock(sessionId);
+        return res.status(200).json({
+          ok: true,
+          message: "active_call_still_live",
+          sessionId,
+          activeCallSid: aiSession.activeCallSid,
+          twilioCallStatus,
+        });
+      }
+
+      console.warn("[AI WORKER] stale active call is terminal in Twilio; clearing and continuing", {
         sessionId,
-        updatedAt: aiSession.updatedAt,
-        cutoff: freshCutoff,
+        activeCallSid: aiSession.activeCallSid,
+        activeAgeSec: Math.round(activeAgeSec),
+        twilioCallStatus,
       });
-      await releaseLock(sessionId);
-      return res.status(200).json({ ok: true, message: "stale_queued_noop", sessionId });
+      await AICallSession.updateOne(
+        { _id: sessionId },
+        {
+          $set: {
+            activeCallSid: null,
+            activeCallSidAt: null,
+            errorMessage: "Recovered stale active AI call and continued dialing.",
+          },
+        }
+      );
+      aiSession.activeCallSid = null;
+      aiSession.activeCallSidAt = null;
     }
 
     // ✅ DB kill switch (User.aiDialerEnabled default true)
@@ -792,25 +864,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         message: "invalid_fromNumber_marked_error",
         sessionId,
       });
-    }
-
-    // ✅ Active-call guard: don't place a new call if one is already in flight for this session
-    if (aiSession.activeCallSid && aiSession.activeCallSidAt) {
-      const activeAgeSec = (Date.now() - new Date(aiSession.activeCallSidAt).getTime()) / 1000;
-      if (activeAgeSec < 5 * 60) {
-        console.log("[AI WORKER] active call in progress for session; skipping", {
-          sessionId,
-          activeCallSid: aiSession.activeCallSid,
-          activeAgeSec: Math.round(activeAgeSec),
-        });
-        await releaseLock(sessionId);
-        return res.status(200).json({
-          ok: true,
-          message: "active_call_in_progress",
-          sessionId,
-          activeCallSid: aiSession.activeCallSid,
-        });
-      }
     }
 
     // Place the AI outbound call via user's Twilio client

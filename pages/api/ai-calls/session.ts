@@ -7,6 +7,7 @@ import AICallSession from "@/models/AICallSession";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 import { requireBillingReady } from "@/lib/billing/requireBillingReady";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { Types } from "mongoose";
 
 type GetResponse =
@@ -520,9 +521,14 @@ export default async function handler(
           .json({ ok: false, message: "AI dial session not found" });
       }
 
+      const activeCallSidToHangUp =
+        action === "stop" ? String((aiSession as any).activeCallSid || "") : "";
+
       if (action === "stop") {
         aiSession.status = "stopped";
         aiSession.completedAt = new Date();
+        (aiSession as any).activeCallSid = null;
+        (aiSession as any).activeCallSidAt = null;
       } else if (action === "pause") {
         aiSession.status = "paused";
       } else if (action === "resume") {
@@ -536,6 +542,19 @@ export default async function handler(
       }
 
       await aiSession.save();
+
+      if (action === "stop" && activeCallSidToHangUp) {
+        try {
+          const { client } = await getClientForUser(email);
+          await client.calls(activeCallSidToHangUp).update({ status: "completed" } as any);
+        } catch (err: any) {
+          console.warn("[AI SESSION] Failed to hang up active AI call on stop:", {
+            sessionId,
+            activeCallSid: activeCallSidToHangUp,
+            error: err?.message || err,
+          });
+        }
+      }
 
       if (action === "resume") {
         try {

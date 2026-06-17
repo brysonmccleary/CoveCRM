@@ -221,6 +221,36 @@ export default function AIDialSessionPage() {
   }, [activeSession]);
 
   useEffect(() => {
+    const loadActiveSession = async () => {
+      try {
+        setSessionLoading(true);
+        setSessionError(null);
+        const res = await fetch("/api/ai-calls/session");
+        const data = await res.json();
+        if (!res.ok || !data?.ok) {
+          throw new Error(data?.message || "Failed to load active AI dial session");
+        }
+
+        const session = data.session || null;
+        if (!session) return;
+
+        setLastSession(session);
+        if (session.folderId) setSelectedFolderId(String(session.folderId));
+        if (session.scriptKey) setSelectedScriptKey(String(session.scriptKey));
+        if (session.voiceKey) setSelectedVoiceKey(String(session.voiceKey));
+        if (session.fromNumber) setSelectedFromNumber(String(session.fromNumber));
+      } catch (e: any) {
+        console.error("AI Dial: active session load error", e);
+        setSessionError(e?.message || "Failed to load active AI dial session");
+      } finally {
+        setSessionLoading(false);
+      }
+    };
+
+    loadActiveSession();
+  }, []);
+
+  useEffect(() => {
     const loadCertification = async () => {
       try {
         setCertificationLoading(true);
