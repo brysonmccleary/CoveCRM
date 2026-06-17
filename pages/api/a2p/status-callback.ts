@@ -391,9 +391,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const anySid: string | undefined =
       body.ObjectSid ||
+      body.Sid ||
       body.ResourceSid ||
       body.customerProfileSid ||
       body.trustProductSid ||
+      body.TrustProductSid ||
       body.brandSid ||
       body.BrandSid ||
       body.campaignSid ||
