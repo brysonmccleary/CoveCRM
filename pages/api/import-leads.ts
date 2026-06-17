@@ -499,8 +499,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const m of mapped) {
         const phoneKey = m.phoneLast10 as string | undefined;
         const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
+        const normalizedPhoneKey = m.normalizedPhone as string | undefined;
         const exists =
           (phoneKey && byPhone.get(phoneKey)) ||
+          (normalizedPhoneKey && byPhone.get(normalizedPhoneKey)) ||
           (emailKey && byEmail.get(String(emailKey)));
 
         if (!phoneKey && !emailKey) {
@@ -590,8 +592,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         inserted = (result as any).upsertedCount || 0;
-        const existedOps = processedFilters.length - inserted;
-        updated = existedOps < 0 ? 0 : existedOps;
+        updated = (result as any).modifiedCount || 0;
 
         if (processedFilters.length) {
           const orFilters = processedFilters.flatMap((f) =>
@@ -829,8 +830,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const m of rowsMapped) {
         const phoneKey = m.phoneLast10 as string | undefined;
         const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
+        const normalizedPhoneKey = m.normalizedPhone as string | undefined;
         const exists =
           (phoneKey && byPhone.get(phoneKey)) ||
+          (normalizedPhoneKey && byPhone.get(normalizedPhoneKey)) ||
           (emailKey && byEmail.get(String(emailKey)));
 
         if (!phoneKey && !emailKey) {
@@ -918,8 +921,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         inserted = (result as any).upsertedCount || 0;
-        const existedOps = processedFilters.length - inserted;
-        updated = existedOps < 0 ? 0 : existedOps;
+        updated = (result as any).modifiedCount || 0;
 
         const orFilters = processedFilters.flatMap((f) =>
           (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
