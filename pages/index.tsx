@@ -4,7 +4,6 @@ import Link from "next/link";
 import Image from "next/image";
 import { useEffect } from "react";
 import StatsBar from "@/components/home/StatsBar";
-import KaylaSection from "@/components/home/KaylaSection";
 
 const FEATURES = [
   {
@@ -309,11 +308,7 @@ export default function Home() {
                 Login
               </button>
             </Link>
-            <Link href="/kayla">
-              <button className="hidden sm:inline-flex text-sm text-cyan-200 hover:text-white font-medium cursor-pointer transition">
-                Meet Kayla
-              </button>
-            </Link>
+
             <Link href="/signup">
               <button className="bg-blue-600 text-white px-5 py-2 rounded-xl font-semibold hover:bg-blue-500 text-sm cursor-pointer transition shadow-[0_0_24px_rgba(59,130,246,0.35)] border border-blue-500/50 hover:shadow-[0_0_36px_rgba(59,130,246,0.5)]">
                 Start Free Trial
@@ -590,8 +585,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* ── Kayla Section ── */}
-        <KaylaSection />
 
         {/* ── 3-Column Features Strip ── */}
         <section className="py-20 px-6 bg-[#020617]">
