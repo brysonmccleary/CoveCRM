@@ -5517,10 +5517,7 @@ function buildPostCoverageCurrentPivot(
 
   return {
     pivot: getStateAwareClosingPivot(state),
-    stateWrites: {
-      pendingLiveTransferAvailabilityConfirm: false,
-      pendingLiveTransferAvailabilityAttempts: 0,
-    },
+    stateWrites: {},
   };
 }
 
@@ -5700,7 +5697,7 @@ function classifyTurnIntent(
   // Priority 3.7: Step 1 coverage subject answer — BEFORE detectObjection/detectQuestion so
   // "just me", "myself", "spouse" etc. are never misclassified as objections or questions.
   try {
-    if (!isKaylaDemo && stepCtx.idx === 1 && isStepOneCoverageSubjectAnswer(t)) {
+    if (!isKaylaDemo && stepCtx.idx >= 1 && isStepOneCoverageSubjectAnswer(t)) {
       return { kind: "coverage_subject_answer", raw };
     }
   } catch {}
