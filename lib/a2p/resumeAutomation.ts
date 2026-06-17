@@ -1302,7 +1302,7 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
           const brandPayload = {
             customerProfileBundleSid: profile.profileSid,
             a2PProfileBundleSid: trustProductSid,
-            brandType: "LOW_VOLUME_STANDARD",
+            brandType: "STANDARD",
           };
           console.log("[A2P][BRAND_CREATE_DIAGNOSTIC]", {
             userEmail: normalizedEmail,
