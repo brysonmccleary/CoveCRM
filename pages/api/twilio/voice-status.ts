@@ -3,13 +3,19 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { trackUsage } from "@/lib/billing/trackUsage";
-import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import Call from "@/models/Call";
 import InboundCall from "@/models/InboundCall";
 import Lead from "@/models/Lead";
 import { sendEmail } from "@/lib/email";
 
 const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
+const MANUAL_VOICE_COST_PER_MIN = Number(process.env.MANUAL_VOICE_COST_PER_MIN || "0.02");
+const MIN_MANUAL_BILLABLE_SECONDS = 5;
+const NEVER_BILL_EMAILS = new Set(["bryson.mccleary1@gmail.com", "support@covecrm.com"]);
+const BILLING_IN_PROGRESS_SOURCES = [
+  "manual_dial_billing_in_progress",
+  "twilio_voice_billing_in_progress",
+];
 
 /** Helpers */
 function firstDefined<T = any>(...vals: T[]): T | undefined {
@@ -43,6 +49,32 @@ function normStatus(s?: string) {
   // Treat "answered" as "in-progress"
   if (x === "answered") return "in-progress";
   return x;
+}
+
+function rawStatus(s?: string) {
+  return String(s || "").toLowerCase();
+}
+
+function manualBillStartSource(status: string) {
+  if (status === "initiated") return "pstn_initiated";
+  if (status === "ringing") return "pstn_ringing";
+  if (status === "in-progress" || status === "answered") return "pstn_answered";
+  return undefined;
+}
+
+function isAdminEmail(email?: string | null) {
+  if (!email) return false;
+  const list = (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return list.includes(email.toLowerCase());
+}
+
+function isNeverBillEmail(email?: string | null) {
+  if (!email) return false;
+  const normalized = email.toLowerCase();
+  return NEVER_BILL_EMAILS.has(normalized) || isAdminEmail(normalized);
 }
 
 function ceilMinutesFromSeconds(seconds: number) {
@@ -171,9 +203,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const callSid = String(firstDefined(b.callSid, b.CallSid, q.callSid, q.CallSid) || "").trim();
   if (!callSid) return res.status(200).json({ ok: false, error: "missing_callSid" });
 
+  const rawCallStatus = rawStatus(firstDefined(b.status, b.CallStatus, q.status, q.CallStatus));
+  const rawDialCallStatus = rawStatus(firstDefined(b.DialCallStatus, q.DialCallStatus));
   const status = normStatus(firstDefined(b.status, b.CallStatus, b.DialCallStatus, q.status, q.CallStatus, q.DialCallStatus));
   const rawDirection = String(firstDefined(b.direction, b.Direction, q.direction, q.Direction) || "").toLowerCase();
   const direction: "outbound" | "inbound" = rawDirection === "inbound" ? "inbound" : "outbound";
+  const billingCategory = String(firstDefined(b.billingCategory, q.billingCategory) || "").toLowerCase();
+  const legType = String(firstDefined(b.legType, q.legType) || "").toLowerCase();
+  const parentCallSid = String(firstDefined(b.parentCallSid, b.ParentCallSid, q.parentCallSid, q.ParentCallSid) || "").trim();
+  const dialCallSid = String(firstDefined(b.dialCallSid, b.DialCallSid, q.dialCallSid, q.DialCallSid) || "").trim();
+  const isManualPstnLeg = billingCategory === "manual_dial" && legType === "pstn";
 
   const from = firstDefined(b.from, b.From, q.from, q.From) as string | undefined;
   const to = firstDefined(b.to, b.To, q.to, q.To) as string | undefined;
@@ -248,20 +287,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ✅ GHL-style billing window
   // Start billing when call starts truly 'ringing' (or in-progress if ringing never arrives)
-  const wantStartBill = (status === "ringing" || status === "in-progress") && !existing?.billStartAt;
+  const manualAttemptStatus = rawCallStatus || rawDialCallStatus || status;
+  const wantManualStartBill =
+    isManualPstnLeg &&
+    ["initiated", "ringing", "in-progress", "answered"].includes(manualAttemptStatus) &&
+    !existing?.billStartAt;
+  const wantStartBill = !isManualPstnLeg && (status === "ringing" || status === "in-progress") && !existing?.billStartAt;
   const wantMarkRinging = status === "ringing" && !existing?.ringingAt;
   const terminalForBilling = ["completed", "busy", "failed", "no-answer", "canceled"].includes(status);
   const wantStopBill = terminalForBilling && !existing?.billStopAt;
 
   const userEmail = (existing?.userEmail || userEmailParam || inboundOwnerEmail || "").toLowerCase();
   const effDirection: "outbound" | "inbound" = (existing?.direction || direction) as any;
-  const leadId = existing?.leadId ? String(existing.leadId) : inboundLeadId;
+  const qLeadId = typeof q.leadId === "string" ? q.leadId.trim() : undefined;
+  const leadId = existing?.leadId ? String(existing.leadId) : (inboundLeadId || qLeadId);
 
   // If we’d have to insert but still lack userEmail, skip insert (prevent orphan rows)
   const allowInsert = Boolean(userEmail);
   const isNewDoc = !existing;
 
   const now = new Date();
+  const firstManualPstnCallbackAt =
+    isManualPstnLeg
+      ? existing?.firstManualPstnCallbackAt || existing?.createdAt || now
+      : undefined;
+  const terminalOnlyManualFallbackStart =
+    isManualPstnLeg &&
+    terminalForBilling &&
+    !existing?.billStartAt &&
+    Boolean(existing?.firstManualPstnCallbackAt || existing?.createdAt)
+      ? firstManualPstnCallbackAt
+      : undefined;
 
   // ✅ Only include NON-overlapping fields in $setOnInsert
   const setOnInsert = prune({
@@ -280,8 +336,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     status,
 
     ...(wantMarkRinging ? { ringingAt: existing?.ringingAt || now } : {}),
-    ...(wantStartBill ? { billStartAt: existing?.billStartAt || now } : {}),
+    ...(wantManualStartBill || wantStartBill || terminalOnlyManualFallbackStart
+      ? { billStartAt: existing?.billStartAt || terminalOnlyManualFallbackStart || now }
+      : {}),
+    ...(wantManualStartBill
+      ? { billStartSource: existing?.billStartSource || manualBillStartSource(manualAttemptStatus) }
+      : {}),
+    ...(terminalOnlyManualFallbackStart
+      ? { billStartSource: existing?.billStartSource || "first_manual_pstn_callback" }
+      : {}),
     ...(wantStopBill ? { billStopAt: existing?.billStopAt || now } : {}),
+    ...(isManualPstnLeg && terminalForBilling ? { billStopSource: existing?.billStopSource || "pstn_terminal" } : {}),
+    ...(isManualPstnLeg
+      ? {
+          billingCategory,
+          legType,
+          pstnCallSid: existing?.pstnCallSid || callSid,
+          firstManualPstnCallbackAt,
+        }
+      : {}),
+    ...(isManualPstnLeg && parentCallSid ? { parentCallSid } : {}),
+    ...(isManualPstnLeg && dialCallSid ? { dialCallSid } : {}),
 
     // keep latest numbers (do NOT duplicate in $setOnInsert)
     ownerNumber: existing?.ownerNumber || from,
@@ -350,10 +425,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (terminalForBilling) {
       try {
         const updated = await (Call as any).findOne({ callSid }).lean();
-        if (updated && !updated?.billedAt && updated?.billStartAt) {
-          const start = new Date(updated.billStartAt).getTime();
-          const stop = new Date(updated.billStopAt || now).getTime();
-          const seconds = Math.max(0, (stop - start) / 1000);
+        if (updated && !updated?.billedAt) {
+          const updatedBillingCategory = String(updated.billingCategory || billingCategory || "").toLowerCase();
+          const updatedLegType = String(updated.legType || legType || "").toLowerCase();
+          const shouldUseManualBilling =
+            updatedBillingCategory === "manual_dial" &&
+            updatedLegType === "pstn" &&
+            Boolean(updated.userEmail);
+          const shouldUseManualVoiceRate =
+            shouldUseManualBilling || updated.direction === "inbound" || updated.direction === "outbound";
+          const ratePerMinute = shouldUseManualVoiceRate ? MANUAL_VOICE_COST_PER_MIN : VOICE_COST_PER_MIN;
+
+          let seconds = 0;
+          if (updated.billStartAt) {
+            const start = new Date(updated.billStartAt).getTime();
+            const stop = new Date(updated.billStopAt || now).getTime();
+            seconds = Math.max(0, (stop - start) / 1000);
+          } else if ((updated.durationSec || 0) > 0) {
+            seconds = updated.durationSec;
+          } else if ((updated.duration || 0) > 0) {
+            seconds = updated.duration;
+          }
+          const twilioDuration = Math.max(0, Number(updated.durationSec || updated.duration || duration || 0));
+
+          if (shouldUseManualBilling && seconds < MIN_MANUAL_BILLABLE_SECONDS && twilioDuration <= 0) {
+            await (Call as any).updateOne(
+              {
+                callSid,
+                $or: [{ billedAt: { $exists: false } }, { billedAt: null }],
+              },
+              {
+                $set: {
+                  billedAt: now,
+                  billableSeconds: 0,
+                  billedMinutes: 0,
+                  billedAmount: 0,
+                  billingRatePerMinute: ratePerMinute,
+                  billedSource: "manual_dial_ring_elapsed",
+                },
+              },
+            );
+            throw new Error("__manual_zero_billed__");
+          }
+
           const mins = ceilMinutesFromSeconds(seconds);
 
           if (mins > 0) {
@@ -361,41 +475,80 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (uEmail) {
               const user = await (User as any).findOne({ email: uEmail });
               if (user) {
-                const { usingPersonal } = await getClientForUser(user.email);
-                if (!usingPersonal) {
-                  const lock = await (Call as any).updateOne(
-                    { callSid, billedAt: { $exists: false } },
-                    {
-                      $set: {
-                        billedAt: now,
-                        billedMinutes: mins,
-                        billedAmount: mins * VOICE_COST_PER_MIN,
-                        billedSource: "twilio-voice",
-                      },
-                    },
-                  );
+                // Check billingMode directly instead of calling getClientForUser.
+                // getClientForUser makes live Twilio API calls (credential validation,
+                // key rotation) that can throw and silently kill this entire billing block.
+                // Self-billed users (billingMode:"self") have their own Twilio account;
+                // Twilio charges them directly so we must not add a second charge here.
+                const usingPersonal = String(user.billingMode || "").toLowerCase() === "self";
+                const isAdminRole = String((user as any).role || "").toLowerCase() === "admin";
+                const isExempt = usingPersonal || isAdminRole || isNeverBillEmail(uEmail);
+                const finalBilledSource = shouldUseManualBilling ? "manual_dial_ring_elapsed" : "twilio-voice";
+                const inProgressSource = shouldUseManualBilling
+                  ? "manual_dial_billing_in_progress"
+                  : "twilio_voice_billing_in_progress";
+                const billedAmount = isExempt ? 0 : mins * ratePerMinute;
 
-                  if ((lock as any)?.modifiedCount > 0) {
-                    try {
+                const lock = await (Call as any).updateOne(
+                  {
+                    callSid,
+                    $and: [
+                      { $or: [{ billedAt: { $exists: false } }, { billedAt: null }] },
+                      {
+                        $or: [
+                          { billedSource: { $exists: false } },
+                          { billedSource: null },
+                          { billedSource: { $nin: BILLING_IN_PROGRESS_SOURCES } },
+                        ],
+                      },
+                    ],
+                  },
+                  {
+                    $set: {
+                      billedSource: inProgressSource,
+                      billedMinutes: mins,
+                      billedAmount,
+                      billableSeconds: seconds,
+                      billingRatePerMinute: ratePerMinute,
+                    },
+                  },
+                );
+
+                if ((lock as any)?.modifiedCount === 0) {
+                  console.log("[voice-status] billing lock already acquired", { callSid });
+                } else {
+                  try {
+                    if (!isExempt) {
                       await trackUsage({
                         user,
-                        amount: mins * VOICE_COST_PER_MIN,
+                        amount: billedAmount,
                         source: "twilio-voice",
                       });
-                    } catch (billingErr) {
-                      await (Call as any).updateOne(
-                        { callSid, billedAt: now },
-                        {
-                          $unset: {
-                            billedAt: "",
-                            billedMinutes: "",
-                            billedAmount: "",
-                            billedSource: "",
-                          },
-                        },
-                      );
-                      throw billingErr;
                     }
+
+                    await (Call as any).updateOne(
+                      { callSid, billedSource: inProgressSource },
+                      {
+                        $set: {
+                          billedAt: now,
+                          billedSource: finalBilledSource,
+                        },
+                      },
+                    );
+                  } catch (billingErr) {
+                    await (Call as any).updateOne(
+                      { callSid, billedSource: inProgressSource },
+                      {
+                        $unset: {
+                          billedMinutes: "",
+                          billedAmount: "",
+                          billableSeconds: "",
+                          billingRatePerMinute: "",
+                          billedSource: "",
+                        },
+                      },
+                    );
+                    throw billingErr;
                   }
                 }
               }
@@ -403,7 +556,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       } catch (e) {
-        console.error("[voice-status] billing finalize error", (e as any)?.message || e);
+        if ((e as any)?.message !== "__manual_zero_billed__") {
+          console.error("[voice-status] billing finalize error", (e as any)?.message || e);
+        }
       }
     }
 

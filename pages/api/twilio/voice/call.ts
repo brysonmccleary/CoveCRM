@@ -5,21 +5,10 @@ import type { Session } from "next-auth";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
-import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 import { selectLocalPresenceNumber } from "@/lib/twilio/localPresence";
-
-const BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
-
-// TwiML join endpoint (already working)
-const VOICE_CONTINUE_PATH = "/api/twiml/voice/continue";
-const voiceContinueUrl = (conference: string) =>
-  `${BASE}${VOICE_CONTINUE_PATH}?conference=${encodeURIComponent(conference)}`;
-
-const voiceStatusUrl = (email: string) =>
-  `${BASE}/api/twilio/voice-status?userEmail=${encodeURIComponent(email.toLowerCase())}`;
 
 function normalizeUSPhoneForCall(value: string): string {
   const raw = String(value || "").trim();
@@ -110,12 +99,6 @@ function pickLeadPhoneE164(leadDoc: any): string {
 }
 
 
-function makeConferenceName(email: string) {
-  const slug = email.replace(/[^a-z0-9]+/gi, "_").toLowerCase().slice(0, 24);
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `cove_${slug}_${Date.now().toString(36)}_${rand}`;
-}
-
 function findOwnedUserNumber(user: any, phoneNumber: string) {
   const normalized = normalizeE164(phoneNumber);
   if (!normalized) return null;
@@ -166,13 +149,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const email = String(session?.user?.email ?? "").toLowerCase();
   if (!email) return res.status(401).json({ message: "Unauthorized" });
 
-  const { leadId, to: toRaw, fromNumber, from, dialKey } = (req.body || {}) as {
+  const { leadId, to: toRaw, fromNumber, from } = (req.body || {}) as {
     leadId?: string;
     to?: string;
-    // allow either key so UI can send either
     fromNumber?: string;
     from?: string;
-    dialKey?: string;
   };
 
   if (!leadId && !toRaw) return res.status(400).json({ message: "Missing leadId or to" });
@@ -289,45 +270,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(409).json({ message: "Outbound number/account mismatch." });
     }
 
-    const conferenceName = makeConferenceName(email);
-
-    const call = await client.calls.create({
-      to,
-      from: chosenFrom,
-      url: voiceContinueUrl(conferenceName),
-      statusCallback: voiceStatusUrl(email),
-      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      record: false,
-    });
-
-    // ✅ Upsert a Call row immediately so the dashboard has something to aggregate
-    const now = new Date();
-    await Call.findOneAndUpdate(
-      { callSid: call.sid },
-      {
-        $setOnInsert: {
-          userEmail: email,
-          ...(leadId ? { leadId } : {}),
-          callSid: call.sid,
-          direction: "outbound",
-          to,
-          from: chosenFrom,
-          createdAt: now,
-          startedAt: now, // treat placement as "started" for metrics,
-          dialKey: (typeof dialKey === "string" && dialKey.trim()) ? dialKey.trim() : undefined
-        },
-        $set: { lastStatus: "initiated", conferenceName },
-      },
-      { upsert: true, new: true }
-    );
-
+    // Validation complete. Return resolved numbers so the browser SDK can place
+    // the call directly (2-leg: browser WebRTC + PSTN to lead via agent-join.ts).
     return res.status(200).json({
       success: true,
-      callSid: call.sid,
-      conferenceName,
       from: chosenFrom,
       to,
-      // helpful debugging (doesn't affect anything)
       requestedFrom: requestedFrom || null,
     });
   } catch (e: any) {

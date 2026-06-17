@@ -188,6 +188,38 @@ export async function joinConference(conferenceName: string) {
   return call;
 }
 
+export async function connectDirect(to: string, callerId: string, userEmail?: string, leadId?: string) {
+  await ensureDevice();
+
+  try { activeCall?.disconnect?.(); } catch {}
+  activeCall = null;
+
+  const params: Record<string, string> = { To: to, CallerId: callerId };
+  if (userEmail) params.userEmail = userEmail;
+  if (leadId) params.leadId = leadId;
+
+  let call: any;
+  try {
+    call = await device.connect({ params });
+  } catch (e) {
+    console.warn("Device.connect failed:", e);
+    throw e;
+  }
+
+  disableSdkSounds(device);
+  startTokenTimer();
+
+  attach(call, "disconnect", () => {
+    if (activeCall === call) activeCall = null;
+    if (tokenRefreshTimer) { clearTimeout(tokenRefreshTimer); tokenRefreshTimer = null; }
+  });
+  attach(call, "error", (e: any) => console.warn("Call error:", e?.message || e));
+  attach(call, "accept", () => startTokenTimer());
+
+  activeCall = call;
+  return call;
+}
+
 export async function leaveConference() {
   try { activeCall?.disconnect?.(); } catch {}
   activeCall = null;

@@ -11,6 +11,16 @@ export interface ICall extends Document {
   billedMinutes?: number;
   billedAmount?: number;
   billedSource?: string;
+  billingCategory?: string;
+  legType?: string;
+  parentCallSid?: string;
+  dialCallSid?: string;
+  pstnCallSid?: string;
+  billableSeconds?: number;
+  billStartSource?: string;
+  billStopSource?: string;
+  billingRatePerMinute?: number;
+  firstManualPstnCallbackAt?: Date;
 
   // ✅ dial session + GHL-style billing window
   dialKey?: string;
@@ -91,6 +101,16 @@ const CallSchema = new Schema<ICall>(
     billedMinutes: Number,
     billedAmount: Number,
     billedSource: String,
+    billingCategory: String,
+    legType: String,
+    parentCallSid: String,
+    dialCallSid: String,
+    pstnCallSid: String,
+    billableSeconds: Number,
+    billStartSource: String,
+    billStopSource: String,
+    billingRatePerMinute: Number,
+    firstManualPstnCallbackAt: Date,
 
     // ✅ dial session + GHL-style billing window
     dialKey: String,

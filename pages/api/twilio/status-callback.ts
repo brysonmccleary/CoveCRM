@@ -21,6 +21,7 @@ const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && pro
 const TERMINAL_SMS_STATES = new Set(["delivered","failed","undelivered","canceled"]);
 const TERMINAL_VOICE_STATES = new Set(["completed","busy","failed","no-answer","canceled"]);
 const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
+const MANUAL_VOICE_COST_PER_MIN = Number(process.env.MANUAL_VOICE_COST_PER_MIN || "0.02");
 
 function candidateUrls(path: string): string[] {
   if (!BASE_URL) return [];
@@ -386,7 +387,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           const callForBilling = await Call.findOne({ callSid: CallSid }).lean<any>();
-          if (callForBilling && !callForBilling.billedAt && userEmail) {
+          const callBillingCategory = String(callForBilling?.billingCategory || "").toLowerCase();
+          const callLegType = String(callForBilling?.legType || "").toLowerCase();
+          const isManualPstnBilling =
+            callBillingCategory === "manual_dial" || callLegType === "pstn";
+          if (callForBilling && !callForBilling.billedAt && userEmail && !isManualPstnBilling) {
             const billStartRaw =
               callForBilling.billStartAt ||
               callForBilling.startedAt ||
@@ -408,7 +413,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const billMinutes = ceilMinutesFromSeconds(billSeconds);
 
             if (billMinutes > 0) {
-              const billAmount = billMinutes * VOICE_COST_PER_MIN;
+              const useManualVoiceRate = direction === "inbound" || direction === "outbound";
+              const billingRatePerMinute = useManualVoiceRate ? MANUAL_VOICE_COST_PER_MIN : VOICE_COST_PER_MIN;
+              const billAmount = billMinutes * billingRatePerMinute;
               const lock = await Call.updateOne(
                 { callSid: CallSid, billedAt: { $exists: false } },
                 {
@@ -416,6 +423,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     billedAt: now,
                     billedMinutes: billMinutes,
                     billedAmount: billAmount,
+                    billingRatePerMinute,
                     billedSource: "twilio-status-callback",
                   },
                 },
@@ -436,6 +444,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                         billedAt: "",
                         billedMinutes: "",
                         billedAmount: "",
+                        billingRatePerMinute: "",
                         billedSource: "",
                       },
                     },

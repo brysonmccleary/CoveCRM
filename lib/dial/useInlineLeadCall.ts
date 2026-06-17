@@ -1,15 +1,16 @@
 // lib/dial/useInlineLeadCall.ts
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import toast from "react-hot-toast";
 import { playRingback, stopRingback, primeAudioContext, ensureUnlocked, armRingbackFromUserGesture, disarmRingbackUserGesture, isRingbackArmed } from "@/utils/ringAudio";
-import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
+import { connectDirect, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
 
-type StartResult = { callSid: string; conferenceName: string };
-
-const isTerminalStatus = (s: string) =>
-  ["completed", "busy", "failed", "no-answer", "canceled"].includes(String(s || "").toLowerCase());
+type StartResult = { to: string; from: string };
 
 export function useInlineLeadCall() {
+  const { data: session } = useSession();
+  const userEmail = String(session?.user?.email || "").toLowerCase();
+
   const [status, setStatus] = useState<string>("Idle");
   const [callActive, setCallActive] = useState<boolean>(false);
   const [muted, setMuted] = useState<boolean>(false);
@@ -17,17 +18,9 @@ export function useInlineLeadCall() {
   const activeCallSidRef = useRef<string | null>(null);
   const activeConferenceRef = useRef<string | null>(null);
   const joinedRef = useRef<boolean>(false);
-  const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const ringbackDesiredRef = useRef<boolean>(false);
   const ringbackIsOnRef = useRef<boolean>(false);
-
-  const clearStatusPoll = () => {
-    if (statusPollRef.current) {
-      clearInterval(statusPollRef.current);
-      statusPollRef.current = null;
-    }
-  };
 
   const applyRingbackDesired = async (desired: boolean) => {
     ringbackDesiredRef.current = desired;
@@ -89,7 +82,6 @@ export function useInlineLeadCall() {
 
     await applyRingbackDesired(false);
     try { disarmRingbackUserGesture(); } catch {}
-    clearStatusPoll();
 
     try {
       if (sid) {
@@ -131,7 +123,7 @@ export function useInlineLeadCall() {
     const r = await fetch("/api/twilio/voice/call", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ leadId, fromNumber, dialKey: "" }),
+      body: JSON.stringify({ leadId, fromNumber }),
     });
 
     if (!r.ok) {
@@ -143,70 +135,20 @@ export function useInlineLeadCall() {
       throw new Error(msg);
     }
 
-    const j = (await r.json()) as { success?: boolean; callSid?: string; conferenceName?: string };
-    if (!j?.success || !j?.callSid || !j?.conferenceName) {
-      throw new Error("Call start did not return callSid + conferenceName");
+    const j = (await r.json()) as { success?: boolean; to?: string; from?: string };
+    if (!j?.success || !j?.to || !j?.from) {
+      throw new Error("Call start did not return to + from");
     }
-    return { callSid: j.callSid, conferenceName: j.conferenceName };
-  }, []);
-
-  const beginStatusPolling = useCallback(async (sid: string) => {
-    clearStatusPoll();
-
-    const interpret = (raw: any) => String(raw || "").toLowerCase();
-
-    statusPollRef.current = setInterval(async () => {
-      try {
-        const j = await fetch(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`, { cache: "no-store" })
-          .then((r) => r.json());
-
-        const s = interpret(j?.status);
-        // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
-
-        if (s === "ringing") {
-          setStatus("Ringing…");
-          await applyRingbackDesired(true);
-          return;
-        }
-
-        if (s === "queued" || s === "initiated") {
-          return;
-        }
-
-        if (s === "in-progress") {
-          await applyRingbackDesired(false);
-          try { disarmRingbackUserGesture(); } catch {}
-          setStatus("Connected");
-          return;
-        }
-
-        if (isTerminalStatus(s)) {
-          await applyRingbackDesired(false);
-          try { disarmRingbackUserGesture(); } catch {}
-          const label =
-            s === "completed" ? "Completed" :
-            s === "busy"      ? "Busy" :
-            s === "no-answer" ? "No Answer" :
-            s === "failed"    ? "Failed" : "Ended";
-          setStatus(label);
-          clearStatusPoll();
-          return;
-        }
-      } catch {
-        // best-effort; keep polling
-      }
-    }, 1000);
+    return { to: j.to, from: j.from };
   }, []);
 
   const startCall = useCallback(async (opts: { leadId: string; fromNumber: string }) => {
     const leadId = String(opts.leadId || "").trim();
     const fromNumber = String(opts.fromNumber || "").trim();
-    // Arm ringback ONLY as part of an explicit user-initiated startCall flow.
     try { armRingbackFromUserGesture(); } catch {}
     if (!leadId) return toast.error("Lead not loaded");
     if (!fromNumber) return toast.error("Select a number to call from");
 
-    // Reset state
     setMuted(false);
     setStatus("Dialing…");
     setCallActive(true);
@@ -215,40 +157,34 @@ export function useInlineLeadCall() {
     activeConferenceRef.current = null;
 
     try {
-      // Ensure audio unlock and start MP3 ringback (matches dial-session philosophy)
       try { await ensureUnlocked(); } catch {}
       await applyRingbackDesired(true);
 
-      const { callSid, conferenceName } = await startOutboundCall(leadId, fromNumber);
+      // Server validates billing, quiet hours, caller ID ownership → returns { to, from }
+      const { to, from } = await startOutboundCall(leadId, fromNumber);
 
+      // Browser SDK places the call (2-leg: browser WebRTC + PSTN to lead)
+      const callObj = await connectDirect(to, from, userEmail, leadId);
+      const callSid = String((callObj as any)?.parameters?.CallSid || "");
       activeCallSidRef.current = callSid;
-      activeConferenceRef.current = conferenceName;
+      joinedRef.current = true;
 
-      // Pre-join conference for zero-lag bridge
-      try {
-        if (!joinedRef.current && activeConferenceRef.current) {
-          joinedRef.current = true;
-          const callObj = await joinConference(activeConferenceRef.current);
+      const safeOn = (ev: string, fn: (...args: any[]) => void) => {
+        try {
+          if ((callObj as any)?.on) (callObj as any).on(ev, fn);
+          else if ((callObj as any)?.addListener) (callObj as any).addListener(ev, fn);
+        } catch {}
+      };
 
-          const safeOn = (ev: string, fn: (...args: any[]) => void) => {
-            try {
-              if ((callObj as any)?.on) (callObj as any).on(ev, fn);
-              else if ((callObj as any)?.addListener) (callObj as any).addListener(ev, fn);
-            } catch {}
-          };
-
-          safeOn("disconnect", () => { hangup("twilio-disconnect"); });
-          safeOn("disconnected", () => { hangup("twilio-disconnected"); });
-          safeOn("hangup", () => { hangup("twilio-hangup"); });
-          safeOn("cancel", async () => { await applyRingbackDesired(false); });
-          safeOn("reject", async () => { await applyRingbackDesired(false); });
-          safeOn("error", async () => { await applyRingbackDesired(false); });
-        }
-      } catch (e: any) {
-        console.warn("Inline: failed to pre-join conference:", e?.message || e);
-      }
-
-      await beginStatusPolling(callSid);
+      // answerOnBridge=true → SDK fires "ringing" while lead's phone rings
+      safeOn("ringing", async () => { setStatus("Ringing…"); await applyRingbackDesired(true); });
+      safeOn("accept", async () => { await applyRingbackDesired(false); try { disarmRingbackUserGesture(); } catch {} setStatus("Connected"); });
+      safeOn("disconnect", () => { hangup("twilio-disconnect"); });
+      safeOn("disconnected", () => { hangup("twilio-disconnected"); });
+      safeOn("hangup", () => { hangup("twilio-hangup"); });
+      safeOn("cancel", async () => { await applyRingbackDesired(false); });
+      safeOn("reject", async () => { await applyRingbackDesired(false); });
+      safeOn("error", async () => { await applyRingbackDesired(false); });
     } catch (e: any) {
       await applyRingbackDesired(false);
       try { disarmRingbackUserGesture(); } catch {}
@@ -257,7 +193,7 @@ export function useInlineLeadCall() {
       setStatus("Failed");
       toast.error(e?.message || "Call failed");
     }
-  }, [beginStatusPolling, hangup, startOutboundCall]);
+  }, [hangup, startOutboundCall, userEmail]);
 
   return {
     status,

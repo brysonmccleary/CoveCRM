@@ -42,6 +42,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (toBody) (req as any).__twilioTo = toBody;
         const callerIdBody = params.get("CallerId") || params.get("callerId");
         if (callerIdBody) (req as any).__twilioCallerId = callerIdBody;
+        const userEmailBody = params.get("userEmail") || "";
+        if (userEmailBody) (req as any).__userEmail = userEmailBody;
+        const leadIdBody = params.get("leadId") || "";
+        if (leadIdBody) (req as any).__leadId = leadIdBody;
       }
     }
   } catch {}
@@ -57,8 +61,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const vr = new TwilioTwiml.VoiceResponse();
     const rawCallerId = String((req as any).__twilioCallerId || "").trim();
     const callerIdE164 = /^\+\d{8,16}$/.test(rawCallerId) ? rawCallerId : "";
-    const dial = callerIdE164 ? vr.dial({ callerId: callerIdE164 } as any) : vr.dial();
-    dial.number(postedToE164);
+    const rawUserEmail = String((req as any).__userEmail || "").trim();
+    // Fallback: extract email from Twilio Client identity ("client:email@example.com")
+    const userEmailParam = rawUserEmail || identityFromTwilioFrom(String((req as any).__twilioFrom || ""));
+    const leadIdParam = String((req as any).__leadId || "").trim();
+
+    // answerOnBridge=true: browser leg hears ringback until lead answers (SDK fires "ringing")
+    const dialOpts: any = { answerOnBridge: "true" };
+    if (callerIdE164) dialOpts.callerId = callerIdE164;
+    const dial = vr.dial(dialOpts);
+
+    // statusCallback on <Number> fires PSTN leg events to voice-status.ts for billing
+    if (userEmailParam) {
+      let statusCallbackUrl = `${BASE_URL}/api/twilio/voice-status?userEmail=${encodeURIComponent(userEmailParam)}&billingCategory=manual_dial&legType=pstn`;
+      if (leadIdParam) statusCallbackUrl += `&leadId=${encodeURIComponent(leadIdParam)}`;
+      dial.number({
+        statusCallback: statusCallbackUrl,
+        statusCallbackEvent: "initiated ringing answered completed",
+        statusCallbackMethod: "POST",
+      } as any, postedToE164);
+    } else {
+      dial.number(postedToE164);
+    }
+
     res.setHeader("Content-Type", "text/xml");
     res.status(200).send(vr.toString());
     return;

@@ -6,7 +6,7 @@ import BookAppointmentModal from "@/components/BookAppointmentModal";
 import { isCallAllowedForLead, localTimeString } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext, ensureUnlocked, armRingbackFromUserGesture } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
-import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
+import { connectDirect, joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
 import { useSoftphone } from "@/components/telephony/SoftphoneProvider";
 import {
   FaChevronDown,
@@ -1113,7 +1113,7 @@ export default function DialSession() {
   }, [inboundMode, numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex, callActive]);
 
   /** calling **/
-  const startOutboundCall = async (leadToCall: Lead): Promise<{ callSid: string; conferenceName: string }> => {
+  const startOutboundCall = async (leadToCall: Lead): Promise<{ to: string; from: string }> => {
     if (sessionEndedRef.current) throw new Error("Session ended");
     const isQuickDial = Boolean((leadToCall as any)?.quickDial);
     const quickDialPhone = String((leadToCall as any)?.quickPhone || (leadToCall as any)?.Phone || "").trim();
@@ -1121,11 +1121,10 @@ export default function DialSession() {
     const r = await fetch("/api/twilio/voice/call", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // ✅ ONLY CHANGE: send selected fromNumber so backend uses the right caller ID
       body: JSON.stringify(
         isQuickDial
           ? { to: quickDialPhone, fromNumber }
-          : { leadId, fromNumber, dialKey: serverProgressKey || "" },
+          : { leadId, fromNumber },
       ),
     });
     if (!r.ok) {
@@ -1143,13 +1142,16 @@ export default function DialSession() {
       err.quietHours = r.status === 409 && isQuietHoursError(err);
       throw err;
     }
-    const j = (await r.json()) as { success?: boolean; callSid?: string; conferenceName?: string };
-    if (!j?.success || !j?.callSid || !j?.conferenceName) throw new Error("Call start did not return callSid + conferenceName");
-    return { callSid: j.callSid, conferenceName: j.conferenceName };
+    const j = (await r.json()) as { success?: boolean; to?: string; from?: string };
+    if (!j?.success || !j?.to || !j?.from) throw new Error("Call start did not return to + from");
+    return { to: j.to, from: j.from };
   };
 
   // --- REPLACED: tightened status polling (no early Connected; clean terminal handling)
-  const beginStatusPolling = (sid: string) => {
+  const beginStatusPolling = (
+    sid: string,
+    manualLookup?: { leadId?: string; to?: string; from?: string; since?: number },
+  ) => {
     clearStatusPoll();
 
     const interpret = (raw: any) => String(raw || "").toLowerCase();
@@ -1158,8 +1160,25 @@ export default function DialSession() {
       try {
         if (isPausedRef.current || sessionEndedRef.current) return;
 
-        const j = await fetch(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`, { cache: "no-store" }).then(r => r.json());
+        const manualParams = new URLSearchParams();
+        if (manualLookup?.leadId) manualParams.set("leadId", manualLookup.leadId);
+        if (manualLookup?.to) manualParams.set("to", manualLookup.to);
+        if (manualLookup?.from) manualParams.set("from", manualLookup.from);
+        if (manualLookup?.since) manualParams.set("since", String(manualLookup.since));
+        const hasManualLookup = Boolean(manualLookup?.leadId || manualLookup?.to);
+
+        let j: any = null;
+        if (hasManualLookup) {
+          manualParams.set("manual", "1");
+          j = await fetch(`/api/twilio/calls/status?${manualParams.toString()}`, { cache: "no-store" }).then(r => r.json());
+        }
+
+        if (!j?.matched && sid) {
+          j = await fetch(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`, { cache: "no-store" }).then(r => r.json());
+        }
+
         const s = interpret(j?.status);
+        if (!s || s === "unknown") return;
         lastCallStatusRef.current = s;
         // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
 
@@ -1354,11 +1373,23 @@ export default function DialSession() {
 
       callStartAtRef.current = Date.now();
 
-      const { callSid, conferenceName } = await startOutboundCall(leadToCall);
+      const { to, from } = await startOutboundCall(leadToCall);
       placingCallRef.current = false;
 
       if (sessionEndedRef.current) {
-        activeCallSidRef.current = callSid;
+        setCallActive(false);
+        stopRingbackNow();
+        return;
+      }
+
+      // Browser SDK places the call (2-leg: browser WebRTC + PSTN to lead)
+      joinedRef.current = true;
+      const callObj = await connectDirect(to, from, userEmailRef.current, getLeadId(leadToCall));
+      const callSid = String((callObj as any)?.parameters?.CallSid || "");
+      activeCallSidRef.current = callSid;
+      activeConferenceRef.current = null;
+
+      if (sessionEndedRef.current) {
         await hangupActiveCall("ended-during-start");
         await leaveIfJoined("ended-during-start");
         setCallActive(false);
@@ -1366,47 +1397,42 @@ export default function DialSession() {
         return;
       }
 
-      activeCallSidRef.current = callSid;
-      activeConferenceRef.current = conferenceName;
-
-      if (!joinedRef.current && activeConferenceRef.current) {
+      const safeOn = (ev: string, fn: (...args: any[]) => void) => {
         try {
-          joinedRef.current = true;
+          if ((callObj as any)?.on) (callObj as any).on(ev, fn);
+          else if ((callObj as any)?.addListener) (callObj as any).addListener(ev, fn);
+        } catch {}
+      };
 
-          // Capture the returned call object
-          const callObj = await joinConference(activeConferenceRef.current);
+      // answerOnBridge=true → SDK fires "ringing" while lead's phone rings
+      safeOn("ringing", () => { setStatus("Ringing…"); applyRingbackDesired(true); });
 
-          const safeOn = (ev: string, fn: (...args: any[]) => void) => {
-            try {
-              if ((callObj as any)?.on) (callObj as any).on(ev, fn);
-              else if ((callObj as any)?.addListener) (callObj as any).addListener(ev, fn);
-            } catch {}
-          };
+      // "accept"/"connect" fires when lead answers — stop ringback, mark connected
+      const onBridged = () => {
+        stopRingbackNow();
+        clearWatchdog();
+        hasConnectedRef.current = true;
+        startConnectedTimer();
+        callOutcomeRef.current = { status: "Connected", source: "sdk-accept" };
+        setStatus("Connected");
+      };
+      safeOn("accept", onBridged);
+      safeOn("connect", onBridged);
 
-          // 🔁 Agent leg bridged — do NOT mark Connected or stop ringback here.
-          const agentLegBridged = () => {
-            hasConnectedRef.current = hasConnectedRef.current || false;
-          };
-          safeOn("accept", agentLegBridged);
-          safeOn("connect", agentLegBridged);
-          safeOn("connected", agentLegBridged);
-
-          // Disconnected events
-          safeOn("disconnect", () => { markDisconnected("twilio-disconnect"); });
-          safeOn("disconnected", () => { markDisconnected("twilio-disconnected"); });
-          safeOn("hangup", () => { markDisconnected("twilio-hangup"); });
-
-          // Defensive cuts for non-success paths
-          safeOn("cancel", () => { stopRingbackNow(); });
-          safeOn("reject", () => { stopRingbackNow(); });
-          safeOn("error", () => { stopRingbackNow(); });
-        } catch (e) {
-          console.warn("Failed to pre-join conference:", e);
-        }
-      }
+      safeOn("disconnect", () => { markDisconnected("twilio-disconnect"); });
+      safeOn("disconnected", () => { markDisconnected("twilio-disconnected"); });
+      safeOn("hangup", () => { markDisconnected("twilio-hangup"); });
+      safeOn("cancel", () => { stopRingbackNow(); });
+      safeOn("reject", () => { stopRingbackNow(); });
+      safeOn("error", () => { stopRingbackNow(); });
 
       scheduleWatchdog();
-      beginStatusPolling(callSid);
+      beginStatusPolling(callSid, {
+        leadId: getLeadId(leadToCall),
+        to,
+        from,
+        since: callStartAtRef.current,
+      });
 
       setSessionStartedCount((n) => n + 1);
 
@@ -1795,7 +1821,13 @@ export default function DialSession() {
             lastCallStatusRef.current = s;
 
             const sid = activeCallSidRef.current;
-            if (sid && payload?.callSid && sid !== payload.callSid) return;
+            const payloadLeadId = payload?.leadId ? String(payload.leadId) : "";
+            const activeLeadId = currentLeadId();
+            const isManualPstnStatus =
+              String(payload?.billingCategory || "").toLowerCase() === "manual_dial" &&
+              String(payload?.legType || "").toLowerCase() === "pstn";
+            const sameLead = Boolean(activeLeadId && payloadLeadId && activeLeadId === payloadLeadId);
+            const callSidMismatch = Boolean(sid && payload?.callSid && sid !== payload.callSid);
 
             const leadNum = normalizeE164(
               (leadQueue[currentLeadIndex] && (leadQueue[currentLeadIndex] as any)?.phone) ||
@@ -1808,6 +1840,7 @@ export default function DialSession() {
             const fromNum = normalizeE164(fromNumber || "");
             if (leadNum && eventOther && leadNum !== eventOther) return;
             if (fromNum && ownerNum && fromNum !== ownerNum) return;
+            if (callSidMismatch && !(isManualPstnStatus && (sameLead || eventOther || ownerNum))) return;
 
             if (s === "initiated") setStatus("Dial initiated…");
 
