@@ -183,12 +183,22 @@ export interface IUser {
 
   /**
    * ✅ AI Dialer postpaid usage billing (threshold-based):
-   * - aiDialerAccruedCents: unbilled running total (cents)
-   * - aiDialerBilledTotalCents: lifetime billed total (cents)
+   * - aiDialerAccruedCents: unbilled running total (cents) — legacy per-minute bucket (unused)
+   * - aiDialerBilledTotalCents: lifetime billed total (cents) — shared by session billing
    */
   aiDialerAccruedCents?: number;
   aiDialerBilledTotalCents?: number;
   aiDialerLastInvoicedAt?: Date;
+
+  /**
+   * ✅ AI Dialer SESSION-TIME billing ($5/hr, charged every $20):
+   * - aiDialerSessionSeconds: lifetime total seconds billed (analytics)
+   * - aiDialerAccruedSessionCents: unbilled running cents from session wall-clock time
+   * - aiDialerLastChargedAt: timestamp of most recent successful Stripe charge
+   */
+  aiDialerSessionSeconds?: number;
+  aiDialerAccruedSessionCents?: number;
+  aiDialerLastChargedAt?: Date | null;
 
   aiInsightMinutesUsed?: number;
   aiInsightCostCents?: number;
@@ -507,6 +517,11 @@ const UserSchema = new Schema<IUser>({
   aiDialerAccruedCents: { type: Number, default: 0 },
   aiDialerBilledTotalCents: { type: Number, default: 0 },
   aiDialerLastInvoicedAt: { type: Date, default: null },
+
+  // ✅ AI Dialer SESSION-TIME billing ($5/hr wall-clock, $20 threshold)
+  aiDialerSessionSeconds: { type: Number, default: 0 },
+  aiDialerAccruedSessionCents: { type: Number, default: 0 },
+  aiDialerLastChargedAt: { type: Date, default: null },
 
   aiInsightMinutesUsed: { type: Number, default: 0 },
   aiInsightCostCents: { type: Number, default: 0 },

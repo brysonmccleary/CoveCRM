@@ -7,16 +7,10 @@ import AICallSession from "@/models/AICallSession";
 import User from "@/models/User";
 import Call from "@/models/Call";
 import Lead from "@/models/Lead";
-import { trackAiDialerUsage } from "@/lib/billing/trackAiDialerUsage";
 import { Types } from "mongoose";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 export const config = { api: { bodyParser: false } };
-
-// Your cost per **dial minute** (Twilio + OpenAI), for margin tracking only.
-const VENDOR_RATE_PER_MINUTE = Number(
-  process.env.AI_DIALER_VENDOR_RATE_PER_MIN_USD || "0.03"
-);
 
 // ✅ global hard kill switch (env)
 const AI_DIALER_DISABLED =
@@ -105,6 +99,19 @@ function mapTerminalOutcome(callStatus: string, answeredByRaw: string) {
       return "failed";
     default:
       return undefined;
+  }
+}
+
+function getOutcomePriority(outcome: string): number {
+  switch (outcome) {
+    case "booked": return 5;
+    case "callback":
+    case "not_interested": return 4;
+    case "hung_up": return 3;
+    case "no_answer":
+    case "voicemail": return 2;
+    case "disconnected": return 1;
+    default: return 0;
   }
 }
 
@@ -522,80 +529,6 @@ export default async function handler(
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // ✅ Billing: bill ONLY on completed calls with positive duration AND only once.
-    // We use an idempotency guard on AICallRecording.billedAt to prevent overcharging
-    // from webhook retries. (No changes to audio logic.)
-    // ─────────────────────────────────────────────────────────────────────────────
-    if (CallSid && CallStatus === "completed" && durationSec && durationSec > 0) {
-      if (!userEmail) {
-        console.warn(
-          "[AI Dialer billing] No userEmail resolved for CallSid",
-          CallSid
-        );
-      } else {
-        // Acquire a one-time billing lock (Twilio may retry callbacks)
-        const billLock = await AICallRecording.updateOne(
-          {
-            callSid: CallSid,
-            $or: [{ billedAt: { $exists: false } }, { billedAt: null }],
-          },
-          { $set: { billedAt: new Date() } }
-        ).exec();
-
-        const locked = ((billLock as any)?.modifiedCount ?? 0) > 0;
-
-        if (!locked) {
-          console.log(
-            "[AI Dialer billing] Suppressed duplicate billing (already billedAt)",
-            {
-              callSid: CallSid,
-              userEmail,
-              durationSec,
-            }
-          );
-        } else {
-          const user = await User.findOne({ email: userEmail });
-          if (user) {
-            console.log(
-              "[AI Dialer billing] Tracking usage for email",
-              userEmail,
-              "CallSid",
-              CallSid
-            );
-            // Bill based on **dial time** (full call duration in seconds)
-            const minutes = Math.max(1, Math.ceil(durationSec / 60));
-            const vendorCostUsd =
-              VENDOR_RATE_PER_MINUTE > 0 ? minutes * VENDOR_RATE_PER_MINUTE : 0;
-
-            try {
-              await trackAiDialerUsage({
-                user,
-                minutes,
-                vendorCostUsd,
-              });
-            } catch (billErr) {
-              console.error(
-                "❌ AI Dialer billing error (non-blocking) in call-status-webhook:",
-                (billErr as any)?.message || billErr
-              );
-
-              // If billing failed, release the lock so a future retry can bill correctly
-              // (Still safe from runaway loops because Twilio retries are limited.)
-              try {
-                await AICallRecording.updateOne(
-                  { callSid: CallSid, billedAt: { $ne: null } },
-                  { $set: { billedAt: null } }
-                ).exec();
-              } catch {
-                // swallow
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────
     // --- SYNC INTO Call MODEL FOR LEAD ACTIVITY PANEL (AI DIALER ONLY) ---
     // ─────────────────────────────────────────────────────────────────────────────
     try {
@@ -695,9 +628,9 @@ export default async function handler(
 
             const mapped = mapTerminalOutcome(CallStatus, AnsweredBy);
 
-            // If outcome is still unknown, set a conservative fallback terminal outcome.
-            // Do NOT override a real outcome already set by the agent.
-            if ((latestOutcome === "unknown" || !latestOutcome) && mapped) {
+            // Only write fallback outcome if incoming priority beats the existing one.
+            // Skip if existing outcome is already priority >= 2 (no_answer, voicemail, or higher).
+            if (mapped && getOutcomePriority(latestOutcome) < 2) {
               await AICallRecording.updateOne(
                 {
                   callSid: CallSid,
@@ -705,6 +638,7 @@ export default async function handler(
                     { outcome: { $exists: false } },
                     { outcome: null },
                     { outcome: "unknown" },
+                    { outcome: "disconnected" },
                   ],
                 },
                 {

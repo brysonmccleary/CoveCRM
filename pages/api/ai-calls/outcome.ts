@@ -475,6 +475,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ───────────────────────── Normalize outcome ─────────────────────────
+    const getOutcomePriority = (o: string): number => {
+      switch (o) {
+        case "booked": return 5;
+        case "callback":
+        case "not_interested": return 4;
+        case "hung_up": return 3;
+        case "no_answer":
+        case "voicemail": return 2;
+        case "disconnected": return 1;
+        default: return 0;
+      }
+    };
+
     const allowed: AllowedOutcome[] = [
       "unknown",
       "booked",
@@ -484,6 +497,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       "do_not_call",
       "disconnected",
       "transferred",
+      "voicemail",
     ];
 
     const prevOutcome: AllowedOutcome = (rec.outcome as any) || "unknown";
@@ -496,8 +510,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       normalizedOutcome = outcome;
     }
 
-    if (normalizedOutcome === "unknown" && prevOutcome !== "unknown") {
-      normalizedOutcome = undefined;
+    // Block any overwrite where the incoming priority is strictly less than the existing.
+    // Prevents lower-priority outcomes (e.g. "unknown", "disconnected") from clobbering
+    // higher-priority ones (e.g. "no_answer", "booked") set by Twilio or a prior ai-voice call.
+    if (normalizedOutcome !== undefined) {
+      const incomingPriority = getOutcomePriority(normalizedOutcome);
+      const existingPriority = getOutcomePriority(prevOutcome);
+      if (incomingPriority < existingPriority) {
+        normalizedOutcome = undefined;
+      }
     }
 
     if (normalizedOutcome === "booked") {

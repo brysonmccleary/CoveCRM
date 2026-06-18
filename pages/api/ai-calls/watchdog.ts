@@ -15,6 +15,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallSession from "@/models/AICallSession";
+import { trackAiDialerSessionUsage } from "@/lib/billing/trackAiDialerSessionUsage";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
@@ -34,6 +35,8 @@ const WATCHDOG_COOLDOWN_MS = 8 * 60 * 1000;
 const ACTIVE_CALL_GRACE_MS = 5 * 60 * 1000;
 // Hard cap on sessions kicked per watchdog run.
 const MAX_KICKS_PER_RUN = 5;
+// Hard cap on sessions billed per watchdog run (billing is lightweight).
+const MAX_BILLING_PER_RUN = 20;
 
 function isAuthorized(req: NextApiRequest): boolean {
   const bearer = (String(req.headers["authorization"] || "").match(/^Bearer\s+(.+)$/i)?.[1] || "").trim();
@@ -81,6 +84,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await mongooseConnect();
 
   const now = Date.now();
+
+  // ── Session-time billing sweep ───────────────────────────────────────────────
+  // Runs for ALL status="running" sessions every 2 minutes.
+  // Each call bills only the newly elapsed seconds since the last checkpoint.
+  // trackAiDialerSessionUsage uses an optimistic lock on billedSeconds so
+  // concurrent watchdog invocations cannot double-bill the same window.
+  const billingSessions = await AICallSession.find({
+    status: "running",
+    callDirection: { $ne: "inbound" },
+    scriptKey: { $ne: "kayla_signup" },
+    stoppedAt: null,
+    startedAt: { $ne: null },
+  })
+    .select("_id userEmail")
+    .limit(MAX_BILLING_PER_RUN)
+    .lean();
+
+  for (const sess of billingSessions) {
+    const sessId = String((sess as any)._id);
+    const sessEmail = String((sess as any).userEmail || "");
+    if (!sessId || !sessEmail) continue;
+    try {
+      await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail });
+    } catch (err: any) {
+      console.warn("[AI WATCHDOG] session billing failed (non-blocking)", {
+        sessionId: sessId,
+        error: err?.message || err,
+      });
+    }
+  }
+
+  // Also run final billing for sessions that just completed/stopped (within last 15 min)
+  // so the last partial interval is charged even though they're no longer "running".
+  const recentlyEndedCutoff = new Date(now - 15 * 60 * 1000);
+  const endedSessions = await AICallSession.find({
+    status: { $in: ["completed", "stopped"] },
+    callDirection: { $ne: "inbound" },
+    scriptKey: { $ne: "kayla_signup" },
+    startedAt: { $ne: null },
+    updatedAt: { $gte: recentlyEndedCutoff },
+  })
+    .select("_id userEmail completedAt stoppedAt")
+    .limit(10)
+    .lean();
+
+  for (const sess of endedSessions) {
+    const sessId = String((sess as any)._id);
+    const sessEmail = String((sess as any).userEmail || "");
+    const endAt: Date = (sess as any).stoppedAt || (sess as any).completedAt || new Date();
+    if (!sessId || !sessEmail) continue;
+    try {
+      await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail, endAt });
+    } catch (err: any) {
+      console.warn("[AI WATCHDOG] final session billing failed (non-blocking)", {
+        sessionId: sessId,
+        error: err?.message || err,
+      });
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+
   const stalePlacedCutoff = new Date(now - STALE_PLACED_CALL_MS);
   const watchdogCooldownCutoff = new Date(now - WATCHDOG_COOLDOWN_MS);
   const activeCallCutoff = new Date(now - ACTIVE_CALL_GRACE_MS);
@@ -120,7 +184,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .lean();
 
   if (!candidates.length) {
-    return res.status(200).json({ ok: true, message: "no_stuck_sessions", kicked: [] });
+    return res.status(200).json({
+      ok: true,
+      message: "no_stuck_sessions",
+      kicked: [],
+      billedSessions: billingSessions.length,
+    });
   }
 
   const kicked: string[] = [];
@@ -158,5 +227,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     kicked.push(sessionId);
   }
 
-  return res.status(200).json({ ok: true, kicked, total: kicked.length });
+  return res.status(200).json({ ok: true, kicked, total: kicked.length, billedSessions: billingSessions.length });
 }

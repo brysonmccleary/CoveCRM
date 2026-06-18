@@ -8,6 +8,7 @@ import Lead from "@/models/Lead";
 import User from "@/models/User";
 import { requireBillingReady } from "@/lib/billing/requireBillingReady";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { trackAiDialerSessionUsage } from "@/lib/billing/trackAiDialerSessionUsage";
 import { Types } from "mongoose";
 
 type GetResponse =
@@ -524,9 +525,12 @@ export default async function handler(
       const activeCallSidToHangUp =
         action === "stop" ? String((aiSession as any).activeCallSid || "") : "";
 
+      const stopEndAt = new Date(); // capture before save for terminal billing accuracy
+
       if (action === "stop") {
         aiSession.status = "stopped";
-        aiSession.completedAt = new Date();
+        aiSession.completedAt = stopEndAt;
+        (aiSession as any).stoppedAt = stopEndAt;
         (aiSession as any).activeCallSid = null;
         (aiSession as any).activeCallSidAt = null;
       } else if (action === "pause") {
@@ -542,6 +546,21 @@ export default async function handler(
       }
 
       await aiSession.save();
+
+      // Terminal billing: charge remaining unbilled session seconds at session end.
+      // Uses stopEndAt so billing is exact regardless of processing delay.
+      if (action === "stop" && aiSession.startedAt) {
+        try {
+          await trackAiDialerSessionUsage({
+            sessionId: String((aiSession as any)._id),
+            userEmail: email,
+            endAt: stopEndAt,
+          });
+        } catch (billingErr: any) {
+          // Non-blocking — session is already saved as stopped
+          console.warn("[AI SESSION] Terminal billing failed (non-blocking):", billingErr?.message || billingErr);
+        }
+      }
 
       if (action === "stop" && activeCallSidToHangUp) {
         try {

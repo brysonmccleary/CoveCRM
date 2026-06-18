@@ -336,8 +336,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Best-effort delayed recovery after cooldown expires. setTimeout is unreliable in
       // serverless (Vercel kills the function after response). The cron sweep is the
       // authoritative recovery  -  this fires only if the instance stays warm.
-      const cooldownRemaining = Math.max(0, new Date(aiSession.cooldownUntil).getTime() - Date.now());
-      setTimeout(() => { fireAndForgetWorkerKick(sessionId); }, cooldownRemaining + 3000);
+      await AICallSession.updateOne(
+        { _id: sessionId },
+        { $set: { cooldownUntil: null } }
+      );
+      fireAndForgetWorkerKick(sessionId);
       return res.status(200).json({ ok: true, message: "cooldown_active", sessionId });
     }
 
@@ -1006,12 +1009,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       await releaseLock(sessionId);
-      // Best-effort delayed recovery after cooldown expires. setTimeout is unreliable in
-      // serverless  -  the cron sweep is the authoritative recovery mechanism.
-      setTimeout(
-        () => { fireAndForgetWorkerKick(sessionId); },
-        Math.max(5, COOLDOWN_SECONDS) * 1000 + 3000
+      await AICallSession.updateOne(
+        { _id: sessionId },
+        { $set: { cooldownUntil: null } }
       );
+      fireAndForgetWorkerKick(sessionId);
 
       // Keep 200 so cron doesn't treat it as failure and re-run aggressively
       return res.status(200).json({

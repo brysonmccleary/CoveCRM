@@ -3387,7 +3387,19 @@ function isVoicemailSystemTranscript(textRaw: string): boolean {
     t.includes("mailbox is full") ||
     t.includes("mailbox has not been set up") ||
     t.includes("your call has been forwarded") ||
-    t.includes("record your message")
+    t.includes("record your message") ||
+    t.includes("tosendafaxnow") ||
+    t.includes("to send a fax now") ||
+    t.includes("toleaveacallbacknumber") ||
+    t.includes("leave a callback number") ||
+    t.includes("send a fax") ||
+    t.includes("receiving your fax") ||
+    t.includes("receiving fax") ||
+    t.includes("fax machine") ||
+    t.includes("press 5 to send") ||
+    t.includes("fax number") ||
+    t.includes("pleaserecordyourmessage") ||
+    t.includes("atthetonepleaserecordyourmessage")
   );
 }
 
