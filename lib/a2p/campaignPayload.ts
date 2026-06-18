@@ -29,6 +29,18 @@ type A2PCampaignPayload = {
   termsAndConditionsUrl?: string;
 };
 
+type BuildCampaignDescriptionArgs = {
+  profile?: any;
+  businessName?: any;
+  contactFirstName?: any;
+  contactLastName?: any;
+  agentName?: any;
+  landingOptInUrl?: any;
+  campaignType?: any;
+  a2pFlow?: any;
+  storedDescription?: any;
+};
+
 function clean(value: any): string {
   return String(value || "").trim();
 }
@@ -245,32 +257,74 @@ function normalizeSamples(args: BuildA2PCampaignPayloadArgs): string[] {
   return personalizeA2PSampleMessages(parsed, profile);
 }
 
-function buildCampaignDescription(profile: any, usecase: string, messageFlow: string, optInUrl: string): string {
-  const storedDescription = clean(profile?.campaignDescription);
-  if (storedDescription) {
+function humanizeCampaignType(value: any): string {
+  const normalized = clean(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (!normalized || normalized === "lead_generation" || normalized === "final_expense") {
+    return "life insurance or final expense";
+  }
+  if (normalized.includes("mortgage")) return "mortgage protection";
+  if (normalized.includes("iul")) return "indexed universal life insurance";
+  if (normalized.includes("veteran")) return "veteran life insurance";
+  if (normalized.includes("truck")) return "life insurance for truck drivers";
+  return "life insurance or final expense";
+}
+
+function buildAgentName(args: BuildCampaignDescriptionArgs): string {
+  const explicit = clean(args.agentName);
+  if (explicit) return explicit;
+
+  const profile = args.profile || {};
+  const fullName = [
+    args.contactFirstName ?? profile.contactFirstName,
+    args.contactLastName ?? profile.contactLastName,
+  ].map(clean).filter(Boolean).join(" ");
+
+  return fullName || "the licensed insurance agent";
+}
+
+function shouldRegenerateDescription(profile: any, optInUrl: string): boolean {
+  const flow = clean(profile?.a2pFlow).toLowerCase();
+  const campaignType = clean(profile?.campaignType).toLowerCase().replace(/[\s-]+/g, "_");
+  return (
+    flow === "lead_generation" ||
+    campaignType === "final_expense" ||
+    /\/f\/[A-Za-z0-9]+/.test(optInUrl)
+  );
+}
+
+function clampDescriptionPreservingUrl(prefix: string, suffix: string): string {
+  const maxLength = 1024;
+  const full = `${prefix}${suffix}`;
+  if (full.length <= maxLength) return full;
+
+  const availablePrefixLength = Math.max(0, maxLength - suffix.length);
+  return `${prefix.slice(0, availablePrefixLength).trimEnd()}${suffix}`;
+}
+
+export function buildCampaignDescription(args: BuildCampaignDescriptionArgs): string {
+  const profile = args.profile || {};
+  const optInUrl = clean(args.landingOptInUrl ?? profile.landingOptInUrl);
+  const storedDescription = clean(args.storedDescription ?? profile.campaignDescription);
+
+  if (storedDescription && !shouldRegenerateDescription(profile, optInUrl)) {
     return storedDescription.length > 1024 ? storedDescription.slice(0, 1024) : storedDescription;
   }
 
-  const businessName = clean(profile?.businessName) || "this business";
-  const useCase = clean(usecase) || "LOW_VOLUME";
+  // Campaign DESCRIPTION text only. This does not change the LOW_VOLUME campaign use case.
+  const businessName = clean(args.businessName ?? profile.businessName) || "the insurance agency";
+  const agentName = buildAgentName(args);
+  const coverageType = humanizeCampaignType(args.campaignType ?? profile.campaignType);
+  const fallbackOptInUrl = optInUrl || "the CoveCRM-hosted opt-in page";
 
-  let desc = `Life insurance lead follow-up and appointment reminder SMS campaign for ${businessName}. Use case: ${useCase}. `;
-  if (optInUrl) {
-    desc += `Public SMS opt-in page: ${optInUrl}. `;
-  }
-  const flowSnippet = messageFlow.replace(/\s+/g, " ").trim();
-  if (flowSnippet) {
-    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 300)}`;
-  } else {
-    desc +=
-      "Leads opt in via TCPA-compliant web forms and receive updates about their life insurance options and booked appointments.";
-  }
+  const prefix =
+    `Consumers see an advertisement for ${coverageType} coverage from ${businessName} and click through to the opt-in page. ` +
+    `Consumers submit a request for information and provide optional consent to receive SMS communications from ${agentName} and ${businessName}. ` +
+    `Messages are sent only to consumers who submitted the form and requested information about ${coverageType} coverage. ` +
+    "Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to consumer inquiries.";
+  const suffix =
+    ` Opt-in page: ${fallbackOptInUrl}. Recipients may opt out by replying STOP and may request help by replying HELP.`;
 
-  if (desc.length > 1024) desc = desc.slice(0, 1024);
-  if (desc.length < 40) {
-    desc += " This campaign sends compliant follow-up and reminder messages to warm leads.";
-  }
-  return desc;
+  return clampDescriptionPreservingUrl(prefix, suffix);
 }
 
 function hasEmbeddedPhone(text: string): boolean {
@@ -282,13 +336,16 @@ export function buildA2PCampaignPayload(args: BuildA2PCampaignPayloadArgs): A2PC
   const urls = resolveComplianceUrls(args);
   const messageFlow = buildMessageFlow(args);
   const messageSamples = normalizeSamples(args);
-  const usecase = "LOW_VOLUME";
   const searchableText = [messageFlow, ...messageSamples].join(" ");
 
   return {
     brandRegistrationSid: args.brandRegistrationSid,
     usAppToPersonUsecase: "LOW_VOLUME",
-    description: buildCampaignDescription(profile, usecase, messageFlow, urls.optInUrl),
+    description: buildCampaignDescription({
+      profile,
+      landingOptInUrl: urls.optInUrl,
+      campaignType: profile.campaignType,
+    }),
     messageFlow,
     messageSamples,
     hasEmbeddedLinks: /https?:\/\//i.test(searchableText),

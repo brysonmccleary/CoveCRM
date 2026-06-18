@@ -12,7 +12,10 @@ import {
   getClientForUser,
   TwilioResolvedAuth,
 } from "@/lib/twilio/getClientForUser";
-import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
+import {
+  buildA2PCampaignPayload,
+  buildCampaignDescription,
+} from "@/lib/a2p/campaignPayload";
 import {
   buildA2PMessageFlowForFlow,
   buildLeadGenerationOptInDetails,
@@ -143,42 +146,6 @@ function normalizeEinDigits(raw: unknown): string {
 function formatEinDisplay(einDigits: string): string {
   // 00-0000000
   return `${einDigits.slice(0, 2)}-${einDigits.slice(2)}`;
-}
-
-// Ensure campaign description meets Twilio min/max length requirements
-function buildCampaignDescription(opts: {
-  businessName: string;
-  useCase: string;
-  messageFlow: string;
-  complianceUrls: { optInUrl: string; tosUrl: string; privacyUrl: string };
-}): string {
-  const businessName = (opts.businessName || "").trim() || "this business";
-  const useCase = (opts.useCase || "").trim() || "LOW_VOLUME";
-
-  let desc = `Life insurance lead follow-up and appointment reminder SMS campaign for ${businessName}. Use case: ${useCase}. `;
-
-  const flowSnippet = (opts.messageFlow || "").replace(/\s+/g, " ").trim();
-  if (flowSnippet) {
-    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 200)}`;
-  } else {
-    desc +=
-      "Leads opt in via TCPA-compliant web forms and receive updates about their life insurance options and booked appointments.";
-  }
-
-  // Append compliance URLs so they appear explicitly in the submitted description
-  const { optInUrl, tosUrl, privacyUrl } = opts.complianceUrls;
-  desc += ` Opt-in: ${optInUrl} Terms: ${tosUrl} Privacy: ${privacyUrl}`;
-
-  // Trim to Twilio's max (safe 1024 chars)
-  if (desc.length > 1024) desc = desc.slice(0, 1024);
-
-  // Guarantee at least 40 chars
-  if (desc.length < 40) {
-    desc +=
-      " This campaign sends compliant follow-up and reminder messages to warm leads.";
-  }
-
-  return desc;
 }
 
 function isSidLike(value: any, prefix: string) {
@@ -1628,15 +1595,15 @@ export default async function handler(
     ).trim();
     (setPayload as any).lastSubmittedSampleMessages = samples;
     (setPayload as any).twilioAccountSidLastUsed = twilioAccountSidUsed;
+    // Campaign DESCRIPTION text only. This does not change the LOW_VOLUME campaign use case.
     (setPayload as any).campaignDescription = buildCampaignDescription({
+      profile: setPayload,
       businessName: String(businessName),
-      useCase: normalizedUseCase,
-      messageFlow: generatedMessageFlow,
-      complianceUrls: {
-        optInUrl: compliance.optInUrl,
-        tosUrl: compliance.tosUrl,
-        privacyUrl: compliance.privacyUrl,
-      },
+      contactFirstName,
+      contactLastName,
+      landingOptInUrl: compliance.optInUrl,
+      campaignType: flowSelection.campaignType,
+      a2pFlow: flowSelection.flow,
     });
 
     const messageFlowText: string = applyComplianceTokens(setPayload.optInDetails || generatedMessageFlow, {
