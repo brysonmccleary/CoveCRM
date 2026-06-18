@@ -338,7 +338,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const hasExistingFailedBrand = !!existingA2P?.brandSid && existingBrandStatus === "FAILED";
   const resubmit = hasExistingFailedBrand;
 
-  const normalizedUseCase = body.useCase || body.usecaseCode || "LOW_VOLUME";
+  const normalizedUseCase = "LOW_VOLUME";
   const normalizedState = addressState!.trim().toUpperCase();
   const normalizedCountry = addressCountry!.trim().toUpperCase();
   const normalizedPhone = phone!.trim();

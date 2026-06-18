@@ -81,10 +81,6 @@ function hasA2PSubmissionData(p: AnyDoc): boolean {
   );
 }
 
-function deriveUseCase(doc: AnyDoc): string {
-  return doc.lastSubmittedUseCase || doc.useCase || doc.usecaseCode || "LOW_VOLUME";
-}
-
 function deriveMessageSamples(doc: AnyDoc): string[] {
   if (Array.isArray(doc.lastSubmittedSampleMessages) && doc.lastSubmittedSampleMessages.length) {
     return doc.lastSubmittedSampleMessages
@@ -303,7 +299,6 @@ async function ensureCampaignForApprovedBrandTenant(args: {
   const lowerBrand = (brandStatus || "").toLowerCase();
   if (!lowerBrand || !BRAND_APPROVED.has(lowerBrand)) return { created: false, campaignSid: null };
 
-  const useCase = deriveUseCase(doc);
   const messageSamples = deriveMessageSamples(doc);
   const flow = deriveMessageFlow(doc);
 
@@ -356,7 +351,7 @@ async function ensureCampaignForApprovedBrandTenant(args: {
       brandRegistrationSid: brandSid,
       baseUrl: BASE_URL,
       userId: String(lockedDoc.userId || doc.userId || ""),
-      usecase: useCase,
+      usecase: "LOW_VOLUME",
       messageSamples,
       messageFlow: flow,
     });

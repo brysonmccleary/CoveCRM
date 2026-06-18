@@ -214,7 +214,8 @@ async function main() {
       console.log("  client.messaging.v1.brandRegistrations.create({");
       console.log(`    customerProfileBundleSid: "${profile.profileSid}",`);
       console.log(`    a2PProfileBundleSid: "<trustProductSid after creation>",`);
-      console.log(`    brandType: "LOW_VOLUME_STANDARD",`);
+      console.log(`    brandType: "STANDARD",`);
+      console.log("    skipAutomaticSecVet: true,");
       console.log("  })");
       console.log("  → Run resumeAutomation to create Trust Product first.");
     }
@@ -229,7 +230,8 @@ async function main() {
     console.log("  client.messaging.v1.brandRegistrations.create({");
     console.log(`    customerProfileBundleSid: "${profile.profileSid}",`);
     console.log(`    a2PProfileBundleSid: "${profile.trustProductSid}",`);
-    console.log(`    brandType: "LOW_VOLUME_STANDARD",`);
+    console.log(`    brandType: "STANDARD",`);
+    console.log("    skipAutomaticSecVet: true,");
     console.log("  })");
     console.log("  → Run --advance (calls resumeAutomation) to trigger automatically.");
   } else if (brandSidStored && !brandApproved) {

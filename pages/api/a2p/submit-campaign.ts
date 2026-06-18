@@ -235,7 +235,7 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
     throw new Error("A2P profile is missing sample messages (need at least 2).");
   }
 
-  const useCaseCode = String((a2p as any).usecaseCode || "LOW_VOLUME");
+  const useCaseCode = "LOW_VOLUME";
   const messageFlowText = String(a2p.optInDetails || "");
 
   const createPayload = buildA2PCampaignPayload({
@@ -243,7 +243,7 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
     brandRegistrationSid: a2p.brandSid,
     baseUrl,
     userId,
-    usecase: useCaseCode,
+    usecase: "LOW_VOLUME",
     messageSamples: samples,
     messageFlow: messageFlowText,
   });

@@ -1563,7 +1563,7 @@ export default async function handler(
     >();
     const now = new Date();
 
-    const normalizedUseCase = String(usecaseCode || "LOW_VOLUME");
+    const normalizedUseCase = "LOW_VOLUME";
     if (flowSelection.flow === "lead_generation") {
       samples = personalizeA2PSampleMessages(buildLeadGenerationSampleMessages(), {
         contactFirstName,
@@ -1644,8 +1644,7 @@ export default async function handler(
       tosUrl: compliance.tosUrl,
       privacyUrl: compliance.privacyUrl,
     });
-    const useCaseCodeFinal: string =
-      (setPayload.usecaseCode as string) || "LOW_VOLUME";
+    const useCaseCodeFinal = "LOW_VOLUME";
 
     const a2p = await A2PProfile.findOneAndUpdate<IA2PProfile>(
       { userId },
@@ -2305,6 +2304,7 @@ export default async function handler(
         customerProfileBundleSid: secondaryProfileSid!,
         a2PProfileBundleSid: trustProductSid!,
         brandType: "STANDARD",
+        skipAutomaticSecVet: true,
       };
 
       log("step: brandRegistrations.create", {
@@ -2504,7 +2504,7 @@ export default async function handler(
         brandRegistrationSid: brandSid!,
         baseUrl,
         userId,
-        usecase: code,
+        usecase: "LOW_VOLUME",
         messageSamples: samples,
         messageFlow: messageFlowText,
       });

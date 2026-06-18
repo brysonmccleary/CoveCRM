@@ -1303,6 +1303,7 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
             customerProfileBundleSid: profile.profileSid,
             a2PProfileBundleSid: trustProductSid,
             brandType: "STANDARD",
+            skipAutomaticSecVet: true,
           };
           console.log("[A2P][BRAND_CREATE_DIAGNOSTIC]", {
             userEmail: normalizedEmail,
@@ -1447,12 +1448,6 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         log("A2P][CAMPAIGN_RECOVERED", { userEmail: normalizedEmail, campaignSid, campaignStatus });
       }
 
-      const useCase = String(
-        profile.lastSubmittedUseCase ||
-          (profile as any).useCase ||
-          profile.usecaseCode ||
-          "LOW_VOLUME",
-      );
       const samples = parseSamples(profile);
       const messageFlow = String(
         profile.lastSubmittedOptInDetails || profile.optInDetails || "",
@@ -1499,7 +1494,7 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
               brandRegistrationSid: brandSid,
               baseUrl: BASE_URL,
               userId: String((lockedProfile as any).userId || profile.userId || ""),
-              usecase: useCase,
+              usecase: "LOW_VOLUME",
               messageSamples: samples,
               messageFlow,
             });

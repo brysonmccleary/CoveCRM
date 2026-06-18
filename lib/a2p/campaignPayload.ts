@@ -282,19 +282,12 @@ export function buildA2PCampaignPayload(args: BuildA2PCampaignPayloadArgs): A2PC
   const urls = resolveComplianceUrls(args);
   const messageFlow = buildMessageFlow(args);
   const messageSamples = normalizeSamples(args);
-  const usecase = clean(
-    args.usecase ||
-      profile.lastSubmittedUseCase ||
-      profile.useCase ||
-      profile.usecaseCode ||
-      profile.useCaseSid ||
-      "LOW_VOLUME",
-  );
+  const usecase = "LOW_VOLUME";
   const searchableText = [messageFlow, ...messageSamples].join(" ");
 
   return {
     brandRegistrationSid: args.brandRegistrationSid,
-    usAppToPersonUsecase: usecase || "LOW_VOLUME",
+    usAppToPersonUsecase: "LOW_VOLUME",
     description: buildCampaignDescription(profile, usecase, messageFlow, urls.optInUrl),
     messageFlow,
     messageSamples,
