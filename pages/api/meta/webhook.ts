@@ -163,8 +163,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
       }
     } catch (err: any) {
-      console.error("[meta-webhook] Failed to persist webhook event before ack:", err?.message);
-      return res.status(500).json({ ok: false, error: "webhook_persist_failed" });
+      // Log but always ACK 200 — returning 500 causes Meta retry storms
+      console.error("[meta-webhook] DB persist failed (acking 200 to suppress Meta retry):", err?.message);
     }
 
     // Return 200 immediately — process async

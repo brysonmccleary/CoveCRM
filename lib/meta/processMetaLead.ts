@@ -5,6 +5,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/lib/mongo/leads";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import FBLeadEntry from "@/models/FBLeadEntry";
+import MetaLeadWebhookEvent from "@/models/MetaLeadWebhookEvent";
 import User from "@/models/User";
 import Folder from "@/models/Folder";
 import { retrieveMetaLead } from "./retrieveLead";
@@ -29,6 +30,23 @@ const FB_LEAD_TYPE_TO_AI_SCRIPT_KEY: Record<string, string> = {
   trucker: "trucker_leads",
 };
 
+// Retry backoff: 1 min, 5 min, 30 min, 2 hr, 6 hr
+const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000, 21_600_000];
+
+async function updateEventStatus(
+  leadgenId: string,
+  update: Record<string, any>
+) {
+  try {
+    await MetaLeadWebhookEvent.updateOne(
+      { leadgenId },
+      { $set: update }
+    );
+  } catch (err: any) {
+    console.warn("[processMetaLead] MetaLeadWebhookEvent status update failed:", err?.message);
+  }
+}
+
 export async function processMetaLead(
   leadgenId: string,
   pageId: string,
@@ -40,9 +58,33 @@ export async function processMetaLead(
 ) {
   await mongooseConnect();
 
+  const now = new Date();
+
+  // Mark as processing and increment attemptCount atomically.
+  // $set and $inc must be siblings at the top level — not nested inside each other.
+  let attemptCount = 1;
+  try {
+    await MetaLeadWebhookEvent.updateOne(
+      { leadgenId },
+      {
+        $set: { processingStatus: "processing", lastAttemptAt: now },
+        $inc: { attemptCount: 1 },
+      }
+    );
+    const evt = await MetaLeadWebhookEvent.findOne({ leadgenId }).select("attemptCount").lean() as any;
+    if (evt?.attemptCount) attemptCount = evt.attemptCount;
+  } catch (err: any) {
+    console.warn("[processMetaLead] Failed to mark event as processing:", err?.message);
+  }
+
   const existingLead = await Lead.findOne({ metaLeadgenId: leadgenId }).lean();
   if (existingLead) {
     console.info(`[processMetaLead] Duplicate Meta lead ${leadgenId} — skipping`);
+    await updateEventStatus(leadgenId, {
+      processingStatus: "duplicate",
+      processedAt: now,
+      lastError: "",
+    });
     return;
   }
 
@@ -68,6 +110,11 @@ export async function processMetaLead(
 
   if (!campaign) {
     console.warn(`[processMetaLead] No campaign found for leadgenId ${leadgenId}, metaCampaignId ${metaCampaignId}, formId ${formId}`);
+    // Mark permanent — no campaign to route to, retrying won't help
+    await updateEventStatus(leadgenId, {
+      processingStatus: "failed_permanent",
+      lastError: `No campaign matched: metaCampaignId=${metaCampaignId} formId=${formId}`,
+    });
     return;
   }
 
@@ -78,15 +125,37 @@ export async function processMetaLead(
   }
   if (!user) {
     console.warn(`[processMetaLead] User not found: ${userEmail}`);
+    await updateEventStatus(leadgenId, {
+      processingStatus: "failed_permanent",
+      lastError: `User not found: ${userEmail}`,
+      matchedCampaignId: (campaign as any)._id,
+      userEmail,
+    });
     return;
   }
+
+  // Update event with matched campaign/user before the retrieval attempt
+  await updateEventStatus(leadgenId, {
+    matchedCampaignId: (campaign as any)._id,
+    userEmail,
+  });
 
   let leadData: any;
   try {
     const userAccessToken = String((user as any).metaAccessToken || "").trim();
     leadData = await retrieveMetaLead(leadgenId, userAccessToken || undefined);
   } catch (err: any) {
-    console.error(`[processMetaLead] Failed to retrieve lead ${leadgenId}:`, err?.message);
+    const retryIndex = Math.min(attemptCount - 1, RETRY_DELAYS_MS.length - 1);
+    const nextRetryAt = attemptCount <= RETRY_DELAYS_MS.length
+      ? new Date(now.getTime() + RETRY_DELAYS_MS[retryIndex])
+      : null;
+    const status = nextRetryAt ? "failed_retryable" : "failed_permanent";
+    console.error(`[processMetaLead] Failed to retrieve lead ${leadgenId} (attempt ${attemptCount}):`, err?.message);
+    await updateEventStatus(leadgenId, {
+      processingStatus: status,
+      lastError: String(err?.message || "retrieve failed").slice(0, 500),
+      nextRetryAt,
+    });
     return;
   }
 
@@ -154,6 +223,12 @@ export async function processMetaLead(
 
   if (dupCheck.isDuplicate) {
     console.info(`[processMetaLead] Duplicate CRM lead for ${leadgenId} — FBLeadEntry created, CRM lead skipped`);
+    await updateEventStatus(leadgenId, {
+      processingStatus: "duplicate",
+      processedAt: now,
+      fbLeadEntryId: (entry as any)._id,
+      lastError: "",
+    });
     return;
   }
 
@@ -162,24 +237,30 @@ export async function processMetaLead(
 
   const rawFields = leadData.rawFieldData || [];
 
-  function getRawField(label: string): string {
-    const normalized = label.toLowerCase().replace(/[\s_-]+/g, "_");
-    const found = rawFields.find((f: any) =>
-      String(f.name || "").toLowerCase().replace(/[\s_-]+/g, "_") === normalized
-    );
-    return String(found?.values?.[0] || "").trim();
+  // Match by explicit key first (set since form question fix), then fall back to normalized label
+  function getRawField(key: string, labelFallback?: string): string {
+    const byKey = rawFields.find((f: any) => String(f.name || "") === key);
+    if (byKey) return String(byKey.values?.[0] || "").trim();
+    if (labelFallback) {
+      const normalized = labelFallback.toLowerCase().replace(/[\s_-]+/g, "_");
+      const byLabel = rawFields.find((f: any) =>
+        String(f.name || "").toLowerCase().replace(/[\s_-]+/g, "_") === normalized
+      );
+      if (byLabel) return String(byLabel.values?.[0] || "").trim();
+    }
+    return "";
   }
 
   const ageRaw = getRawField("age");
   const ageValue = ageRaw || null;
 
-  const beneficiary = getRawField("who_would_be_your_beneficiary");
-  const coverageAmount = getRawField("what_coverage_amount_are_you_interested_in");
-  const mortgageBalance = getRawField("what_is_your_mortgage_balance");
-  const militaryBranch = getRawField("what_military_branch_did_you_serve_in");
-  const cdlStatus = getRawField("are_you_currently_an_active_cdl_driver");
-  const iulGoal = getRawField("are_you_looking_for_protection_cash_value_growth_or_both");
-  const bestCallTime = getRawField("best_time_for_a_licensed_agent_to_call");
+  const beneficiary = getRawField("beneficiary", "who_would_be_your_beneficiary");
+  const coverageAmount = getRawField("coverage_amount", "what_coverage_amount_are_you_interested_in");
+  const mortgageBalance = getRawField("mortgage_balance", "what_is_your_mortgage_balance");
+  const militaryBranch = getRawField("military_branch", "what_military_branch_did_you_serve_in");
+  const cdlStatus = getRawField("cdl_driver_status", "are_you_currently_an_active_cdl_driver");
+  const iulGoal = getRawField("iul_goal", "are_you_looking_for_protection_cash_value_growth_or_both");
+  const bestCallTime = getRawField("best_call_time", "best_time_for_a_licensed_agent_to_call");
 
   const coverageAmountFinal = coverageAmount || mortgageBalance || "";
 
@@ -229,6 +310,16 @@ export async function processMetaLead(
     { _id: (entry as any)._id },
     { $set: { crmLeadId: (newLead as any)._id, importedToCrm: true, importedAt: new Date() } }
   );
+
+  // Mark event fully processed with CRM lead reference
+  await updateEventStatus(leadgenId, {
+    processingStatus: "processed",
+    processedAt: now,
+    crmLeadId: (newLead as any)._id,
+    fbLeadEntryId: (entry as any)._id,
+    lastError: "",
+    nextRetryAt: null,
+  });
 
   try {
     await scoreLeadOnArrival(String((newLead as any)._id), "facebook_realtime");

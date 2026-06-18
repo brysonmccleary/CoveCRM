@@ -224,7 +224,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const userEmail = String(session.user.email).toLowerCase();
     const user = await User.findOne({ email: userEmail })
-      .select("_id email name firstName lastName agentPhone numbers metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaPageName metaInstagramId metaLeadTypeAssets")
+      .select("_id email name firstName lastName agentPhone numbers metaAccessToken metaSystemUserToken metaPageAccessToken metaAdAccountId metaPageId metaPageName metaInstagramId metaLeadTypeAssets")
       .lean();
     if (!user) {
       return res.status(404).json({ error: "User account not found" });
@@ -601,15 +601,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           final_expense: "What coverage amount are you interested in?",
           iul: "Are you looking for protection, cash value growth, or both?",
         };
+        const leadTypeSpecificQuestionKeys: Record<string, string> = {
+          mortgage_protection: "mortgage_balance",
+          trucker: "cdl_driver_status",
+          veteran: "military_branch",
+          final_expense: "coverage_amount",
+          iul: "iul_goal",
+        };
         const questions: Array<Record<string, any>> = [
           { type: "FULL_NAME" },
-          { type: "CUSTOM", label: leadTypeSpecificQuestionLabels[leadType] },
-          { type: "CUSTOM", label: "Best time for a licensed agent to call?" },
+          { type: "CUSTOM", label: leadTypeSpecificQuestionLabels[leadType], key: leadTypeSpecificQuestionKeys[leadType] || "lead_question" },
+          { type: "CUSTOM", label: "Best time for a licensed agent to call?", key: "best_call_time" },
           { type: "PHONE" },
           { type: "EMAIL" },
-          { type: "CUSTOM", label: "Age" },
-          { type: "CUSTOM", label: "State" },
-          { type: "CUSTOM", label: "Who would be your beneficiary?" },
+          { type: "CUSTOM", label: "Age", key: "age" },
+          { type: "CUSTOM", label: "State", key: "state" },
+          { type: "CUSTOM", label: "Who would be your beneficiary?", key: "beneficiary" },
         ];
 
         const storedComplianceProfile = (campaign as any).complianceProfile || {};
@@ -652,7 +659,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         metaFormParams.set("custom_disclaimer", JSON.stringify(customDisclaimer));
         metaFormParams.set("follow_up_action_url", "https://www.covecrm.com/thank-you");
         metaFormParams.set("questions", JSON.stringify(questions));
-        metaFormParams.set("access_token", accessToken);
+        // Prefer page access token for page-scoped leadgen_forms endpoint
+        const pageAccessToken = String((user as any)?.metaPageAccessToken || "").trim();
+        metaFormParams.set("access_token", pageAccessToken || accessToken);
 
         const metaFormResp = await fetch(`https://graph.facebook.com/v19.0/${pageIdFinal}/leadgen_forms`, {
           method: "POST",

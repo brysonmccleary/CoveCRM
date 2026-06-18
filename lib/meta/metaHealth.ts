@@ -404,10 +404,22 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
       return result;
     }
 
+    // Proactive Lead Ads TOS check — non-fatal; surface warning without blocking publish
+    let leadAdsTosAccepted = true;
+    try {
+      const tosResp = await graphGet(`${pageId}/leadgen_tos_acceptance`, accessToken);
+      // If the user has not accepted TOS, the response either errors or returns empty data
+      if (tosResp?.data !== undefined && (!Array.isArray(tosResp.data) || tosResp.data.length === 0)) {
+        leadAdsTosAccepted = false;
+      }
+    } catch {
+      // Not all users/pages return TOS acceptance — skip, don't fail health check
+    }
+
     const update = {
       metaReconnectNeeded: false,
       metaHealthStatus: "healthy",
-      lastMetaHealthError: "",
+      lastMetaHealthError: leadAdsTosAccepted ? "" : "Lead Ads Terms of Service may not be accepted. Visit https://www.facebook.com/ads/leadgen/tos before publishing.",
       metaHealthCooldownUntil: null,
       metaLastHealthCheckAt: now,
       metaLastSuccessfulHealthCheckAt: now,
@@ -416,7 +428,9 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
     return {
       ok: true,
       status: "healthy",
-      reason: "Facebook setup is ready.",
+      reason: leadAdsTosAccepted
+        ? "Facebook setup is ready."
+        : "Facebook setup is ready, but Lead Ads Terms of Service may not be accepted. Accept them at facebook.com/ads/leadgen/tos before publishing.",
       checkedAt: now,
       lastSuccessfulHealthCheckAt: now,
       account,

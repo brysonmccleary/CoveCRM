@@ -107,6 +107,74 @@ export async function syncAdInsights(
     weightedCtr: number;
   }>();
 
+  // Pre-aggregate lead counts by (metaAdId, date) and (metaCampaignId, date)
+  // so we avoid one DB query per insight record (N+1 elimination).
+  const leadsByAdAndDate = new Map<string, number>();
+  const leadsByCampaignAndDate = new Map<string, number>();
+  try {
+    const dateRange = insights.reduce(
+      (acc, ins) => {
+        const d = ins.date_start;
+        if (!d) return acc;
+        if (!acc.min || d < acc.min) acc.min = d;
+        if (!acc.max || d > acc.max) acc.max = d;
+        return acc;
+      },
+      { min: "", max: "" }
+    );
+
+    if (dateRange.min && dateRange.max) {
+      const startOfRange = new Date(dateRange.min + "T00:00:00Z");
+      const endOfRange = new Date(dateRange.max + "T23:59:59Z");
+
+      const adAgg = await Lead.aggregate([
+        {
+          $match: {
+            userEmail,
+            metaAdId: { $exists: true, $ne: "" },
+            createdAt: { $gte: startOfRange, $lte: endOfRange },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              metaAdId: "$metaAdId",
+              date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "UTC" } },
+            },
+            count: { $sum: 1 },
+          },
+        },
+      ]);
+      for (const row of adAgg) {
+        leadsByAdAndDate.set(`${row._id.metaAdId}:${row._id.date}`, row.count);
+      }
+
+      const campaignAgg = await Lead.aggregate([
+        {
+          $match: {
+            userEmail,
+            metaCampaignId: { $exists: true, $ne: "" },
+            createdAt: { $gte: startOfRange, $lte: endOfRange },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              metaCampaignId: "$metaCampaignId",
+              date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "UTC" } },
+            },
+            count: { $sum: 1 },
+          },
+        },
+      ]);
+      for (const row of campaignAgg) {
+        leadsByCampaignAndDate.set(`${row._id.metaCampaignId}:${row._id.date}`, row.count);
+      }
+    }
+  } catch (aggErr: any) {
+    console.warn("[syncAdInsights] lead aggregation failed, defaulting to 0:", aggErr?.message);
+  }
+
   for (const insight of insights) {
     const campaign =
       (insight.campaign_id ? campaignByMetaId.get(insight.campaign_id) : null) ||
@@ -125,14 +193,12 @@ export async function syncAdInsights(
     const cpm = parseFloat(insight.cpm || "0");
     const ctr = parseFloat(insight.ctr || "0");
 
-    // Count leads from CRM for this campaign on this date
-    const startOfDay = new Date(date + "T00:00:00Z");
-    const endOfDay = new Date(date + "T23:59:59Z");
-    const leads = await Lead.countDocuments({
-      userEmail,
-      ...(insight.ad_id ? { metaAdId: insight.ad_id } : { metaCampaignId: insight.campaign_id }),
-      createdAt: { $gte: startOfDay, $lte: endOfDay },
-    });
+    // Use ad-level count when insight.ad_id is present (level=ad always has ad_id).
+    // No campaign-level fallback — it would double-count multi-ad campaigns.
+    const leads =
+      insight.ad_id
+        ? (leadsByAdAndDate.get(`${insight.ad_id}:${date}`) ?? 0)
+        : (leadsByCampaignAndDate.get(`${insight.campaign_id}:${date}`) ?? 0);
 
     const dailyKey = `${String((campaign as any)._id)}:${date}`;
     const prevDaily = campaignDailyTotals.get(dailyKey) || {

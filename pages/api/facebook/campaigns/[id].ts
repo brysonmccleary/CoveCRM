@@ -161,7 +161,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } else if (status !== undefined) {
       updates.status = status;
     }
-    if (dailyBudget !== undefined) updates.dailyBudget = dailyBudget;
+    if (dailyBudget !== undefined) {
+      const budgetDollars = Number(dailyBudget);
+      if (isNaN(budgetDollars) || budgetDollars < 5) {
+        return res.status(400).json({ error: "dailyBudget must be >= $5.00" });
+      }
+      const budgetCents = Math.round(budgetDollars * 100);
+      const metaAdsetId = String((campaign as any).metaAdsetId || "").trim();
+      if (metaAdsetId) {
+        try {
+          const budgetUser = await User.findOne({ email: session.user.email.toLowerCase() })
+            .select("_id metaSystemUserToken metaAccessToken")
+            .lean() as any;
+          const budgetToken = String(budgetUser?.metaSystemUserToken || budgetUser?.metaAccessToken || "").trim();
+          if (!budgetToken) {
+            return res.status(400).json({ error: "Meta access token missing — reconnect Facebook before changing budget" });
+          }
+          const budgetParams = new URLSearchParams();
+          budgetParams.set("daily_budget", String(budgetCents));
+          budgetParams.set("access_token", budgetToken);
+          const budgetResp = await fetch(`https://graph.facebook.com/v19.0/${metaAdsetId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: budgetParams.toString(),
+          });
+          const budgetJson = await budgetResp.json().catch(() => ({}));
+          if (!budgetResp.ok) {
+            console.error("[campaign-patch] Meta budget update failed:", JSON.stringify(budgetJson).slice(0, 500));
+            return res.status(400).json({
+              ok: false,
+              error: `Meta rejected budget update: ${budgetJson?.error?.message || "unknown error"}`,
+            });
+          }
+          console.info(`[campaign-patch] Budget updated on Meta adset ${metaAdsetId}: $${(campaign as any).dailyBudget ?? "?"} → $${budgetDollars}`);
+        } catch (budgetErr: any) {
+          console.error("[campaign-patch] Meta budget call threw:", budgetErr?.message);
+          return res.status(500).json({ error: "Meta budget update failed — try again" });
+        }
+      }
+      updates.dailyBudget = budgetDollars;
+    }
     if (totalSpend !== undefined) updates.totalSpend = totalSpend;
     if (totalLeads !== undefined) updates.totalLeads = totalLeads;
     if (totalClicks !== undefined) updates.totalClicks = totalClicks;
@@ -197,7 +236,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
           if (metaHealth.ok) {
             await fetch(
-              `https://graph.facebook.com/v18.0/${(campaign as any).metaCampaignId}`,
+              `https://graph.facebook.com/v19.0/${(campaign as any).metaCampaignId}`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },

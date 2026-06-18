@@ -78,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const campaign = await (FBLeadCampaign as any).findOne({
       _id: campaignId,
     })
-      .select("userEmail folderId campaignName leadType webhookKey metaCampaignId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet funnelVersion")
+      .select("userEmail folderId campaignName leadType webhookKey metaCampaignId metaAdId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet funnelVersion")
       .lean() as any;
 
     if (!campaign) {
@@ -177,22 +177,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     notesLines.push(`Source: CoveCRM hosted funnel — ${campaign.campaignName}`);
 
+    const rawPhone = String(phone || "").trim();
+    const phoneLast10 = rawPhone.replace(/\D+/g, "").slice(-10);
+
     const lead = await Lead.create({
       "First Name": String(firstName || "").trim(),
       "Last Name": String(lastName || "").trim(),
       Email: String(email || "").trim(),
       email: String(email || "").trim().toLowerCase(),
-      Phone: String(phone || "").trim(),
+      Phone: rawPhone,
+      phoneLast10,
+      normalizedPhone: phoneLast10,
       State: String(state || "").trim(),
       Age: String(age || "").trim(),
       Notes: notesLines.join("\n"),
       userEmail,
+      ownerEmail: userEmail,
       folderId,
       status: "New",
       assignedDrips: [],
       campaignId: campaign._id,
       metaCampaignId: campaign.metaCampaignId || "",
+      metaAdId: campaign.metaAdId || "",
       leadType: normalizedLeadType,
+      leadSource: "facebook_funnel",
       sourceType: "facebook_funnel",
       stateRestrictionWarning: !!(outsideLicensedArea || stateRestrictionWarning),
       stateOutsidePrimaryLicensedArea: !!(outsideLicensedArea || stateOutsidePrimaryLicensedArea),

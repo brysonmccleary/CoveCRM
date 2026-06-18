@@ -66,7 +66,7 @@ async function fetchLeadFromGraph(
 ): Promise<Record<string, string>> {
   if (!accessToken) return {};
   try {
-    const url = `https://graph.facebook.com/v18.0/${leadgenId}`;
+    const url = `https://graph.facebook.com/v19.0/${leadgenId}`;
     const res = await axios.get(url, {
       params: {
         fields: "field_data,created_time,ad_id,form_id",
