@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallSession from "@/models/AICallSession";
+import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 import { requireBillingReady } from "@/lib/billing/requireBillingReady";
@@ -257,6 +258,27 @@ function serializeSession(doc: any | null) {
   return json;
 }
 
+async function attachFolderName(json: any | null, userEmail: string) {
+  if (!json?.folderId || json.folderName) return json;
+  const folderId =
+    typeof json.folderId === "object" && json.folderId?._id
+      ? String(json.folderId._id)
+      : String(json.folderId);
+  if (!Types.ObjectId.isValid(folderId)) return json;
+
+  const folder = await Folder.findOne({
+    _id: new Types.ObjectId(folderId),
+    userEmail,
+  })
+    .select("name")
+    .lean<any>();
+
+  if (folder?.name) {
+    json.folderName = String(folder.name);
+  }
+  return json;
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<GetResponse>
@@ -294,7 +316,7 @@ export default async function handler(
           .sort({ createdAt: -1 })
           .exec();
 
-        const latest = serializeSession(latestDoc);
+        const latest = await attachFolderName(serializeSession(latestDoc), email);
         return res.status(200).json({ ok: true, session: latest || null });
       }
 
@@ -308,7 +330,7 @@ export default async function handler(
         .sort({ createdAt: -1 })
         .exec();
 
-      const active = serializeSession(activeDoc);
+      const active = await attachFolderName(serializeSession(activeDoc), email);
       return res.status(200).json({ ok: true, session: active || null });
     } catch (err) {
       console.error("AI session GET error:", err);
@@ -384,25 +406,6 @@ export default async function handler(
 
       const fid = new Types.ObjectId(folderId);
 
-      // Pull queue snapshot from leads in that folder (per-user ownership)
-      const leads = await Lead.find({
-        folderId: fid,
-        $or: [{ userEmail: email }, { ownerEmail: email }, { user: email }],
-      })
-        .sort({ aiPriorityScore: -1, createdAt: -1, lastContactedAt: 1 })
-        .select("_id")
-        .lean()
-        .exec();
-
-      const leadIds = leads.map((l: any) => l._id as any);
-      const total = leadIds.length;
-
-      if (total === 0) {
-        return res
-          .status(400)
-          .json({ ok: false, message: "No leads in this folder to dial." });
-      }
-
       let aiSession = await AICallSession.findOne({
         userEmail: email,
         folderId: fid,
@@ -413,6 +416,42 @@ export default async function handler(
         .exec();
 
       const now = new Date();
+      const useExistingQueue =
+        mode === "resume" &&
+        aiSession &&
+        Array.isArray((aiSession as any).leadIds) &&
+        (aiSession as any).leadIds.length > 0;
+
+      let leadIds: any[] = useExistingQueue
+        ? ([...((aiSession as any).leadIds || [])] as any[])
+        : [];
+      let total = useExistingQueue
+        ? typeof (aiSession as any).total === "number" &&
+          (aiSession as any).total > 0
+          ? (aiSession as any).total
+          : leadIds.length
+        : 0;
+
+      if (!useExistingQueue) {
+        // Pull a fresh queue snapshot from leads in that folder (per-user ownership)
+        const leads = await Lead.find({
+          folderId: fid,
+          $or: [{ userEmail: email }, { ownerEmail: email }, { user: email }],
+        })
+          .sort({ aiPriorityScore: -1, createdAt: -1, lastContactedAt: 1 })
+          .select("_id")
+          .lean()
+          .exec();
+
+        leadIds = leads.map((l: any) => l._id as any);
+        total = leadIds.length;
+      }
+
+      if (total === 0) {
+        return res
+          .status(400)
+          .json({ ok: false, message: "No leads in this folder to dial." });
+      }
 
       if (!aiSession) {
         // First time → always behave like fresh
@@ -432,8 +471,10 @@ export default async function handler(
         });
       } else {
         // Re-use existing session for this folder/user
-        aiSession.leadIds = leadIds;
-        aiSession.total = total;
+        if (!useExistingQueue) {
+          aiSession.leadIds = leadIds;
+          aiSession.total = total;
+        }
         aiSession.fromNumber = fromNumber;
         aiSession.scriptKey = normalizedScriptKey;
         aiSession.voiceKey = voiceKey;
@@ -441,6 +482,16 @@ export default async function handler(
 
         if (mode === "fresh") {
           aiSession.lastIndex = -1;
+          aiSession.stats = {
+            completed: 0,
+            booked: 0,
+            not_interested: 0,
+            no_answer: 0,
+            callback: 0,
+            do_not_call: 0,
+            disconnected: 0,
+            skipped: 0,
+          } as any;
         }
         // mode === "resume" keeps lastIndex where it was
 
@@ -477,7 +528,7 @@ export default async function handler(
         // Non-fatal — session is saved; cron is the last-resort fallback
       }
 
-      const payload = serializeSession(aiSession);
+      const payload = await attachFolderName(serializeSession(aiSession), email);
       return res.status(200).json({ ok: true, session: payload, workerKickOk });
     } catch (err) {
       console.error("AI session POST error:", err);
@@ -583,7 +634,7 @@ export default async function handler(
         }
       }
 
-      const payload = serializeSession(aiSession);
+      const payload = await attachFolderName(serializeSession(aiSession), email);
       return res.status(200).json({ ok: true, session: payload });
     } catch (err) {
       console.error("AI session PATCH error:", err);
