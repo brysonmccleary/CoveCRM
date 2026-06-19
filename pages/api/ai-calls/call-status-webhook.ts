@@ -366,7 +366,7 @@ export default async function handler(
           const firstHandle = ((handled as any)?.modifiedCount ?? 0) > 0;
 
           if (firstHandle) {
-            // Set conservative voicemail outcome only if still unknown
+            // Set no_answer outcome for voicemail (correction #1 — "voicemail" is not an allowed outcome)
             await AICallRecording.updateOne(
               {
                 callSid: CallSid,
@@ -378,12 +378,24 @@ export default async function handler(
               },
               {
                 $set: {
-                  outcome: "voicemail",
+                  outcome: "no_answer",
                   outcomeSource: "amd_voicemail",
                   updatedAt: now,
                 },
               }
             ).exec();
+
+            // Update session stats for no_answer (bypasses outcome.ts so we must do it here)
+            try {
+              if (recDoc.aiCallSessionId) {
+                await AICallSession.updateOne(
+                  { _id: recDoc.aiCallSessionId },
+                  { $inc: { "stats.no_answer": 1, "stats.completed": 1 } }
+                ).exec();
+              }
+            } catch (statsErr: any) {
+              console.warn("[AI Dialer] Failed to update session stats for AMD voicemail (non-blocking):", statsErr?.message || statsErr);
+            }
 
             // Append lead history + notes once
             if (recDoc.leadId) {
@@ -397,7 +409,7 @@ export default async function handler(
                 meta: {
                   source: "call-status-webhook",
                   callSid: CallSid,
-                  outcome: "voicemail",
+                  outcome: "no_answer",
                   recordingId: recDoc._id,
                   answeredBy: AnsweredBy,
                 },
@@ -649,6 +661,24 @@ export default async function handler(
                   },
                 }
               ).exec();
+
+              // Update AICallSession.stats — this path bypasses outcome.ts so stats must be updated here (audit Fix 7)
+              try {
+                if (latestRec.aiCallSessionId) {
+                  // mapTerminalOutcome can return: "voicemail" | "disconnected" | "no_answer" | "failed" | undefined
+                  const statField = (mapped === "no_answer" || mapped === "voicemail") ? "stats.no_answer"
+                    : mapped === "disconnected" ? "stats.disconnected"
+                    : null;
+                  if (statField) {
+                    await AICallSession.updateOne(
+                      { _id: latestRec.aiCallSessionId },
+                      { $inc: { [statField]: 1, "stats.completed": 1 } }
+                    ).exec();
+                  }
+                }
+              } catch (statsErr: any) {
+                console.warn("[AI Dialer] Failed to update session stats from terminal fallback (non-blocking):", statsErr?.message || statsErr);
+              }
             }
 
             // Append lead history/notes only once per callSid (idempotent)

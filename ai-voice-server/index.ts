@@ -377,6 +377,10 @@ type CallState = {
   // Repeat-objection tracking
   lastObjectionKind?: string;
   objectionRepeatCount?: number;
+  // Consecutive unrecognized-turn counter — resets on any named intent, exits at 4
+  unknownTurnCount?: number;
+  // Cumulative soft-decline counter across all subKinds; resets on scheduling advance only
+  totalDeclineSignals?: number;
 
   // silence watchdog: arms after greeting or each AI turn; cancelled on speech_started
   silenceWatchdog?: NodeJS.Timeout | null;
@@ -969,6 +973,7 @@ function armSilenceWatchdog(
       live.finalOutcomeSent = live.finalOutcomeSent || false;
       stopOutboundPacer(ws, live, `silence timeout (${reason})`);
       safelyCloseOpenAi(live, `silence timeout (${reason})`);
+      completeTwilioCallNow(ws, live, `silence timeout (${reason})`);
     } catch (err: any) {
       console.warn("[AI-VOICE][SILENCE] timeout close failed:", err?.message || err);
     }
@@ -3436,7 +3441,19 @@ function isHardDncRequest(textRaw: string): boolean {
     t.includes("remove my number") ||
     t.includes("take me off") ||
     t.includes("leave me alone") ||
-    t.includes("never call")
+    t.includes("never call") ||
+    // Extended DNC phrases (audit Fix 2)
+    t.includes("to be removed") ||
+    t.includes("stop bothering") ||
+    t.includes("don t bother me") ||
+    t.includes("dont bother me") ||
+    t.includes("don't bother me") ||
+    t.includes("please don t call") ||
+    t.includes("please dont call") ||
+    t.includes("please don't call") ||
+    t.includes("report you") ||
+    t.includes("calling the fcc") ||
+    t.includes("this is illegal")
   );
 }
 
@@ -4759,6 +4776,18 @@ function detectObjection(textRaw: string): string | null {
     t.includes("what are we going over")
   ) return "what_entails";
 
+  // Coverage ownership — must come BEFORE va_question and redirect to avoid misrouting
+  // e.g. "I have Medicare" would hit redirect's "medicare" check without this guard
+  if (
+    t.includes("have medicare") ||
+    t.includes("have medicaid") ||
+    t.includes("have va coverage") ||
+    t.includes("already covered") ||
+    t.includes("covered through work") ||
+    t.includes("coverage through work") ||
+    t.includes("have coverage through")
+  ) return "already_have";
+
   if (
     t.includes("with the va") ||
     t.includes("through the va") ||
@@ -4966,6 +4995,20 @@ if (
     } catch {}
     return "busy";
   }
+  // "You keep calling me / been calling multiple times" — annoyance about call frequency
+  if (
+    t.includes("keep calling") ||
+    t.includes("keep getting calls") ||
+    t.includes("called me before") ||
+    t.includes("been calling me") ||
+    t.includes("called me multiple times") ||
+    t.includes("called me several") ||
+    t.includes("called me a few times") ||
+    t.includes("called me already") ||
+    /called.*(?:multiple|several|many|a few)\s+times/i.test(t) ||
+    /keep.*calling/i.test(t)
+  ) return "repeated_contact";
+
   // "Already talked to someone / already spoke with agent"
   if (
     t.includes("already talked") ||
@@ -5010,6 +5053,41 @@ if (
       if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t)) return null;
     } catch {}
     return "how_much";
+  }
+  // Affordability objections — route into how_much rebuttal (audit Fix 6)
+  if (
+    t.includes("too expensive") ||
+    t.includes("can t afford") ||
+    t.includes("can't afford") ||
+    t.includes("cant afford") ||
+    t.includes("money s tight") ||
+    t.includes("money's tight") ||
+    t.includes("moneys tight") ||
+    t.includes("out of my budget") ||
+    t.includes("don t have the money") ||
+    t.includes("don't have the money") ||
+    t.includes("dont have the money") ||
+    t.includes("can t pay for") ||
+    t.includes("can't pay for") ||
+    t.includes("cant pay for")
+  ) {
+    return "how_much";
+  }
+  // "Need to think about it" — soft-delay, not a hard no
+  if (
+    t.includes("need to think") ||
+    t.includes("need time to think") ||
+    t.includes("think about it") ||
+    t.includes("think it over") ||
+    t.includes("let me think") ||
+    t.includes("still deciding") ||
+    t.includes("not sure yet") ||
+    t.includes("need to consider")
+  ) {
+    try {
+      if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t)) return null;
+    } catch {}
+    return "needs_time";
   }
   if (
     t.includes("don't remember") ||
@@ -6589,6 +6667,26 @@ function handlePostCoverageSchedulingTurn(
     };
   }
 
+  // Hard exit after 4 consecutive unrecognized turns in post-coverage phase (audit Fix 1)
+  const unknownCountPC = (state.unknownTurnCount ?? 0) + 1;
+  if (unknownCountPC >= 4) {
+    return {
+      handled: true,
+      routeKind: "post_coverage_unknown_exit",
+      responseMode: "exact_script",
+      objective: "end_call",
+      lineToSay: "No worries at all — I don't want to take up more of your time. Have a great day!",
+      requiredClosingPivot: "",
+      forbiddenTopics: [],
+      stateWrites: {
+        unknownTurnCount: 0,
+        pendingHangupAfterGoodbye: true,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
   const _unknownPivot = buildPostCoverageCurrentPivot(state, intent, ctx, stepCtx);
   const _unknownRequiredPivot =
     extractClosingQuestionFromStepLine(stepCtx.steps[stepCtx.idx] || "") ||
@@ -6608,7 +6706,7 @@ function handlePostCoverageSchedulingTurn(
       "asking discovery questions",
       "opening a new topic",
     ],
-    stateWrites: { ..._unknownPivot.stateWrites },
+    stateWrites: { ..._unknownPivot.stateWrites, unknownTurnCount: unknownCountPC },
     shouldAdvanceStep: false,
   };
 }
@@ -6699,6 +6797,11 @@ function buildConversationPolicyDecision(
   }
   function ucFirst(s: string): string {
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  }
+
+  // Reset consecutive-unknown counter whenever we successfully classify the intent (audit Fix 1)
+  if (intent.kind !== "unknown" && intent.kind !== "off_topic") {
+    state.unknownTurnCount = 0;
   }
 
   if (intent.kind === "kayla_signup_ready" && normalizeScriptKey(ctx?.scriptKey) === "kayla_signup") {
@@ -7272,18 +7375,48 @@ function buildConversationPolicyDecision(
     const niIsRepeat = !!state.lastObjectionKind && state.lastObjectionKind === niKind;
     const niRepeatCount = niIsRepeat ? (Number(state.objectionRepeatCount ?? 0) + 1) : 1;
     const niRepeatMode = niIsRepeat && niRepeatCount >= 2;
-    const niStateWrites: Record<string, unknown> = { lastObjectionKind: niKind, objectionRepeatCount: niRepeatCount };
+    const totalDeclineSignals = (state.totalDeclineSignals ?? 0) + 1;
+    const niStateWrites: Record<string, unknown> = { lastObjectionKind: niKind, objectionRepeatCount: niRepeatCount, totalDeclineSignals };
+    if (!isKaylaDemo && totalDeclineSignals >= 4) {
+      return {
+        handled: true,
+        routeKind: "policy_not_interested_exit",
+        responseMode: "exact_script",
+        objective: "end_call",
+        lineToSay: "Totally understood — I won't keep you. Have a great day!",
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          ...niStateWrites,
+          totalDeclineSignals: 0,
+          pendingHangupAfterGoodbye: true,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
 	    if (niRepeatMode) {
+	      // 2nd not_interested → graceful exit instead of infinite soft rebuttal (audit Fix 4)
 	      return {
-	        handled: true, routeKind: "policy_not_interested", responseMode: "soft_script",
-	        objective: "return_to_booking",
-	        lineToSay: getRebuttalLine(ctx, niKind),
-	        requiredClosingPivot: requiredObjective,
-	        forbiddenTopics: [], stateWrites: {
+	        handled: true,
+	        routeKind: "policy_not_interested_exit",
+	        responseMode: "exact_script",
+	        objective: "end_call",
+	        lineToSay: "Totally understood — I won't keep you. Have a great day!",
+	        requiredClosingPivot: "",
+	        forbiddenTopics: [],
+	        stateWrites: {
 	          ...niStateWrites,
-	          ...preserveCurrentStepState(),
-	        }, shouldAdvanceStep: false,
-	        repeatMode: true,
+	          pendingHangupAfterGoodbye: true,
+	          awaitingUserAnswer: false,
+	          awaitingAnswerForStepIndex: undefined,
+	          pendingLiveTransferAvailabilityConfirm: false,
+	          pendingLiveTransferAvailabilityAttempts: 0,
+	        },
+	        shouldAdvanceStep: false,
 	      };
 	    }
 	    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
@@ -7333,6 +7466,10 @@ function buildConversationPolicyDecision(
         : `Yes — I’m a virtual assistant helping with scheduling. ${agentFirst} handles everything on the actual call. ${requiredObjective}`;
     } else if (sk === "busy") {
       lineToSay = `No worries — this’ll be really quick. ${requiredObjective}`;
+    } else if (sk === "needs_time") {
+      lineToSay = `Totally fair — most people just want to see the actual numbers first since there’s zero obligation. ${agentFirst} can run through it in about 5 minutes. ${requiredObjective}`;
+    } else if (sk === "repeated_contact") {
+      lineToSay = `I’m sorry about that — I’ll get this corrected. Were you wanting to go ahead and get this taken care of, or would you rather I stop reaching out?`;
     } else if (sk === "send_it" || sk === "send_info") {
       lineToSay = isKayla
         ? `I can text you the signup link and discount code right now — want me to send it over? ${requiredObjective}`
@@ -7363,10 +7500,59 @@ function buildConversationPolicyDecision(
     const objIsRepeat = !!state.lastObjectionKind && state.lastObjectionKind === objKind;
     const objRepeatCount = objIsRepeat ? (Number(state.objectionRepeatCount ?? 0) + 1) : 1;
     const objRepeatMode = objIsRepeat && objRepeatCount >= 2;
-    const objStateWrites: Record<string, unknown> = { lastObjectionKind: objKind, objectionRepeatCount: objRepeatCount };
+    const softDeclineObjKinds = ["needs_time", "repeated_contact", "busy", "spouse_consult"];
+    const isSoftDeclineObj = softDeclineObjKinds.includes(sk);
+    const objTotalDeclines = isSoftDeclineObj ? (state.totalDeclineSignals ?? 0) + 1 : (state.totalDeclineSignals ?? 0);
+    const objStateWrites: Record<string, unknown> = {
+      lastObjectionKind: objKind,
+      objectionRepeatCount: objRepeatCount,
+      ...(isSoftDeclineObj ? { totalDeclineSignals: objTotalDeclines } : {}),
+    };
     const dayHintFromTurn = !state.selectedDay ? extractExplicitDaySelection(intent.raw) : null;
 
+    if (!isKaylaDemo && isSoftDeclineObj && objTotalDeclines >= 4) {
+      return {
+        handled: true,
+        routeKind: "policy_not_interested_exit",
+        responseMode: "exact_script",
+        objective: "end_call",
+        lineToSay: "Totally understood — I won't keep you. Have a great day!",
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          ...objStateWrites,
+          totalDeclineSignals: 0,
+          pendingHangupAfterGoodbye: true,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     if (objRepeatMode) {
+      // 3rd+ occurrence of the same objection → graceful exit (audit Fix 4 extension)
+      if (objRepeatCount >= 3) {
+        return {
+          handled: true,
+          routeKind: "policy_objection_exit",
+          responseMode: "exact_script",
+          objective: "end_call",
+          lineToSay: "Totally understood — I won't keep you. Have a great day!",
+          requiredClosingPivot: "",
+          forbiddenTopics: [],
+          stateWrites: {
+            ...objStateWrites,
+            pendingHangupAfterGoodbye: true,
+            awaitingUserAnswer: false,
+            awaitingAnswerForStepIndex: undefined,
+            pendingLiveTransferAvailabilityConfirm: false,
+            pendingLiveTransferAvailabilityAttempts: 0,
+          },
+          shouldAdvanceStep: false,
+        };
+      }
       const rebuttalBase = lineToSay;
       return {
         handled: true,
@@ -7389,10 +7575,10 @@ function buildConversationPolicyDecision(
     return {
       handled: true,
       routeKind: `policy_${sk || "objection"}`,
-      responseMode: sk === "busy" ? "soft_script" : "exact_script",
+      responseMode: (sk === "busy" || sk === "needs_time" || sk === "repeated_contact") ? "soft_script" : "exact_script",
       objective: "return_to_booking",
       lineToSay,
-      ...(sk === "busy" ? { userText: intent.raw } : {}),
+      ...((sk === "busy" || sk === "needs_time" || sk === "repeated_contact") ? { userText: intent.raw } : {}),
       requiredClosingPivot: requiredObjective,
       forbiddenTopics: [],
       stateWrites: {
@@ -7436,6 +7622,7 @@ function buildConversationPolicyDecision(
         forbiddenTopics: [],
         stateWrites: {
           selectedDay: dayToUse,
+          totalDeclineSignals: 0,
           pendingLiveTransferAvailabilityConfirm: false,
           pendingLiveTransferAvailabilityAttempts: 0,
           ...(wasLTPending && isStandard ? { scriptStepIndex: advancedDayIdx } : {}),
@@ -7481,6 +7668,7 @@ function buildConversationPolicyDecision(
         requiredClosingPivot: closingPivot,
         forbiddenTopics: [],
         stateWrites: {
+          totalDeclineSignals: 0,
           pendingLiveTransferAvailabilityConfirm: false,
           pendingLiveTransferAvailabilityAttempts: 0,
         },
@@ -7491,6 +7679,28 @@ function buildConversationPolicyDecision(
 
   if (intent.kind === "unknown" || intent.kind === "off_topic") {
     if (!ctx) return NOT_HANDLED;
+    const unknownCount = (state.unknownTurnCount ?? 0) + 1;
+    // Hard exit after 4 consecutive unrecognized turns (audit Fix 1)
+    if (!isKaylaDemo && unknownCount >= 4) {
+	      return {
+	        handled: true,
+	        routeKind: "policy_unknown_exit",
+	        responseMode: "exact_script",
+	        objective: "end_call",
+	        lineToSay: "No worries at all — I don't want to take up more of your time. Have a great day!",
+	        requiredClosingPivot: "",
+	        forbiddenTopics: [],
+	        stateWrites: {
+	          unknownTurnCount: 0,
+	          pendingHangupAfterGoodbye: true,
+	          awaitingUserAnswer: false,
+	          awaitingAnswerForStepIndex: undefined,
+	          pendingLiveTransferAvailabilityConfirm: false,
+	          pendingLiveTransferAvailabilityAttempts: 0,
+	        },
+	        shouldAdvanceStep: false,
+	      };
+    }
 	    return {
 	      handled: true,
 	      routeKind: "policy_unknown",
@@ -7506,6 +7716,7 @@ function buildConversationPolicyDecision(
 	        "opening a new topic",
 	      ],
 	      stateWrites: {
+	        unknownTurnCount: unknownCount,
 	        pendingLiveTransferAvailabilityConfirm: false,
 	        pendingLiveTransferAvailabilityAttempts: 0,
 	        ...preserveCurrentStepState(),
@@ -7531,6 +7742,7 @@ function buildConversationPolicyDecision(
         forbiddenTopics: [],
         stateWrites: {
           scriptStepIndex: nextIdx,
+          totalDeclineSignals: 0,
           awaitingUserAnswer: false,
           awaitingAnswerForStepIndex: undefined,
           lastAcceptedUserText: intent.raw,
@@ -7556,6 +7768,7 @@ function buildConversationPolicyDecision(
       forbiddenTopics: [],
       stateWrites: {
         scriptStepIndex: nextIdx,
+        totalDeclineSignals: 0,
         awaitingUserAnswer: true,
         awaitingAnswerForStepIndex: nextIdx,
         lastAcceptedUserText: intent.raw,
@@ -8055,6 +8268,35 @@ async function handleConversationTurn(
       kind: "final_outcome",
       outcome: "do_not_call",
       summary: "Lead requested no further calls or indicated wrong number.",
+      notesAppend: `Lead said: "${text.slice(0, 220)}"`,
+    });
+    state.finalOutcomeSent = true;
+  }
+
+  // Graceful exits: genuine decline (not_interested outcome)
+  if (
+    !state.finalOutcomeSent &&
+    (decision.routeKind === "policy_not_interested_exit" ||
+      decision.routeKind === "policy_objection_exit")
+  ) {
+    void handleFinalOutcomeIntent(state, {
+      kind: "final_outcome",
+      outcome: "not_interested",
+      summary: "Lead did not engage after repeated attempts — call ended gracefully.",
+      notesAppend: `Lead said: "${text.slice(0, 220)}"`,
+    });
+    state.finalOutcomeSent = true;
+  }
+  // Unknown-turn-cap exits: failure to understand, not confirmed disinterest (disconnected outcome)
+  if (
+    !state.finalOutcomeSent &&
+    (decision.routeKind === "policy_unknown_exit" ||
+      decision.routeKind === "post_coverage_unknown_exit")
+  ) {
+    void handleFinalOutcomeIntent(state, {
+      kind: "final_outcome",
+      outcome: "disconnected",
+      summary: "Call ended after repeated unrecognized turns — lead may not have understood the conversation.",
       notesAppend: `Lead said: "${text.slice(0, 220)}"`,
     });
     state.finalOutcomeSent = true;
@@ -10185,7 +10427,7 @@ wss.on("connection", (ws: WebSocket) => {
 
       if (!st.finalOutcomeSent && st.context) {
         const answeredBy = String(st.context.answeredBy || "").toLowerCase();
-        const outcome = isVoicemailAnsweredBy(answeredBy) ? "no_answer" : "unknown";
+        const outcome = isVoicemailAnsweredBy(answeredBy) ? "no_answer" : "disconnected";
         handleFinalOutcomeIntent(st, {
           kind: "final_outcome",
           outcome,
@@ -11087,7 +11329,7 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
 
   if (!state.finalOutcomeSent && state.context) {
     const answeredBy = String(state.context.answeredBy || "").toLowerCase();
-    const outcome = isVoicemailAnsweredBy(answeredBy) ? "no_answer" : "unknown";
+    const outcome = isVoicemailAnsweredBy(answeredBy) ? "no_answer" : "disconnected";
     console.log("[AI-VOICE][OUTCOME][FALLBACK]", {
       callSid: state.callSid,
       outcome,
