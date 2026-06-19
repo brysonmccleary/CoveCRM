@@ -35,6 +35,7 @@ type ComplianceProfile = {
 
 interface FunnelData {
   leadType: string;
+  audienceSegment?: string;
   headline: string;
   subheadline: string;
   benefitBullets: string[];
@@ -53,9 +54,28 @@ interface Props {
   notFound?: boolean;
 }
 
-// Consent copy used on the consent step and as footer note.
-const COMPLIANT_CONSENT_TEXT =
-  "You may choose whether to receive SMS messages about your Final Expense request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.";
+function getLeadTypeLabel(leadType: string, audienceSegment?: string): string {
+  const compositeKey =
+    audienceSegment && audienceSegment !== "standard"
+      ? `${leadType}_${audienceSegment}`
+      : leadType;
+  const labels: Record<string, string> = {
+    final_expense: "Final Expense",
+    mortgage_protection: "Mortgage Protection",
+    iul: "IUL",
+    veteran: "Veteran Life Insurance",
+    trucker: "Trucker Life Insurance",
+    mortgage_protection_veteran: "Veteran Mortgage Protection",
+    iul_veteran: "Veteran IUL",
+    mortgage_protection_trucker: "Trucker Mortgage Protection",
+    iul_trucker: "Trucker IUL",
+  };
+  return labels[compositeKey] || labels[leadType] || "Insurance";
+}
+
+function buildConsentText(leadTypeLabel: string): string {
+  return `You may choose whether to receive SMS messages about your ${leadTypeLabel} request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`;
+}
 
 const DISCLAIMER_TEXT =
   "Availability varies by state and carrier. This is a no-obligation review with a licensed independent agent.";
@@ -72,8 +92,8 @@ const contactFieldIds = ["firstName", "lastName", "email", "phone"] as const;
 
 export default function FunnelPage({ campaignId, funnelData, webhookKey = "", notFound }: Props) {
   const template = useMemo(
-    () => getFunnelTemplate(funnelData?.leadType || "mortgage_protection"),
-    [funnelData?.leadType]
+    () => getFunnelTemplate(funnelData?.leadType || "mortgage_protection", funnelData?.audienceSegment),
+    [funnelData?.leadType, funnelData?.audienceSegment]
   );
   const [stepIndex, setStepIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -215,11 +235,13 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   const agent = funnelData.publicAgentProfile || {};
   const consentSenderName =
     agent.displayName?.trim() || agent.businessName?.trim() || "the sender";
+  const leadTypeLabel = getLeadTypeLabel(funnelData.leadType, funnelData.audienceSegment);
+  const dynamicConsentText = buildConsentText(leadTypeLabel);
   const smsConsentLabel =
-    `Yes, I agree to receive SMS messages from ${consentSenderName} about my Final Expense request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`;
+    `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`;
 
   const consentText =
-    funnelData.complianceProfile?.consentText?.trim() || COMPLIANT_CONSENT_TEXT;
+    funnelData.complianceProfile?.consentText?.trim() || dynamicConsentText;
 
   const renderStep = (step: FunnelStep) => {
     // ── Consent step: show full TCPA text + single submit button ────────────
@@ -578,7 +600,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               {/* Consent footer — short note on every step, full text shown on consent step */}
               {!isConsentStep && (
                 <p style={{ margin: "16px 0 0", fontSize: 11, color: theme.muted, lineHeight: 1.5, opacity: 0.7 }}>
-                  {COMPLIANT_CONSENT_TEXT}
+                  {dynamicConsentText}
                 </p>
               )}
             </div>
@@ -728,7 +750,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
   try {
     await mongooseConnect();
     const campaign = await (FBLeadCampaign as any).findById(id)
-      .select("userId leadType notes webhookKey funnelStatus landingPageConfig publicAgentProfile complianceProfile licensedStates borderStateBehavior")
+      .select("userId leadType audienceSegment notes webhookKey funnelStatus landingPageConfig publicAgentProfile complianceProfile licensedStates borderStateBehavior")
       .lean() as any;
 
     if (!campaign || campaign.funnelStatus === "paused") {
@@ -750,7 +772,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
     const safeConfig = campaign.landingPageConfig && Object.keys(campaign.landingPageConfig).length
       ? campaign.landingPageConfig
       : notesFunnelData;
-    const template = getFunnelTemplate(String(campaign.leadType || "mortgage_protection"));
+    const template = getFunnelTemplate(String(campaign.leadType || "mortgage_protection"), String(campaign.audienceSegment || ""));
     const crmUser = campaign.userId
       ? await (User as any).findById(campaign.userId)
           .select("email name firstName lastName agentPhone numbers")
@@ -764,6 +786,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
 
     const funnelData: FunnelData = {
       leadType: String(campaign.leadType || "mortgage_protection"),
+      audienceSegment: String(campaign.audienceSegment || "standard"),
       headline: String(safeConfig?.headline || safeConfig?.adHeadline || template.defaultHeadline),
       subheadline: String(safeConfig?.subheadline || template.defaultSubheadline),
       benefitBullets: Array.isArray(safeConfig?.benefitBullets) ? safeConfig.benefitBullets.map(String).slice(0, 4) : [],

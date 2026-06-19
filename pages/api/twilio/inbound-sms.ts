@@ -383,7 +383,7 @@ function isInfoRequest(text: string): boolean {
  *
  * Returns a hard-coded Jeremy-style reply (with booking question).
  */
-function getFaqOverrideReply(text: string): string | null {
+function getFaqOverrideReply(text: string, ownerFirstName?: string | null): string | null {
   const t = (text || "").trim().toLowerCase();
   if (!t) return null;
 
@@ -399,7 +399,8 @@ function getFaqOverrideReply(text: string): string | null {
     "who are you from",
   ];
   if (whoTriggers.some((p) => t.includes(p))) {
-    return "I’m a broker through the state contracted with all the companies that offer these products. My job is to find you the best rate for the coverage. When do you have five minutes for a quick call?";
+    const agentFirst = ownerFirstName || "the agent";
+    return `I’m Kayla, ${agentFirst}’s scheduling assistant. My job is to get you on a quick call with them so they can walk you through your options. When’s a good time for a 5 minute call?`;
   }
 
   // "What is mortgage protection?"
@@ -1041,6 +1042,7 @@ IDENTITY:
 - Prior outbound messages may mention the agent/owner/persona name. Do not treat those names as the lead/contact name.
 - Only greet the lead using the safe greeting name. If the lead first name is missing or uncertain, say "Hey there" or skip the name.
 - Never say "Hey ${ownerFirstName || "the owner"}", "Hi ${ownerFirstName || "the owner"}", or "Hello ${ownerFirstName || "the owner"}" unless the lead/contact first name is actually ${ownerFirstName || "that same name"}.
+- You are ${ownerFirstName || "the agent"}'s scheduling assistant. You are not ${ownerFirstName || "the agent"}. If the lead asks who they're talking to, says they thought they were texting ${ownerFirstName || "the agent"}, or references a prior message from ${ownerFirstName || "the agent"}, clarify that you are Kayla, ${ownerFirstName || "the agent"}'s assistant, and that you handle scheduling on their behalf.
 
 Here is what you know about this lead:
 ${leadMemory.leadSummary || "(none)"}
@@ -1093,6 +1095,7 @@ STYLE (Jeremy Lee Minor–inspired):
 - Sound like a real human texting, not a bot.
 - No emojis, no links, no signatures, no disclaimers.
 - Never repeat the same sentence or opening line twice in a row.
+- Never use em-dashes (—) or en-dashes (–). Use a comma or rewrite the sentence instead.
 - Local timezone for the lead: ${tz}.
 
 BEHAVIOR:
@@ -1361,7 +1364,7 @@ ${recentAssistant.length ? recentAssistant.join(" | ") : "(none yet)"}
 
   if (!candidate) {
     candidate =
-      "Got it — what time works for a quick 5 minute call today or tomorrow so the agent can walk you through everything?";
+      "Got it, what time works for a quick 5 minute call today or tomorrow so the agent can walk you through everything?";
   }
 
   // Normalize whitespace
@@ -1410,7 +1413,7 @@ async function generateConversationalReply(opts: {
     const confirmedAppointment = confirmedAppointmentText(lead, history, tz);
     if (confirmedAppointment) {
       if (/\b(reschedule|passed|missed|no one called|nobody called|wrong email|too many calls?)\b/i.test(inboundText)) {
-        return "Sorry about that — let’s get it fixed. Does later today or tomorrow morning work better for the quick call?";
+        return "Sorry about that, let’s get it fixed. Does later today or tomorrow morning work better for the quick call?";
       }
       return `You're confirmed for ${confirmedAppointment}. Reply RESCHEDULE if you need a different time.`;
     }
@@ -1418,7 +1421,7 @@ async function generateConversationalReply(opts: {
     const fallback =
       "When’s a good time today or tomorrow for a quick 5 minute call so we can go over everything with you?";
     if (lastAI?.text?.trim() === fallback) {
-      return `Got it — send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`;
+      return `Got it, send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`;
     }
     return fallback;
   }
@@ -1996,7 +1999,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let requestedISO: string | null = null;
 
     // 🔒 Hard-coded FAQ overrides for "who are you with" / "what is mortgage protection"
-    const faqOverride = getFaqOverrideReply(body);
+    const faqOwnerFirst = firstNonEmptyString([(user as any)?.firstName, splitFirstName((user as any)?.name)]);
+    const faqOverride = getFaqOverrideReply(body, faqOwnerFirst);
     if (!faqOverride) {
       // 1) Direct parse of any concrete time in their text
       requestedISO = extractRequestedISO(body, stateCanon);
@@ -2042,7 +2046,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             "When’s a good time today or tomorrow for a quick 5-minute chat?";
           aiReply =
             lastAI?.text?.trim() === v
-              ? `Got it — send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`
+              ? `Got it, send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`
               : v;
         }
       }
@@ -2070,7 +2074,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           clientTime.toISO(),
         );
         aiReply =
-          "It looks like that time might have already passed on my end — what works later today or tomorrow for a quick 5 minute call?";
+          "It looks like that time might have already passed on my end, what works later today or tomorrow for a quick 5 minute call?";
         memory.state = "awaiting_time";
       } else {
         const alreadyConfirmedSame =
@@ -2078,7 +2082,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
 
         if (alreadyConfirmedSame) {
-          aiReply = "All set — you’re on my schedule. Talk soon!";
+          aiReply = "All set, you’re on my schedule. Talk soon!";
         } else {
           try {
             const bookingPayload = {
@@ -2142,7 +2146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           const readable = clientTime.toFormat("ccc, MMM d 'at' h:mm a");
-          aiReply = `Perfect — I’ve got you down for ${readable} ${
+          aiReply = `Perfect, I’ve got you down for ${readable} ${
             clientTime.offsetNameShort
           }. You’ll get a confirmation shortly. Reply RESCHEDULE if you need to change it.`;
           (lead as any).aiLastConfirmedISO = clientTime.toISO();

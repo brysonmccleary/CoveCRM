@@ -7,6 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
+import FBLeadEntry from "@/models/FBLeadEntry";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
@@ -78,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const campaign = await (FBLeadCampaign as any).findOne({
       _id: campaignId,
     })
-      .select("userEmail folderId campaignName leadType webhookKey metaCampaignId metaAdId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet funnelVersion")
+      .select("userId userEmail folderId campaignName leadType webhookKey metaCampaignId metaAdId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet funnelVersion")
       .lean() as any;
 
     if (!campaign) {
@@ -205,6 +206,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stateRestrictionWarning: !!(outsideLicensedArea || stateRestrictionWarning),
       stateOutsidePrimaryLicensedArea: !!(outsideLicensedArea || stateOutsidePrimaryLicensedArea),
     });
+
+    try {
+      await FBLeadEntry.create({
+        userId: campaign.userId,
+        userEmail,
+        campaignId: campaign._id,
+        firstName: String(firstName || "").trim(),
+        lastName: String(lastName || "").trim(),
+        email: String(email || "").trim().toLowerCase(),
+        phone: rawPhone,
+        facebookLeadId: `funnel_${String((lead as any)._id)}`,
+        crmLeadId: (lead as any)._id,
+        folderId: folderId || undefined,
+        importedToCrm: true,
+        importedAt: new Date(),
+        source: "hosted_funnel",
+        leadType: campaign.leadType,
+        metaCampaignId: campaign.metaCampaignId || "",
+        metaAdId: campaign.metaAdId || "",
+      });
+    } catch (fbEntryErr: any) {
+      console.warn("[funnel-submit] FBLeadEntry create failed (non-fatal):", fbEntryErr?.message);
+    }
 
     if (campaign.writeLeadsToSheet && campaign.appsScriptUrl) {
       try {

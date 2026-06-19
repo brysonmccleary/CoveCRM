@@ -17,7 +17,7 @@ const FBLeadEntrySchema = new Schema(
     },
     source: {
       type: String,
-      enum: ["manual_import", "facebook_webhook", "facebook_meta_native", "csv", "google_sheet_sync"],
+      enum: ["manual_import", "facebook_webhook", "facebook_meta_native", "csv", "google_sheet_sync", "hosted_funnel"],
       default: "csv",
     },
     facebookLeadId: { type: String }, // FB's internal lead ID (Phase 2)
