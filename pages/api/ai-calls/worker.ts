@@ -10,6 +10,10 @@ import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { Types } from "mongoose";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 import { selectLocalPresenceNumber } from "@/lib/twilio/localPresence";
+import {
+  maybeMarkAICallSessionCompleted,
+  transitionAICallRecordingOutcome,
+} from "@/lib/ai-calls/outcomeTransitions";
 
 const BASE = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -62,6 +66,21 @@ function normalizeE164(p?: string) {
   if (d.length === 11 && d.startsWith("1")) return `+${d}`;
   if (d.length === 10) return `+1${d}`;
   return raw.startsWith("+") ? raw : `+${d}`;
+}
+
+function mapTwilioTerminalOutcome(callStatus: string) {
+  switch (String(callStatus || "").toLowerCase()) {
+    case "completed":
+      return "disconnected";
+    case "busy":
+    case "no-answer":
+      return "no_answer";
+    case "failed":
+    case "canceled":
+      return "disconnected";
+    default:
+      return null;
+  }
 }
 
 // Twilio will fetch TwiML from here (AI <Connect><Stream>)
@@ -453,6 +472,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         activeAgeSec: Math.round(activeAgeSec),
         twilioCallStatus,
       });
+      const recoveredOutcome = mapTwilioTerminalOutcome(twilioCallStatus);
+      if (recoveredOutcome) {
+        try {
+          await transitionAICallRecordingOutcome({
+            callSid: String(aiSession.activeCallSid),
+            outcome: recoveredOutcome,
+            outcomeSource: "worker_stale_recovery",
+            userEmail,
+            aiCallSessionId: sessionId,
+          });
+        } catch (transitionErr: any) {
+          console.warn("[AI WORKER] stale active call outcome transition failed; continuing recovery", {
+            sessionId,
+            activeCallSid: aiSession.activeCallSid,
+            twilioCallStatus,
+            error: transitionErr?.message || transitionErr,
+          });
+        }
+      }
       await AICallSession.updateOne(
         { _id: sessionId },
         {
@@ -562,28 +600,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const nextIndex = lastIndex + 1;
 
     if (nextIndex >= leadIds.length) {
-      await AICallSession.updateOne(
-        { _id: sessionId },
-        {
-          $set: {
-            status: "completed",
-            completedAt: new Date(),
-            activeCallSid: null,
-            activeCallSidAt: null,
-          },
-        }
-      );
+      const completion = await maybeMarkAICallSessionCompleted({
+        sessionId,
+        userEmail,
+      });
 
-      console.log("[AI WORKER] Session completed; no remaining leads", {
+      console.log("[AI WORKER] Session has no remaining queued leads", {
         sessionId,
         userEmail,
         totalLeads: total,
+        completion,
       });
 
       await releaseLock(sessionId);
       return res.status(200).json({
         ok: true,
-        message: "completed_no_remaining_leads",
+        message: completion.completed
+          ? "completed_all_leads_accounted_for"
+          : "no_remaining_leads_waiting_for_outcomes",
         sessionId,
       });
     }
@@ -1005,6 +1039,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             leadAttemptCounts: updatedAttemptCounts,
             ...(shouldSkipLeadNow ? { lastIndex: nextIndex } : {}),
           },
+          ...(shouldSkipLeadNow ? { $inc: { "stats.skipped": 1 } } : {}),
         }
       );
 

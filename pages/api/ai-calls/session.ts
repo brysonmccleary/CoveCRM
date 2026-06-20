@@ -490,6 +490,8 @@ export default async function handler(
             callback: 0,
             do_not_call: 0,
             disconnected: 0,
+            transferred: 0,
+            voicemail: 0,
             skipped: 0,
           } as any;
         }

@@ -5,6 +5,7 @@ import toast from "react-hot-toast";
 interface AISettings {
   aiTextingEnabled?: boolean;
   aiNewLeadCallEnabled?: boolean;
+  aiDialerTranscriptsEnabled?: boolean;
   aiCallOverviewEnabled?: boolean;
   aiCallCoachingEnabled?: boolean;
   liveTransferEnabled?: boolean;
@@ -186,6 +187,17 @@ export default function AISettingsPanel() {
               />
             </SettingRow>
           )}
+
+          <SettingRow
+            label="AI Dialer Transcripts"
+            description="Save Kayla call transcripts for calls over 1:30. Transcript minutes are billed in your AI Dialer bucket at $0.01/min, rounded up."
+          >
+            <Toggle
+              checked={!!settings.aiDialerTranscriptsEnabled}
+              onChange={(v) => save({ aiDialerTranscriptsEnabled: v })}
+              disabled={saving}
+            />
+          </SettingRow>
         </div>
       </div>
 

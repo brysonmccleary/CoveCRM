@@ -4,12 +4,15 @@ import { useSession } from "next-auth/react";
 import axios from "axios";
 import toast from "react-hot-toast";
 
+const VALID_COMP_PERCENTAGES = [80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145];
+
 type ProfilePayload = {
   firstName: string;
   lastName: string;
   email: string;
   country: string;
   agentPhone: string;
+  defaultCompPercentage: number;
   workingHours?: any; // keep whatever server returns; we pass it back unchanged
 };
 
@@ -32,6 +35,7 @@ export default function ProfilePanel() {
     email: "",
     country: "United States",
     agentPhone: "",
+    defaultCompPercentage: 100,
     workingHours: undefined,
   });
 
@@ -53,6 +57,7 @@ export default function ProfilePanel() {
           email: data.email || "",
           country: data.country || "United States",
           agentPhone: data.agentPhone || "",
+          defaultCompPercentage: data.defaultCompPercentage ?? 100,
           workingHours: data.workingHours, // keep round-tripped
         });
       } catch (e: any) {
@@ -83,6 +88,7 @@ export default function ProfilePanel() {
         email: data.email || "",
         country: data.country || "United States",
         agentPhone: data.agentPhone || "",
+        defaultCompPercentage: data.defaultCompPercentage ?? 100,
         workingHours: data.workingHours,
       });
     } catch (err: any) {
@@ -182,6 +188,40 @@ export default function ProfilePanel() {
               className="mt-4 bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-white"
             >
               Save Changes
+            </button>
+          </>
+        )}
+      </section>
+
+      {/* Sales & Commission */}
+      <section>
+        <h2 className="text-xl font-semibold mb-2">Sales & Commission</h2>
+        <p className="text-sm text-gray-400 mb-4">
+          Your default comp % pre-fills when you record a sale. You can still change it per sale.
+        </p>
+        {!initializing && (
+          <>
+            <div>
+              <label className="block text-sm mb-1">Default Comp Percentage (%)</label>
+              <select
+                className="w-full bg-[#0f172a] border border-gray-600 px-3 py-2 rounded-md"
+                value={profile.defaultCompPercentage}
+                onChange={(e) => setProfile({ ...profile, defaultCompPercentage: Number(e.target.value) })}
+              >
+                {VALID_COMP_PERCENTAGES.map((v) => (
+                  <option key={v} value={v}>{v}%</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Advance % is always 75% and is not editable here.
+              </p>
+            </div>
+            <button
+              onClick={handleProfileSave}
+              disabled={loading}
+              className="mt-4 bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-white"
+            >
+              Save Commission Settings
             </button>
           </>
         )}

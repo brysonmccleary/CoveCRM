@@ -24,7 +24,7 @@ interface SpamStatus {
   spamScore: number;
   spamLabel: string;
   isSpam: boolean;
-  checkedAt: string;
+  checkedAt?: string | null;
 }
 
 function NumbersPage() {
@@ -87,6 +87,14 @@ function NumbersPage() {
       setCheckingSpam(null);
     }
   };
+
+  const reputationFor = (phoneNumber: string): SpamStatus => ({
+    phoneNumber,
+    spamScore: 0,
+    spamLabel: "Unknown",
+    isSpam: false,
+    checkedAt: spamStatuses[phoneNumber]?.checkedAt || null,
+  });
 
   const setDefault = async (numberId: string | null) => {
     setSavingDefault(true);
@@ -156,7 +164,7 @@ function NumbersPage() {
           ) : (
             <ul className="space-y-3">
               {(numbers ?? []).map((number) => {
-                const spam = spamStatuses[number.phoneNumber];
+                const spam = reputationFor(number.phoneNumber);
                 const numId = number._id || number.sid || number.id;
                 const isDefault = defaultId === numId;
                 return (
@@ -174,25 +182,12 @@ function NumbersPage() {
                         )}
                       </div>
                       <p className="text-xs text-gray-500">SID: {number.sid}</p>
-                      {spam && (
-                        <div className="mt-1 flex items-center gap-2">
-                          <span
-                            className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                              spam.isSpam
-                                ? "bg-red-900 text-red-300"
-                                : spam.spamScore >= 40
-                                ? "bg-yellow-900 text-yellow-300"
-                                : "bg-green-900 text-green-300"
-                            }`}
-                          >
-                            {spam.isSpam ? "⚠️ " : "✓ "}{spam.spamLabel || (spam.isSpam ? "Spam Risk" : "Clean")}
-                          </span>
-                          <span className="text-xs text-gray-500">Score: {spam.spamScore}/100</span>
-                          <span className="text-xs text-gray-600">
-                            Checked {new Date(spam.checkedAt).toLocaleDateString()}
-                          </span>
-                        </div>
-                      )}
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-800 text-gray-300">
+                          Carrier reputation: {spam.spamLabel || "Unknown"}
+                        </span>
+                        <span className="text-xs text-gray-500">Provider data unavailable</span>
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <button
@@ -200,7 +195,7 @@ function NumbersPage() {
                         disabled={checkingSpam === number.phoneNumber}
                         className="text-xs bg-[#1e293b] hover:bg-[#2d3f55] border border-white/10 text-gray-300 px-3 py-1.5 rounded-lg disabled:opacity-50"
                       >
-                        {checkingSpam === number.phoneNumber ? "Checking..." : "Check Spam"}
+                        {checkingSpam === number.phoneNumber ? "Checking..." : "Check Reputation"}
                       </button>
                       {isDefault ? (
                         <span className="text-xs bg-green-900/30 border border-green-800 text-green-300 px-3 py-1.5 rounded-lg cursor-default">

@@ -146,6 +146,8 @@ const AICallSessionSchema = new Schema<IAICallSession>(
       callback: { type: Number, default: 0 },
       do_not_call: { type: Number, default: 0 },
       disconnected: { type: Number, default: 0 },
+      transferred: { type: Number, default: 0 },
+      voicemail: { type: Number, default: 0 },
       skipped: { type: Number, default: 0 },
     },
   },

@@ -4,6 +4,8 @@ import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import LeadImportPanel from "@/components/LeadImportPanel";
 import LeadPreviewPanel from "@/components/LeadPreviewPanel";
+import SaleModal from "@/components/SaleModal";
+import toast from "react-hot-toast";
 import { getNumberState } from "@/lib/twilio/localPresence";
 
 function formatPhoneNumber(phone: string): string {
@@ -217,9 +219,18 @@ export default function LeadsPage() {
 
   // preview panel
   const [previewLead, setPreviewLead] = useState<any | null>(null);
+  const [saleModalLead, setSaleModalLead] = useState<any | null>(null);
+  const [defaultComp, setDefaultComp] = useState(100);
 
   // import panel toggle for top "Import Leads" button
   const [showImport, setShowImport] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/settings/profile")
+      .then((r) => r.json())
+      .then((d) => { if (d?.defaultCompPercentage) setDefaultComp(Number(d.defaultCompPercentage)); })
+      .catch(() => {});
+  }, []);
 
   /** fetch folders */
   useEffect(() => {
@@ -483,6 +494,13 @@ export default function LeadsPage() {
   /** Move lead to disposition folder (same as your component) */
   const handleDisposition = async (leadId: string, disposition: string) => {
     if (disposition === "No Answer") return;
+
+    // Intercept Sold → show SaleModal
+    if (disposition === "Sold") {
+      const lead = previewLead?._id === leadId ? previewLead : { _id: leadId };
+      setSaleModalLead(lead);
+      return;
+    }
 
     try {
       console.log("UI disposition payload →", { leadId, newFolderName: disposition });
@@ -758,6 +776,40 @@ export default function LeadsPage() {
           </>
         )}
       </div>
+
+      {saleModalLead && (
+        <SaleModal
+          leadId={String(saleModalLead._id || "")}
+          defaultComp={defaultComp}
+          onSave={async (result) => {
+            const leadId = String(saleModalLead._id || "");
+            setSaleModalLead(null);
+            try {
+              const saleRes = await fetch("/api/leads/record-sale", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId, ...result }),
+              });
+              if (!saleRes.ok) {
+                const d = await saleRes.json().catch(() => ({}));
+                toast.error((d as any)?.error || "Failed to record sale");
+                return;
+              }
+              const res = await fetch("/api/disposition-lead", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId, newFolderName: "Sold" }),
+              });
+              const data = await res.json().catch(() => ({} as any));
+              if (data?.success) {
+                if (leads) setLeads((prev) => (prev || []).filter((l) => l._id !== leadId));
+                setPreviewLead(null);
+              }
+            } catch {}
+          }}
+          onCancel={() => setSaleModalLead(null)}
+        />
+      )}
     </div>
   );
 }

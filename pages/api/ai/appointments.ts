@@ -102,6 +102,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const nowUtc = DateTime.utc();
     const isPast = apptZoned.toUTC() <= nowUtc;
+    if (isPast) {
+      console.log(
+        "[ai/appointments] Refusing to book past appointment time:",
+        apptZoned.toISO()
+      );
+      return res.status(400).json({
+        success: false,
+        message: "Appointment time is in the past",
+        reason: "past_appointment_time",
+      });
+    }
 
     // 1) Book via the existing Google Calendar endpoint (which may already send confirm+reminders)
     const bookingUrl = `${BASE_URL}/api/google/calendar/book-appointment`;

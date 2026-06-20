@@ -358,7 +358,7 @@ export default function BuyNumberPanel() {
             <p>
               Location: {selectedNumber.city}, {selectedNumber.state}
             </p>
-            <p>Price: $2.00/month</p>
+            <p>Price: $1.15/month</p>
             <div className="flex space-x-4 mt-4">
               <button
                 className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded cursor-pointer disabled:opacity-60"

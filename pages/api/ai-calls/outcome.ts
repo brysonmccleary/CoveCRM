@@ -8,6 +8,10 @@ import Folder from "@/models/Folder"; // same model used elsewhere
 import Call from "@/models/Call";
 import { Types } from "mongoose";
 import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
+import {
+  normalizeAICallOutcome,
+  transitionAICallRecordingOutcome,
+} from "@/lib/ai-calls/outcomeTransitions";
 
 const AI_DIALER_AGENT_KEY = (process.env.AI_DIALER_AGENT_KEY || "").trim();
 
@@ -506,8 +510,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let bookedAccepted = true;
     let bookedRejectedReason: string | null = null;
 
-    if (outcome && allowed.includes(outcome)) {
-      normalizedOutcome = outcome;
+    const normalizedIncoming = normalizeAICallOutcome(outcome);
+
+    if (normalizedIncoming && allowed.includes(normalizedIncoming as AllowedOutcome)) {
+      normalizedOutcome = normalizedIncoming as AllowedOutcome;
     }
 
     // Block any overwrite where the incoming priority is strictly less than the existing.
@@ -559,9 +565,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const alreadyAppliedToRecording =
       typeof rec.notes === "string" && rec.notes.includes(marker);
 
-    if (normalizedOutcome) {
-      rec.outcome = normalizedOutcome as any;
-    }
     if (typeof summary === "string") {
       rec.summary = summary;
     }
@@ -588,72 +591,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ───────────────────────── Session stats (AI-only, idempotent) ─────────────────────────
     if (aiCallSessionId && normalizedOutcome && userEmail) {
-      const now = new Date();
-      const inc: Record<string, number> = {};
-      const set: Record<string, any> = { updatedAt: now };
-
-      if (prevOutcome !== nextOutcome) {
-        if (prevOutcome !== "unknown") {
-          inc[`stats.${prevOutcome}`] = (inc[`stats.${prevOutcome}`] || 0) - 1;
-        }
-        if (nextOutcome !== "unknown") {
-          inc[`stats.${nextOutcome}`] = (inc[`stats.${nextOutcome}`] || 0) + 1;
-        }
-
-        if (prevOutcome === "unknown" && nextOutcome !== "unknown") {
-          inc["stats.completed"] = (inc["stats.completed"] || 0) + 1;
-        } else if (prevOutcome !== "unknown" && nextOutcome === "unknown") {
-          inc["stats.completed"] = (inc["stats.completed"] || 0) - 1;
-        }
-      }
-
-      if (Object.keys(inc).length > 0) {
-        await AICallSession.updateOne(
-          { _id: aiCallSessionId, userEmail },
-          { $inc: inc, $set: set }
-        ).exec();
-      }
-
       try {
-        const session = await AICallSession.findOne({
-          _id: aiCallSessionId,
+        await transitionAICallRecordingOutcome({
+          callSid,
+          outcome: normalizedOutcome,
+          outcomeSource: "ai_outcome",
           userEmail,
-        }).lean();
-
-        if (session) {
-          const s: any = session;
-          const total: number = typeof s.total === "number" ? s.total : 0;
-          const completed: number =
-            s.stats && typeof s.stats.completed === "number"
-              ? s.stats.completed
-              : 0;
-          // Require lastIndex to confirm the worker has actually reached the final lead.
-          // Stats alone can exceed total due to race conditions; this prevents early completion.
-          const lastIndex: number = typeof s.lastIndex === "number" ? s.lastIndex : -1;
-
-          if (total > 0 && completed >= total && lastIndex >= total - 1 && s.status !== "completed") {
-            await AICallSession.updateOne(
-              { _id: aiCallSessionId, userEmail, status: { $ne: "completed" } },
-              {
-                $set: {
-                  status: "completed",
-                  completedAt: new Date(),
-                  updatedAt: new Date(),
-                },
-              }
-            ).exec();
-
-            console.log("[ai-calls/outcome] Marked AI session completed based on stats", {
-              sessionId: String(aiCallSessionId),
-              userEmail,
-              total,
-              completed,
-            });
-          }
-        }
+          aiCallSessionId,
+        });
       } catch (sessionErr: any) {
         console.warn(
-          "[ai-calls/outcome] Failed to auto-complete session by stats (non-blocking):",
+          "[ai-calls/outcome] Failed to transition AI outcome stats (non-blocking):",
           sessionErr?.message || sessionErr
         );
       }
@@ -915,7 +863,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       ok: true,
       recordingId: rec._id,
-      outcome: rec.outcome,
+      outcome: nextOutcome,
       bookedAccepted,
       bookedRejectedReason,
       moved,

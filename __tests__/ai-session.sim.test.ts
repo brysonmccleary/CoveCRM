@@ -993,9 +993,18 @@ describe("Sim 13: Schema and source validation", () => {
     expect(dedupPos).toBeLessThan(createPos);
   });
 
-  test("outcome.ts stats-completion requires lastIndex >= total - 1", () => {
-    const src = fs.readFileSync("pages/api/ai-calls/outcome.ts", "utf8");
-    expect(src).toContain("lastIndex >= total - 1");
+  test("session completion uses completed + skipped >= total with active-call guard (no lastIndex)", () => {
+    // Completion logic moved to lib/ai-calls/outcomeTransitions.ts → maybeMarkAICallSessionCompleted.
+    // Old inline guard (lastIndex >= total - 1) was replaced by:
+    //   completed + skipped >= total && !activeCallSid
+    // This prevents premature completion while a call is in flight, without requiring lastIndex.
+    const src = fs.readFileSync("lib/ai-calls/outcomeTransitions.ts", "utf8");
+    expect(src).toContain("completed + skipped >= total");
+    expect(src).toContain("!activeCallSid");
+    expect(src).toContain("maybeMarkAICallSessionCompleted");
+    // Confirm outcome.ts no longer has the old inline completion block
+    const outcomeSrc = fs.readFileSync("pages/api/ai-calls/outcome.ts", "utf8");
+    expect(outcomeSrc).not.toContain("lastIndex >= total - 1");
   });
 
   test("worker.ts has active call guard before client.calls.create", () => {

@@ -9,6 +9,10 @@ import Call from "@/models/Call";
 import Lead from "@/models/Lead";
 import { Types } from "mongoose";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import {
+  maybeMarkAICallSessionCompleted,
+  transitionAICallRecordingOutcome,
+} from "@/lib/ai-calls/outcomeTransitions";
 
 export const config = { api: { bodyParser: false } };
 
@@ -96,7 +100,7 @@ function mapTerminalOutcome(callStatus: string, answeredByRaw: string) {
       return "no_answer";
     case "failed":
     case "canceled":
-      return "failed";
+      return "disconnected";
     default:
       return undefined;
   }
@@ -366,32 +370,16 @@ export default async function handler(
           const firstHandle = ((handled as any)?.modifiedCount ?? 0) > 0;
 
           if (firstHandle) {
-            // Set no_answer outcome for voicemail (correction #1 — "voicemail" is not an allowed outcome)
-            await AICallRecording.updateOne(
-              {
-                callSid: CallSid,
-                $or: [
-                  { outcome: { $exists: false } },
-                  { outcome: null },
-                  { outcome: "unknown" },
-                ],
-              },
-              {
-                $set: {
-                  outcome: "no_answer",
-                  outcomeSource: "amd_voicemail",
-                  updatedAt: now,
-                },
-              }
-            ).exec();
-
-            // Update session stats for no_answer (bypasses outcome.ts so we must do it here)
+            // Update outcome + stats idempotently (bypasses outcome.ts so it must be atomic here)
             try {
               if (recDoc.aiCallSessionId) {
-                await AICallSession.updateOne(
-                  { _id: recDoc.aiCallSessionId },
-                  { $inc: { "stats.no_answer": 1, "stats.completed": 1 } }
-                ).exec();
+                await transitionAICallRecordingOutcome({
+                  callSid: CallSid,
+                  outcome: "no_answer",
+                  outcomeSource: "amd_voicemail",
+                  userEmail,
+                  aiCallSessionId: recDoc.aiCallSessionId,
+                });
               }
             } catch (statsErr: any) {
               console.warn("[AI Dialer] Failed to update session stats for AMD voicemail (non-blocking):", statsErr?.message || statsErr);
@@ -643,38 +631,16 @@ export default async function handler(
             // Only write fallback outcome if incoming priority beats the existing one.
             // Skip if existing outcome is already priority >= 2 (no_answer, voicemail, or higher).
             if (mapped && getOutcomePriority(latestOutcome) < 2) {
-              await AICallRecording.updateOne(
-                {
-                  callSid: CallSid,
-                  $or: [
-                    { outcome: { $exists: false } },
-                    { outcome: null },
-                    { outcome: "unknown" },
-                    { outcome: "disconnected" },
-                  ],
-                },
-                {
-                  $set: {
-                    outcome: mapped,
-                    outcomeSource: "call_status_fallback",
-                    updatedAt: now,
-                  },
-                }
-              ).exec();
-
-              // Update AICallSession.stats — this path bypasses outcome.ts so stats must be updated here (audit Fix 7)
+              // Update outcome + stats idempotently — this path bypasses outcome.ts.
               try {
                 if (latestRec.aiCallSessionId) {
-                  // mapTerminalOutcome can return: "voicemail" | "disconnected" | "no_answer" | "failed" | undefined
-                  const statField = (mapped === "no_answer" || mapped === "voicemail") ? "stats.no_answer"
-                    : mapped === "disconnected" ? "stats.disconnected"
-                    : null;
-                  if (statField) {
-                    await AICallSession.updateOne(
-                      { _id: latestRec.aiCallSessionId },
-                      { $inc: { [statField]: 1, "stats.completed": 1 } }
-                    ).exec();
-                  }
+                  await transitionAICallRecordingOutcome({
+                    callSid: CallSid,
+                    outcome: mapped,
+                    outcomeSource: "call_status_fallback",
+                    userEmail,
+                    aiCallSessionId: latestRec.aiCallSessionId,
+                  });
                 }
               } catch (statsErr: any) {
                 console.warn("[AI Dialer] Failed to update session stats from terminal fallback (non-blocking):", statsErr?.message || statsErr);
@@ -832,38 +798,35 @@ export default async function handler(
             isTransferRebootFresh = !!(freshRecording as any)?.transferRebootPending;
           } catch {}
 
-          // mark session completed if we truly reached the end
+          // mark session completed only when all leads are accounted for and no call is active
           if (isTransferRebootFresh) {
             console.log("[AI Dialer] Skipping session completion — transfer reboot in progress (fresh check)", {
               callSid: CallSid,
             });
           } else {
             if (isTerminal && !hasMoreLeads && s.status !== "completed") {
-              await AICallSession.updateOne(
-                { _id: aiCallSessionId, status: { $ne: "completed" } },
-                {
-                  $set: {
-                    status: "completed",
-                    completedAt: new Date(),
-                    updatedAt: new Date(),
-                  },
-                }
-              ).exec();
+              const completion = await maybeMarkAICallSessionCompleted({
+                sessionId: aiCallSessionId,
+                userEmail,
+              });
 
-              console.log(
-                "[AI Dialer] Marked AI session completed from call-status-webhook",
-                {
-                  sessionId: String(aiCallSessionId),
-                  userEmail,
-                  total,
-                  leadCount,
-                  lastIndex,
-                  callSid: CallSid,
-                  callStatus: CallStatus,
-                }
-              );
+              if (completion.completed) {
+                console.log(
+                  "[AI Dialer] Marked AI session completed from call-status-webhook",
+                  {
+                    sessionId: String(aiCallSessionId),
+                    userEmail,
+                    total,
+                    leadCount,
+                    lastIndex,
+                    callSid: CallSid,
+                    callStatus: CallStatus,
+                    accountedFor: completion.accountedFor,
+                  }
+                );
 
-              return res.status(200).end();
+                return res.status(200).end();
+              }
             }
           }
 

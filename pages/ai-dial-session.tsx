@@ -62,6 +62,33 @@ interface AICallSession {
   resumeFromSessionId?: string | null;
 }
 
+interface AICallTranscriptTurn {
+  role: "ai" | "lead";
+  text: string;
+  timestamp?: string;
+}
+
+interface AICallTranscript {
+  _id?: string;
+  callSid: string;
+  leadName: string;
+  outcome: string;
+  durationSeconds: number;
+  turns: AICallTranscriptTurn[];
+  transcriptSource?: "voice_turns" | "openai_transcribe" | "none";
+}
+
+interface TranscriptCallRow {
+  callSid: string;
+  leadId?: string;
+  leadName: string;
+  outcome: string;
+  durationSeconds: number;
+  transcriptAvailable: boolean;
+  transcriptEligible: boolean;
+  transcript?: AICallTranscript | null;
+}
+
 // Hardcoded script options for now (later: AIAgentScript)
 const SCRIPT_OPTIONS = [
   {
@@ -182,6 +209,184 @@ function ClockIcon({ className = "h-5 w-5" }: { className?: string }) {
   );
 }
 
+function formatDuration(seconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
+  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function getOutcomeBadgeClass(outcome: string) {
+  switch (String(outcome || "").toLowerCase()) {
+    case "booked":
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
+    case "transferred":
+      return "border-sky-500/30 bg-sky-500/10 text-sky-300";
+    case "not_interested":
+      return "border-orange-500/30 bg-orange-500/10 text-orange-300";
+    case "no_answer":
+    case "voicemail":
+      return "border-gray-500/30 bg-gray-500/10 text-gray-300";
+    case "callback":
+      return "border-indigo-500/30 bg-indigo-500/10 text-indigo-300";
+    case "do_not_call":
+      return "border-red-500/30 bg-red-500/10 text-red-300";
+    case "disconnected":
+      return "border-slate-500/30 bg-slate-500/10 text-slate-300";
+    default:
+      return "border-slate-500/30 bg-slate-500/10 text-slate-300";
+  }
+}
+
+function formatOutcomeLabel(outcome: string) {
+  const normalized = String(outcome || "unknown").replace(/_/g, " ");
+  return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function CallTranscriptsCard({
+  active,
+  rows,
+  loading,
+  error,
+  expandedCallSid,
+  onToggle,
+}: {
+  active: boolean;
+  rows: TranscriptCallRow[];
+  loading: boolean;
+  error: string | null;
+  expandedCallSid: string | null;
+  onToggle: (callSid: string) => void;
+}) {
+  const expandedRow = rows.find((row) => row.callSid === expandedCallSid);
+  const expandedTranscript = expandedRow?.transcript;
+
+  return (
+    <div className="rounded-2xl border border-gray-700/70 bg-[#07101e] p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Call Transcripts</h2>
+          <p className="mt-1 text-xs text-gray-400">
+            Review what Kayla and the lead said on eligible calls.
+          </p>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="rounded-xl border border-slate-700 bg-slate-900/70 p-4 text-sm text-gray-300">
+          Loading transcripts...
+        </div>
+      ) : error ? (
+        <div className="rounded-xl border border-yellow-500/50 bg-yellow-900/30 p-4 text-sm text-yellow-100">
+          {error}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="rounded-xl border border-slate-700 bg-slate-900/70 p-4 text-sm text-gray-300">
+          {active ? "No transcripts yet for this session" : "No eligible transcripts for this session"}
+        </div>
+      ) : (
+        <div className="max-h-[620px] overflow-hidden">
+          <div className="max-h-[330px] overflow-y-auto rounded-xl border border-slate-700">
+            <div className="grid grid-cols-[minmax(0,1.5fr)_auto_auto_auto] gap-3 border-b border-slate-700 bg-slate-900/80 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+              <span>Lead</span>
+              <span>Result</span>
+              <span>Duration</span>
+              <span className="text-right">Transcript</span>
+            </div>
+            <div className="divide-y divide-slate-800">
+              {rows.map((row) => {
+                const canView = row.transcriptAvailable && !!row.transcript;
+                const isExpanded = expandedCallSid === row.callSid;
+                return (
+                  <div key={row.callSid} className="px-3 py-3">
+                    <div className="grid grid-cols-[minmax(0,1.5fr)_auto_auto_auto] items-center gap-3 text-sm">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-gray-100">
+                          {row.leadName || "Lead"}
+                        </p>
+                        <p className="truncate text-xs text-gray-500">{row.callSid}</p>
+                      </div>
+                      <span className={`whitespace-nowrap rounded-full border px-2 py-1 text-xs font-semibold ${getOutcomeBadgeClass(row.outcome)}`}>
+                        {formatOutcomeLabel(row.outcome)}
+                      </span>
+                      <span className="whitespace-nowrap text-xs font-semibold text-gray-300">
+                        {formatDuration(row.durationSeconds)}
+                      </span>
+                      <div className="text-right">
+                        {canView ? (
+                          <button
+                            type="button"
+                            onClick={() => onToggle(row.callSid)}
+                            className="rounded-lg border border-indigo-500/30 px-3 py-1.5 text-xs font-semibold text-indigo-200 transition hover:bg-indigo-500/10"
+                          >
+                            {isExpanded ? "Hide" : "View Transcript"}
+                          </button>
+                        ) : row.durationSeconds < 90 ? (
+                          <div className="text-right">
+                            <p className="text-xs font-semibold text-gray-400">Not generated</p>
+                            <p className="text-[11px] text-gray-500">Calls under 1:30 are skipped.</p>
+                          </div>
+                        ) : (
+                          <p className="text-xs font-semibold text-gray-400">
+                            {active ? "Processing" : "Unavailable"}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {expandedTranscript && (
+            <div className="mt-4 rounded-xl border border-slate-700 bg-slate-900/70 p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-gray-100">
+                    {expandedTranscript.leadName || expandedRow?.leadName || "Lead"}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {formatDuration(expandedTranscript.durationSeconds || expandedRow?.durationSeconds || 0)}
+                  </p>
+                </div>
+                <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${getOutcomeBadgeClass(expandedTranscript.outcome)}`}>
+                  {formatOutcomeLabel(expandedTranscript.outcome)}
+                </span>
+              </div>
+              <div className="max-h-[280px] overflow-y-auto rounded-xl bg-[#0f172a] p-3">
+                {expandedTranscript.turns.map((turn, index) => {
+                  const isKayla = turn.role === "ai";
+                  const speaker = isKayla
+                    ? "Kayla"
+                    : expandedTranscript.leadName || expandedRow?.leadName || "Lead";
+                  return (
+                    <div
+                      key={`${expandedTranscript.callSid}-${index}`}
+                      className={`mb-3 flex flex-col ${isKayla ? "items-end" : "items-start"}`}
+                    >
+                      <span className="mb-1 px-1 text-[11px] font-semibold text-gray-400">
+                        {speaker}
+                      </span>
+                      <div
+                        className={`max-w-[82%] rounded-2xl px-4 py-2 text-sm leading-relaxed text-white shadow ${
+                          isKayla ? "bg-[#7c3aed]" : "bg-[#334155]"
+                        }`}
+                      >
+                        {turn.text}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const session = await getServerSession(ctx.req as any, ctx.res as any, authOptions as any);
@@ -233,6 +438,10 @@ export default function AIDialSessionPage() {
   const [certificationError, setCertificationError] = useState<string | null>(
     null,
   );
+  const [transcriptRows, setTranscriptRows] = useState<TranscriptCallRow[]>([]);
+  const [transcriptsLoading, setTranscriptsLoading] = useState(false);
+  const [transcriptsError, setTranscriptsError] = useState<string | null>(null);
+  const [expandedTranscriptCallSid, setExpandedTranscriptCallSid] = useState<string | null>(null);
 
   // 🔹 AI Dialer billing state (separate from SMS AI)
   const [aiBillingLoading, setAiBillingLoading] = useState(true);
@@ -267,6 +476,10 @@ export default function AIDialSessionPage() {
   useEffect(() => {
     setSessionDetailsOpen(false);
   }, [activeSession?._id]);
+
+  useEffect(() => {
+    setExpandedTranscriptCallSid(null);
+  }, [lastSession?._id]);
 
   useEffect(() => {
     const loadActiveSession = async () => {
@@ -547,6 +760,71 @@ export default function AIDialSessionPage() {
       }
     };
   }, [selectedFolderId]);
+
+  useEffect(() => {
+    if (!lastSession?._id) {
+      setTranscriptRows([]);
+      setTranscriptsError(null);
+      setExpandedTranscriptCallSid(null);
+      return;
+    }
+
+    let cancelled = false;
+    let intervalId: number | undefined;
+
+    const fetchTranscripts = async () => {
+      try {
+        setTranscriptsLoading(true);
+        setTranscriptsError(null);
+        const res = await fetch(
+          `/api/ai-calls/transcript?sessionId=${encodeURIComponent(lastSession._id)}`,
+        );
+        const data = await res.json();
+        if (!res.ok || !data?.ok) {
+          throw new Error(data?.message || "Failed to load call transcripts");
+        }
+
+        const rows: TranscriptCallRow[] = Array.isArray(data.callRows)
+          ? data.callRows
+          : Array.isArray(data.transcripts)
+            ? data.transcripts.map((transcript: AICallTranscript) => ({
+                callSid: transcript.callSid,
+                leadName: transcript.leadName || "Lead",
+                outcome: transcript.outcome || "unknown",
+                durationSeconds: transcript.durationSeconds || 0,
+                transcriptAvailable: true,
+                transcriptEligible: true,
+                transcript,
+              }))
+            : [];
+
+        if (!cancelled) {
+          setTranscriptRows(rows);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setTranscriptsError(e?.message || "Failed to load call transcripts");
+          setTranscriptRows([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setTranscriptsLoading(false);
+        }
+      }
+    };
+
+    fetchTranscripts();
+    if (activeSession && typeof window !== "undefined") {
+      intervalId = window.setInterval(fetchTranscripts, 7000);
+    }
+
+    return () => {
+      cancelled = true;
+      if (intervalId !== undefined) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [activeSession, lastSession?._id]);
 
   const canConfigure =
     !!selectedFolderId &&
@@ -1180,6 +1458,20 @@ export default function AIDialSessionPage() {
                 </div>
               </div>
             )}
+            {lastSession && (
+              <CallTranscriptsCard
+                active={false}
+                rows={transcriptRows}
+                loading={transcriptsLoading}
+                error={transcriptsError}
+                expandedCallSid={expandedTranscriptCallSid}
+                onToggle={(callSid) =>
+                  setExpandedTranscriptCallSid((current) =>
+                    current === callSid ? null : callSid,
+                  )
+                }
+              />
+            )}
           </>
         ) : (
           <div className="space-y-6">
@@ -1338,6 +1630,19 @@ export default function AIDialSessionPage() {
                   </div>
                 )}
               </div>
+
+              <CallTranscriptsCard
+                active
+                rows={transcriptRows}
+                loading={transcriptsLoading}
+                error={transcriptsError}
+                expandedCallSid={expandedTranscriptCallSid}
+                onToggle={(callSid) =>
+                  setExpandedTranscriptCallSid((current) =>
+                    current === callSid ? null : callSid,
+                  )
+                }
+              />
             </div>
 
             <div className="rounded-xl border border-slate-700 bg-slate-900/80">

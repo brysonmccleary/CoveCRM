@@ -4,9 +4,8 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Call from "@/models/Call";
-import NumberSpamStatus from "@/models/NumberSpamStatus";
 
-type HealthLabel = "Healthy" | "Watch" | "Spam Risk" | "Unknown";
+type HealthLabel = "Healthy" | "Watch" | "Unknown";
 
 type CallHealthRow = {
   phoneNumber: string;
@@ -51,24 +50,17 @@ function callDuration(call: any): number {
   return Number.isFinite(duration) && duration > 0 ? duration : 0;
 }
 
-function hasProviderSpamSignal(spam: any): boolean {
-  const score = Number(spam?.spamScore || 0);
-  const label = String(spam?.spamLabel || "").toLowerCase();
-  return Boolean(spam?.isSpam) || score >= 75 || /\b(spam|scam|fraud)\b/.test(label);
-}
-
 function buildHealthForNumber(args: {
   phoneNumber: string;
-  spam: any;
   calls: any[];
   now: number;
 }): CallHealthRow {
-  const { phoneNumber, spam, calls, now } = args;
+  const { phoneNumber, calls, now } = args;
   const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
   const oneDayAgo = now - 24 * 60 * 60 * 1000;
 
   const normalized = normalizePhone(phoneNumber);
-  const providerSpamSignal = hasProviderSpamSignal(spam);
+  const providerSpamSignal = false;
   const outbound7d = calls.filter((call) => {
     if (callTime(call) < sevenDaysAgo) return false;
     const owner = normalizePhone(call.ownerNumber || call.from);
@@ -96,18 +88,7 @@ function buildHealthForNumber(args: {
 
   const flags: string[] = [];
   const recommendations: string[] = [];
-  let score = Number(spam?.spamScore || 0);
-
-  if (providerSpamSignal) {
-    flags.push("Provider spam signal detected");
-    recommendations.push("Review this number before high-volume calling. Consider checking reputation with your provider.");
-    score = Math.max(score, 90);
-  }
-
-  if (!spam?.checkedAt) {
-    flags.push("No provider spam check cached");
-    recommendations.push("Run a provider spam check before relying on this number for higher-volume calling.");
-  }
+  let score = 0;
 
   if (outboundVolume7d < 5) {
     flags.push("Insufficient recent outbound call data");
@@ -145,15 +126,15 @@ function buildHealthForNumber(args: {
   }
 
   let label: HealthLabel = "Healthy";
-  if (providerSpamSignal || score >= 75) label = "Spam Risk";
-  else if (!spam?.checkedAt || outboundVolume7d < 5) label = "Unknown";
+  if (score >= 75) label = "Watch";
+  else if (outboundVolume7d < 5) label = "Unknown";
   else if (score >= 40 || flags.length > 0) label = "Watch";
 
   return {
     phoneNumber,
     label,
     score: Math.max(0, Math.min(100, Math.round(score))),
-    lastCheckedAt: spam?.checkedAt ? new Date(spam.checkedAt).toISOString() : null,
+    lastCheckedAt: null,
     providerSpamSignal,
     answerRate,
     shortCallRate,
@@ -186,25 +167,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const normalizedNumbers = new Set(numbers.map(normalizePhone).filter(Boolean));
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  const [spamRows, callRows] = await Promise.all([
-    NumberSpamStatus.find({ userEmail, phoneNumber: { $in: numbers } }).lean(),
-    (Call as any)
-      .find({
-        userEmail,
-        $or: [
-          { startedAt: { $gte: thirtyDaysAgo } },
-          { completedAt: { $gte: thirtyDaysAgo } },
-          { createdAt: { $gte: thirtyDaysAgo } },
-        ],
-      })
-      .select("direction ownerNumber otherNumber from to startedAt completedAt createdAt duration durationSec talkTime answeredBy isVoicemail")
-      .lean(),
-  ]);
-
-  const spamByNumber = new Map<string, any>();
-  for (const spam of spamRows as any[]) {
-    spamByNumber.set(normalizePhone(spam.phoneNumber), spam);
-  }
+  const callRows = await (Call as any)
+    .find({
+      userEmail,
+      $or: [
+        { startedAt: { $gte: thirtyDaysAgo } },
+        { completedAt: { $gte: thirtyDaysAgo } },
+        { createdAt: { $gte: thirtyDaysAgo } },
+      ],
+    })
+    .select("direction ownerNumber otherNumber from to startedAt completedAt createdAt duration durationSec talkTime answeredBy isVoicemail")
+    .lean();
 
   const relevantCalls = (callRows as any[]).filter((call) => {
     const owner = normalizePhone(call.ownerNumber || call.from || call.to);
@@ -215,7 +188,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const health = numbers.map((phoneNumber) =>
     buildHealthForNumber({
       phoneNumber,
-      spam: spamByNumber.get(normalizePhone(phoneNumber)),
       calls: relevantCalls,
       now,
     }),

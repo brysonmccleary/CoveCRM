@@ -53,8 +53,19 @@ const INTERNAL_NUMBER_PURCHASE_BYPASS_EMAILS: string[] = [
 ];
 
 const PHONE_SUBSCRIPTION_PURPOSE = "phone_number";
+const DEFAULT_PHONE_PRICE_ID = "price_1TkCtfDF9aEsjVyJRrUfYdLF";
+const LEGACY_PHONE_PRICE_IDS = [
+  "price_1RpvR9DF9aEsjVyJk9GiJkpe",
+  ...(process.env.STRIPE_LEGACY_PHONE_PRICE_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+];
+const CONFIGURED_PHONE_PRICE_ID = String(process.env.STRIPE_PHONE_PRICE_ID || "").trim();
 const PHONE_PRICE_ID =
-  process.env.STRIPE_PHONE_PRICE_ID || "price_1RpvR9DF9aEsjVyJk9GiJkpe";
+  CONFIGURED_PHONE_PRICE_ID && !LEGACY_PHONE_PRICE_IDS.includes(CONFIGURED_PHONE_PRICE_ID)
+    ? CONFIGURED_PHONE_PRICE_ID
+    : DEFAULT_PHONE_PRICE_ID;
 
 const canBypassNumberPurchaseBilling = (user: any, email?: string | null) => {
   const normalizedEmail = L(email || user?.email || "");
@@ -77,7 +88,9 @@ async function isPhoneNumberSubscription(subscriptionId?: string | null) {
     const purpose = String(metadata.purpose || "").trim().toLowerCase();
     const phoneBilling = String(metadata.phoneBilling || "").trim().toLowerCase();
     const hasPhonePrice = (sub.items?.data || []).some(
-      (item: any) => item?.price?.id === PHONE_PRICE_ID,
+      (item: any) =>
+        item?.price?.id === PHONE_PRICE_ID ||
+        LEGACY_PHONE_PRICE_IDS.includes(String(item?.price?.id || "")),
     );
 
     const ok =

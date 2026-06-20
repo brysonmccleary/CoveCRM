@@ -165,7 +165,14 @@ export async function processMetaLead(
     leadData.email
   );
 
-  const aiScriptKey = FB_LEAD_TYPE_TO_AI_SCRIPT_KEY[(campaign as any).leadType] || "final_expense";
+  const _lt = (campaign as any).leadType as string;
+  const _seg = String((campaign as any).audienceSegment || "standard");
+  const aiScriptKey =
+    (_lt === "mortgage_protection" && _seg === "veteran") ? "veteran_mortgage" :
+    (_lt === "iul"                 && _seg === "veteran") ? "veteran_iul" :
+    (_lt === "mortgage_protection" && _seg === "trucker") ? "trucker_mortgage" :
+    (_lt === "iul"                 && _seg === "trucker") ? "trucker_iul" :
+    FB_LEAD_TYPE_TO_AI_SCRIPT_KEY[_lt] || "final_expense";
   let folder: any = null;
 
   if ((campaign as any).folderId) {

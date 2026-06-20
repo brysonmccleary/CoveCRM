@@ -21,7 +21,13 @@ const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && pro
 const TERMINAL_SMS_STATES = new Set(["delivered","failed","undelivered","canceled"]);
 const TERMINAL_VOICE_STATES = new Set(["completed","busy","failed","no-answer","canceled"]);
 const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
-const MANUAL_VOICE_COST_PER_MIN = Number(process.env.MANUAL_VOICE_COST_PER_MIN || "0.02");
+const _rawManualRate = process.env.MANUAL_VOICE_COST_PER_MIN;
+if (!_rawManualRate) {
+  console.warn("[status-callback] MANUAL_VOICE_COST_PER_MIN env var not set — defaulting to $0.04/min. Set this in production.");
+}
+const MANUAL_VOICE_COST_PER_MIN = Number(_rawManualRate || "0.04");
+const NEVER_BILL_EMAILS = new Set(["bryson.mccleary1@gmail.com", "support@covecrm.com"]);
+const BILLING_IN_PROGRESS_SOURCES = ["manual_dial_billing_in_progress", "twilio_voice_billing_in_progress"];
 
 function candidateUrls(path: string): string[] {
   if (!BASE_URL) return [];
@@ -285,6 +291,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           otherNumber,
         };
         const set: any = {
+          status: CallStatus,
           from: ownerNumber,
           to: otherNumber,
           ownerNumber,
@@ -318,7 +325,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn("⚠️ Call doc upsert failed (continuing):", (e as any)?.message || e);
       }
 
-      // Regular call billing is centralized in voice-status.ts.
       try {
         if (TERMINAL_VOICE_STATES.has(CallStatus) && ownerNumber) {
         // ✅ Missed inbound call email (temporary until mobile app)
@@ -386,70 +392,89 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
           }
 
-          const callForBilling = await Call.findOne({ callSid: CallSid }).lean<any>();
-          const callBillingCategory = String(callForBilling?.billingCategory || "").toLowerCase();
-          const callLegType = String(callForBilling?.legType || "").toLowerCase();
-          const isManualPstnBilling =
-            callBillingCategory === "manual_dial" || callLegType === "pstn";
-          if (callForBilling && !callForBilling.billedAt && userEmail && !isManualPstnBilling) {
-            const billStartRaw =
-              callForBilling.billStartAt ||
-              callForBilling.startedAt ||
-              callForBilling.createdAt ||
-              null;
-            const billStopRaw =
-              callForBilling.billStopAt ||
-              callForBilling.completedAt ||
-              callForBilling.endedAt ||
-              now;
-            const fallbackStopMs = new Date(now).getTime();
-            const billStart = billStartRaw ? new Date(billStartRaw as any).getTime() : 0;
-            const billStop = billStopRaw ? new Date(billStopRaw as any).getTime() : fallbackStopMs;
-            const elapsedSec =
-              billStart > 0 && billStop >= billStart
-                ? Math.max(0, (billStop - billStart) / 1000)
-                : 0;
-            const billSeconds = Math.max(elapsedSec, Number(durationSec || 0));
-            const billMinutes = ceilMinutesFromSeconds(billSeconds);
+          // Only bill the PSTN (lead) leg. Skip the browser/SDK agent leg (To = "client:...").
+          // Uses the same two-phase billedSource lock as voice-status.ts to prevent
+          // cross-path double-billing races. Only bills completed calls with actual duration.
+          const isClientLeg = To.toLowerCase().startsWith("client:");
+          if (!isClientLeg) {
+            const callForBilling = await Call.findOne({ callSid: CallSid }).lean<any>();
+            const callBillingCategory = String(callForBilling?.billingCategory || "").toLowerCase();
+            const callLegType = String(callForBilling?.legType || "").toLowerCase();
+            const isManualPstnBilling = callBillingCategory === "manual_dial" || callLegType === "pstn";
 
-            if (billMinutes > 0) {
-              const useManualVoiceRate = direction === "inbound" || direction === "outbound";
-              const billingRatePerMinute = useManualVoiceRate ? MANUAL_VOICE_COST_PER_MIN : VOICE_COST_PER_MIN;
-              const billAmount = billMinutes * billingRatePerMinute;
-              const lock = await Call.updateOne(
-                { callSid: CallSid, billedAt: { $exists: false } },
-                {
-                  $set: {
-                    billedAt: now,
-                    billedMinutes: billMinutes,
-                    billedAmount: billAmount,
-                    billingRatePerMinute,
-                    billedSource: "twilio-status-callback",
-                  },
-                },
-              );
+            if (
+              callForBilling &&
+              !callForBilling.billedAt &&
+              userEmail &&
+              !isManualPstnBilling &&
+              CallStatus === "completed" &&
+              (durationSec || 0) > 0
+            ) {
+              const billSeconds = Math.max(0, Number(durationSec || 0));
+              const billMinutes = ceilMinutesFromSeconds(billSeconds);
 
-              if ((lock as any)?.modifiedCount > 0) {
-                try {
-                  await trackUsage({
-                    user: { email: userEmail },
-                    amount: billAmount,
-                    source: "twilio-voice",
-                  });
-                } catch (billingErr) {
-                  await Call.updateOne(
-                    { callSid: CallSid, billedAt: now },
+              if (billMinutes > 0) {
+                const uEmail = userEmail.toLowerCase();
+                const userForBilling = await User.findOne({ email: uEmail });
+                if (userForBilling) {
+                  const usingPersonal = String((userForBilling as any).billingMode || "").toLowerCase() === "self";
+                  const isAdminRole = String((userForBilling as any).role || "").toLowerCase() === "admin";
+                  const isExempt = usingPersonal || isAdminRole || NEVER_BILL_EMAILS.has(uEmail);
+                  const billedAmount = isExempt ? 0 : billMinutes * MANUAL_VOICE_COST_PER_MIN;
+                  const inProgressSource = "twilio_voice_billing_in_progress";
+
+                  const lock = await Call.updateOne(
                     {
-                      $unset: {
-                        billedAt: "",
-                        billedMinutes: "",
-                        billedAmount: "",
-                        billingRatePerMinute: "",
-                        billedSource: "",
+                      callSid: CallSid,
+                      $and: [
+                        { $or: [{ billedAt: { $exists: false } }, { billedAt: null }] },
+                        {
+                          $or: [
+                            { billedSource: { $exists: false } },
+                            { billedSource: null },
+                            { billedSource: { $nin: BILLING_IN_PROGRESS_SOURCES } },
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      $set: {
+                        billedSource: inProgressSource,
+                        billedMinutes: billMinutes,
+                        billedAmount,
+                        billableSeconds: billSeconds,
+                        billingRatePerMinute: MANUAL_VOICE_COST_PER_MIN,
                       },
                     },
                   );
-                  throw billingErr;
+
+                  if ((lock as any)?.modifiedCount === 0) {
+                    console.log("[status-callback] billing lock already acquired", { callSid: CallSid });
+                  } else {
+                    try {
+                      if (!isExempt) {
+                        await trackUsage({ user: userForBilling, amount: billedAmount, source: "twilio-voice" });
+                      }
+                      await Call.updateOne(
+                        { callSid: CallSid, billedSource: inProgressSource },
+                        { $set: { billedAt: now, billedSource: "twilio-status-callback" } },
+                      );
+                    } catch (billingErr) {
+                      await Call.updateOne(
+                        { callSid: CallSid, billedSource: inProgressSource },
+                        {
+                          $unset: {
+                            billedMinutes: "",
+                            billedAmount: "",
+                            billableSeconds: "",
+                            billingRatePerMinute: "",
+                            billedSource: "",
+                          },
+                        },
+                      );
+                      throw billingErr;
+                    }
+                  }
                 }
               }
             }

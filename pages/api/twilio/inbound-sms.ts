@@ -431,12 +431,18 @@ const TZ_ABBR: Record<string, string> = {
   pdt: "America/Los_Angeles",
 };
 
+function zoneForExplicitAbbreviation(abbr: string | undefined, state?: string): string | null {
+  if (!abbr) return null;
+  if (abbr === "mst" && normalizeStateInput(state || "") === "AZ") return "America/Phoenix";
+  return TZ_ABBR[abbr] || null;
+}
+
 function extractRequestedISO(textIn: string, state?: string): string | null {
   const text = (textIn || "").trim().toLowerCase();
   if (!text) return null;
 
-  const abbr = Object.keys(TZ_ABBR).find((k) => text.includes(` ${k}`));
-  const zone = abbr ? TZ_ABBR[abbr] : zoneFromAnyState(state || "") || "America/New_York";
+  const abbr = Object.keys(TZ_ABBR).find((k) => new RegExp(`\\b${k}\\b`, "i").test(text));
+  const zone = zoneForExplicitAbbreviation(abbr, state) || zoneFromAnyState(state || "") || "America/New_York";
   const now = DateTime.now().setZone(zone);
   const timeRe = /(\b\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/;
 
@@ -1026,6 +1032,14 @@ async function runO3MiniSmsAssistant(opts: {
   const safeLeadGreetingName = safeLeadFirstNameForGreeting(leadFirstName) || "there";
   const recentThreadText = formatRecentThreadHistory(history);
   const confirmedAppointment = confirmedAppointmentText(lead, history, tz);
+  const leadNow = DateTime.now().setZone(tz);
+  const agentZone = String(
+    user?.bookingSettings?.timezone || user?.timezone || "",
+  ).trim();
+  const agentNow = agentZone ? DateTime.now().setZone(agentZone) : null;
+  const leadDstStatus = leadNow.isInDST
+    ? "This zone is currently observing daylight saving time."
+    : "This zone is currently not observing daylight saving time.";
 
   // --- SYSTEM PROMPT (Jeremy-style, appointment only, no quotes/details) ---
   const systemPrompt = `
@@ -1058,6 +1072,16 @@ ${recentThreadText}
 
 Confirmed appointment time, if any:
 ${confirmedAppointment || "(none)"}
+
+Time context:
+- Current lead-local time: ${leadNow.toFormat("cccc, LLLL d, yyyy 'at' h:mm a ZZZZ")} (${tz}).
+- ${leadDstStatus}
+${agentNow && agentNow.isValid ? `- Current agent-local time: ${agentNow.toFormat("cccc, LLLL d, yyyy 'at' h:mm a ZZZZ")} (${agentZone}).` : "- Agent-local time is not available. Use the lead-local time above."}
+- Treat relative words like today, tomorrow, later today, morning, afternoon, and evening from the lead-local time above.
+- Luxon/server code handles DST using IANA timezones. Do not invent timezone conversions.
+- For Arizona, say Phoenix time or Arizona time. Never say Phoenix/Arizona time is Pacific time.
+- If the lead's exact timezone is uncertain because their state can span more than one timezone, ask one short clarification instead of guessing.
+- Never confirm or imply an appointment time that is before the current lead-local time.
 
 Next best action:
 ${leadMemory.nextBestAction || "(none)"}

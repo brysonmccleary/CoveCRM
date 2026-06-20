@@ -10,8 +10,20 @@ import { stripe } from "@/lib/stripe";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
 
+const DEFAULT_PHONE_PRICE_ID = "price_1TkCtfDF9aEsjVyJRrUfYdLF";
+const LEGACY_PHONE_PRICE_IDS = [
+  "price_1RpvR9DF9aEsjVyJk9GiJkpe",
+  ...(process.env.STRIPE_LEGACY_PHONE_PRICE_IDS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+];
+const CONFIGURED_PHONE_PRICE_ID = String(process.env.STRIPE_PHONE_PRICE_ID || "").trim();
+
 const PHONE_PRICE_ID =
-  process.env.STRIPE_PHONE_PRICE_ID || "price_1RpvR9DF9aEsjVyJk9GiJkpe";
+  CONFIGURED_PHONE_PRICE_ID && !LEGACY_PHONE_PRICE_IDS.includes(CONFIGURED_PHONE_PRICE_ID)
+    ? CONFIGURED_PHONE_PRICE_ID
+    : DEFAULT_PHONE_PRICE_ID;
 const PHONE_SUBSCRIPTION_PURPOSE = "phone_number";
 
 const BASE_URL = (
@@ -89,7 +101,9 @@ function isPhoneSubscriptionCandidate(sub: Stripe.Subscription | null | undefine
   const purpose = String(metadata.purpose || "").trim().toLowerCase();
   const phoneBilling = String(metadata.phoneBilling || "").trim().toLowerCase();
   const hasPhonePrice = (sub.items?.data || []).some(
-    (item: any) => item?.price?.id === PHONE_PRICE_ID,
+    (item: any) =>
+      item?.price?.id === PHONE_PRICE_ID ||
+      LEGACY_PHONE_PRICE_IDS.includes(String(item?.price?.id || "")),
   );
 
   return (

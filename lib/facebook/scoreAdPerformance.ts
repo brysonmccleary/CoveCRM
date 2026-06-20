@@ -4,6 +4,8 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import CRMOutcome from "@/models/CRMOutcome";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
+import FBLeadEntry from "@/models/FBLeadEntry";
+import Lead from "@/models/Lead";
 
 export type PerformanceClass = "SCALE" | "DUPLICATE_TEST" | "MONITOR" | "FIX" | "PAUSE";
 
@@ -138,6 +140,44 @@ export async function scoreAdPerformance(campaignId: string): Promise<ScoreResul
   const appointmentsBooked = outcomes.appointmentsBooked || 0;
   const salesAgg = outcomes.sales || 0;
   const optOuts = outcomes.optOuts || 0;
+
+  // Option B: aggregate real AP revenue directly from Lead documents via FBLeadEntry join
+  // This ignores CRMOutcome.revenue (estimated) — only agent-entered AP counts
+  let totalAnnualPremium = 0;
+  let totalGrossRevenue = 0;
+  let totalAdvanceRevenue = 0;
+  try {
+    const fbEntries = await FBLeadEntry.find({ campaignId: campaign._id })
+      .select("crmLeadId")
+      .lean() as any[];
+    const crmLeadIds = fbEntries.map((e: any) => e.crmLeadId).filter(Boolean);
+    if (crmLeadIds.length > 0) {
+      const revenueRows = await Lead.aggregate([
+        {
+          $match: {
+            _id: { $in: crmLeadIds },
+            status: "Sold",
+            grossCommissionRevenue: { $gt: 0 },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            totalAnnualPremium: { $sum: "$annualPremium" },
+            totalGrossRevenue: { $sum: "$grossCommissionRevenue" },
+            totalAdvanceRevenue: { $sum: "$advanceRevenue" },
+          },
+        },
+      ]);
+      if (revenueRows[0]) {
+        totalAnnualPremium = revenueRows[0].totalAnnualPremium || 0;
+        totalGrossRevenue = revenueRows[0].totalGrossRevenue || 0;
+        totalAdvanceRevenue = revenueRows[0].totalAdvanceRevenue || 0;
+      }
+    }
+  } catch (revenueErr: any) {
+    console.warn("[scoreAdPerformance] revenue aggregation failed (non-blocking):", revenueErr?.message);
+  }
   const badNumbers = outcomes.badNumbers || 0;
 
   const appointments = appointmentsBooked || bookedFromStats;
@@ -203,6 +243,9 @@ export async function scoreAdPerformance(campaignId: string): Promise<ScoreResul
         badNumberRate,
         appointments,
         sales,
+        totalAnnualPremium,
+        totalGrossRevenue,
+        totalAdvanceRevenue,
         costPerAppointment,
         costPerSale,
         appointmentRate,

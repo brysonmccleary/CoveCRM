@@ -155,7 +155,7 @@ async function createRefreshCreativeAd(params: {
   const campaignName = String(params.campaign.campaignName || "Campaign");
   const variants = generateWinningVariantList({
     leadType,
-    audienceSegment: leadType === "veteran" || leadType === "trucker" ? leadType : "standard",
+    audienceSegment: (String((params.campaign as any).audienceSegment || "standard") as "standard" | "veteran" | "trucker"),
     userId: String(params.user._id || params.user.email || "user"),
     campaignName,
     location: "",

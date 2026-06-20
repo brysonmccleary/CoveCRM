@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
+import SaleModal from "@/components/SaleModal";
 import { isCallAllowedForLead, localTimeString } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext, ensureUnlocked, armRingbackFromUserGesture } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
@@ -271,6 +272,8 @@ export default function DialSession() {
 
   // UI
   const [showBookModal, setShowBookModal] = useState(false);
+  const [showSaleModal, setShowSaleModal] = useState(false);
+  const [defaultComp, setDefaultComp] = useState(100);
   const [notes, setNotes] = useState("");
   const [aiOverviewExpanded, setAiOverviewExpanded] = useState(false);
   const [smsText, setSmsText] = useState("");
@@ -805,6 +808,7 @@ export default function DialSession() {
         const profile = await fetchJson<Json>("/api/settings/profile");
         const extracted = extractAgentPhone(profile);
         if (!cancelled && extracted) setAgentPhone(extracted);
+        if (!cancelled && profile?.defaultCompPercentage) setDefaultComp(Number(profile.defaultCompPercentage));
       } catch {}
 
       if (!cancelled) setNumbersLoaded(true);
@@ -2371,7 +2375,7 @@ export default function DialSession() {
           {/* Bottom content (pinned to bottom) */}
           <div className="flex flex-col items-center space-y-4 mt-auto pt-6 flex-none">
             <div className="flex justify-center flex-wrap gap-2">
-              <button onClick={() => handleDisposition("Sold")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Sold</button>
+              <button onClick={() => setShowSaleModal(true)} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Sold</button>
               <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
               <button onClick={() => setShowBookModal(true)} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
               <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Not Interested</button>
@@ -2398,6 +2402,32 @@ export default function DialSession() {
           onClose={handleBookModalClose}
           lead={lead}
           onBooked={handleBookedAppointmentBooked}
+        />
+      )}
+
+      {showSaleModal && lead && (
+        <SaleModal
+          leadId={String(lead.id || "")}
+          defaultComp={defaultComp}
+          onSave={async (result) => {
+            setShowSaleModal(false);
+            try {
+              const saleRes = await fetch("/api/leads/record-sale", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId: lead.id, ...result }),
+              });
+              if (!saleRes.ok) {
+                const d = await saleRes.json().catch(() => ({}));
+                toast.error((d as any)?.error || "Failed to record sale");
+                return;
+              }
+              await handleDisposition("Sold");
+            } catch (e: any) {
+              toast.error(e?.message || "Failed to record sale");
+            }
+          }}
+          onCancel={() => setShowSaleModal(false)}
         />
       )}
     </div>

@@ -116,6 +116,14 @@ const LeadSchema = new Schema(
     metaRawPayload: { type: String, default: "" },
     leadSource: { type: String, default: "" },
 
+    // Sale revenue fields (agent-entered; Option B source of truth for Facebook ROAS)
+    annualPremium: { type: Number, default: null },
+    compPercentage: { type: Number, default: null },
+    advancePercentage: { type: Number, default: null },
+    grossCommissionRevenue: { type: Number, default: null },
+    advanceRevenue: { type: Number, default: null },
+    holdbackRevenue: { type: Number, default: null },
+
     // AI First-Call tracking
     sourceType: {
       type: String,

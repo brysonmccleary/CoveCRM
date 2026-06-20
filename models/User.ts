@@ -307,6 +307,8 @@ export interface IUser {
   metaHealthCooldownUntil?: Date;
   metaLastHealthCheckAt?: Date;
   metaLastSuccessfulHealthCheckAt?: Date;
+
+  defaultCompPercentage?: number;
 }
 
 const SyncedSheetSchema = new Schema(
@@ -622,6 +624,8 @@ const UserSchema = new Schema<IUser>({
   metaAccessToken: { type: String, default: "" },
   metaPageAccessToken: { type: String, default: "" },
   metaTokenExpiresAt: { type: Date, default: null },
+  defaultCompPercentage: { type: Number, default: 100 },
+
   metaLastWebhookAt: { type: Date, default: null },
   metaLastInsightSyncAt: { type: Date, default: null },
   metaReconnectNeeded: { type: Boolean, default: false },

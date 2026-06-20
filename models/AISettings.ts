@@ -9,6 +9,7 @@ const AISettingsSchema = new Schema(
     aiTextingEnabled: { type: Boolean, default: false },
     aiNewLeadCallEnabled: { type: Boolean, default: false },
     aiDialSessionEnabled: { type: Boolean, default: false },
+    aiDialerTranscriptsEnabled: { type: Boolean, default: false },
     aiInboundEnabled: { type: Boolean, default: false },
     aiInboundVoiceKey: { type: String, default: "" },
     aiInboundScriptKey: { type: String, default: "" },

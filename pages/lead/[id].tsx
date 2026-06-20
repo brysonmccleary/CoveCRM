@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
+import SaleModal from "@/components/SaleModal";
 import dynamic from "next/dynamic";
 import ChatThread from "@/components/messages/ChatThread";
 import { getSocket } from "@/lib/socketClient";
@@ -293,6 +294,13 @@ export default function LeadProfileDial() {
   // Safety: opening a lead should never carry over outbound ringback audio.
   useEffect(() => {
     try { stopRingback(); } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/settings/profile")
+      .then((r) => r.json())
+      .then((d) => { if (d?.defaultCompPercentage) setDefaultComp(Number(d.defaultCompPercentage)); })
+      .catch(() => {});
   }, []);
 
   const router = useRouter();
@@ -1132,11 +1140,19 @@ export default function LeadProfileDial() {
   // ---------- Disposition (move lead to folder) ----------
   const [disposition, setDisposition] = useState<string>("");
   const [savingDisposition, setSavingDisposition] = useState<boolean>(false);
+  const [showSaleModal, setShowSaleModal] = useState(false);
+  const [defaultComp, setDefaultComp] = useState(100);
 
   const handleDispositionChange = async (value: string) => {
     setDisposition(value);
     const v = String(value || "").trim();
     if (!v) return;
+
+    // Intercept Sold → show SaleModal before committing disposition
+    if (v === "Sold") {
+      setShowSaleModal(true);
+      return;
+    }
 
     // Match existing behavior elsewhere: disposition endpoint ignores No Answer for folder moves.
 
@@ -1384,6 +1400,15 @@ export default function LeadProfileDial() {
               <option value="No Show">No Show</option>
               <option value="Do Not Contact">Do Not Contact</option>
             </select>
+            {lead?.status === "Sold" && (
+              <button
+                type="button"
+                onClick={() => setShowSaleModal(true)}
+                className="mt-1 text-xs text-blue-400 hover:text-blue-300"
+              >
+                Edit Sale Details
+              </button>
+            )}
           </div>
 
           {/* AI Call Overview */}
@@ -1720,6 +1745,42 @@ export default function LeadProfileDial() {
           </div>
         </div>
       ) : null}
+
+      {showSaleModal && lead && (
+        <SaleModal
+          leadId={String(lead._id || lead.id || "")}
+          defaultComp={defaultComp}
+          existingAP={lead.annualPremium ? Number(lead.annualPremium) : undefined}
+          existingComp={lead.compPercentage ? Number(lead.compPercentage) : undefined}
+          onSave={async (result) => {
+            setShowSaleModal(false);
+            try {
+              await fetch("/api/leads/record-sale", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId: lead._id || lead.id, ...result }),
+              });
+              // now commit the disposition
+              const leadId = String(lead._id || lead.id || "").trim();
+              setSavingDisposition(true);
+              const res = await fetch("/api/disposition-lead", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId, newFolderName: "Sold" }),
+              });
+              const data = await res.json().catch(() => ({} as any));
+              if (!res.ok || !data?.success) throw new Error(data?.message || "Failed to move lead");
+              toast.success(`Moved to ${data?.folderName || "Sold"}`);
+            } catch (e: any) {
+              toast.error(e?.message || "Failed to save sale");
+            } finally {
+              setSavingDisposition(false);
+              setDisposition("");
+            }
+          }}
+          onCancel={() => { setShowSaleModal(false); setDisposition(""); }}
+        />
+      )}
     </div>
   );
 }

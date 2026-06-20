@@ -48,6 +48,7 @@ export default async function handler(
       country,
       workingHours,
       agentPhone,
+      defaultCompPercentage,
     } = (req.body || {}) as {
       firstName?: string;
       lastName?: string;
@@ -55,6 +56,7 @@ export default async function handler(
       country?: string;
       workingHours?: any;
       agentPhone?: string;
+      defaultCompPercentage?: number;
     };
 
     // Basic type validation
@@ -89,6 +91,12 @@ export default async function handler(
     if (workingHours && typeof workingHours === "object") {
       (user as any).bookingSettings = (user as any).bookingSettings || {};
       (user as any).bookingSettings.workingHours = workingHours;
+    }
+
+    // Optional: update default comp percentage (5% increments, 80–145)
+    const VALID_COMP = [80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145];
+    if (defaultCompPercentage !== undefined && VALID_COMP.includes(Number(defaultCompPercentage))) {
+      (user as any).defaultCompPercentage = Number(defaultCompPercentage);
     }
 
     await user.save();

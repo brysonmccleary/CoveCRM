@@ -29,6 +29,13 @@ type AiDialerSessionUsageResult = {
   newSeconds?: number;
 };
 
+type AiDialerCentsUsageResult = {
+  ok: true;
+  accrued: number;
+  charged?: boolean;
+  billCents?: number;
+};
+
 function isAdminEmail(email?: string | null): boolean {
   if (!email) return false;
   const list = (process.env.ADMIN_EMAILS || "")
@@ -260,4 +267,145 @@ export async function trackAiDialerSessionUsage({
   }
 
   return { billedSeconds: newSeconds, accrued: addCents };
+}
+
+export async function trackAiDialerCentsUsage({
+  userEmail,
+  addCents,
+  description,
+  idempotencyPrefix,
+}: {
+  userEmail: string;
+  addCents: number;
+  description: string;
+  idempotencyPrefix: string;
+}): Promise<AiDialerCentsUsageResult | null> {
+  await ensureDb();
+
+  const email = userEmail.toLowerCase();
+  const cents = Math.max(0, Math.round(addCents));
+  if (cents <= 0) {
+    return { ok: true, accrued: 0, charged: false };
+  }
+
+  if (isAdminEmail(email)) {
+    return { ok: true, accrued: 0, charged: false };
+  }
+
+  const userDoc = await User.findOne({ email })
+    .select("hasAI stripeCustomerId aiDialerAccruedSessionCents")
+    .lean();
+
+  if (!userDoc || !(userDoc as any).hasAI) {
+    return { ok: true, accrued: 0, charged: false };
+  }
+
+  const updated = await User.findOneAndUpdate(
+    { email },
+    {
+      $inc: {
+        aiDialerAccruedSessionCents: cents,
+        "aiDialerUsage.billedAmount": cents / 100,
+      },
+    },
+    { new: true, projection: { aiDialerAccruedSessionCents: 1, stripeCustomerId: 1 } }
+  );
+
+  if (!updated) return { ok: true, accrued: cents, charged: false };
+
+  const newAccrued = Number((updated as any).aiDialerAccruedSessionCents || 0);
+  const canBill = !!(userDoc as any).stripeCustomerId && !(DEV_SKIP_BILLING && isProd);
+
+  if (!canBill && !isProd && newAccrued >= SESSION_THRESHOLD_CENTS) {
+    console.warn("[DEV billing] AI dialer threshold reached but billing unavailable; accrual remains.");
+    return { ok: true, accrued: cents, charged: false };
+  }
+
+  if (!canBill || newAccrued < SESSION_THRESHOLD_CENTS) {
+    return { ok: true, accrued: cents, charged: false };
+  }
+
+  const lockOwner = new mongoose.Types.ObjectId().toString();
+  const lockExpiresAt = new Date(Date.now() + BILLING_LOCK_TTL_MS);
+
+  const locked = await User.findOneAndUpdate(
+    {
+      email,
+      aiDialerAccruedSessionCents: { $gte: SESSION_THRESHOLD_CENTS },
+      $or: [
+        { aiDialerBillingLockAt: null },
+        { aiDialerBillingLockExpiresAt: { $lt: new Date() } },
+      ],
+    },
+    {
+      $set: {
+        aiDialerBillingLockAt: new Date(),
+        aiDialerBillingLockOwner: lockOwner,
+        aiDialerBillingLockExpiresAt: lockExpiresAt,
+      },
+    },
+    { new: true, projection: { aiDialerAccruedSessionCents: 1 } }
+  );
+
+  if (!locked) return { ok: true, accrued: cents, charged: false };
+
+  const accrued = Number((locked as any).aiDialerAccruedSessionCents || 0);
+  const increments = Math.floor(accrued / SESSION_THRESHOLD_CENTS);
+  const billCents = increments * SESSION_THRESHOLD_CENTS;
+
+  if (billCents <= 0) {
+    await User.updateOne(
+      { email, aiDialerBillingLockOwner: lockOwner },
+      {
+        $set: {
+          aiDialerBillingLockAt: null,
+          aiDialerBillingLockOwner: null,
+          aiDialerBillingLockExpiresAt: null,
+        },
+      }
+    );
+    return { ok: true, accrued: cents, charged: false };
+  }
+
+  const idempotencyKey = `${idempotencyPrefix}_${email}_${lockOwner}`;
+
+  try {
+    await createFinalizePayInvoice({
+      customerId: (userDoc as any).stripeCustomerId as string,
+      amountCents: billCents,
+      description,
+      idempotencyKey,
+    });
+
+    await User.findOneAndUpdate(
+      { email, aiDialerBillingLockOwner: lockOwner },
+      {
+        $inc: {
+          aiDialerAccruedSessionCents: -billCents,
+          aiDialerBilledTotalCents: billCents,
+        },
+        $set: {
+          aiDialerLastChargedAt: new Date(),
+          aiDialerBillingLockAt: null,
+          aiDialerBillingLockOwner: null,
+          aiDialerBillingLockExpiresAt: null,
+        },
+      }
+    );
+
+    return { ok: true, accrued: cents, charged: true, billCents };
+  } catch (err) {
+    console.error("❌ Stripe AI dialer charge failed:", err);
+    await User.updateOne(
+      { email, aiDialerBillingLockOwner: lockOwner },
+      {
+        $set: {
+          aiDialerBillingLockAt: null,
+          aiDialerBillingLockOwner: null,
+          aiDialerBillingLockExpiresAt: null,
+        },
+      }
+    );
+    return { ok: true, accrued: cents, charged: false };
+  }
 }

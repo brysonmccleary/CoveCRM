@@ -259,6 +259,9 @@ function parseClientStartISO(iso: string, clientZone: string) {
     : DateTime.fromISO(iso, { zone: clientZone });
   return base.setZone(clientZone).set({ second: 0, millisecond: 0 });
 }
+function isPastAppointmentTime(start: DateTime): boolean {
+  return !start.isValid || start.toUTC() <= DateTime.utc();
+}
 
 // ---- SMS helpers ----------------------------------------------------------
 async function getSendParams(userId: string, toE164: string) {
@@ -380,6 +383,14 @@ export default async function handler(
       const clientStart = parseClientStartISO(String(time), clientZone);
       if (!clientStart.isValid) {
         res.status(400).json({ message: "Invalid time" });
+        return;
+      }
+      if (isPastAppointmentTime(clientStart)) {
+        res.status(400).json({
+          success: false,
+          message: "Appointment time is in the past",
+          reason: "past_appointment_time",
+        });
         return;
       }
       const dur = Math.max(15, Math.min(240, Number(durationMinutes || 30)));
@@ -525,6 +536,14 @@ export default async function handler(
   const clientStart = parseClientStartISO(String(time), clientZone);
   if (!clientStart.isValid) {
     res.status(400).json({ message: "Invalid time" });
+    return;
+  }
+  if (isPastAppointmentTime(clientStart)) {
+    res.status(400).json({
+      success: false,
+      message: "Appointment time is in the past",
+      reason: "past_appointment_time",
+    });
     return;
   }
 

@@ -196,6 +196,13 @@ export default async function handler(
     const startAgent = startParsed.setZone(agentTz);
     const endAgent = endParsed.setZone(agentTz);
     const startClient = startParsed.setZone(clientTz);
+    if (startParsed.toUTC() <= DateTime.utc()) {
+      return res.status(400).json({
+        success: false,
+        message: "Appointment time is in the past",
+        reason: "past_appointment_time",
+      });
+    }
 
     // Build event payload — book in AGENT timezone
     const summary =

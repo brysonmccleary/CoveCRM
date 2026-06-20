@@ -26,6 +26,12 @@ interface FBCampaign {
   cpl: number;
   appointments?: number;
   sales?: number;
+  revenue?: number; // legacy estimated — not used for ROAS
+  totalAnnualPremium?: number;
+  totalGrossRevenue?: number;
+  totalAdvanceRevenue?: number;
+  costPerAppointment?: number;
+  costPerSale?: number;
   plan: string;
   createdAt: string;
   googleSheetUrl?: string;
@@ -2279,27 +2285,45 @@ const FILTER_OPTIONS = [
   { id: "trucker", label: "Trucker" },
 ];
 
+function fmt$(n: number) {
+  return n > 0 ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : "—";
+}
+
 function HubMetricsRow({ campaigns }: { campaigns: FBCampaign[] }) {
-  const spend = campaigns.reduce((sum, campaign) => sum + Number(campaign.totalSpend || 0), 0);
-  const leads = campaigns.reduce((sum, campaign) => sum + Number(campaign.totalLeads || 0), 0);
-  const booked = campaigns.reduce((sum, campaign) => sum + Number(campaign.appointments || 0), 0);
-  const sales = campaigns.reduce((sum, campaign) => sum + Number(campaign.sales || 0), 0);
+  const spend = campaigns.reduce((sum, c) => sum + Number(c.totalSpend || 0), 0);
+  const leads = campaigns.reduce((sum, c) => sum + Number(c.totalLeads || 0), 0);
+  const booked = campaigns.reduce((sum, c) => sum + Number(c.appointments || 0), 0);
+  const sales = campaigns.reduce((sum, c) => sum + Number(c.sales || 0), 0);
+  const totalAP = campaigns.reduce((sum, c) => sum + Number(c.totalAnnualPremium || 0), 0);
+  const grossRevenue = campaigns.reduce((sum, c) => sum + Number(c.totalGrossRevenue || 0), 0);
+  const advanceRevenue = campaigns.reduce((sum, c) => sum + Number(c.totalAdvanceRevenue || 0), 0);
+
+  // aggregate costPerAppointment + costPerSale from campaign-level stored values
+  const totalCostPerAppt = spend > 0 && booked > 0 ? spend / booked : 0;
+  const totalCostPerSale = spend > 0 && sales > 0 ? spend / sales : 0;
   const cpl = leads > 0 && spend > 0 ? spend / leads : 0;
+  const roas = spend > 0 && grossRevenue > 0 ? grossRevenue / spend : 0;
 
   const cards = [
     { label: "Spend", value: spend > 0 ? `$${spend.toFixed(2)}` : "—" },
     { label: "Leads", value: leads.toLocaleString() },
     { label: "CPL", value: cpl > 0 ? `$${cpl.toFixed(2)}` : "—" },
     { label: "Booked", value: booked.toLocaleString() },
+    { label: "Cost / Appt", value: totalCostPerAppt > 0 ? `$${totalCostPerAppt.toFixed(0)}` : "—" },
     { label: "Sales", value: sales.toLocaleString() },
+    { label: "Cost / Sale", value: totalCostPerSale > 0 ? `$${totalCostPerSale.toFixed(0)}` : "—" },
+    { label: "Total AP", value: fmt$(totalAP) },
+    { label: "Gross Rev", value: fmt$(grossRevenue) },
+    { label: "Advance Rev", value: fmt$(advanceRevenue) },
+    { label: "ROAS", value: roas > 0 ? `${roas.toFixed(2)}x` : "—" },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11">
       {cards.map((card) => (
-        <div key={card.label} className="rounded-xl border border-white/10 bg-[#0f172a] p-4 text-center">
-          <p className="text-xs uppercase tracking-wide text-gray-400">{card.label}</p>
-          <p className="mt-1 text-xl font-bold text-white">{card.value}</p>
+        <div key={card.label} className="rounded-xl border border-white/10 bg-[#0f172a] p-3 text-center">
+          <p className="text-xs uppercase tracking-wide text-gray-400 leading-tight">{card.label}</p>
+          <p className="mt-1 text-lg font-bold text-white">{card.value}</p>
         </div>
       ))}
     </div>

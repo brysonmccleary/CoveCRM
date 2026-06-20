@@ -2,6 +2,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
+import SaleModal from "./SaleModal";
+import toast from "react-hot-toast";
 import FolderLeadsTable from "./FolderLeadsTable";
 import { useRouter } from "next/router";
 import { getNumberState } from "@/lib/twilio/localPresence";
@@ -205,6 +207,8 @@ export default function LeadsPanel() {
   const [selectAll, setSelectAll] = useState(false);
   const [showResumeOptions, setShowResumeOptions] = useState(false);
   const [previewLead, setPreviewLead] = useState<any | null>(null);
+  const [saleModalLead, setSaleModalLead] = useState<any | null>(null);
+  const [defaultComp, setDefaultComp] = useState(100);
   const [agingFilter, setAgingFilter] = useState<"all" | "fresh" | "warm" | "stale" | "cold">("all");
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<string>("");
@@ -268,6 +272,10 @@ export default function LeadsPanel() {
   useEffect(() => {
     fetchFolders();
     fetchNumbers();
+    fetch("/api/settings/profile")
+      .then((r) => r.json())
+      .then((d) => { if (d?.defaultCompPercentage) setDefaultComp(Number(d.defaultCompPercentage)); })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -636,6 +644,13 @@ export default function LeadsPanel() {
 
   const handleDisposition = async (leadId: string, disposition: string) => {
     if (disposition === "No Answer") return;
+
+    // Intercept Sold → show SaleModal
+    if (disposition === "Sold") {
+      const lead = previewLead?._id === leadId ? previewLead : { _id: leadId };
+      setSaleModalLead(lead);
+      return;
+    }
 
     try {
       const res = await fetch("/api/disposition-lead", {
@@ -1485,6 +1500,41 @@ export default function LeadsPanel() {
             </div>
           </div>
         </div>
+      )}
+
+      {saleModalLead && (
+        <SaleModal
+          leadId={String(saleModalLead._id || "")}
+          defaultComp={defaultComp}
+          onSave={async (result) => {
+            const leadId = String(saleModalLead._id || "");
+            setSaleModalLead(null);
+            try {
+              const saleRes = await fetch("/api/leads/record-sale", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId, ...result }),
+              });
+              if (!saleRes.ok) {
+                const d = await saleRes.json().catch(() => ({}));
+                toast.error((d as any)?.error || "Failed to record sale");
+                return;
+              }
+              const res = await fetch("/api/disposition-lead", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId, newFolderName: "Sold" }),
+              });
+              const data = await res.json().catch(() => ({} as any));
+              if (data?.success) {
+                setLeads((prev) => prev.filter((l) => l._id !== leadId));
+                setPreviewLead(null);
+                await fetchFolders();
+              }
+            } catch {}
+          }}
+          onCancel={() => setSaleModalLead(null)}
+        />
       )}
     </div>
   );

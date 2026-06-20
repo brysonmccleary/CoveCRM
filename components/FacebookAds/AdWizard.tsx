@@ -33,7 +33,7 @@ const SUBTYPE_OPTIONS: Record<string, { label: string; leadType: string; audienc
   ],
 };
 
-const STEPS = ["Lead Type", "State", "Budget", "Generate", "Review & Launch"];
+const STEPS = ["Lead Type", "Campaign Type", "State", "Budget", "Generate", "Review & Launch"];
 const VARIANT_COUNT_OPTIONS = [
   { value: 1, label: "Basic" },
   { value: 2, label: "Small Test" },
@@ -53,6 +53,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [mainCategory, setMainCategory] = useState("final_expense");
   const [leadType, setLeadType] = useState("final_expense");
   const [audienceSegment, setAudienceSegment] = useState("standard");
+  const [campaignType, setCampaignType] = useState<"native_form" | "hosted_funnel" | "hosted_funnel_otp">("hosted_funnel");
   const [campaignTypeLabel, setCampaignTypeLabel] = useState("Final Expense");
   const [states, setStates] = useState<string[]>([]);
   const [draft, setDraft] = useState<any>(null);
@@ -216,7 +217,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
       setDraft(json.draft);
       setDrafts(nextDrafts);
       if (isRegenerate) setRegenerateAttempts(nextAttempt);
-      setStep(3);
+      setStep(4);
     } catch (err: any) {
       setError(err?.message || "Generation failed");
     } finally {
@@ -226,7 +227,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 
   const continueToLaunch = async () => {
     if (!drafts.length || imageGenerating || loading) return;
-    setStep(4);
+    setStep(5);
   };
 
   const launch = async () => {
@@ -292,6 +293,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         body: JSON.stringify({
           leadType,
           audienceSegment,
+          campaignType,
           requestedLeadType: leadType,
           campaignTypeLabel,
           campaignName,
@@ -327,7 +329,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         throw new Error(metaError || "Launch failed");
       }
       setResult(json);
-      setStep(4);
+      setStep(5);
     } catch (err: any) {
       setError(err?.message || "Launch failed");
     } finally {
@@ -361,9 +363,11 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 
   const canContinue =
     (step === 0 && !!leadType) ||
-    (step === 1 && states.length > 0) ||
-    (step === 2 && dailyBudget >= 5) ||
-    (step === 3 && drafts.length > 0 && !imageGenerating);
+    (step === 1 && !!campaignType) ||
+    (step === 2 && states.length > 0) ||
+    (step === 3 && dailyBudget >= 5) ||
+    (step === 4 && drafts.length > 0 && !imageGenerating) ||
+    step === 5;
 
   return (
     <div className="bg-[#0f172a] border border-white/10 rounded-xl p-6">
@@ -439,9 +443,37 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         </div>
       )}
 
-      {step === 1 && <StateSelector value={states} onChange={setStates} />}
+      {step === 1 && (
+        <div className="space-y-3">
+          <p className="text-white font-semibold">How do you want to capture leads?</p>
+          <p className="text-sm text-gray-400">Choose the destination where your ad sends people.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {([
+              { id: "hosted_funnel" as const, label: "Hosted Landing Page", description: "CoveCRM hosts the form. Leads go directly into your CRM." },
+              { id: "hosted_funnel_otp" as const, label: "Landing Page + Phone Verify", description: "Same as above but with OTP phone verification to reduce fake leads." },
+              { id: "native_form" as const, label: "Facebook Native Form", description: "Facebook hosts the form inside the ad. Higher volume, slightly lower intent." },
+            ] as const).map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setCampaignType(option.id)}
+                className={`text-left p-4 rounded-lg border ${
+                  campaignType === option.id
+                    ? "bg-emerald-600/20 border-emerald-500/60 text-white"
+                    : "bg-white/5 border-white/10 text-gray-300 hover:bg-white/10"
+                }`}
+              >
+                <p className="font-semibold text-sm">{option.label}</p>
+                <p className="text-xs text-gray-400 mt-1">{option.description}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
-	      {step === 2 && (
+      {step === 2 && <StateSelector value={states} onChange={setStates} />}
+
+	      {step === 3 && (
 	        <div className="bg-white/5 border border-white/10 rounded-lg p-5">
           <p className="text-white font-semibold mb-1">Choose daily budget</p>
           <p className="text-sm text-gray-400 mb-4">
@@ -488,7 +520,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	        </div>
 	      )}
 
-      {step === 3 && !draft && (
+      {step === 4 && !draft && (
         <div className="bg-white/5 border border-white/10 rounded-lg p-5">
           <p className="text-white font-semibold mb-1">Ready to generate</p>
           <p className="text-sm text-gray-400 mb-4">
@@ -505,12 +537,12 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         </div>
       )}
 
-	      {(step === 3 || step === 4) && draft && (
+	      {(step === 4 || step === 5) && draft && (
 		        <div
 	            className="space-y-3"
-	            style={step === 4 ? { position: "absolute", left: -10000, top: 0, width: 375, pointerEvents: "none" } : undefined}
+	            style={step === 5 ? { position: "absolute", left: -10000, top: 0, width: 375, pointerEvents: "none" } : undefined}
 	          >
-              {step === 4 && drafts.map((currentDraft, index) => (
+              {step === 5 && drafts.map((currentDraft, index) => (
                 <div
                   key={`production-${currentDraft.uniquenessFingerprint || index}`}
                   ref={(el) => {
@@ -602,7 +634,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         </div>
       )}
 
-      {step === 4 && (
+      {step === 5 && (
         <div className={`rounded-lg p-5 border ${result ? "bg-emerald-900/30 border-emerald-700/40" : "bg-white/5 border-white/10"}`}>
           <p className="text-white font-semibold">{result ? "Campaign Created Successfully" : "Review & Launch"}</p>
           <p className="text-sm text-gray-400 mt-1">
@@ -692,7 +724,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         >
           Back
         </button>
-        {step < 4 && step !== 2 && step !== 3 && (
+        {step < 5 && step !== 3 && step !== 4 && (
           <button
             type="button"
             onClick={() => setStep(step + 1)}
@@ -702,17 +734,17 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
             Continue
           </button>
         )}
-        {step === 2 && (
+        {step === 3 && (
           <button
             type="button"
-            onClick={() => setStep(3)}
+            onClick={() => setStep(4)}
             disabled={!canContinue || launching}
             className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm text-white font-semibold disabled:opacity-50"
           >
             Continue
           </button>
         )}
-	        {step === 3 && (
+	        {step === 4 && (
 	          <button
 	            type="button"
             onClick={continueToLaunch}

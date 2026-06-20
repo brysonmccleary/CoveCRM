@@ -35,6 +35,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       "aiTextingEnabled",
       "aiNewLeadCallEnabled",
       "aiDialSessionEnabled",
+      "aiDialerTranscriptsEnabled",
       "aiCallOverviewEnabled",
       "aiCallCoachingEnabled",
       "liveTransferEnabled",

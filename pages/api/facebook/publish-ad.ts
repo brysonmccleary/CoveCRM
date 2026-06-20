@@ -41,6 +41,23 @@ function getBase64FromDataImageUrl(imageAsset: string) {
   return match?.[1]?.replace(/\s/g, "") || "";
 }
 
+function getLeadSpecificQuestion(leadType: string, audienceSegment: string): { label: string; key: string } {
+  if (audienceSegment === "veteran") {
+    return { label: "What military branch did you serve in?", key: "military_branch" };
+  }
+  if (audienceSegment === "trucker") {
+    return { label: "Are you currently an active CDL driver?", key: "cdl_driver_status" };
+  }
+  const map: Record<string, { label: string; key: string }> = {
+    mortgage_protection: { label: "What is your mortgage balance?", key: "mortgage_balance" },
+    final_expense: { label: "What coverage amount are you interested in?", key: "coverage_amount" },
+    iul: { label: "Are you looking for protection, cash value growth, or both?", key: "iul_goal" },
+    veteran: { label: "What military branch did you serve in?", key: "military_branch" },
+    trucker: { label: "Are you currently an active CDL driver?", key: "cdl_driver_status" },
+  };
+  return map[leadType] || { label: "What are you most interested in?", key: "lead_question" };
+}
+
 function isGeneratedCoveCrmDraft(draft: any) {
   return Boolean(
     draft?.winningFamilyId ||
@@ -186,6 +203,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     complianceProfile?: Record<string, string>;
     funnelType?: string;
   };
+
+  const audienceSegment = String((req.body as any).audienceSegment || "standard").trim();
+  const campaignType = String((req.body as any).campaignType || "hosted_funnel").trim();
 
   // Validate required fields
   if (!campaignName || String(campaignName).trim().length < 3) {
@@ -369,6 +389,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       folder = await Folder.findOne({ userEmail, name: folderName }).lean();
       if (!folder) {
         const aiScriptKey =
+          (leadType === "mortgage_protection" && audienceSegment === "veteran") ? "veteran_mortgage" :
+          (leadType === "iul"                 && audienceSegment === "veteran") ? "veteran_iul" :
+          (leadType === "mortgage_protection" && audienceSegment === "trucker") ? "trucker_mortgage" :
+          (leadType === "iul"                 && audienceSegment === "trucker") ? "trucker_iul" :
           leadType === "mortgage_protection" ? "mortgage_protection" :
           leadType === "iul" ? "iul_cash_value" :
           leadType === "veteran" ? "veteran_leads" :
@@ -409,12 +433,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
         $set: {
           leadType,
+          audienceSegment,
+          campaignType,
           dailyBudget: Math.round(budgetCents / 100),
           folderId,
           facebookPageId: resolvedPageId,
           facebookPageName: resolvedPageName,
           adAccountId: resolvedAdAccountId,
-          funnelStatus: "active",
+          funnelStatus: campaignType === "native_form" ? "paused" : "active",
           funnelSlug,
           funnelVersion: "2026-04-production-v1",
           landingPageConfig: funnelData,
@@ -490,7 +516,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       metaFormId = String((campaign as any).metaFormId || "").trim();
       metaAdId = String((campaign as any).metaAdId || "").trim();
 
-      if (metaCampaignId && metaAdsetId && metaFormId && metaAdId) {
+      const isAlreadyPublished = campaignType === "native_form"
+        ? !!(metaCampaignId && metaAdsetId && metaFormId && metaAdId)
+        : !!(metaCampaignId && metaAdsetId && metaAdId);
+      if (isAlreadyPublished) {
         return res.status(200).json({
           ok: true,
           alreadyPublished: true,
@@ -573,7 +602,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         adsetParams.set("status", lockedStructure.adSet.status);
         adsetParams.set("promoted_object", JSON.stringify({ page_id: pageIdFinal }));
         adsetParams.set("targeting", JSON.stringify(lockedStructure.adSet.targeting));
-        adsetParams.set("destination_type", "ON_AD");
+        adsetParams.set("destination_type", campaignType === "native_form" ? "ON_AD" : "WEBSITE");
         adsetParams.set("access_token", accessToken);
 
         const metaAdsetResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/adsets`, {
@@ -593,24 +622,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
       }
 
+      if (campaignType !== "hosted_funnel" && campaignType !== "hosted_funnel_otp") {
       if (!metaFormId) {
-        const leadTypeSpecificQuestionLabels: Record<string, string> = {
-          mortgage_protection: "What is your mortgage balance?",
-          trucker: "Are you currently an active CDL driver?",
-          veteran: "What military branch did you serve in?",
-          final_expense: "What coverage amount are you interested in?",
-          iul: "Are you looking for protection, cash value growth, or both?",
-        };
-        const leadTypeSpecificQuestionKeys: Record<string, string> = {
-          mortgage_protection: "mortgage_balance",
-          trucker: "cdl_driver_status",
-          veteran: "military_branch",
-          final_expense: "coverage_amount",
-          iul: "iul_goal",
-        };
+        const leadSpecificQ = getLeadSpecificQuestion(leadType, audienceSegment);
         const questions: Array<Record<string, any>> = [
           { type: "FULL_NAME" },
-          { type: "CUSTOM", label: leadTypeSpecificQuestionLabels[leadType], key: leadTypeSpecificQuestionKeys[leadType] || "lead_question" },
+          { type: "CUSTOM", label: leadSpecificQ.label, key: leadSpecificQ.key },
           { type: "CUSTOM", label: "Best time for a licensed agent to call?", key: "best_call_time" },
           { type: "PHONE" },
           { type: "EMAIL" },
@@ -679,8 +696,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           { $set: { metaFormId, metaLastPublishAttemptAt: new Date() } }
         );
       }
+      } // end native_form-only block
         const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://www.covecrm.com").replace(/\/$/, "");
         const instantFormDisplayUrl = appUrl || "https://www.covecrm.com";
+        const funnelUrl = `${appUrl}/f/${String((campaign as any)._id)}`;
         publishedAds = [];
 
         for (let index = 0; index < normalizedDrafts.length; index++) {
@@ -704,10 +723,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               )
             : "";
 
+          const resolvedAdLink = campaignType === "native_form" ? instantFormDisplayUrl : funnelUrl;
           const objectStorySpec: Record<string, any> = {
             page_id: pageIdFinal,
             link_data: {
-              link: instantFormDisplayUrl,
+              link: resolvedAdLink,
               message: String(currentDraft.primaryText || primaryText || ""),
               name: String(currentDraft.headline || headline || ""),
               description: String(currentDraft.description || description || ""),
@@ -729,9 +749,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   }
                   return "LEARN_MORE";
                 })(),
-                value: {
-                  lead_gen_form_id: metaFormId,
-                },
+                value: campaignType === "native_form"
+                  ? { lead_gen_form_id: metaFormId }
+                  : { link: funnelUrl },
               },
             },
           };

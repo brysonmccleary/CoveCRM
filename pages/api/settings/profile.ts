@@ -42,6 +42,7 @@ export default async function handler(
       email: user.email || "",
       country: user.country || "United States",
       agentPhone: user.agentPhone || "",
+      defaultCompPercentage: (user as any).defaultCompPercentage ?? 100,
       workingHours:
         (user as any).bookingSettings?.workingHours || {
           Monday: { start: "08:00", end: "21:00" },

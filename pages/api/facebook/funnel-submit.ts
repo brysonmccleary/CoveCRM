@@ -5,7 +5,9 @@
 // No auth required (public endpoint — the funnel page is public).
 //
 import type { NextApiRequest, NextApiResponse } from "next";
+import crypto from "crypto";
 import mongooseConnect from "@/lib/mongooseConnect";
+import FunnelOTPSession from "@/models/FunnelOTPSession";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import FBLeadEntry from "@/models/FBLeadEntry";
 import Lead from "@/models/Lead";
@@ -79,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const campaign = await (FBLeadCampaign as any).findOne({
       _id: campaignId,
     })
-      .select("userId userEmail folderId campaignName leadType webhookKey metaCampaignId metaAdId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet funnelVersion")
+      .select("userId userEmail folderId campaignName leadType campaignType webhookKey metaCampaignId metaAdId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet funnelVersion")
       .lean() as any;
 
     if (!campaign) {
@@ -112,6 +114,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (campaign.funnelVersion === "a2p-compliance-stub") {
       return res.status(200).json({ ok: true, complianceOnly: true } as any);
+    }
+
+    let otpSessionIdToConsume: string | undefined;
+    if (campaign.campaignType === "hosted_funnel_otp") {
+      const verifiedToken = (req.body as any).verifiedToken;
+      if (!verifiedToken) return res.status(400).json({ error: "Phone verification required." });
+      try {
+        const secret = process.env.WEBHOOK_SECRET || process.env.NEXTAUTH_SECRET || "fallback";
+        const decoded = Buffer.from(String(verifiedToken), "base64").toString("utf8");
+        const parts = decoded.split(":");
+        if (parts.length !== 4) throw new Error("Invalid token format");
+        const [tokenCampaignId, tokenPhone, tokenSessionId, tokenSig] = parts;
+        otpSessionIdToConsume = tokenSessionId;
+        const payload = `${tokenCampaignId}:${tokenPhone}:${tokenSessionId}`;
+        const expectedSig = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+        if (tokenSig !== expectedSig) throw new Error("Invalid signature");
+        if (tokenCampaignId !== String(campaignId)) throw new Error("Campaign mismatch");
+        const otpSession = await FunnelOTPSession.findOne({
+          _id: tokenSessionId,
+          campaignId: tokenCampaignId,
+          verified: true,
+        }).lean();
+        if (!otpSession) throw new Error("Session not verified");
+        const rawPhoneCheck = String(phone || "").trim();
+        const phoneLast10Check = rawPhoneCheck.replace(/\D/g, "").slice(-10);
+        if (tokenPhone !== phoneLast10Check) throw new Error("Phone mismatch");
+      } catch {
+        return res.status(400).json({ error: "Phone verification failed. Please verify your phone number again." });
+      }
     }
 
     // Ensure the CRM folder exists
@@ -206,6 +237,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stateRestrictionWarning: !!(outsideLicensedArea || stateRestrictionWarning),
       stateOutsidePrimaryLicensedArea: !!(outsideLicensedArea || stateOutsidePrimaryLicensedArea),
     });
+
+    if (campaign.campaignType === "hosted_funnel_otp" && otpSessionIdToConsume) {
+      try { await FunnelOTPSession.deleteOne({ _id: otpSessionIdToConsume }); } catch {}
+    }
 
     try {
       await FBLeadEntry.create({

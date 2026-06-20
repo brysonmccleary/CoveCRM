@@ -96,7 +96,7 @@ Here’s what Cove CRM does:
 - Subscriptions are managed via Stripe
 - Users pay monthly for the base plan
 - Optional AI upgrade adds call summaries and assistant replies
-- Each Twilio number is $2/month (plus usage)
+- Each Twilio number is $1.15/month (plus usage)
 - Stripe billing portal allows full invoice and payment history
 
 💸 Affiliate Program:
@@ -106,7 +106,7 @@ Here’s what Cove CRM does:
 
 📱 Phone Number Management:
 - Your first number is free
-- Additional numbers are $2/mo
+- Additional numbers are $1.15/mo
 - Auto-renew enabled
 - Usage (texts + calls) tracked and billed monthly
 

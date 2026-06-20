@@ -11,6 +11,16 @@ const FBLeadCampaignSchema = new Schema(
       required: true,
       index: true,
     },
+    audienceSegment: {
+      type: String,
+      enum: ["standard", "veteran", "trucker"],
+      default: "standard",
+    },
+    campaignType: {
+      type: String,
+      enum: ["native_form", "hosted_funnel", "hosted_funnel_otp"],
+      default: "hosted_funnel",
+    },
     campaignName: { type: String, required: true },
     status: {
       type: String,
@@ -75,6 +85,10 @@ const FBLeadCampaignSchema = new Schema(
     totalClicks: { type: Number, default: 0 },
     appointments: { type: Number, default: 0 },
     sales: { type: Number, default: 0 },
+    revenue: { type: Number, default: 0 }, // legacy estimated; not used for ROAS
+    totalAnnualPremium: { type: Number, default: 0 },
+    totalGrossRevenue: { type: Number, default: 0 },
+    totalAdvanceRevenue: { type: Number, default: 0 },
     costPerAppointment: { type: Number, default: 0 },
     costPerSale: { type: Number, default: 0 },
     appointmentRate: { type: Number, default: 0 },

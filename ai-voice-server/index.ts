@@ -30,6 +30,15 @@ function loadEnvForAiVoiceServer() {
 loadEnvForAiVoiceServer();
 // ---- end env bootstrap ----
 
+// C2: process-level guards — log unhandled errors without crashing the server.
+// An unhandled error in one call's logic must never drop every other active call.
+process.on("unhandledRejection", (reason) => {
+  console.error("[AI-VOICE][UNHANDLED_REJECTION]", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[AI-VOICE][UNCAUGHT_EXCEPTION]", err?.stack || err);
+});
+
 // ai-voice-server/index.ts
 import http, { IncomingMessage, ServerResponse } from "http";
 import WebSocket, { WebSocketServer } from "ws";
@@ -381,7 +390,13 @@ type CallState = {
   unknownTurnCount?: number;
   // Cumulative soft-decline counter across all subKinds; resets on scheduling advance only
   totalDeclineSignals?: number;
+  // Consecutive angry/profane turn counter — resets on any non-angry turn, exits at 2 with do_not_call
+  angryTurnCount?: number;
 
+  // Twilio WebSocket for this call — stored at connect time for use in timers
+  twilioWs?: WebSocket;
+  // Force-hangup timer: fires 12s after pendingHangupAfterGoodbye is set if audio never drains
+  goodbyeTimeoutId?: NodeJS.Timeout | null;
   // silence watchdog: arms after greeting or each AI turn; cancelled on speech_started
   silenceWatchdog?: NodeJS.Timeout | null;
   // greeting audio fallback: fires after 8s if OpenAI never sends audio
@@ -1041,6 +1056,11 @@ function maybeCompleteCallAfterGoodbye(ws: WebSocket, state: CallState, reason: 
   state.awaitingUserAnswer = false;
   state.awaitingAnswerForStepIndex = undefined;
   clearSilenceWatchdog(state, `goodbye hangup (${reason})`);
+  // C3: cancel the force-hangup safety timer — normal goodbye path is running
+  if (state.goodbyeTimeoutId) {
+    clearTimeout(state.goodbyeTimeoutId);
+    state.goodbyeTimeoutId = null;
+  }
 
   console.log("[AI-VOICE][GOODBYE] completing call after goodbye audio", {
     callSid: state.callSid,
@@ -3440,8 +3460,11 @@ function isHardDncRequest(textRaw: string): boolean {
     t.includes("remove me") ||
     t.includes("remove my number") ||
     t.includes("take me off") ||
+    t.includes("take me off this list") ||
     t.includes("leave me alone") ||
     t.includes("never call") ||
+    t.includes("unsubscribe me") ||
+    t.includes("unsubscribe") ||
     // Extended DNC phrases (audit Fix 2)
     t.includes("to be removed") ||
     t.includes("stop bothering") ||
@@ -4715,7 +4738,13 @@ function detectObjection(textRaw: string): string | null {
     t.includes("is this a robot") ||
     t.includes("is it a robot") ||
     t.includes("am i talking to a robot") ||
-    t.includes("am i talking to an ai")
+    t.includes("am i talking to an ai") ||
+    t.includes("are you a human") ||
+    t.includes("are you human") ||
+    t.includes("are you a person") ||
+    t.includes("is this a person") ||
+    t.includes("talking to a human") ||
+    t.includes("talking to a person")
   ) return "are_you_ai";
 
   // Call purpose confusion — "what are you calling about" / "why are you calling"
@@ -4868,6 +4897,17 @@ function detectObjection(textRaw: string): string | null {
     t.includes("stop calling") ||
     t.includes("remove") ||
     t.includes("do not call") ||
+    t.includes("absolutely not") ||
+    t.includes("hard pass") ||
+    t === "no way" ||
+    t.startsWith("no way ") ||
+    t.includes(" no way ") ||
+    t === "yeah no" ||
+    t.startsWith("yeah no ") ||
+    t.includes("i already told someone no") ||
+    t.includes("i already told you no") ||
+    t.includes("told you i m not") ||
+    t.includes("told you i'm not") ||
     t === "nah" ||
     t === "nope" ||
     t === "not really" ||
@@ -4986,7 +5026,19 @@ if (
     t.includes("look at my calendar") ||
     t.includes("look at my schedule") ||
     t.includes("check my schedule") ||
-    t.includes("need to check my")
+    t.includes("need to check my") ||
+    t.includes("hold on") ||
+    t.includes("one sec") ||
+    t.includes("one second") ||
+    t.includes("give me a minute") ||
+    t.includes("give me a second") ||
+    t.includes("i gotta go") ||
+    t.includes("i got to go") ||
+    t.includes("i have to go") ||
+    t.includes("i've got to go") ||
+    t.includes("i need to go") ||
+    t.includes("gotta run") ||
+    t.includes("gotta go")
   ) {
     // If they are still actively scheduling (e.g. "tomorrow evening" / "what times do you have"),
     // do NOT treat this as an objection — let the stepper offer concrete time options.
@@ -5038,7 +5090,8 @@ if (
   // "Can you mail it / send it in the mail / text it over"
   if (t.includes("text me") || t.includes("send it") || t.includes("email me") ||
       t.includes("mail it") || t.includes("send me") || t.includes("text it") ||
-      t.includes("send that over") || t.includes("send over") || t.includes("mail me")) {
+      t.includes("send that over") || t.includes("send over") || t.includes("mail me") ||
+      t === "dm me" || t.startsWith("dm me ") || t.includes(" dm me")) {
     // If they are still actively scheduling ("text me the times you have tomorrow"),
     // keep booking flow and offer options instead of rebuttal.
     try {
@@ -5758,6 +5811,8 @@ function classifyTurnIntent(
     "hello?", "hello hello",
     "breaking up", "cutting out", "static", "too quiet", "barely hear",
     "hard to hear", "hardly hear",
+    "too fast", "talking too fast", "you're talking too fast", "slow down", "speak slower",
+    "slow it down", "can you slow down", "slow down a bit",
   ];
   if (hearingSignals.some(s => t.includes(s)) || t === "what" || t === "huh" || t === "what?") {
     return { kind: "hearing_problem", raw };
@@ -6803,6 +6858,10 @@ function buildConversationPolicyDecision(
   if (intent.kind !== "unknown" && intent.kind !== "off_topic") {
     state.unknownTurnCount = 0;
   }
+  // Reset consecutive-angry counter on any non-angry turn (Item B)
+  if (intent.kind !== "angry_or_profane") {
+    state.angryTurnCount = 0;
+  }
 
   if (intent.kind === "kayla_signup_ready" && normalizeScriptKey(ctx?.scriptKey) === "kayla_signup") {
     const lineToSay = "Perfect — I'll text you the trial link and COVE50 code now. You get 7 days free, and COVE50 takes $50 off every month.";
@@ -7197,6 +7256,27 @@ function buildConversationPolicyDecision(
         shouldAdvanceStep: false,
       };
     }
+    const newAngryCount = (state.angryTurnCount ?? 0) + 1;
+    if (newAngryCount >= 2) {
+      return {
+        handled: true,
+        routeKind: "angry_hostility_exit",
+        responseMode: "exact_script",
+        objective: "end_call",
+        lineToSay: "I understand — I'll go ahead and remove you from our list. Take care.",
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          angryTurnCount: 0,
+          pendingHangupAfterGoodbye: true,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     return {
       handled: true,
       routeKind: "angry_soft",
@@ -7205,7 +7285,7 @@ function buildConversationPolicyDecision(
 	      lineToSay: `I hear you. ${requiredObjective}`,
 	      requiredClosingPivot: requiredObjective,
 	      forbiddenTopics: [],
-	      stateWrites: preserveCurrentStepState(),
+	      stateWrites: { ...preserveCurrentStepState(), angryTurnCount: newAngryCount },
 	      shouldAdvanceStep: false,
 	    };
 	  }
@@ -7500,7 +7580,7 @@ function buildConversationPolicyDecision(
     const objIsRepeat = !!state.lastObjectionKind && state.lastObjectionKind === objKind;
     const objRepeatCount = objIsRepeat ? (Number(state.objectionRepeatCount ?? 0) + 1) : 1;
     const objRepeatMode = objIsRepeat && objRepeatCount >= 2;
-    const softDeclineObjKinds = ["needs_time", "repeated_contact", "busy", "spouse_consult"];
+    const softDeclineObjKinds = ["needs_time", "repeated_contact", "busy", "spouse_consult", "already_have"];
     const isSoftDeclineObj = softDeclineObjKinds.includes(sk);
     const objTotalDeclines = isSoftDeclineObj ? (state.totalDeclineSignals ?? 0) + 1 : (state.totalDeclineSignals ?? 0);
     const objStateWrites: Record<string, unknown> = {
@@ -8167,8 +8247,16 @@ async function handleConversationTurn(
   if (decision.stateWrites?.coverageSubjectSetThisTurn) {
     state.coverageSubjectSetThisTurn = true;
   }
+  // C5: also apply the repeat guard to unknown-route free_response turns.
+  // "policy_unknown" and "post_coverage_unknown_free" can emit the same GPT
+  // instruction twice in a row if the lead says confusing things back-to-back.
+  // Other free_response routes (repeat-guard fallback, kayla, step-1 bridge) are
+  // intentionally exempt and must NOT be re-checked here.
+  const isUnknownFreeResponse =
+    decision.responseMode === "free_response" &&
+    (decision.routeKind === "policy_unknown" || decision.routeKind === "post_coverage_unknown_free");
   let repeatGuard: ReturnType<typeof applyAiOutputRepeatGuard> | null = null;
-  if (decision.responseMode !== "free_response") {
+  if (decision.responseMode !== "free_response" || isUnknownFreeResponse) {
     repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
       userText: text,
       routeKind: decision.routeKind,
@@ -8226,6 +8314,7 @@ async function handleConversationTurn(
   let instr = buildResponseFromPolicy(decision, state, stepCtx);
 
   // Apply policy decision stateWrites FIRST before repeat guard can interfere
+  const hadPendingHangup = !!state.pendingHangupAfterGoodbye;
   for (const [k, v] of Object.entries(decision.stateWrites)) {
     (state as any)[k] = v;
   }
@@ -8233,6 +8322,20 @@ async function handleConversationTurn(
   for (const [k, v] of Object.entries(repeatGuardStateWrites)) {
     if (k === "coverageSubject" || k === "pendingLiveTransferAvailabilityConfirm") continue;
     (state as any)[k] = v;
+  }
+  // C3: arm 12-second force-hangup timer when pendingHangupAfterGoodbye first becomes true.
+  // Safety net only — fires if the AI's goodbye audio never drains (model stall, audio error).
+  if (!hadPendingHangup && state.pendingHangupAfterGoodbye && !state.goodbyeTimeoutId && state.twilioWs) {
+    const _hangupWs = state.twilioWs;
+    state.goodbyeTimeoutId = setTimeout(() => {
+      state.goodbyeTimeoutId = null;
+      if (state.phase !== "ended") {
+        console.warn("[AI-VOICE][GOODBYE-TIMEOUT] goodbye audio never drained — force-ending call", {
+          callSid: state.callSid,
+        });
+        completeTwilioCallNow(_hangupWs, state, "goodbye timeout — audio never drained");
+      }
+    }, 12000);
   }
 
   if (
@@ -8260,6 +8363,7 @@ async function handleConversationTurn(
     (decision.routeKind === "policy_hard_dnc" ||
       decision.routeKind === "post_coverage_hard_stop" ||
       decision.routeKind === "angry_hard_stop" ||
+      decision.routeKind === "angry_hostility_exit" ||
       routeKindForMemory === "policy_hard_dnc" ||
       routeKindForMemory === "post_coverage_hard_stop" ||
       routeKindForMemory === "angry_hard_stop")
@@ -10778,6 +10882,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.initialGreetingQueued = false;
   state.phase = "init";
   state.silenceWatchdog = null;
+  state.twilioWs = ws;  // C3: store for use in safety timers
 
   state.openAiReady = false;
   state.openAiConfigured = false;
@@ -11543,11 +11648,39 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
   });
 
   openAiWs.on("close", () => {
-    console.log("[AI-VOICE] OpenAI Realtime closed");
+    // C1: when OpenAI closes (expected or unexpected), ensure the Twilio call also ends.
+    // safelyCloseOpenAi() always triggers this via state.openAiWs.close().
+    // Live-transfer: Twilio call is now in agent hands — do NOT terminate it.
+    state.openAiReady = false;
+    if (state.transferInProgress) {
+      console.log("[AI-VOICE] OpenAI Realtime closed — live transfer in progress, leaving Twilio call active", {
+        callSid: state.callSid,
+      });
+      return;
+    }
+    console.log("[AI-VOICE] OpenAI Realtime closed", {
+      callSid: state.callSid,
+      phase: state.phase,
+      finalOutcomeSent: state.finalOutcomeSent,
+    });
+    // Record outcome if nothing has been recorded yet
+    if (!state.finalOutcomeSent && state.context) {
+      state.finalOutcomeSent = true;
+      const outcome = state.voicemailSkipArmed ? "no_answer" : "disconnected";
+      void handleFinalOutcomeIntent(state, {
+        kind: "final_outcome",
+        outcome,
+        summary: state.voicemailSkipArmed
+          ? "Voicemail detected — call ended automatically."
+          : "OpenAI connection closed — call terminated.",
+        notesAppend: "",
+      }).catch(() => {});
+    }
+    completeTwilioCallNow(ws, state, "openai closed");
   });
 
   openAiWs.on("error", (err) => {
-    console.error("[AI-VOICE] OpenAI Realtime error:", err);
+    console.error("[AI-VOICE] OpenAI Realtime error:", err?.message || err);
   });
 }
 
