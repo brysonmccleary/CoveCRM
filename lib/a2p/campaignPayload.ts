@@ -1,6 +1,7 @@
 import {
   buildLeadGenerationOptInDetails,
   buildLeadGenerationSampleMessages,
+  buildLeadGenerationSenderName,
   personalizeA2PSampleMessages,
 } from "@/lib/a2p/flowSelection";
 
@@ -80,15 +81,25 @@ function joinUrl(baseUrl: string, path?: string): string {
 function resolveComplianceUrls(args: BuildA2PCampaignPayloadArgs) {
   const profile = args.profile || {};
   const userId = clean(args.userId || profile.userId);
-  const optInUrl = isPublicHttpsUrl(profile.landingOptInUrl)
-    ? clean(profile.landingOptInUrl)
-    : joinUrl(args.baseUrl || "", userId ? `/sms/optin/${userId}` : "");
-  const tosUrl = isPublicHttpsUrl(profile.landingTosUrl)
-    ? clean(profile.landingTosUrl)
-    : joinUrl(args.baseUrl || "", userId ? `/sms/optin-terms/${userId}` : "");
-  const privacyUrl = isPublicHttpsUrl(profile.landingPrivacyUrl)
-    ? clean(profile.landingPrivacyUrl)
-    : joinUrl(args.baseUrl || "", userId ? `/sms/optin-privacy/${userId}` : "");
+  const leadGeneration = isLeadGenerationProfile(profile);
+  const optInPath = leadGeneration ? "/sms/lead-optin" : "/sms/optin";
+  const termsPath = leadGeneration ? "/sms/lead-optin-terms" : "/sms/optin-terms";
+  const privacyPath = leadGeneration ? "/sms/lead-optin-privacy" : "/sms/optin-privacy";
+  const profileOptInUrl = clean(profile.landingOptInUrl);
+  const profileTosUrl = clean(profile.landingTosUrl);
+  const profilePrivacyUrl = clean(profile.landingPrivacyUrl);
+  const hasServicingOptInUrl = leadGeneration && /\/sms\/optin\//i.test(profileOptInUrl);
+  const hasServicingTosUrl = leadGeneration && /\/sms\/optin-terms\//i.test(profileTosUrl);
+  const hasServicingPrivacyUrl = leadGeneration && /\/sms\/optin-privacy\//i.test(profilePrivacyUrl);
+  const optInUrl = isPublicHttpsUrl(profileOptInUrl) && !hasServicingOptInUrl
+    ? profileOptInUrl
+    : joinUrl(args.baseUrl || "", userId ? `${optInPath}/${userId}` : "");
+  const tosUrl = isPublicHttpsUrl(profileTosUrl) && !hasServicingTosUrl
+    ? profileTosUrl
+    : joinUrl(args.baseUrl || "", userId ? `${termsPath}/${userId}` : "");
+  const privacyUrl = isPublicHttpsUrl(profilePrivacyUrl) && !hasServicingPrivacyUrl
+    ? profilePrivacyUrl
+    : joinUrl(args.baseUrl || "", userId ? `${privacyPath}/${userId}` : "");
 
   if (!isPublicHttpsUrl(optInUrl) || !isPublicHttpsUrl(tosUrl) || !isPublicHttpsUrl(privacyUrl)) {
     throw new Error("A2P campaign payload missing public compliance URLs");
@@ -129,6 +140,10 @@ function looksLikeLegacyServicingText(text: string): boolean {
   return /\b(service-related|existing insurance customers|existing policy|current policy|policy updates|account servicing|retention-related|beneficiaries)\b/i.test(text);
 }
 
+function looksLikeGenericLeadGenerationText(text: string): boolean {
+  return /\b(the sender|sender's|public SMS opt-in page|licensed insurance agent|appointment reminder SMS campaign)\b/i.test(text);
+}
+
 function looksLikeLegacyServicingSamples(samples: string[]): boolean {
   return looksLikeLegacyServicingText(samples.join(" "));
 }
@@ -150,7 +165,7 @@ function ensureDisclosureText(flow: string): string {
   const checks = [
     {
       pattern: /public\s+sms\s+opt-?in\s+page|public.*final expense landing page|public.*landing page/i,
-      text: "End users consent on a public SMS opt-in page.",
+      text: "End users consent on the opt-in page.",
     },
     {
       pattern: /separate.*unchecked.*sms\s+consent\s+checkbox|unchecked.*sms\s+consent\s+checkbox/i,
@@ -203,12 +218,12 @@ function buildMessageFlow(args: BuildA2PCampaignPayloadArgs): string {
     clean(profile.optInDetails) ||
     clean(profile.messageFlow);
   const sourceFlow =
-    isLeadGenerationProfile(profile) && (!initial || looksLikeLegacyServicingText(initial))
-      ? buildLeadGenerationOptInDetails(urls.optInUrl)
+    isLeadGenerationProfile(profile) && (!initial || looksLikeLegacyServicingText(initial) || looksLikeGenericLeadGenerationText(initial))
+      ? buildLeadGenerationOptInDetails(urls.optInUrl, profile)
       : initial;
 
   const interpolated = interpolateComplianceUrlTokens(
-    sourceFlow || "End users consent on a public SMS opt-in page using a separate unchecked SMS consent checkbox.",
+    sourceFlow || buildLeadGenerationOptInDetails(urls.optInUrl, profile),
     urls,
   );
 
@@ -279,7 +294,7 @@ function buildAgentName(args: BuildCampaignDescriptionArgs): string {
     args.contactLastName ?? profile.contactLastName,
   ].map(clean).filter(Boolean).join(" ");
 
-  return fullName || "the licensed insurance agent";
+  return fullName || clean(args.businessName ?? profile.businessName) || "the agent";
 }
 
 function shouldRegenerateDescription(profile: any, optInUrl: string): boolean {
@@ -313,12 +328,13 @@ export function buildCampaignDescription(args: BuildCampaignDescriptionArgs): st
   // Campaign DESCRIPTION text only. This does not change the LOW_VOLUME campaign use case.
   const businessName = clean(args.businessName ?? profile.businessName) || "the insurance agency";
   const agentName = buildAgentName(args);
+  const senderName = buildLeadGenerationSenderName({ agentName, businessName });
   const coverageType = humanizeCampaignType(args.campaignType ?? profile.campaignType);
   const fallbackOptInUrl = optInUrl || "the CoveCRM-hosted opt-in page";
 
   const prefix =
     `Consumers see an advertisement for ${coverageType} coverage from ${businessName} and click through to the opt-in page. ` +
-    `Consumers submit a request for information and provide optional consent to receive SMS communications from ${agentName} and ${businessName}. ` +
+    `Consumers submit a request for information and provide optional consent to receive SMS communications from ${senderName}. ` +
     `Messages are sent only to consumers who submitted the form and requested information about ${coverageType} coverage. ` +
     "Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to consumer inquiries.";
   const suffix =

@@ -69,32 +69,6 @@ function shouldSendFailureEmail(previousFailure: any, nextFailure: any): boolean
   return Date.now() - lastEmailSentAt.getTime() > 24 * 60 * 60 * 1000;
 }
 
-function buildCampaignDescription(opts: {
-  businessName: string;
-  useCase: string;
-  messageFlow: string;
-}): string {
-  const businessName = (opts.businessName || "").trim() || "this business";
-  const useCase = (opts.useCase || "").trim() || "LOW_VOLUME";
-
-  let desc = `Life insurance lead follow-up and appointment reminder SMS campaign for ${businessName}. Use case: ${useCase}. `;
-
-  const flowSnippet = (opts.messageFlow || "").replace(/\s+/g, " ").trim();
-  if (flowSnippet) {
-    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 300)}`;
-  } else {
-    desc +=
-      "Leads opt in via TCPA-compliant web forms and receive updates about their life insurance options and booked appointments.";
-  }
-
-  if (desc.length > 1024) desc = desc.slice(0, 1024);
-  if (desc.length < 40) {
-    desc += " This campaign sends compliant follow-up and reminder messages to warm leads.";
-  }
-
-  return desc;
-}
-
 function getSamplesFromProfile(a2p: any): string[] {
   if (Array.isArray(a2p.lastSubmittedSampleMessages) && a2p.lastSubmittedSampleMessages.length > 0) {
     return a2p.lastSubmittedSampleMessages

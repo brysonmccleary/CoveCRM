@@ -9,6 +9,10 @@ import User from "@/models/User";
 import { getFunnelTemplate, FunnelStep } from "@/lib/facebook/funnels/funnelTemplates";
 import { US_STATES, isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
+import {
+  buildLeadGenerationConsentText,
+  buildLeadGenerationSenderName,
+} from "@/lib/a2p/flowSelection";
 
 // ── Validation helpers ─────────────────────────────────────────────────────────
 
@@ -36,6 +40,7 @@ type ComplianceProfile = {
 interface FunnelData {
   leadType: string;
   audienceSegment?: string;
+  campaignType?: string;
   headline: string;
   subheadline: string;
   benefitBullets: string[];
@@ -73,8 +78,15 @@ function getLeadTypeLabel(leadType: string, audienceSegment?: string): string {
   return labels[compositeKey] || labels[leadType] || "Insurance";
 }
 
-function buildConsentText(leadTypeLabel: string): string {
-  return `You may choose whether to receive SMS messages about your ${leadTypeLabel} request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`;
+function includesIdentity(text: string, value?: string): boolean {
+  const needle = String(value || "").trim().toLowerCase();
+  return !needle || text.toLowerCase().includes(needle);
+}
+
+function shouldUseStoredConsentText(text: string, agentName?: string, businessName?: string): boolean {
+  const cleanText = text.trim();
+  if (!cleanText) return false;
+  return includesIdentity(cleanText, agentName) && includesIdentity(cleanText, businessName);
 }
 
 const DISCLAIMER_TEXT =
@@ -103,11 +115,123 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   const [done, setDone] = useState(false);
   const [smsConsentGiven, setSmsConsentGiven] = useState(false);
 
+  const requiresOTP = funnelData?.campaignType === "hosted_funnel_otp";
+  const [otpPhase, setOtpPhase] = useState<"phone" | "code" | "verified">(requiresOTP ? "phone" : "verified");
+  const [otpPhone, setOtpPhone] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSessionId, setOtpSessionId] = useState("");
+  const [otpVerifiedToken, setOtpVerifiedToken] = useState("");
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpError, setOtpError] = useState("");
+  const [otpExpiry, setOtpExpiry] = useState<Date | null>(null);
+
   if (notFound || !funnelData) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#0f172a", color: "#fff", fontFamily: "system-ui, sans-serif" }}>
         <p>This page is no longer available.</p>
       </div>
+    );
+  }
+
+  const sendOTP = async () => {
+    setOtpLoading(true);
+    setOtpError("");
+    try {
+      const r = await fetch("/api/funnel/send-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignId, phone: otpPhone }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setOtpError(data.error || "Failed to send code."); return; }
+      setOtpSessionId(data.sessionId);
+      setOtpExpiry(new Date(data.expiresAt));
+      setOtpPhase("code");
+    } catch {
+      setOtpError("Network error. Please try again.");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const verifyOTP = async () => {
+    setOtpLoading(true);
+    setOtpError("");
+    try {
+      const r = await fetch("/api/funnel/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: otpSessionId, campaignId, phone: otpPhone, code: otpCode }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setOtpError(data.error || "Incorrect code."); return; }
+      setOtpVerifiedToken(data.verifiedToken);
+      setOtpPhase("verified");
+    } catch {
+      setOtpError("Network error. Please try again.");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  if (requiresOTP && otpPhase !== "verified") {
+    const otpTheme = template.theme;
+    return (
+      <main style={{ minHeight: "100vh", background: otpTheme.bg, fontFamily: "'Inter', system-ui, -apple-system, sans-serif", color: otpTheme.text, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}>
+        <div style={{ maxWidth: 420, width: "100%", background: otpTheme.panel, border: "1px solid rgba(15,23,42,0.1)", borderRadius: 12, padding: "32px 28px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.06), 0 20px 50px -8px rgba(15,23,42,0.12)" }}>
+          {otpPhase === "phone" ? (
+            <>
+              <h1 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 8px", color: otpTheme.text }}>Verify your phone number</h1>
+              <p style={{ fontSize: 14, color: otpTheme.muted, margin: "0 0 20px" }}>We'll send a 6-digit code to confirm your number before submitting.</p>
+              <input
+                type="tel"
+                placeholder="(555) 000-0000"
+                value={otpPhone}
+                onChange={(e) => setOtpPhone(formatPhoneDisplay(e.target.value))}
+                style={{ width: "100%", padding: "13px 14px", borderRadius: 8, fontSize: 15, border: "1px solid #cbd5e1", background: "#ffffff", color: "#0f172a", outline: "none", boxSizing: "border-box", fontFamily: "inherit", appearance: "none", WebkitAppearance: "none" }}
+              />
+              {otpError && <p style={{ color: "#dc2626", fontSize: 13, marginTop: 10 }}>{otpError}</p>}
+              <button
+                onClick={sendOTP}
+                disabled={otpLoading || otpPhone.replace(/\D/g, "").length < 10}
+                style={{ width: "100%", marginTop: 16, padding: "15px 16px", borderRadius: 8, border: "none", background: otpTheme.button, color: otpTheme.buttonText, fontSize: 16, fontWeight: 800, cursor: "pointer", opacity: otpLoading ? 0.7 : 1 }}
+              >
+                {otpLoading ? "Sending…" : "Send Code"}
+              </button>
+            </>
+          ) : (
+            <>
+              <h1 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 8px", color: otpTheme.text }}>Enter your code</h1>
+              <p style={{ fontSize: 14, color: otpTheme.muted, margin: "0 0 20px" }}>
+                We sent a 6-digit code to {otpPhone}.{otpExpiry ? ` Expires at ${otpExpiry.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : ""}
+              </p>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="123456"
+                maxLength={6}
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                style={{ width: "100%", padding: "13px 14px", borderRadius: 8, fontSize: 22, letterSpacing: "0.2em", textAlign: "center", border: "1px solid #cbd5e1", background: "#ffffff", color: "#0f172a", outline: "none", boxSizing: "border-box", fontFamily: "inherit", appearance: "none", WebkitAppearance: "none" }}
+              />
+              {otpError && <p style={{ color: "#dc2626", fontSize: 13, marginTop: 10 }}>{otpError}</p>}
+              <button
+                onClick={verifyOTP}
+                disabled={otpLoading || otpCode.length < 6}
+                style={{ width: "100%", marginTop: 16, padding: "15px 16px", borderRadius: 8, border: "none", background: otpTheme.button, color: otpTheme.buttonText, fontSize: 16, fontWeight: 800, cursor: "pointer", opacity: otpLoading ? 0.7 : 1 }}
+              >
+                {otpLoading ? "Verifying…" : "Verify Code"}
+              </button>
+              <button
+                onClick={() => { setOtpPhase("phone"); setOtpCode(""); setOtpError(""); }}
+                style={{ width: "100%", marginTop: 10, padding: "10px 16px", borderRadius: 8, border: "none", background: "transparent", color: otpTheme.muted, fontSize: 14, cursor: "pointer" }}
+              >
+                Use a different number
+              </button>
+            </>
+          )}
+        </div>
+      </main>
     );
   }
 
@@ -209,6 +333,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
           answers: finalAnswers,
           stateRestrictionWarning: false,
           stateOutsidePrimaryLicensedArea: false,
+          ...(otpVerifiedToken ? { verifiedToken: otpVerifiedToken } : {}),
         }),
       });
       const data = await r.json();
@@ -233,15 +358,20 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   // ── Step renderer ───────────────────────────────────────────────────────────
 
   const agent = funnelData.publicAgentProfile || {};
-  const consentSenderName =
-    agent.displayName?.trim() || agent.businessName?.trim() || "the sender";
+  const agentName = agent.displayName?.trim() || "";
+  const businessName = agent.businessName?.trim() || "";
+  const consentSenderName = buildLeadGenerationSenderName({ agentName, businessName });
   const leadTypeLabel = getLeadTypeLabel(funnelData.leadType, funnelData.audienceSegment);
-  const dynamicConsentText = buildConsentText(leadTypeLabel);
-  const smsConsentLabel =
-    `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`;
+  const dynamicConsentText = buildLeadGenerationConsentText({
+    agentName,
+    businessName,
+    campaignType: funnelData.leadType,
+  });
+  const smsConsentLabel = `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to my inquiry. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`;
 
+  const storedConsentText = funnelData.complianceProfile?.consentText?.trim() || "";
   const consentText =
-    funnelData.complianceProfile?.consentText?.trim() || dynamicConsentText;
+    shouldUseStoredConsentText(storedConsentText, agentName, businessName) ? storedConsentText : dynamicConsentText;
 
   const renderStep = (step: FunnelStep) => {
     // ── Consent step: show full TCPA text + single submit button ────────────
@@ -488,8 +618,10 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               <p style={{ margin: 0, fontSize: 11, color: theme.accent, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
                 {template.eyebrow}
               </p>
-              {(agent.businessName || agent.displayName) && (
-                <p style={{ margin: "2px 0 0", fontSize: 13, color: theme.muted }}>{agent.businessName || agent.displayName}</p>
+              {(businessName || agentName) && (
+                <p style={{ margin: "2px 0 0", fontSize: 13, color: theme.muted }}>
+                  {[agentName, businessName].filter(Boolean).join(" • ")}
+                </p>
               )}
             </div>
           </div>
@@ -750,7 +882,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
   try {
     await mongooseConnect();
     const campaign = await (FBLeadCampaign as any).findById(id)
-      .select("userId leadType audienceSegment notes webhookKey funnelStatus landingPageConfig publicAgentProfile complianceProfile licensedStates borderStateBehavior")
+      .select("userId leadType audienceSegment campaignType notes webhookKey funnelStatus landingPageConfig publicAgentProfile complianceProfile licensedStates borderStateBehavior")
       .lean() as any;
 
     if (!campaign || campaign.funnelStatus === "paused") {
@@ -787,6 +919,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
     const funnelData: FunnelData = {
       leadType: String(campaign.leadType || "mortgage_protection"),
       audienceSegment: String(campaign.audienceSegment || "standard"),
+      campaignType: String(campaign.campaignType || "hosted_funnel"),
       headline: String(safeConfig?.headline || safeConfig?.adHeadline || template.defaultHeadline),
       subheadline: String(safeConfig?.subheadline || template.defaultSubheadline),
       benefitBullets: Array.isArray(safeConfig?.benefitBullets) ? safeConfig.benefitBullets.map(String).slice(0, 4) : [],

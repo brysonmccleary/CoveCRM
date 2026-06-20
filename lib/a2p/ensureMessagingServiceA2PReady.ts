@@ -3,6 +3,10 @@ import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
+import {
+  buildLeadGenerationSampleMessages,
+  personalizeA2PSampleMessages,
+} from "@/lib/a2p/flowSelection";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -154,10 +158,7 @@ function getMessageSamples(profile: any) {
   const samples = raw.map((sample: any) => String(sample || "").trim()).filter((sample: string) => sample.length >= 20);
   if (samples.length >= 2) return samples.slice(0, 5);
 
-  return [
-    "Hi, this is your licensed insurance agent following up on your coverage request. Reply STOP to opt out.",
-    "Thanks for requesting insurance information. I can help compare options and answer questions. Reply STOP to opt out.",
-  ];
+  return personalizeA2PSampleMessages(buildLeadGenerationSampleMessages(), profile).slice(0, 2);
 }
 
 function hasEmbeddedLinks(flow: string, samples: string[]) {

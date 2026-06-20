@@ -7,7 +7,11 @@ import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
 import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
-import { personalizeA2PSampleMessages } from "@/lib/a2p/flowSelection";
+import {
+  buildLeadGenerationOptInDetails,
+  personalizeA2PSampleMessages,
+} from "@/lib/a2p/flowSelection";
+import { buildCampaignDescription } from "@/lib/a2p/campaignPayload";
 
 /**
  * This endpoint orchestrates the full A2P flow:
@@ -351,6 +355,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     contactLastName,
     businessName,
   });
+  const normalizedFlow = body.a2pFlow === "servicing" ? "servicing" : "lead_generation";
+  const normalizedCampaignType = body.campaignType || "final_expense";
+  const canonicalOptInDetails =
+    normalizedFlow === "lead_generation"
+      ? buildLeadGenerationOptInDetails(body.landingOptInUrl || "{{LANDING_OPTIN_URL}}", {
+        contactFirstName,
+        contactLastName,
+        businessName,
+        campaignType: normalizedCampaignType,
+      })
+      : optInDetails!;
+  const canonicalCampaignDescription =
+    normalizedFlow === "lead_generation"
+      ? buildCampaignDescription({
+        businessName,
+        contactFirstName,
+        contactLastName,
+        landingOptInUrl: body.landingOptInUrl,
+        campaignType: normalizedCampaignType,
+        a2pFlow: normalizedFlow,
+      })
+      : body.campaignDescription;
 
   const startPayload: Record<string, any> = {
     businessName: businessName!.trim(),
@@ -377,13 +403,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     sampleMessage2: finalSampleArray[1],
     sampleMessage3: finalSampleArray[2],
 
-    optInDetails: optInDetails!,
+    optInDetails: canonicalOptInDetails,
     volume: volDigits,
     resubmit,
     useHostedCompliancePages,
-    a2pFlow: body.a2pFlow || "lead_generation",
-    campaignType: body.campaignType || "final_expense",
-    campaignDescription: body.campaignDescription,
+    a2pFlow: normalizedFlow,
+    campaignType: normalizedCampaignType,
+    campaignDescription: canonicalCampaignDescription,
 
     ...(body.optInScreenshotUrl ? { optInScreenshotUrl: body.optInScreenshotUrl } : {}),
     ...(body.landingOptInUrl ? { landingOptInUrl: body.landingOptInUrl } : {}),
@@ -401,7 +427,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           $set: {
             lastSubmittedUseCase: normalizedUseCase,
             lastSubmittedSampleMessages: finalSampleArray,
-            lastSubmittedOptInDetails: optInDetails!,
+            lastSubmittedOptInDetails: canonicalOptInDetails,
             useCase: normalizedUseCase,
             usecaseCode: normalizedUseCase,
             sampleMessages: finalSampleArray.join("\n\n"),
@@ -409,11 +435,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             sampleMessage1: finalSampleArray[0],
             sampleMessage2: finalSampleArray[1],
             sampleMessage3: finalSampleArray[2],
-            optInDetails: optInDetails!,
+            optInDetails: canonicalOptInDetails,
             volume: volDigits,
-            a2pFlow: body.a2pFlow || "lead_generation",
-            campaignType: body.campaignType || "final_expense",
-            ...(body.campaignDescription ? { campaignDescription: body.campaignDescription } : {}),
+            a2pFlow: normalizedFlow,
+            campaignType: normalizedCampaignType,
+            ...(canonicalCampaignDescription ? { campaignDescription: canonicalCampaignDescription } : {}),
 
             applicationStatus: "pending",
             registrationStatus: "profile_submitted",
@@ -537,7 +563,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const submitPayload = {
       useCase: normalizedUseCase,
-      messageFlow: optInDetails!,
+      messageFlow: canonicalOptInDetails,
       sampleMessages: finalSampleArray,
     };
 

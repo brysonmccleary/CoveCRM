@@ -2,6 +2,10 @@ import React, { useMemo, useState } from "react";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
+import {
+  buildLeadGenerationConsentText,
+  buildLeadGenerationSenderName,
+} from "@/lib/a2p/flowSelection";
 
 type Props = {
   businessName: string;
@@ -11,11 +15,14 @@ type Props = {
   userId: string;
 };
 
-const CONSENT_TEXT =
-  "By checking this box, you agree to receive SMS messages about life insurance, final expense coverage, mortgage protection, related insurance options, appointment coordination, application follow-up, customer support, and responses to your requests. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.";
-
 export default function LeadOptInPage(props: Props) {
   const { businessName, agentName, email, phone, userId } = props;
+  const senderName = buildLeadGenerationSenderName({ agentName, businessName });
+  const consentText = buildLeadGenerationConsentText({
+    agentName,
+    businessName,
+    campaignType: "final_expense",
+  });
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [mobile, setMobile] = useState("");
@@ -111,7 +118,7 @@ export default function LeadOptInPage(props: Props) {
               <label className="flex gap-3 items-start">
                 <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1 h-4 w-4" />
                 <span className="text-sm text-slate-200 leading-5">
-                  {CONSENT_TEXT}
+                  {consentText}
                 </span>
               </label>
               <div className="text-xs text-slate-400 mt-3">
@@ -130,7 +137,7 @@ export default function LeadOptInPage(props: Props) {
         ) : (
           <div className="rounded-xl border border-green-800 bg-green-900/20 p-6">
             <h2 className="text-xl font-bold text-green-200">Submitted</h2>
-            <p className="text-slate-200 mt-2">Thanks. Your SMS opt-in has been recorded for this sender.</p>
+            <p className="text-slate-200 mt-2">Thanks. Your SMS opt-in has been recorded for {senderName}.</p>
             <div className="mt-4 text-sm text-slate-200">
               You can opt out anytime by replying <span className="font-semibold">STOP</span>. For help, reply <span className="font-semibold">HELP</span>.
             </div>
@@ -148,10 +155,10 @@ export async function getServerSideProps(ctx: any) {
   const user = await User.findById(userId).lean<any>();
   const a2p = await A2PProfile.findOne({ userId }).lean<any>();
 
-  const businessName = String(a2p?.businessName || user?.name || "Business");
+  const businessName = String(a2p?.businessName || user?.name || "the insurance agency");
   const agentName =
     [a2p?.contactFirstName, a2p?.contactLastName].filter(Boolean).join(" ").trim() ||
-    String(user?.name || "Authorized Representative");
+    "";
 
   const email = String(a2p?.email || user?.email || "");
   const phone = String(a2p?.phone || "");

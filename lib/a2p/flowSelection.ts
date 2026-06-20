@@ -26,8 +26,47 @@ type ComplianceUrlArgs = {
   useHostedCompliancePages?: boolean;
 };
 
+type LeadGenerationTextArgs = {
+  agentName?: any;
+  businessName?: any;
+  contactFirstName?: any;
+  contactLastName?: any;
+  campaignType?: any;
+};
+
 function clean(value: any): string {
   return String(value || "").trim();
+}
+
+function humanizeCoverageType(value?: any): string {
+  const raw = clean(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (raw.includes("mortgage")) return "mortgage protection";
+  if (raw.includes("iul")) return "indexed universal life insurance";
+  if (raw.includes("veteran")) return "veteran life insurance";
+  if (raw.includes("truck")) return "life insurance for truck drivers";
+  return "life insurance or final expense";
+}
+
+export function resolveLeadGenerationAgentName(args: LeadGenerationTextArgs = {}): string {
+  const explicit = clean(args.agentName);
+  if (explicit) return explicit;
+  return [args.contactFirstName, args.contactLastName]
+    .map((part) => clean(part))
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function buildLeadGenerationSenderName(args: LeadGenerationTextArgs = {}): string {
+  const agentName = resolveLeadGenerationAgentName(args);
+  const businessName = clean(args.businessName);
+  if (agentName && businessName) return `${agentName} and ${businessName}`;
+  return agentName || businessName || "the insurance agency";
+}
+
+export function buildLeadGenerationConsentText(args: LeadGenerationTextArgs = {}): string {
+  const senderName = buildLeadGenerationSenderName(args);
+  const coverageType = humanizeCoverageType(args.campaignType);
+  return `By checking this box, you agree to receive SMS messages from ${senderName} about your ${coverageType} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to your request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.`;
 }
 
 function normalizeBaseUrl(baseUrl?: string): string {
@@ -107,17 +146,19 @@ export function buildLeadGenerationMessageFlow(urls: {
   optInUrl: string;
   tosUrl: string;
   privacyUrl: string;
-}): string {
-  return buildLeadGenerationOptInDetails(urls.optInUrl);
+}, args: LeadGenerationTextArgs = {}): string {
+  return buildLeadGenerationOptInDetails(urls.optInUrl, args);
 }
 
-export function buildLeadGenerationOptInDetails(optInUrl = "{{LANDING_OPTIN_URL}}"): string {
+export function buildLeadGenerationOptInDetails(optInUrl = "{{LANDING_OPTIN_URL}}", args: LeadGenerationTextArgs = {}): string {
   const url = clean(optInUrl) || "{{LANDING_OPTIN_URL}}";
-  return `This campaign sends SMS messages from the sender to consumers who request information about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to consumer requests. End users opt in through the sender's public CoveCRM-hosted Final Expense landing page at ${url} with a separate unchecked SMS consent checkbox. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.
+  const senderName = buildLeadGenerationSenderName(args);
+  const coverageType = humanizeCoverageType(args.campaignType);
+  return `This campaign sends SMS messages from ${senderName} to consumers who request information about ${coverageType} coverage. Consumers see an advertisement, click through to the CoveCRM-hosted opt-in page at ${url}, submit a request for information, and provide optional consent through a separate unchecked SMS consent checkbox. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to consumer inquiries. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.
 
 Before submission, users see a disclosure similar to:
 
-"By checking this box, you agree to receive SMS messages from the sender about final expense coverage, life insurance, and related insurance options. Messages may include follow-up communication, appointment coordination, application follow-up, customer support, and responses to your request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase."
+"${buildLeadGenerationConsentText(args)}"
 
 The opt-in page displays SMS Terms and SMS Privacy links on the same page as the form submission. Consent records may be retained as needed for compliance and audit purposes.`;
 }
@@ -153,7 +194,7 @@ export function resolveA2PSampleAgentName(args: {
     .map((part) => clean(part))
     .filter(Boolean)
     .join(" ");
-  return fullName || clean(args.businessName) || "a licensed insurance agent";
+  return fullName || clean(args.businessName) || "the insurance agency";
 }
 
 export function personalizeA2PSampleMessage(sample: any, args: {

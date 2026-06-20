@@ -1,12 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import A2PProfile from "@/models/A2PProfile";
 import SmsConsentEvidence from "@/models/SmsConsentEvidence";
+import { buildLeadGenerationConsentText } from "@/lib/a2p/flowSelection";
 
 const CONSENT_VERSION = "lead_generation_v1";
-
-const CONSENT_TEXT =
-  "By checking this box, you agree to receive SMS messages about life insurance, final expense coverage, mortgage protection, related insurance options, appointment coordination, application follow-up, customer support, and responses to your requests. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.";
 
 function getIp(req: NextApiRequest): string {
   const xfwd = req.headers["x-forwarded-for"];
@@ -44,6 +43,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await mongooseConnect();
   const user = await User.findById(userId).lean<any>();
   if (!user) return res.status(404).json({ ok: false, error: "Sender not found" });
+  const a2p = await A2PProfile.findOne({ userId }).lean<any>();
+  const consentText = buildLeadGenerationConsentText({
+    contactFirstName: a2p?.contactFirstName,
+    contactLastName: a2p?.contactLastName,
+    businessName: a2p?.businessName || user?.name,
+    campaignType: "final_expense",
+  });
 
   const baseUrl = getBaseUrl(req);
   const pageUrl = `${baseUrl}/sms/lead-optin/${encodeURIComponent(userId)}`;
@@ -59,7 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     phone,
     email,
     consentGiven,
-    consentText: CONSENT_TEXT,
+    consentText,
     consentTextVersion: CONSENT_VERSION,
     pageUrl,
     privacyUrl,

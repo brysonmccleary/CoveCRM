@@ -355,6 +355,13 @@ export default function A2PVerificationForm() {
 
   // ---------- Helpers ----------
   const allMessages = [msg1, msg2, msg3].filter(Boolean).join("\n\n");
+  const buildCurrentLeadGenerationOptInDetails = (optInUrl = landingOptInUrl) =>
+    buildLeadGenerationOptInDetails(optInUrl || "{{LANDING_OPTIN_URL}}", {
+      contactFirstName,
+      contactLastName,
+      businessName,
+      campaignType,
+    });
 
   const isUsState = (value: string) =>
     US_STATE_CODES.includes(value.trim().toUpperCase());
@@ -594,6 +601,8 @@ export default function A2PVerificationForm() {
 
     setSubmitting(true);
     try {
+      const canonicalOptInDetails =
+        a2pFlow === "lead_generation" ? buildCurrentLeadGenerationOptInDetails() : optInDetails;
       const payload = {
         businessName,
         ein,
@@ -615,7 +624,7 @@ export default function A2PVerificationForm() {
         sampleMessage1: msg1,
         sampleMessage2: msg2,
         sampleMessage3: msg3,
-        optInDetails,
+        optInDetails: canonicalOptInDetails,
         volume,
         optInScreenshotUrl: optInScreenshotUrl || undefined,
         landingOptInUrl: landingOptInUrl || undefined,
@@ -1058,7 +1067,7 @@ export default function A2PVerificationForm() {
                     if (a2pFlow === "lead_generation") {
                       setOptInDetails((v) =>
                         !v.trim() || v.includes("{{LANDING_OPTIN_URL}}")
-                          ? buildLeadGenerationOptInDetails(selectedHostedLinks.optInUrl)
+                          ? buildCurrentLeadGenerationOptInDetails(selectedHostedLinks.optInUrl)
                           : v,
                       );
                     }
@@ -1077,7 +1086,7 @@ export default function A2PVerificationForm() {
                     setLandingTosUrl(selectedHostedLinks.tosUrl);
                     setLandingPrivacyUrl(selectedHostedLinks.privacyUrl);
                     if (a2pFlow === "lead_generation") {
-                      setOptInDetails(buildLeadGenerationOptInDetails(selectedHostedLinks.optInUrl));
+                      setOptInDetails(buildCurrentLeadGenerationOptInDetails(selectedHostedLinks.optInUrl));
                     }
                     toast.success("Replaced URL fields");
                   }}

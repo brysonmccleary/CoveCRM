@@ -6,6 +6,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import A2PProfile from "@/models/A2PProfile";
 import User from "@/models/User";
+import { buildLeadGenerationConsentText } from "@/lib/a2p/flowSelection";
 
 type ComplianceLinks = { optInUrl: string; tosUrl: string; privacyUrl: string };
 
@@ -77,13 +78,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         String(a2pProfile?.contactLastName || "").trim(),
       ]
         .filter(Boolean)
-        .join(" ") || "a licensed insurance agent";
+        .join(" ");
     const businessName = String(a2pProfile?.businessName || "").trim();
     const agentPhone = String(a2pProfile?.phone || "").trim();
 
-    const consentBiz = businessName ? ` and ${businessName}` : "";
-    const consentText =
-      `By clicking Continue, you agree to receive SMS messages from ${agentName}${consentBiz} about life insurance, final expense coverage, and related insurance options. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.`;
+    const consentText = buildLeadGenerationConsentText({
+      agentName,
+      businessName,
+      campaignType: "final_expense",
+    });
 
     const stub = await (FBLeadCampaign as any).findOneAndUpdate(
       { userEmail: session.user.email, funnelVersion: "a2p-compliance-stub" },

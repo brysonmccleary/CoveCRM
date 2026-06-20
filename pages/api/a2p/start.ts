@@ -1540,7 +1540,12 @@ export default async function handler(
     }
 
     const generatedMessageFlow = flowSelection.flow === "lead_generation"
-      ? buildLeadGenerationOptInDetails(compliance.optInUrl)
+      ? buildLeadGenerationOptInDetails(compliance.optInUrl, {
+        contactFirstName,
+        contactLastName,
+        businessName,
+        campaignType: flowSelection.campaignType,
+      })
       : buildA2PMessageFlowForFlow(flowSelection.flow, {
       optInUrl: compliance.optInUrl,
       tosUrl: compliance.tosUrl,

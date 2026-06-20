@@ -2,6 +2,7 @@ import React from "react";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
+import { buildLeadGenerationSenderName } from "@/lib/a2p/flowSelection";
 
 type Props = {
   businessName: string;
@@ -13,6 +14,7 @@ type Props = {
 
 export default function LeadOptInPrivacy(props: Props) {
   const { businessName, agentName, email, phone, userId } = props;
+  const senderName = buildLeadGenerationSenderName({ agentName, businessName });
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 px-4 py-10">
@@ -24,7 +26,7 @@ export default function LeadOptInPrivacy(props: Props) {
         </p>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 mb-6 text-sm text-slate-200">
-          <div className="mb-1"><span className="font-semibold">Sender:</span> {businessName}</div>
+          <div className="mb-1"><span className="font-semibold">Messages From:</span> {senderName}</div>
           <div><span className="font-semibold">Contact:</span> {agentName}{email ? ` • ${email}` : ""}{phone ? ` • ${phone}` : ""}</div>
         </div>
 
@@ -35,8 +37,9 @@ export default function LeadOptInPrivacy(props: Props) {
 
         <h2 className="text-xl font-semibold mt-6 mb-2">2. How It Is Used</h2>
         <p className="text-slate-200 mb-4">
-          Your information may be used to respond to your request, coordinate appointments, follow up on applications,
-          provide customer support, and communicate about life insurance, final expense, mortgage protection, or related insurance options.
+          Your information may be used by {senderName} to respond to your request, coordinate appointments,
+          follow up on applications, provide customer support, and communicate about life insurance, final expense,
+          mortgage protection, or related insurance options.
         </p>
 
         <h2 className="text-xl font-semibold mt-6 mb-2">3. Mobile Data Sharing</h2>
@@ -72,10 +75,10 @@ export async function getServerSideProps(ctx: any) {
   const user = await User.findById(userId).lean<any>();
   const a2p = await A2PProfile.findOne({ userId }).lean<any>();
 
-  const businessName = String(a2p?.businessName || user?.name || "Business");
+  const businessName = String(a2p?.businessName || user?.name || "the insurance agency");
   const agentName =
     [a2p?.contactFirstName, a2p?.contactLastName].filter(Boolean).join(" ").trim() ||
-    String(user?.name || "Authorized Representative");
+    "";
   const email = String(a2p?.email || user?.email || "");
   const phone = String(a2p?.phone || "");
 
