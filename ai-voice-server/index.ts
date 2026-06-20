@@ -4002,7 +4002,7 @@ function buildGreetingFirstTurnDecision(
       const empathy = empathyOpts[Math.floor(Math.random() * empathyOpts.length)];
       lineToSay = `${empathy} ${cleanedStep}`;
     } else {
-      lineToSay = `${getGreetingAckPrefix(raw)} ${cleanedStep}`.trim();
+      lineToSay = `${getGreetingAckPrefix(raw).replace(/[.!,]\s*$/, "")} — ${cleanedStep}`.trim();
     }
     return {
       handled: true,
@@ -4068,7 +4068,7 @@ function buildGreetingFirstTurnDecision(
 
   if (hearingProblem) {
     routeKind = "greeting_hearing_recover";
-    lineToSay = `Sorry about that — ${step1Line}`;
+    lineToSay = `Sorry about that — let me try again. ${step1Line}`;
   } else if (intent.kind === "not_interested") {
     routeKind = "greeting_not_interested_soft_rebuttal";
     lineToSay = getRebuttalLine(ctx, "not_interested");
@@ -4080,11 +4080,11 @@ function buildGreetingFirstTurnDecision(
       t.includes("didn't request") ||
       t.includes("i did not request")
     ) {
-      lineToSay = `It looks like the request came through recently, possibly from an online form. ${step1Line}`;
+      lineToSay = `It looks like the request came through recently, possibly from an online form — ${step1Line}`;
     } else if (t.includes("spam") || t.includes("scam")) {
-      lineToSay = `No, this is just a quick follow-up about the request that came through for ${agentFirst}. ${step1Line}`;
+      lineToSay = `No, this is just a quick follow-up about the request that came through for ${agentFirst} — ${step1Line}`;
     } else {
-      lineToSay = `${aiName} is the virtual assistant helping ${agentFirst} with the request that came through. ${step1Line}`;
+      lineToSay = `${aiName} is the virtual assistant helping ${agentFirst} with the request that came through — ${step1Line}`;
     }
   } else if (intent.kind === "greeting_ack") {
     routeKind = "greeting_ack";
@@ -4144,7 +4144,7 @@ function buildGreetingFirstTurnDecision(
       lineToSay = `${empathy} ${step1Line}`;
     } else {
       const cleanedStep1Line = step1Line.replace(/^got it\s*[—\-–]\s*/i, "").replace(/^got it\.\s*/i, "");
-      lineToSay = `${getGreetingAckPrefix(raw)} ${cleanedStep1Line}`.trim();
+      lineToSay = `${getGreetingAckPrefix(raw).replace(/[.!,]\s*$/, "")} — ${cleanedStep1Line}`.trim();
     }
   }
 
