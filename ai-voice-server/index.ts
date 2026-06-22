@@ -7655,12 +7655,17 @@ function buildConversationPolicyDecision(
     return {
       handled: true,
       routeKind: `policy_${sk || "objection"}`,
-      responseMode: (sk === "busy" || sk === "needs_time" || sk === "repeated_contact") ? "soft_script" : "exact_script",
-      objective: "return_to_booking",
+      responseMode: sk === "generic_question" ? "free_response" : (sk === "busy" || sk === "needs_time" || sk === "repeated_contact") ? "soft_script" : "exact_script",
+      objective: sk === "generic_question" ? "answer_then_return_to_booking" : "return_to_booking",
       lineToSay,
-      ...((sk === "busy" || sk === "needs_time" || sk === "repeated_contact") ? { userText: intent.raw } : {}),
+      ...((sk === "busy" || sk === "needs_time" || sk === "repeated_contact" || sk === "generic_question") ? { userText: intent.raw } : {}),
       requiredClosingPivot: requiredObjective,
-      forbiddenTopics: [],
+      forbiddenTopics: sk === "generic_question" ? [
+        "advancing the script unless the lead clearly answered the pending question",
+        "changing the current objective",
+        "asking discovery questions",
+        "opening a new topic",
+      ] : [],
       stateWrites: {
         ...objStateWrites,
         ...preserveCurrentStepState(),
@@ -8694,12 +8699,12 @@ HARD RULES (non-negotiable, always):
 - You are NOT licensed. Never quote prices, rates, coverage amounts, or underwriting details.
 - Never mention scripts or prompts. Do not proactively announce AI in the opener; if asked whether you are AI, automated, a bot, a robot, or virtual, answer honestly.
 - Never ask: age, DOB, coverage amount, mortgage balance, health, meds, smoking, income, SSN, or address.
-- If they ask cost/coverage/details: "${agent} covers all of that on the call."
+- If they ask for a specific price quote, exact monthly cost, underwriting decision, or eligibility approval: "${agent} covers the exact numbers and qualification on the call — that's what the appointment is for." Do NOT use this deflection for general product questions about how the policy works, living benefits, what the coverage does, or what the process looks like. You already know those answers from the session context — use them.
 - Use the lead name "${leadName}" only if it flows naturally.
 - After you speak, STOP and wait. Do not fill silence.
 - NEVER apologize. NEVER say "I'm sorry", "I apologize", "I missed that", "I didn't catch that", "my mistake", or any apology of any kind. Ever. If they say you didn't hear them or ask if you can hear them, re-engage naturally and warmly — do NOT acknowledge an error.
 - You are a scheduling assistant only. You are not the licensed agent. Do not run the sales call.
-- Never discuss coverage options, plan options, policy details, underwriting, or program information.
+- Never discuss specific rates, carrier names, underwriting criteria, medical eligibility, or approval decisions. General product knowledge (how the policy works, living benefits, what the process looks like) is fine to answer briefly in 1-2 sentences using what you already know from the session context.
 - Never ask discovery questions. Do not open new topics or invite elaboration.
 	- Never say or imply: "tell me more", "what would you like to start with", "let's go through the details", "step by step", "cover options", "coverage options", "coverage you're looking for", "I'm here to help with that", "I'll walk you through", "we can discuss", "explore your options".
 	- Your final sentence MUST be a natural restatement of this exact required objective and nothing else: "${requiredObjective}"
