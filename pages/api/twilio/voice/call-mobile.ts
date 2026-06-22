@@ -215,7 +215,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       url: voiceContinueUrl(conferenceName),
       statusCallback: voiceStatusUrl(email),
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      record: false,
+      record: true,
+      recordingStatusCallback: `${BASE}/api/voice/recording-webhook`,
+      recordingStatusCallbackMethod: "POST",
     });
 
     // Optional: store a Call row like web does (doesn't affect web flow)

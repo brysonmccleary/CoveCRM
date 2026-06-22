@@ -483,6 +483,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         beep: false,
         waitUrl,
         waitMethod: "POST",
+        record: "record-from-start",
+        recordingStatusCallback: `${baseUrl()}/api/voice/recording-webhook`,
+        recordingStatusCallbackMethod: "POST",
+        recordingStatusCallbackEvent: "completed",
       } as any,
       String(conferenceName),
     );
@@ -500,7 +504,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const dial = vr.dial({
       answerOnBridge: true,
       timeout: 25,
-    });
+      record: "record-from-answer-dual",
+      recordingStatusCallback: `${baseUrl()}/api/voice/recording-webhook`,
+      recordingStatusCallbackMethod: "POST",
+      recordingStatusCallbackEvent: ["completed"] as any,
+    } as any);
     dial.client(
       {
         statusCallback: actionUrl,

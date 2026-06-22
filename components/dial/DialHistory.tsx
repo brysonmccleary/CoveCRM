@@ -83,7 +83,21 @@ export default function DialHistory({
                 <div className="text-xs text-gray-500 mt-1">Sentiment: {ev.sentiment}</div>
               )}
               {ev.recordingUrl && (
-                <audio className="mt-2 w-full" controls src={ev.recordingUrl}></audio>
+                <div className="mt-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-400">
+                      {new Date(ev.date).toLocaleString()}
+                      {ev.durationSec != null ? ` • ${ev.durationSec}s` : ""}
+                    </span>
+                    <a
+                      href={`${ev.recordingUrl}${ev.recordingUrl.includes("?") ? "&" : "?"}download=1`}
+                      className="text-xs text-blue-500 hover:text-blue-400 underline"
+                    >
+                      Download
+                    </a>
+                  </div>
+                  <audio className="w-full" controls src={ev.recordingUrl}></audio>
+                </div>
               )}
             </div>
           );

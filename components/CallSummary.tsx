@@ -2,6 +2,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
+function isTwilioApiUrl(url?: string): boolean {
+  return !!url && String(url).includes("api.twilio.com");
+}
+
 type CallShape = {
   _id?: string;
   callSid?: string;
@@ -36,6 +40,16 @@ export default function CallSummary({
 }) {
   const [loading, setLoading] = useState(false);
   const [currentCall, setCurrentCall] = useState<CallShape | null>(call || null);
+
+  const audioSrc = useMemo(() => {
+    const c = currentCall;
+    if (!c?.recordingUrl && !c?._id && !c?.callSid) return "";
+    if (!c.recordingUrl) return "";
+    if (c._id) return `/api/recordings/proxy?callId=${encodeURIComponent(c._id)}`;
+    if (c.callSid) return `/api/recordings/proxy?callSid=${encodeURIComponent(c.callSid)}`;
+    // fallback: only use raw URL if it is not a Twilio API URL (already proxied or public)
+    return isTwilioApiUrl(c.recordingUrl) ? "" : c.recordingUrl;
+  }, [currentCall?._id, currentCall?.callSid, currentCall?.recordingUrl]);
 
   const aiAvailable = useMemo(() => {
     const c: any = currentCall || {};
@@ -88,10 +102,18 @@ export default function CallSummary({
   return (
     <div className="bg-[#0f172a] p-4 border rounded text-white">
       {/* Audio */}
-      {currentCall?.recordingUrl ? (
+      {audioSrc ? (
         <div className="mb-4">
-          <div className="text-sm text-gray-300 mb-1">Call Recording</div>
-          <audio controls preload="none" src={currentCall.recordingUrl} className="w-full" />
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-sm text-gray-300">Call Recording</div>
+            <a
+              href={`${audioSrc}&download=1`}
+              className="text-xs text-blue-300 hover:text-blue-200 underline"
+            >
+              Download
+            </a>
+          </div>
+          <audio controls preload="none" src={audioSrc} className="w-full" />
         </div>
       ) : null}
 
