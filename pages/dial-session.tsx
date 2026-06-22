@@ -281,6 +281,11 @@ export default function DialSession() {
   const [messages, setMessages] = useState<SmsThreadMessage[]>([]);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [latestAiOverview, setLatestAiOverview] = useState<DialAICallOverview["call"] | null>(null);
+  const [inboundOverlayLead, setInboundOverlayLead] = useState<Lead | null>(null);
+  const inboundOverlayLeadRef = useRef<Lead | null>(null);
+  const inboundCallSidRef = useRef<string | null>(null);
+  const inboundEndCallRef = useRef<any>(null);
+  const inboundEndHandlerRef = useRef<(() => void) | null>(null);
 
   // Numbers (display only; server resolves authoritative values)
   const [fromNumber, setFromNumber] = useState<string>("");
@@ -324,6 +329,9 @@ export default function DialSession() {
   // NEW: call outcome + logging guard
   const callOutcomeRef = useRef<{ status: string; source?: string } | null>(null);
   const callLoggedRef = useRef<boolean>(false);
+
+  const activeLead = inboundOverlayLead || lead;
+  const inboundOverlayActive = !!inboundOverlayLead;
 
   const tooEarly = () => !callStartAtRef.current || Date.now() - callStartAtRef.current < EARLY_STATUS_MS;
 
@@ -459,6 +467,7 @@ export default function DialSession() {
   const killAllTimers = () => { clearWatchdog(); clearAdvanceTimers(); clearStatusPoll(); stopConnectedTimer(); };
   const getLeadId = (leadLike?: Lead | null) => String((leadLike as any)?.id || (leadLike as any)?._id || "").trim();
   const currentLeadId = () => getLeadId(leadQueue[currentLeadIndex] ?? lead);
+  const activeLeadId = () => getLeadId(inboundOverlayLeadRef.current || (leadQueue[currentLeadIndex] ?? lead));
   const getAttemptCount = (leadId: string) => Number(leadAttemptCountsRef.current[leadId] || 0);
   const didCurrentCallConnect = () => {
     const statusLabel = String(callOutcomeRef.current?.status || "").toLowerCase();
@@ -485,7 +494,7 @@ export default function DialSession() {
   const logCallOutcome = async (opts?: { statusOverride?: string; reason?: string }) => {
     if (callLoggedRef.current) return;
 
-    const current = leadQueue[currentLeadIndex] ?? lead;
+    const current = inboundOverlayLeadRef.current || (leadQueue[currentLeadIndex] ?? lead);
     const isQuickDial = Boolean((current as any)?.quickDial);
     const leadId = (current as any)?.id;
     if (!leadId && !isQuickDial) return;
@@ -557,6 +566,81 @@ export default function DialSession() {
     } catch (e) {
       console.warn("Hangup request failed:", (e as any)?.message || e);
     }
+  };
+
+  const hangupInboundCall = async (why?: string) => {
+    const sid = inboundCallSidRef.current;
+    try {
+      inboundDirectCallRef.current?.disconnect?.();
+    } catch {}
+    try {
+      if (sid) {
+        await fetch("/api/twilio/calls/hangup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callSid: sid }),
+        });
+      }
+      if (why) console.log("Inbound hangup requested:", { sid, why });
+    } catch (e) {
+      console.warn("Inbound hangup request failed:", (e as any)?.message || e);
+    }
+  };
+
+  const unbindInboundEndListener = () => {
+    const call = inboundEndCallRef.current;
+    const handler = inboundEndHandlerRef.current;
+    if (call && handler) {
+      try { call.off?.("disconnect", handler); } catch {}
+      try { call.off?.("cancel", handler); } catch {}
+      try { call.removeListener?.("disconnect", handler); } catch {}
+      try { call.removeListener?.("cancel", handler); } catch {}
+    }
+    inboundEndCallRef.current = null;
+    inboundEndHandlerRef.current = null;
+  };
+
+  const bindInboundEndListener = (call: any) => {
+    if (!call) return;
+    if (inboundEndCallRef.current === call && inboundEndHandlerRef.current) return;
+
+    unbindInboundEndListener();
+
+    const onInboundEnd = () => {
+      if (inboundDirectCallRef.current !== call) return;
+      stopConnectedTimer();
+      setCallActive(false);
+      setStatus("Inbound call ended");
+    };
+
+    inboundEndCallRef.current = call;
+    inboundEndHandlerRef.current = onInboundEnd;
+    try { call.on?.("disconnect", onInboundEnd); } catch {}
+    try { call.on?.("cancel", onInboundEnd); } catch {}
+  };
+
+  const restorePausedDialSession = () => {
+    unbindInboundEndListener();
+    inboundOverlayLeadRef.current = null;
+    inboundCallSidRef.current = null;
+    inboundDirectCallRef.current = null;
+    inboundDirectSetupRef.current = false;
+    setInboundOverlayLead(null);
+    setCallActive(false);
+    setCallEnded(false);
+    setMuted(false);
+    stopConnectedTimer();
+    callStartAtRef.current = 0;
+    hasConnectedRef.current = false;
+    callOutcomeRef.current = null;
+    callLoggedRef.current = false;
+    terminalHandledRef.current = false;
+    placingCallRef.current = false;
+    activeDialLeadIdRef.current = null;
+    setIsPaused(true);
+    isPausedRef.current = true;
+    setReadyToCall(false);
+    setStatus("Paused");
   };
 
   const leaveIfJoined = async (why?: string) => {
@@ -908,9 +992,9 @@ export default function DialSession() {
   }, [currentLeadIndex, progressKey, leadQueue.length]);
 
   useEffect(() => {
-    currentLeadIdRef.current = getLeadId(lead);
+    currentLeadIdRef.current = activeLeadId();
     setAiOverviewExpanded(false);
-  }, [lead]);
+  }, [activeLead?.id, currentLeadIndex]);
 
   useEffect(() => {
     isPausedRef.current = isPaused;
@@ -923,7 +1007,7 @@ export default function DialSession() {
   // Clear + load history for each lead (per-lead only, newest-first)
   useEffect(() => {
     const loadHistory = async () => {
-      if (!lead?.id) { setHistory([]); setMessages([]); return; }
+      if (!activeLead?.id) { setHistory([]); setMessages([]); return; }
       setHistory([]);
       setMessages([]);
       try {
@@ -934,13 +1018,13 @@ export default function DialSession() {
             | { type: "note"; text: string; date: string }
             | { type: "status"; to?: string; date: string }
           >;
-        }>(`/api/leads/history?id=${encodeURIComponent(lead.id)}&limit=50&includeCalls=1`);
+        }>(`/api/leads/history?id=${encodeURIComponent(activeLead.id)}&limit=50&includeCalls=1`);
 
         const rows: HistoryRow[] = [];
         const smsMessages: SmsThreadMessage[] = [];
 
         // 🔒 PINNED SAVED NOTES — only if it looks like a real human note (not fallback junk)
-        const savedNotes = (lead as any)?.Notes;
+        const savedNotes = (activeLead as any)?.Notes;
         if (typeof savedNotes === "string" && savedNotes.trim() && !isJunkHistoryText(savedNotes.trim())) {
           rows.push({ kind: "text", text: `📌 Saved Notes (Pinned) — ${savedNotes.trim()}` });
         }
@@ -1036,16 +1120,16 @@ export default function DialSession() {
       }
     };
     loadHistory();
-  }, [lead?.id]);
+  }, [activeLead?.id]);
 
   useEffect(() => {
     const loadLatestAiOverview = async () => {
-      if (!lead?.id) {
+      if (!activeLead?.id) {
         setLatestAiOverview(null);
         return;
       }
       try {
-        const r = await fetch(`/api/calls/ai-overview?leadId=${encodeURIComponent(lead.id)}`, { cache: "no-store" });
+        const r = await fetch(`/api/calls/ai-overview?leadId=${encodeURIComponent(activeLead.id)}`, { cache: "no-store" });
         const j = await r.json().catch(() => ({} as DialAICallOverview));
         if (r.ok && j?.call) setLatestAiOverview(j.call);
         else setLatestAiOverview(null);
@@ -1054,12 +1138,83 @@ export default function DialSession() {
       }
     };
     loadLatestAiOverview();
-  }, [lead?.id]);
+  }, [activeLead?.id]);
+
+  useEffect(() => {
+    inboundOverlayLeadRef.current = inboundOverlayLead;
+  }, [inboundOverlayLead]);
+
+  useEffect(() => {
+    const onInboundAccepted = async (event: Event) => {
+      const payload = (event as CustomEvent).detail || {};
+      const acceptedCall = payload?.call;
+      if (!acceptedCall) return;
+      const inboundLeadId = String(payload?.leadId || "").trim();
+      const inboundCallSid = String(payload?.callSid || "").trim();
+
+      setIsPaused(true);
+      isPausedRef.current = true;
+      setReadyToCall(false);
+      stopRingbackNow();
+      killAllTimers();
+      terminalHandledRef.current = true;
+      placingCallRef.current = false;
+      activeDialLeadIdRef.current = null;
+
+      if (activeCallSidRef.current) {
+        // Intentional: inbound callback interrupts the live outbound leg, but we do not
+        // log a normal disposition for it so the dial-session position stays intact.
+        await hangupActiveCall("inbound-overlay");
+      }
+      if (joinedRef.current) {
+        await leaveIfJoined("inbound-overlay");
+      }
+
+      inboundCallSidRef.current = inboundCallSid || null;
+      inboundDirectSetupRef.current = true;
+      inboundDirectCallRef.current = acceptedCall;
+      callStartAtRef.current = Date.now();
+      hasConnectedRef.current = true;
+      callOutcomeRef.current = { status: "Connected", source: "inbound-overlay" };
+      callLoggedRef.current = false;
+      setCallEnded(false);
+      setCallActive(true);
+      setStatus("Inbound call connected");
+      startConnectedTimer();
+
+      let inboundLead: Lead | null = null;
+      if (inboundLeadId) {
+        try {
+          const j = await fetchJson<Json>(`/api/get-lead?id=${encodeURIComponent(inboundLeadId)}`);
+          if (j?.lead?._id) inboundLead = { id: j.lead._id, ...j.lead };
+        } catch {}
+      }
+
+      if (!inboundLead) {
+        const phone = String(payload?.phone || payload?.from || "").trim();
+        inboundLead = {
+          id: inboundLeadId || "",
+          Phone: phone,
+          phone,
+          "First Name": String(payload?.leadName || "Inbound caller"),
+          inboundOverlay: true,
+        } as Lead;
+      }
+
+      inboundOverlayLeadRef.current = inboundLead;
+      setInboundOverlayLead(inboundLead);
+      bindInboundEndListener(acceptedCall);
+    };
+
+    window.addEventListener("crm:incomingCall:accepted", onInboundAccepted);
+    return () => window.removeEventListener("crm:incomingCall:accepted", onInboundAccepted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-advance driver
   useEffect(() => {
     // 🔒 NEW: if we arrived from an inbound "Answer", NEVER auto-start an outbound call
-    if (inboundMode) return;
+    if (inboundMode || inboundOverlayActive) return;
 
     if (!numbersLoaded) { setStatus("Loading your numbers…"); return; }
 
@@ -1114,7 +1269,7 @@ export default function DialSession() {
       callLead(leadQueue[currentLeadIndex]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inboundMode, numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex, callActive]);
+  }, [inboundMode, inboundOverlayActive, numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex, callActive]);
 
   /** calling **/
   const startOutboundCall = async (leadToCall: Lead): Promise<{ to: string; from: string }> => {
@@ -1474,13 +1629,14 @@ export default function DialSession() {
 
   /** notes / dispositions **/
   const handleSaveNote = async () => {
-    if ((lead as any)?.quickDial) return toast.error("Quick Dial calls are not tied to a saved lead");
-    if (!notes.trim() || !lead?.id) return toast.error("Cannot save an empty note");
+    const targetLead = activeLead;
+    if ((targetLead as any)?.quickDial) return toast.error("Quick Dial calls are not tied to a saved lead");
+    if (!notes.trim() || !targetLead?.id) return toast.error("Cannot save an empty note");
     try {
       const r = await fetch("/api/leads/add-note", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id, text: notes.trim() }),
+        body: JSON.stringify({ leadId: targetLead.id, text: notes.trim() }),
       });
       if (!r.ok) {
         let msg = "Failed to save note";
@@ -1498,9 +1654,10 @@ export default function DialSession() {
   };
 
   const handleSendSms = async () => {
-    if ((lead as any)?.quickDial) return toast.error("Quick Dial calls are not tied to a saved lead");
+    const targetLead = activeLead;
+    if ((targetLead as any)?.quickDial) return toast.error("Quick Dial calls are not tied to a saved lead");
 
-    const leadId = getLeadId(lead);
+    const leadId = getLeadId(targetLead);
     const cleanText = smsText.trim();
     if (!leadId) return toast.error("No active lead to text");
     if (!cleanText || sendingSms) return;
@@ -1575,11 +1732,14 @@ export default function DialSession() {
   };
 
   const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "Bad Number") => {
-    if ((lead as any)?.quickDial) {
+    const targetLead = activeLead;
+    const isInboundOverlayDisposition = inboundOverlayActive;
+
+    if ((targetLead as any)?.quickDial) {
       toast.error("Quick Dial calls are not tied to a saved lead");
       return;
     }
-    if (!lead?.id) {
+    if (!targetLead?.id) {
       toast.error("No active lead to disposition");
       return;
     }
@@ -1596,20 +1756,30 @@ export default function DialSession() {
 
       const reasonKey = `disposition-${label.replace(/\s+/g, "-").toLowerCase()}`;
 
-      await hangupActiveCall(reasonKey);
-      await leaveIfJoined(reasonKey);
+      if (isInboundOverlayDisposition) {
+        await hangupInboundCall(reasonKey);
+      } else {
+        await hangupActiveCall(reasonKey);
+        await leaveIfJoined(reasonKey);
+      }
       setCallActive(false);
 
       // Log call outcome tied to this disposition (once)
       await logCallOutcome({ statusOverride: label, reason: reasonKey });
 
-      await persistDisposition(lead.id, label);
+      await persistDisposition(targetLead.id, label);
 
       setHistory((prev) => [{ kind: "text", text: `🏷️ Disposition: ${label}` }, ...prev]);
       setStatus(`Disposition saved: ${label}`);
       toast.success(`Saved: ${label}`);
 
       // ✅ IMPORTANT: disposition button must NOT open calendar (prevents double booking)
+
+      if (isInboundOverlayDisposition) {
+        restorePausedDialSession();
+        toast.success("Returned to paused dial session");
+        return;
+      }
 
       if (!sessionEndedRef.current && !inboundMode) {
         if (label === "No Answer") {
@@ -1621,7 +1791,7 @@ export default function DialSession() {
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to save note");
-      if (!sessionEndedRef.current) scheduleNextLead(); // still advance on error
+      if (!sessionEndedRef.current && !isInboundOverlayDisposition) scheduleNextLead(); // still advance on error
     } finally {
       dispositionBusyRef.current = false;
     }
@@ -1668,7 +1838,14 @@ export default function DialSession() {
   };
 
   const handleHangUp = () => {
-    if (inboundMode && inboundDirectCallRef.current) {
+    if (inboundOverlayActive) {
+      void (async () => {
+        await hangupInboundCall("inbound-overlay-hangup");
+        restorePausedDialSession();
+      })();
+      return;
+    }
+    if ((inboundMode || inboundOverlayActive) && inboundDirectCallRef.current) {
       try { inboundDirectCallRef.current.disconnect?.(); } catch {}
     }
     markDisconnected("agent-hangup");
@@ -1679,7 +1856,7 @@ export default function DialSession() {
     setMuted(next);
 
     try {
-      if (inboundMode && inboundDirectCallRef.current) {
+      if ((inboundMode || inboundOverlayActive) && inboundDirectCallRef.current) {
         // Inbound direct: mute the SoftphoneProvider-accepted call object
         inboundDirectCallRef.current.mute?.(next);
       } else {
@@ -1914,6 +2091,7 @@ export default function DialSession() {
       } catch {}
       stopRingbackNow();
       killAllTimers();
+      unbindInboundEndListener();
       leaveIfJoined("unmount");
       clearStatusPoll();
     };
@@ -1924,7 +2102,7 @@ export default function DialSession() {
 
   // ✅ Build lead info rows like /lead/[id] (ordered + extras, hide empties, dedupe, include rawRow headers)
   const leadInfoRows = useMemo(() => {
-    const l = lead || ({} as any);
+    const l = activeLead || ({} as any);
     const flat = flattenDisplayFields(l);
 
     const mapNormToKeys: Record<string, string[]> = {};
@@ -2064,20 +2242,20 @@ export default function DialSession() {
       .sort((a, b) => a.label.localeCompare(b.label));
 
     return [...rows, ...extras];
-  }, [lead]);
+  }, [activeLead]);
 
   // Derive best-effort First/Last Name from any common variants on the lead (for display only)
   const firstName =
-    (lead as any)?.["First Name"] ??
-    (lead as any)?.first_name ??
-    (lead as any)?.firstname ??
-    (lead as any)?.firstName ??
+    (activeLead as any)?.["First Name"] ??
+    (activeLead as any)?.first_name ??
+    (activeLead as any)?.firstname ??
+    (activeLead as any)?.firstName ??
     "";
   const lastName =
-    (lead as any)?.["Last Name"] ??
-    (lead as any)?.last_name ??
-    (lead as any)?.lastname ??
-    (lead as any)?.lastName ??
+    (activeLead as any)?.["Last Name"] ??
+    (activeLead as any)?.last_name ??
+    (activeLead as any)?.lastname ??
+    (activeLead as any)?.lastName ??
     "";
   const leadDisplayName = [firstName, lastName].filter(Boolean).join(" ").trim() || "Unknown Lead";
   const phoneRow = leadInfoRows.find((r) => normalizeKey(r.key) === "phone" || normalizeKey(r.label) === "phone");
@@ -2113,9 +2291,10 @@ export default function DialSession() {
     : [];
   const redialLeadDisabled =
     !lead ||
+    inboundOverlayActive ||
     callActive ||
     sessionEndedRef.current;
-  const canTextLead = !!lead && !(lead as any)?.quickDial;
+  const canTextLead = !!activeLead && !(activeLead as any)?.quickDial;
   const showConnectedTimer =
     callActive &&
     connectedAtRef.current !== null &&
@@ -2181,7 +2360,7 @@ export default function DialSession() {
                 {extraLeadInfoRows.map((r) => {
                   const key = r.key;
                   const value = r.value;
-                  const rawRowAny = (lead as any)?.rawRow;
+                  const rawRowAny = (activeLead as any)?.rawRow;
                   const displayLabel =
                     rawRowAny && Object.prototype.hasOwnProperty.call(rawRowAny, key) ? String(key) : r.label;
                   let display = "";
@@ -2396,18 +2575,18 @@ export default function DialSession() {
         </div>
       </div>
 
-      {lead && (
+      {activeLead && (
         <BookAppointmentModal
           isOpen={showBookModal}
           onClose={handleBookModalClose}
-          lead={lead}
+          lead={activeLead}
           onBooked={handleBookedAppointmentBooked}
         />
       )}
 
-      {showSaleModal && lead && (
+      {showSaleModal && activeLead && (
         <SaleModal
-          leadId={String(lead.id || "")}
+          leadId={String(activeLead.id || "")}
           defaultComp={defaultComp}
           onSave={async (result) => {
             setShowSaleModal(false);
@@ -2415,7 +2594,7 @@ export default function DialSession() {
               const saleRes = await fetch("/api/leads/record-sale", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ leadId: lead.id, ...result }),
+                body: JSON.stringify({ leadId: activeLead.id, ...result }),
               });
               if (!saleRes.ok) {
                 const d = await saleRes.json().catch(() => ({}));

@@ -20,7 +20,7 @@ type SoftphoneCtx = {
   inboundCallAccepted: boolean;
   startCall: (toE164: string, fromTwilio: string) => Promise<void>;
   hangup: () => void;
-  answer: () => void;
+  answer: (event?: Event) => void;
   decline: () => void;
 };
 
@@ -263,18 +263,26 @@ export default function SoftphoneProvider({ children }: Props) {
     } catch {}
   }, [activeCall]);
 
-  const answer = useCallback(() => {
+  const answer = useCallback(async (event?: Event) => {
     try {
       const call = incomingCall;
       if (!call) return;
+      const detail = (event as CustomEvent | undefined)?.detail || {};
       // If agent is on an active SoftphoneProvider-tracked call, hang it up first.
       // voiceClient conference cleanup is handled by the inbound-direct hook in dial-session.
       try { activeCall?.disconnect?.(); } catch {}
-      call.accept?.();
+      await call.accept?.();
       // Promote to activeCall immediately — Device "connect" may not fire for accepted inbound calls
       setActiveCall(call);
       setIncomingCall(undefined);
       setInboundCallAccepted(true);
+      try {
+        window.dispatchEvent(
+          new CustomEvent("crm:incomingCall:accepted", {
+            detail: { ...detail, call },
+          }),
+        );
+      } catch {}
       const onEnd = () => {
         setActiveCall((c: any) => (c === call ? undefined : c));
         setInboundCallAccepted(false);

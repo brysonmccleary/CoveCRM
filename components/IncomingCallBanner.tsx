@@ -30,6 +30,40 @@ function formatPhone(p?: string) {
 export function generateRingTone(volume: number): RingToneHandle {
   if (typeof window === "undefined") return { stop: () => {} };
 
+  const safeVolume = Math.max(0, Math.min(1, Number(volume) || 0));
+  const audio = new Audio("/incoming-soft.mp3");
+  audio.loop = true;
+  audio.preload = "auto";
+  audio.volume = safeVolume;
+
+  let stopped = false;
+  const fallback = () => generateFallbackTone(safeVolume);
+  let fallbackHandle: RingToneHandle | null = null;
+
+  const playPromise = audio.play();
+  if (playPromise && typeof playPromise.catch === "function") {
+    playPromise.catch(() => {
+      if (stopped) return;
+      fallbackHandle = fallback();
+    });
+  }
+
+  return {
+    stop: () => {
+      stopped = true;
+      fallbackHandle?.stop();
+      fallbackHandle = null;
+      try {
+        audio.pause();
+        audio.currentTime = 0;
+      } catch {}
+    },
+  };
+}
+
+function generateFallbackTone(volume: number): RingToneHandle {
+  if (typeof window === "undefined") return { stop: () => {} };
+
   const w = window as any;
   const AudioContextCtor =
     window.AudioContext || w.webkitAudioContext;
@@ -210,6 +244,11 @@ export default function IncomingCallBanner({ volume = 1 }: { volume?: number }) 
     } catch {}
     setVisible(false);
     payloadRef.current = null;
+
+    if (typeof window !== "undefined" && window.location.pathname === "/dial-session") {
+      return;
+    }
+
     const params = new URLSearchParams();
     params.set("inbound", "1");
     if (payload.callSid) params.set("callSid", payload.callSid);
