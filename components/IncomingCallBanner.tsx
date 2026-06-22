@@ -84,21 +84,34 @@ function generateFallbackTone(volume: number): RingToneHandle {
   const gain = context.createGain();
   let intervalId: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
+  const fallbackVolume = Math.min(0.18, safeVolume * 0.25);
 
   const scheduleCycle = () => {
     const startTime = context.currentTime;
+    const secondToneStart = startTime + 0.42;
     gain.gain.cancelScheduledValues(startTime);
-    gain.gain.setValueAtTime(safeVolume, startTime);
-    gain.gain.setValueAtTime(safeVolume, startTime + 0.5);
-    gain.gain.setValueAtTime(0, startTime + 0.5);
-    gain.gain.setValueAtTime(0, startTime + 1);
+    oscillator.frequency.cancelScheduledValues(startTime);
+
+    oscillator.frequency.setValueAtTime(330, startTime);
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(fallbackVolume, startTime + 0.03);
+    gain.gain.setValueAtTime(fallbackVolume, startTime + 0.26);
+    gain.gain.linearRampToValueAtTime(0, startTime + 0.32);
+
+    oscillator.frequency.setValueAtTime(392, secondToneStart);
+    gain.gain.setValueAtTime(0, secondToneStart);
+    gain.gain.linearRampToValueAtTime(fallbackVolume, secondToneStart + 0.03);
+    gain.gain.setValueAtTime(fallbackVolume, secondToneStart + 0.25);
+    gain.gain.linearRampToValueAtTime(0, secondToneStart + 0.34);
+
+    gain.gain.setValueAtTime(0, startTime + 2);
   };
 
-  oscillator.frequency.value = 440;
+  oscillator.frequency.value = 330;
   oscillator.type = "sine";
   gain.gain.setValueAtTime(0, context.currentTime);
   scheduleCycle();
-  intervalId = setInterval(scheduleCycle, 1000);
+  intervalId = setInterval(scheduleCycle, 2000);
 
   oscillator.connect(gain);
   gain.connect(context.destination);
