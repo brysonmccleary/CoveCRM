@@ -199,6 +199,45 @@ export default function SoftphoneProvider({ children }: Props) {
             call?.parameters?.CallSid ||
             call?.customParameters?.get?.("CallSid") ||
             "";
+          let incomingAnswered = false;
+          let terminalHandled = false;
+          const cleanupIncomingTerminalListeners = () => {
+            try { call?.off?.("cancel", onIncomingCancel); } catch {}
+            try { call?.off?.("disconnect", onIncomingDisconnect); } catch {}
+            try { call?.off?.("reject", onIncomingReject); } catch {}
+            try { call?.off?.("error", onIncomingError); } catch {}
+            try { call?.removeListener?.("cancel", onIncomingCancel); } catch {}
+            try { call?.removeListener?.("disconnect", onIncomingDisconnect); } catch {}
+            try { call?.removeListener?.("reject", onIncomingReject); } catch {}
+            try { call?.removeListener?.("error", onIncomingError); } catch {}
+          };
+          const onIncomingTerminal = (status: string) => {
+            if (incomingAnswered || terminalHandled) return;
+            terminalHandled = true;
+            cleanupIncomingTerminalListeners();
+            setIncomingCall((current: any) => (current === call ? undefined : current));
+            try {
+              window.dispatchEvent(
+                new CustomEvent("crm:incomingCall:ended", {
+                  detail: { callSid, status },
+                }),
+              );
+            } catch {}
+          };
+          const onIncomingCancel = () => onIncomingTerminal("cancel");
+          const onIncomingDisconnect = () => onIncomingTerminal("disconnect");
+          const onIncomingReject = () => onIncomingTerminal("reject");
+          const onIncomingError = () => onIncomingTerminal("error");
+          try { call?.on?.("cancel", onIncomingCancel); } catch {}
+          try { call?.on?.("disconnect", onIncomingDisconnect); } catch {}
+          try { call?.on?.("reject", onIncomingReject); } catch {}
+          try { call?.on?.("error", onIncomingError); } catch {}
+          try {
+            call.__crmMarkIncomingAnswered = () => {
+              incomingAnswered = true;
+              cleanupIncomingTerminalListeners();
+            };
+          } catch {}
           window.dispatchEvent(
             new CustomEvent("crm:incomingCall", {
               detail: {
@@ -272,6 +311,7 @@ export default function SoftphoneProvider({ children }: Props) {
       // voiceClient conference cleanup is handled by the inbound-direct hook in dial-session.
       try { activeCall?.disconnect?.(); } catch {}
       await call.accept?.();
+      try { call.__crmMarkIncomingAnswered?.(); } catch {}
       // Promote to activeCall immediately — Device "connect" may not fire for accepted inbound calls
       setActiveCall(call);
       setIncomingCall(undefined);

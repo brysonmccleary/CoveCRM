@@ -179,6 +179,16 @@ export default function IncomingCallBanner({ volume = 1 }: { volume?: number }) 
     const onIncoming = (data: any) => showIncoming(data);
     const onBrowserIncoming = (event: Event) =>
       showIncoming((event as CustomEvent).detail || {});
+    const onBrowserIncomingEnded = (event: Event) => {
+      const current = payloadRef.current;
+      const data = (event as CustomEvent).detail || {};
+      const eventCallSid = String(data?.callSid || data?.CallSid || "");
+      if (!current?.callSid || !eventCallSid || eventCallSid !== current.callSid) return;
+      stopRing();
+      setVisible(false);
+      payloadRef.current = null;
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
     const onCallStatus = (data: any) => {
       const current = payloadRef.current;
       const eventCallSid = String(data?.callSid || data?.CallSid || "");
@@ -202,6 +212,7 @@ export default function IncomingCallBanner({ volume = 1 }: { volume?: number }) 
     };
 
     window.addEventListener("crm:incomingCall", onBrowserIncoming);
+    window.addEventListener("crm:incomingCall:ended", onBrowserIncomingEnded);
 
     const interval = setInterval(() => {
       tries++;
@@ -224,6 +235,7 @@ export default function IncomingCallBanner({ volume = 1 }: { volume?: number }) 
         sock?.off?.("callStatus", onCallStatus);
       } catch {}
       window.removeEventListener("crm:incomingCall", onBrowserIncoming);
+      window.removeEventListener("crm:incomingCall:ended", onBrowserIncomingEnded);
       if (hideTimer.current) clearTimeout(hideTimer.current);
       stopRing();
       payloadRef.current = null;
