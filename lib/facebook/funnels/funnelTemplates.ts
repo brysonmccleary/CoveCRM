@@ -68,7 +68,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       { id: "lastName", type: "text", title: "What is your last name?", placeholder: "Last name", required: true },
       { id: "email", type: "email", title: "What is your email address?", placeholder: "Email address", required: true },
       { id: "phone", type: "tel", title: "What is your phone number?", placeholder: "Phone number", required: true },
-      { id: "consent", type: "choice", title: "Can a licensed agent contact you about your review?", options: ["Yes, I agree"], required: true },
+      { id: "consent", type: "choice", title: "Review and submit your request", options: ["Yes, I agree"], required: true },
     ],
   },
   veteran: {
@@ -98,7 +98,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       { id: "lastName", type: "text", title: "What is your last name?", placeholder: "Last name", required: true },
       { id: "email", type: "email", title: "What is your email address?", placeholder: "Email address", required: true },
       { id: "phone", type: "tel", title: "What is your phone number?", placeholder: "Phone number", required: true },
-      { id: "consent", type: "choice", title: "Can a licensed agent contact you about your review?", options: ["Yes, I agree"], required: true },
+      { id: "consent", type: "choice", title: "Review and submit your request", options: ["Yes, I agree"], required: true },
     ],
   },
   final_expense: {
@@ -127,7 +127,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       { id: "lastName", type: "text", title: "What is your last name?", placeholder: "Last name", required: true },
       { id: "email", type: "email", title: "What is your email address?", placeholder: "Email address", required: true },
       { id: "phone", type: "tel", title: "What is your phone number?", placeholder: "Phone number", required: true },
-      { id: "consent", type: "choice", title: "Can a licensed agent contact you about your review?", options: ["Yes, I agree"], required: true },
+      { id: "consent", type: "choice", title: "Review and submit your request", options: ["Yes, I agree"], required: true },
     ],
   },
   trucker: {
@@ -156,7 +156,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       { id: "lastName", type: "text", title: "What is your last name?", placeholder: "Last name", required: true },
       { id: "email", type: "email", title: "What is your email address?", placeholder: "Email address", required: true },
       { id: "phone", type: "tel", title: "What is your phone number?", placeholder: "Phone number", required: true },
-      { id: "consent", type: "choice", title: "Can a licensed agent contact you about your review?", options: ["Yes, I agree"], required: true },
+      { id: "consent", type: "choice", title: "Review and submit your request", options: ["Yes, I agree"], required: true },
     ],
   },
   iul: {
@@ -185,7 +185,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       { id: "lastName", type: "text", title: "What is your last name?", placeholder: "Last name", required: true },
       { id: "email", type: "email", title: "What is your email address?", placeholder: "Email address", required: true },
       { id: "phone", type: "tel", title: "What is your phone number?", placeholder: "Phone number", required: true },
-      { id: "consent", type: "choice", title: "Can a licensed agent contact you about your review?", options: ["Yes, I agree"], required: true },
+      { id: "consent", type: "choice", title: "Review and submit your request", options: ["Yes, I agree"], required: true },
     ],
   },
   mortgage_protection_veteran: {
@@ -216,7 +216,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       { id: "lastName", type: "text", title: "What is your last name?", placeholder: "Last name", required: true },
       { id: "email", type: "email", title: "What is your email address?", placeholder: "Email address", required: true },
       { id: "phone", type: "tel", title: "What is your phone number?", placeholder: "Phone number", required: true },
-      { id: "consent", type: "choice", title: "Can a licensed agent contact you about your review?", options: ["Yes, I agree"], required: true },
+      { id: "consent", type: "choice", title: "Review and submit your request", options: ["Yes, I agree"], required: true },
     ],
   },
   iul_veteran: {
@@ -246,7 +246,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       { id: "lastName", type: "text", title: "What is your last name?", placeholder: "Last name", required: true },
       { id: "email", type: "email", title: "What is your email address?", placeholder: "Email address", required: true },
       { id: "phone", type: "tel", title: "What is your phone number?", placeholder: "Phone number", required: true },
-      { id: "consent", type: "choice", title: "Can a licensed agent contact you about your review?", options: ["Yes, I agree"], required: true },
+      { id: "consent", type: "choice", title: "Review and submit your request", options: ["Yes, I agree"], required: true },
     ],
   },
   mortgage_protection_trucker: {
@@ -276,7 +276,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       { id: "lastName", type: "text", title: "What is your last name?", placeholder: "Last name", required: true },
       { id: "email", type: "email", title: "What is your email address?", placeholder: "Email address", required: true },
       { id: "phone", type: "tel", title: "What is your phone number?", placeholder: "Phone number", required: true },
-      { id: "consent", type: "choice", title: "Can a licensed agent contact you about your review?", options: ["Yes, I agree"], required: true },
+      { id: "consent", type: "choice", title: "Review and submit your request", options: ["Yes, I agree"], required: true },
     ],
   },
   iul_trucker: {
@@ -305,7 +305,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       { id: "lastName", type: "text", title: "What is your last name?", placeholder: "Last name", required: true },
       { id: "email", type: "email", title: "What is your email address?", placeholder: "Email address", required: true },
       { id: "phone", type: "tel", title: "What is your phone number?", placeholder: "Phone number", required: true },
-      { id: "consent", type: "choice", title: "Can a licensed agent contact you about your review?", options: ["Yes, I agree"], required: true },
+      { id: "consent", type: "choice", title: "Review and submit your request", options: ["Yes, I agree"], required: true },
     ],
   },
 };

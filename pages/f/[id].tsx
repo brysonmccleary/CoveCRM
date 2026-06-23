@@ -378,17 +378,6 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
     if (step.id === "consent") {
       return (
         <div>
-          <div style={{
-            background: "rgba(15,23,42,0.04)",
-            border: "1px solid rgba(15,23,42,0.1)",
-            borderRadius: 8,
-            padding: "14px 16px",
-            marginBottom: 16,
-          }}>
-            <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: theme.muted }}>
-              {consentText}
-            </p>
-          </div>
           <label style={{
             display: "flex",
             alignItems: "flex-start",
@@ -420,6 +409,9 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               {smsConsentLabel}
             </span>
           </label>
+          <p style={{ margin: "0 0 16px", fontSize: 11, color: theme.muted, lineHeight: 1.5 }}>
+            SMS consent is optional. You may submit your request without checking this box.
+          </p>
           <button
             onClick={() => {
               next(smsConsentGiven ? "Yes, I agree" : "No SMS consent");
@@ -729,12 +721,6 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
                 </button>
               )}
 
-              {/* Consent footer — short note on every step, full text shown on consent step */}
-              {!isConsentStep && (
-                <p style={{ margin: "16px 0 0", fontSize: 11, color: theme.muted, lineHeight: 1.5, opacity: 0.7 }}>
-                  {dynamicConsentText}
-                </p>
-              )}
             </div>
           ) : (
             <div style={{
