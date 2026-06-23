@@ -2275,8 +2275,7 @@ export default async function handler(
       const payload: any = {
         customerProfileBundleSid: secondaryProfileSid!,
         a2PProfileBundleSid: trustProductSid!,
-        brandType: "STANDARD",
-        skipAutomaticSecVet: true,
+        brandType: "LOW_VOLUME_STANDARD",
       };
 
       log("step: brandRegistrations.create", {
