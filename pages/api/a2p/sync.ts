@@ -836,15 +836,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         );
 
-        try {
-          await sendA2PDeclinedEmail({
-            to: userEmail,
-            name: user?.name || undefined,
-            reason: doc.declinedReason || "Declined by reviewers",
-            helpUrl: `${BASE_URL}/help/a2p-checklist`,
-          });
-        } catch (e: any) {
-          await A2PProfile.updateOne({ _id: doc._id }, { $set: { lastError: `notify: ${e?.message || e}` } });
+        if (!doc.declineNotifiedAt) {
+          try {
+            await sendA2PDeclinedEmail({
+              to: userEmail,
+              name: user?.name || undefined,
+              reason: doc.declinedReason || "Declined by reviewers",
+              helpUrl: `${BASE_URL}/help/a2p-checklist`,
+            });
+            await A2PProfile.updateOne({ _id: doc._id }, { $set: { declineNotifiedAt: new Date() } });
+          } catch (e: any) {
+            await A2PProfile.updateOne({ _id: doc._id }, { $set: { lastError: `notify: ${e?.message || e}` } });
+          }
         }
 
         results.push({
