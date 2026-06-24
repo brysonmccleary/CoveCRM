@@ -5045,6 +5045,18 @@ if (
     try {
       if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t)) return null;
     } catch {}
+    // If the utterance also signals soft-decline or past experience, fall through so
+    // the real objection (not_interested / needs_time) gets classified instead of busy.
+    if (
+      t.includes("not sure it") ||
+      t.includes("not sure if it") ||
+      t.includes("looked into it") ||
+      t.includes("already looked") ||
+      t.includes("not interested") ||
+      t.includes("not for me") ||
+      t.includes("not the right") ||
+      t.includes("not right for me")
+    ) return null;
     return "busy";
   }
   // "You keep calling me / been calling multiple times" — annoyance about call frequency
@@ -5407,7 +5419,13 @@ function getStateAwareClosingPivot(state: CallState): string {
       return getTimeOfferLine(state.context, 0, selectedDay, null, "");
     }
   } catch {}
-  return "Does later today or tomorrow work better?";
+  const pivotVariants = [
+    "Does later today or tomorrow work better?",
+    "Would later today or tomorrow work for a quick call?",
+    "What works better — later today or sometime tomorrow?",
+    "Is later today or tomorrow better for you?",
+  ];
+  return pivotVariants[Math.floor(Math.random() * pivotVariants.length)];
 }
 
 /**
@@ -6005,7 +6023,7 @@ function buildContextualProductAnswer(ctx: AICallContext, userText: string): { a
   const isIUL = k === "iul_cash_value" || k === "veteran_iul" || k === "trucker_iul";
   const isVeteran = k === "veteran_leads" || k === "veteran_mortgage" || k === "veteran_iul";
 
-  if (/what is (mortgage protection|final expense|an iul|iul|life insurance|this coverage|this policy|this)|what does (mortgage protection|final expense|an iul|iul|life insurance|this) (cover|do|mean|work)|explain (mortgage protection|final expense|an iul|iul|life insurance|this coverage)|tell me (about|what) (mortgage protection|final expense|an iul|iul|life insurance)/.test(t)) {
+  if (/(?:what.?s|what is) (mortgage protection|final expense|an iul|iul|life insurance|this coverage|this policy|this)|what does (mortgage protection|final expense|an iul|iul|life insurance|this) (cover|do|mean|work)|explain (mortgage protection|final expense|an iul|iul|life insurance|this coverage)|tell me (about|what) (mortgage protection|final expense|an iul|iul|life insurance)/.test(t)) {
     return { answer: getVerticalProductAnswer(ctx), matched: true };
   }
 
