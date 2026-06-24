@@ -804,7 +804,7 @@ export default async function handler(
         second: 0,
         millisecond: 0,
       });
-      if (morning > nowClient.plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES })) {
+      if (morning > nowClient.plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES }) && morning < clientStart) {
         await sendOrSchedule(morningBody, morning);
         didMorning = true;
       }

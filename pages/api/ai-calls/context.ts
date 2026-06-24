@@ -30,7 +30,8 @@ function getTimezoneFromState(stateRaw: string | undefined): string | null {
   if (!s) return null;
   const EST = new Set(["NY","NJ","CT","MA","RI","VT","NH","ME","PA","OH","MI","IN","FL","GA","SC","NC","VA","WV","MD","DE","DC"]);
   const CST = new Set(["TX","IL","MN","WI","IA","MO","AR","LA","MS","AL","TN","KY","OK","KS","NE","SD","ND"]);
-  const MST = new Set(["AZ","CO","UT","NM","WY","MT","ID"]);
+  if (s === "AZ") return "America/Phoenix"; // no DST — must resolve before MST set
+  const MST = new Set(["CO","UT","NM","WY","MT","ID"]);
   const PST = new Set(["CA","OR","WA","NV"]);
   if (EST.has(s)) return "America/New_York";
   if (CST.has(s)) return "America/Chicago";
