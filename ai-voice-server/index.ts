@@ -2705,7 +2705,16 @@ function looksLikeUserQuestion(textRaw: string): boolean {
     t.startsWith("do you") ||
     t.startsWith("are you") ||
     t.startsWith("is this") ||
-    t.startsWith("is it")
+    t.startsWith("is it") ||
+    t.startsWith("do i") ||
+    t.startsWith("is there") ||
+    t.startsWith("can i") ||
+    t.startsWith("could i") ||
+    t.startsWith("would i") ||
+    t.startsWith("am i") ||
+    t.startsWith("will i") ||
+    t.startsWith("have i") ||
+    t.startsWith("does it")
   ) return true;
 
   // Common question stems even without punctuation
@@ -2808,6 +2817,23 @@ function detectQuestionKindForTurn(textRaw: string): string | null {
   try {
     if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t) || looksLikeTimeAnswer(t)) return null;
   } catch {}
+
+  // Soft-decline statements that aren't questions — route through GPT so it can respond to what was said
+  if (
+    t.includes("looked into it before") ||
+    t.includes("looked into this before") ||
+    t.includes("didn't work out") ||
+    t.includes("didnt work out") ||
+    t.includes("financial advisor") ||
+    t.includes("my son handles") ||
+    t.includes("fixed income") ||
+    t.includes("don't trust insurance") ||
+    t.includes("dont trust insurance") ||
+    t.includes("not for me") ||
+    t.includes("not sure this is right") ||
+    t.includes("not sure it's right") ||
+    t.includes("not sure its right")
+  ) return "generic_question";
 
   if (!looksLikeUserQuestion(t)) return null;
 
@@ -5050,12 +5076,17 @@ if (
     if (
       t.includes("not sure it") ||
       t.includes("not sure if it") ||
+      t.includes("not sure this") ||
       t.includes("looked into it") ||
       t.includes("already looked") ||
       t.includes("not interested") ||
       t.includes("not for me") ||
       t.includes("not the right") ||
-      t.includes("not right for me")
+      t.includes("not right for me") ||
+      t.includes("just got out of the hospital") ||
+      t.includes("got out of the hospital") ||
+      t.includes("was in the hospital") ||
+      t.includes("coming from the hospital")
     ) return null;
     return "busy";
   }
@@ -5180,6 +5211,21 @@ if (
   ) {
     return "redirect";
   }
+
+  if (
+    t.includes("take me off") ||
+    t.includes("remove me from") ||
+    t.includes("do not call") ||
+    t.includes("don't call me again") ||
+    t.includes("dont call me again") ||
+    t.includes("stop calling")
+  ) return "do_not_call";
+
+  if (
+    t.includes("wrong number") ||
+    t.includes("wrong person") ||
+    t.includes("nobody here by that name")
+  ) return "wrong_number";
 
   return null;
 }
@@ -7650,6 +7696,46 @@ function buildConversationPolicyDecision(
     let lineToSay: string;
     let genericQuestionMatched = false;
 
+    if (sk === "do_not_call") {
+      return {
+        handled: true,
+        routeKind: "policy_do_not_call_exit",
+        responseMode: "exact_script",
+        objective: "end_call",
+        lineToSay: "Of course — I'll make sure you're removed right away. Sorry for the interruption. Have a great day!",
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingHangupAfterGoodbye: true,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+
+    if (sk === "wrong_number") {
+      return {
+        handled: true,
+        routeKind: "policy_wrong_number_exit",
+        responseMode: "exact_script",
+        objective: "end_call",
+        lineToSay: "Oh, I apologize for the confusion — I'll get this corrected right away. Sorry about that, have a great day!",
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          pendingHangupAfterGoodbye: true,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
+
     if (sk === "call_purpose_confusion" || sk === "source_memory" || sk === "permission_to_ask") {
       lineToSay = `${getRebuttalLine(ctx, sk)}${requiredObjective}`;
     } else if (sk === "scam") {
@@ -7690,6 +7776,10 @@ function buildConversationPolicyDecision(
       lineToSay = isKayla
         ? `Your info came through a form requesting a CoveCRM demo. ${agentFirst} just wants to make sure you got what you were looking for. ${requiredObjective}`
         : `Your info came through a form submitted online for ${scope}. ${agentFirst} just wants to make sure you’re taken care of. ${requiredObjective}`;
+    } else if (sk === "spouse_consult") {
+      lineToSay = `${getRebuttalLine(ctx, "spouse_consult")} ${requiredObjective}`;
+    } else if (sk === "already_talked") {
+      lineToSay = `${getRebuttalLine(ctx, "already_talked")} ${requiredObjective}`;
     } else if (sk === "generic_question") {
       if (ctx) {
         const { answer, matched } = buildContextualProductAnswer(ctx, intent.raw);
