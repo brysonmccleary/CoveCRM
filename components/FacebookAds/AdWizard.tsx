@@ -48,6 +48,161 @@ type MetaHealth = {
   status?: string;
 };
 
+type CaptureValidation = {
+  ok: boolean;
+  width: number;
+  height: number;
+};
+
+const CAPTURE_ERROR = "Ad image capture failed. Please try again.";
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function waitForAnimationFrame() {
+  return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+async function waitForFontsReady() {
+  const fonts = typeof document !== "undefined" ? document.fonts : undefined;
+  if (!fonts?.ready) return;
+  await Promise.race([fonts.ready, wait(1200)]);
+}
+
+function getBackgroundImageUrls(node: HTMLElement) {
+  const urls = new Set<string>();
+  const elements = [node, ...Array.from(node.querySelectorAll<HTMLElement>("*"))];
+  for (const element of elements) {
+    const backgroundImage = window.getComputedStyle(element).backgroundImage || "";
+    for (const match of backgroundImage.matchAll(/url\(["']?([^"')]+)["']?\)/g)) {
+      const url = String(match[1] || "").trim();
+      if (url) urls.add(url);
+    }
+  }
+  return Array.from(urls);
+}
+
+function preloadImage(url: string) {
+  return new Promise<void>((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve();
+    image.onerror = () => resolve();
+    image.src = url;
+  });
+}
+
+async function waitForBackgroundImages(node: HTMLElement) {
+  const urls = getBackgroundImageUrls(node);
+  if (!urls.length) return;
+  await Promise.race([
+    Promise.all(urls.map(preloadImage)),
+    wait(1500),
+  ]);
+}
+
+async function waitForCaptureReady(node: HTMLElement) {
+  await waitForAnimationFrame();
+  await waitForAnimationFrame();
+  await waitForFontsReady();
+  await waitForBackgroundImages(node);
+  await wait(180);
+  await waitForAnimationFrame();
+
+  const rect = node.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    throw new Error("Creative capture node has no layout size");
+  }
+}
+
+function decodeImage(dataUrl: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Captured image could not be decoded"));
+    image.src = dataUrl;
+  });
+}
+
+async function validateCapturedImage(dataUrl: string): Promise<CaptureValidation> {
+  if (!dataUrl.startsWith("data:image/")) {
+    return { ok: false, width: 0, height: 0 };
+  }
+
+  const image = await decodeImage(dataUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  if (width <= 0 || height <= 0) return { ok: false, width, height };
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return { ok: false, width, height };
+  context.drawImage(image, 0, 0);
+
+  const sampleSize = 24;
+  const stepX = Math.max(1, Math.floor(width / sampleSize));
+  const stepY = Math.max(1, Math.floor(height / sampleSize));
+  let count = 0;
+  let opaqueCount = 0;
+  let minR = 255;
+  let minG = 255;
+  let minB = 255;
+  let maxR = 0;
+  let maxG = 0;
+  let maxB = 0;
+  let luminanceSum = 0;
+  let luminanceSquares = 0;
+  let grayishCount = 0;
+
+  for (let y = Math.floor(stepY / 2); y < height; y += stepY) {
+    for (let x = Math.floor(stepX / 2); x < width; x += stepX) {
+      const [r, g, b, a] = context.getImageData(x, y, 1, 1).data;
+      count += 1;
+      if (a > 32) opaqueCount += 1;
+      minR = Math.min(minR, r);
+      minG = Math.min(minG, g);
+      minB = Math.min(minB, b);
+      maxR = Math.max(maxR, r);
+      maxG = Math.max(maxG, g);
+      maxB = Math.max(maxB, b);
+      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      luminanceSum += luminance;
+      luminanceSquares += luminance * luminance;
+      if (Math.abs(r - g) < 8 && Math.abs(g - b) < 8 && Math.abs(r - b) < 8) {
+        grayishCount += 1;
+      }
+    }
+  }
+
+  const opaqueRatio = count ? opaqueCount / count : 0;
+  const meanLuminance = count ? luminanceSum / count : 0;
+  const variance = count ? Math.max(0, luminanceSquares / count - meanLuminance * meanLuminance) : 0;
+  const luminanceStdDev = Math.sqrt(variance);
+  const channelRange = Math.max(maxR - minR, maxG - minG, maxB - minB);
+  const grayishRatio = count ? grayishCount / count : 1;
+  const solidLike = channelRange < 18 && luminanceStdDev < 8;
+  const blankWhite = meanLuminance > 238 && luminanceStdDev < 10;
+  const blankGray = grayishRatio > 0.92 && channelRange < 22 && luminanceStdDev < 10;
+
+  return {
+    ok: opaqueRatio > 0.8 && !solidLike && !blankWhite && !blankGray,
+    width,
+    height,
+  };
+}
+
+function logCaptureValidation(index: number, validation: CaptureValidation) {
+  if (process.env.NODE_ENV !== "development") return;
+  console.info("[AdWizard] captured ad image", {
+    index,
+    width: validation.width,
+    height: validation.height,
+    validationPassed: validation.ok,
+  });
+}
+
 export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (leadType: string) => void }) {
   const [step, setStep] = useState(0);
   const [mainCategory, setMainCategory] = useState("final_expense");
@@ -250,23 +405,30 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         const currentDraft = drafts[index] || {};
         const node = productionCreativeRefs.current[index];
         if (!node) {
-          setError("Ad preview capture failed. Please try again.");
+          setError(CAPTURE_ERROR);
           return;
         }
         let renderedCreativeDataUrl = "";
         try {
+          await waitForCaptureReady(node);
           renderedCreativeDataUrl = await toPng(node, {
             quality: 0.92,
             pixelRatio: 2,
             cacheBust: true,
           });
+          const validation = await validateCapturedImage(renderedCreativeDataUrl);
+          logCaptureValidation(index, validation);
+          if (!validation.ok) {
+            setError(CAPTURE_ERROR);
+            return;
+          }
         } catch (captureErr) {
           console.warn("[AdWizard] CSS capture failed:", captureErr);
-          setError("Ad preview capture failed. Please try again.");
+          setError(CAPTURE_ERROR);
           return;
         }
         if (!renderedCreativeDataUrl) {
-          setError("Ad preview capture failed. Please try again.");
+          setError(CAPTURE_ERROR);
           return;
         }
         launchDrafts.push({
@@ -540,7 +702,16 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	      {(step === 4 || step === 5) && draft && (
 		        <div
 	            className="space-y-3"
-	            style={step === 5 ? { position: "absolute", left: -10000, top: 0, width: 375, pointerEvents: "none" } : undefined}
+	            style={step === 5 ? {
+                position: "fixed",
+                left: 0,
+                top: 0,
+                width: Math.max(540, drafts.length * 700),
+                height: 675,
+                pointerEvents: "none",
+                zIndex: -1,
+                overflow: "visible",
+              } : undefined}
 	          >
               {step === 5 && drafts.map((currentDraft, index) => (
                 <div
@@ -548,7 +719,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
                   ref={(el) => {
                     productionCreativeRefs.current[index] = el;
                   }}
-                  style={{ position: "absolute", left: -12000 - index * 700, top: 0, width: 540, height: 675, pointerEvents: "none" }}
+	                  style={{ position: "absolute", left: index * 700, top: 0, width: 540, height: 675, pointerEvents: "none" }}
                 >
                   <ProductionFeedCreative draft={currentDraft} />
                 </div>
