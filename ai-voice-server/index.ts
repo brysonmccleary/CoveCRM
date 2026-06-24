@@ -2832,7 +2832,12 @@ function detectQuestionKindForTurn(textRaw: string): string | null {
     t.includes("not for me") ||
     t.includes("not sure this is right") ||
     t.includes("not sure it's right") ||
-    t.includes("not sure its right")
+    t.includes("not sure its right") ||
+    t.includes("just got out of the hospital") ||
+    t.includes("got out of the hospital") ||
+    t.includes("out of the hospital") ||
+    t.includes("was in the hospital") ||
+    t.includes("coming from the hospital")
   ) return "generic_question";
 
   if (!looksLikeUserQuestion(t)) return null;
@@ -4770,7 +4775,11 @@ function detectObjection(textRaw: string): string | null {
     t.includes("are you a person") ||
     t.includes("is this a person") ||
     t.includes("talking to a human") ||
-    t.includes("talking to a person")
+    t.includes("talking to a person") ||
+    t.includes("are you a real person") ||
+    t.includes("are you a real human") ||
+    t.includes("is this a real person") ||
+    t.includes("talking to a real person")
   ) return "are_you_ai";
 
   // Call purpose confusion — "what are you calling about" / "why are you calling"
@@ -4883,6 +4892,16 @@ function detectObjection(textRaw: string): string | null {
     t.includes("what business")
   ) return "confused_identity";
   if (!t) return null;
+
+  if (
+    t.includes("take me off") ||
+    t.includes("remove me from") ||
+    t.includes("do not call") ||
+    t.includes("don't call me again") ||
+    t.includes("dont call me again") ||
+    t.includes("stop calling me") ||
+    t.includes("stop calling")
+  ) return "do_not_call";
 
   // "I don't need it anymore" / "don't think I need this" -> treat as not interested (booking-only rebuttal)
   if (
@@ -5211,15 +5230,6 @@ if (
   ) {
     return "redirect";
   }
-
-  if (
-    t.includes("take me off") ||
-    t.includes("remove me from") ||
-    t.includes("do not call") ||
-    t.includes("don't call me again") ||
-    t.includes("dont call me again") ||
-    t.includes("stop calling")
-  ) return "do_not_call";
 
   if (
     t.includes("wrong number") ||
@@ -6119,8 +6129,8 @@ function buildContextualProductAnswer(ctx: AICallContext, userText: string): { a
     return { answer: `No — these are private insurance policies, not a government program. ${agent} works with multiple carriers to find you the best fit for your situation.`, matched: true };
   }
 
-  if (/what company|which company|what carrier|which carrier|who.*work with|what agency|which.*insurance compan|what.*insurance compan/.test(t)) {
-    return { answer: `${agent} works with multiple carriers — the whole point is to shop them and find you the best rate for your specific situation. ${agent} will go over which programs and companies fit best on the call.`, matched: true };
+  if (/what company|which company|what carrier|which carrier|who.*work with|do you work with|do you use|what agency|which.*insurance compan|what.*insurance compan|mutual of omaha|transamerica|\baig\b|prudential|nationwide|american equity|north american|foresters|americo|banner life|pacific life|protective|american national/.test(t)) {
+    return { answer: `${agent} actually has contracts with around 40 carriers — so if you've heard of a company or have one you've worked with before, there's a good chance they're in the mix. The whole point is to shop them all and find you the best rate for your situation. ${agent} will go over exactly which ones apply on the call.`, matched: true };
   }
 
   if (isMortgage && /is this life insurance|same as life|different.*life insurance|life insurance.*same/.test(t)) {
