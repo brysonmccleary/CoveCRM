@@ -5253,7 +5253,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
       return `Yes — and that’s exactly the point. What you’re hearing right now is what your leads would hear. This is the CoveCRM AI running live. What else can I answer for you?`;
     }
-    return `Yes — I’m a virtual assistant helping the agents with scheduling. The licensed agent handles the actual appointment. ${agent} is the licensed agent who handles everything on the actual call. Does later today or tomorrow work better?`;
+    return `Yes — I’m a virtual assistant helping ${agent} with scheduling. ${agentFirst} is the one who handles the actual call. Does later today or tomorrow work better?`;
   }
 
   if (kind === "confused_identity") {
@@ -6004,6 +6004,10 @@ function buildContextualProductAnswer(ctx: AICallContext, userText: string): str
   const isMortgage = k === "mortgage_protection" || k === "veteran_mortgage" || k === "trucker_mortgage";
   const isIUL = k === "iul_cash_value" || k === "veteran_iul" || k === "trucker_iul";
   const isVeteran = k === "veteran_leads" || k === "veteran_mortgage" || k === "veteran_iul";
+
+  if (/what is (mortgage protection|final expense|an iul|iul|life insurance|this coverage|this policy|this)|what does (mortgage protection|final expense|an iul|iul|life insurance|this) (cover|do|mean|work)|explain (mortgage protection|final expense|an iul|iul|life insurance|this coverage)|tell me (about|what) (mortgage protection|final expense|an iul|iul|life insurance)/.test(t)) {
+    return getVerticalProductAnswer(ctx);
+  }
 
   if (/medical exam|exam required|doctor.*exam|physical exam|blood test|blood work|health check/.test(t)) {
     return `Good news — there's no medical exam required for most of what ${agent} goes over. It's mostly just a few health questions on the application.`;
