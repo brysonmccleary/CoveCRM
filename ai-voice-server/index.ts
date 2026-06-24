@@ -1901,7 +1901,7 @@ function buildNonRepeatedStateAwareLine(
             : isIdentityQuestion
               ? `Yes — I'm a virtual assistant helping schedule the appointment. ${agentFirst} is the licensed agent on the call.`
               : ctx
-              ? getVerticalProductAnswer(ctx)
+              ? buildContextualProductAnswer(ctx, raw)
               : `${agentFirst} can answer that clearly on the call.`;
     return {
       lineToSay: `${answer} ${pivot}`,
@@ -5989,6 +5989,109 @@ function getVerticalProductAnswer(ctx: AICallContext): string {
   return `We work with multiple types of coverage — whole life, term, IUL, final expense, mortgage protection. What fits best depends on what you qualify for and what your goal is. ${agent} works with multiple carriers to find you the best rate.`;
 }
 
+/**
+ * Question-aware product answer for generic_question turns.
+ * Pattern-matches the lead's actual text and returns a specific answer.
+ * Falls back to getVerticalProductAnswer when no pattern matches.
+ * Never quotes exact rates, underwriting criteria, or eligibility decisions.
+ */
+function buildContextualProductAnswer(ctx: AICallContext, userText: string): string {
+  const k = normalizeScriptKey(ctx.scriptKey);
+  const agentRaw = (ctx.agentName || "your agent").trim();
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+  const t = (userText || "").toLowerCase();
+
+  const isMortgage = k === "mortgage_protection" || k === "veteran_mortgage" || k === "trucker_mortgage";
+  const isIUL = k === "iul_cash_value" || k === "veteran_iul" || k === "trucker_iul";
+  const isVeteran = k === "veteran_leads" || k === "veteran_mortgage" || k === "veteran_iul";
+
+  if (/medical exam|exam required|doctor.*exam|physical exam|blood test|blood work|health check/.test(t)) {
+    return `Good news — there's no medical exam required for most of what ${agent} goes over. It's mostly just a few health questions on the application.`;
+  }
+
+  if (/living benefit|get sick|get hurt|critical illness|terminal|chronic illness|if i get sick|if i get hurt|paid.*while.*alive|pay out.*alive|diagnos|disability benefit/.test(t)) {
+    return `Yeah — a lot of these policies do come with living benefits, so if you're ever diagnosed with a critical, chronic, or terminal illness, the policy can pay out upfront while you're still here. ${agent} will go over exactly what applies to your situation on the call.`;
+  }
+
+  if (/waiting period|when.*start|when.*kick in|immediate coverage|right away|take effect|effective date|coverage start|start.*day one|day one/.test(t)) {
+    return `Most of the programs ${agent} works with have little to no waiting period — a lot offer immediate coverage from day one. ${agent} will confirm what applies for your specific situation on the call.`;
+  }
+
+  if (/tax.?free|tax advantage|tax benefit|taxable|taxes on|income tax|death.*tax|\birs\b/.test(t)) {
+    return `A lot of these policies do have tax advantages — the death benefit is typically paid out income-tax-free to your beneficiary. ${agent} will go over the specifics on the call.`;
+  }
+
+  if (/death benefit|how much.*pay.*out|payout amount|how much.*family.*get|how much.*beneficiary|how much.*receive|how much.*leave/.test(t)) {
+    return `The death benefit amount depends on what you qualify for and the coverage you choose — that's exactly what ${agent} goes over on the call. There's no cost to find out what you'd be eligible for.`;
+  }
+
+  if (/\bcancel\b|cancellation|stop.*pay|opt out|walk away|back out|no obligation|lock.*in|am i locked|locked in/.test(t)) {
+    return `These are flexible programs — you're not locked into anything. ${agent} will go over the full terms on the call so you know exactly what you're committing to before anything gets set up.`;
+  }
+
+  if (/miss.*payment|late.*payment|payment.*late|\blapse\b|grace period|forget.*pay|fall behind.*payment|skip.*payment/.test(t)) {
+    return `Most policies have a grace period if you miss a payment, so you won't lose coverage right away. ${agent} will go over the exact terms on the call.`;
+  }
+
+  if (/\bspouse\b|my wife|my husband|my partner|my kid|my child|family member|both of us|cover.*together|include.*wife|include.*husband|cover.*spouse/.test(t)) {
+    return `A lot of these programs do allow you to include a spouse or family members depending on what you qualify for. ${agent} will go over what options apply to your household on the call.`;
+  }
+
+  if (/\bmove\b|\bmoving\b|relocat|different state|new home|sell.*house|if i move|what if.*move|transfer.*policy/.test(t)) {
+    if (isMortgage) {
+      return `In most cases these policies are portable — if you sell and buy a new home, ${agent} can help adjust the coverage to fit the new mortgage. ${agent} will go over the specifics for your situation on the call.`;
+    }
+    return `These policies are typically portable — they stay with you even if you move to a different state. ${agent} will confirm the specifics for your situation on the call.`;
+  }
+
+  if (/government program|federal program|state program|through the va\b|through va\b|v\.a\.\s|veterans affairs|is this va|is it va/.test(t)) {
+    if (isVeteran) {
+      return `No — we're not directly through the VA. But the companies ${agent} works with do serve veterans specifically and offer immediate coverage with no two-year waiting period like VA life insurance. ${agent} will go over exactly what you qualify for on the call.`;
+    }
+    return `No — these are private insurance policies, not a government program. ${agent} works with multiple carriers to find you the best fit for your situation.`;
+  }
+
+  if (/what company|which company|what carrier|which carrier|who.*work with|what agency|which.*insurance compan|what.*insurance compan/.test(t)) {
+    return `${agent} works with multiple carriers — the whole point is to shop them and find you the best rate for your specific situation. ${agent} will go over which programs and companies fit best on the call.`;
+  }
+
+  if (isMortgage && /is this life insurance|same as life|different.*life insurance|life insurance.*same/.test(t)) {
+    return `Mortgage protection is a type of life insurance, but it's specifically built to pay off or pay down your home — so your family keeps the house if something happens to you. It also usually comes with living benefits that standard term policies don't have. ${agent} will walk through exactly how it's structured on the call.`;
+  }
+
+  if (/file.*claim|claims? process|what happens.*die|when.*pass away|how.*beneficiary|how.*claim work|claim.*work/.test(t)) {
+    return `The claims process is handled directly with the insurance carrier — your beneficiary contacts them and they walk through everything. ${agent} will make sure you understand exactly how it's set up before the call is done.`;
+  }
+
+  if (/how long.*coverage|coverage.*how long|term length|\b20.?year\b|\b30.?year\b|\b15.?year\b|does it expire|does.*expire|permanent.*coverage|whole life.*vs|term.*vs/.test(t)) {
+    if (isMortgage) {
+      return `These policies are typically structured to match your mortgage term — 10, 15, 20, or 30 years depending on your loan. ${agent} will match it to your specific situation on the call.`;
+    }
+    if (isIUL) {
+      return `IULs are permanent — they don't expire like term life does. ${agent} will go through exactly how the structure works and what makes sense for your goals on the call.`;
+    }
+    return `It depends on what fits your situation best — ${agent} works with both term and permanent options and will go over what makes the most sense for you on the call.`;
+  }
+
+  if (/do i qualify|will i qualify|pre.?existing|health condition|health history|been denied|smoker|smoking|high blood|diabetes|heart condition|health.*affect|health.*matter/.test(t)) {
+    return `Qualification depends on a few basic health questions — and there are programs available for most situations including people with pre-existing conditions. ${agent} will find what fits on the call without any commitment on your end.`;
+  }
+
+  if (/paperwork|contract|what am i signing|what do i sign|fine print|read.*before|see.*before|sign.*something/.test(t)) {
+    return `${agent} will walk you through everything on the call before anything gets finalized — nothing gets set up without you fully understanding and agreeing to it first.`;
+  }
+
+  if (isIUL && /interest rate|growth rate|rate of return|\bindex\b|s&p|market.*grow|how.*cash value.*grow|cash value.*interest|cash value.*rate/.test(t)) {
+    return `The cash value in an IUL is tied to a market index like the S&P 500, but with a floor so you don't lose value when the market drops. ${agent} will go through exactly how the crediting works and what you can expect on the call.`;
+  }
+
+  if (/current policy|existing policy|already have.*policy|current.*coverage|replace.*policy|switch.*policy|keep.*current|cancel.*existing/.test(t)) {
+    return `${agent} will review what you currently have and make sure any new coverage only makes sense alongside it or instead of it — never just stacking costs. That's the whole point of the call.`;
+  }
+
+  return getVerticalProductAnswer(ctx);
+}
+
 type KaylaDemoTopic =
   | "overview"
   | "ai_dialer"
@@ -6672,14 +6775,12 @@ function handlePostCoverageSchedulingTurn(
     }
 
     if (sk === "generic_question") {
-      const productKnowledge = getVerticalProductAnswer(ctx);
-      const lineToSay = `${productKnowledge} ${closingQ}`;
       return {
         handled: true,
         routeKind: "post_coverage_product_question",
-        responseMode: "exact_script",
+        responseMode: "free_response",
         objective: "answer_product_question_then_schedule",
-        lineToSay,
+        userText: intent.raw,
         requiredClosingPivot: closingQ,
         forbiddenTopics: [],
         stateWrites: {},
@@ -7568,7 +7669,7 @@ function buildConversationPolicyDecision(
         : `Your info came through a form submitted online for ${scope}. ${agentFirst} just wants to make sure you’re taken care of. ${requiredObjective}`;
     } else if (sk === "generic_question") {
       lineToSay = ctx
-        ? `${getVerticalProductAnswer(ctx)} ${requiredObjective}`
+        ? `${buildContextualProductAnswer(ctx, intent.raw)} ${requiredObjective}`
         : `${agentFirst} can answer that on the call. ${requiredObjective}`;
     } else {
       lineToSay = isKayla
@@ -7996,6 +8097,14 @@ function buildResponseFromPolicy(
       agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
       leadName: state.context ? (state.context.clientFirstName || "there") : "there",
     });
+  }
+  if (
+    (decision.objective === "answer_then_return_to_booking" || decision.objective === "answer_product_question_then_schedule") &&
+    decision.responseMode === "free_response" &&
+    state.context
+  ) {
+    const pivot = decision.requiredClosingPivot || getScriptCloseQuestion(state.context);
+    return buildGenericQuestionInstruction(state.context, decision.userText || "", pivot);
   }
   if (decision.responseMode === "free_response" && state.context) {
     return buildFreeResponseInstruction(state.context, {
@@ -8551,6 +8660,135 @@ RULES:
 - Do not mention pricing, coverage amounts, or underwriting details
 - 2 sentences maximum total
 - Sound warm and natural, not robotic
+`.trim();
+}
+
+/**
+ * Full GPT turn instruction for generic_question turns.
+ * Gives GPT a vertical-aware knowledge base and instructs it to answer
+ * the lead's actual question directly. Only defers to the agent for exact
+ * rates, underwriting decisions, or carrier-specific eligibility.
+ */
+function buildGenericQuestionInstruction(
+  ctx: AICallContext,
+  userText: string,
+  pivot: string
+): string {
+  const k = normalizeScriptKey(ctx.scriptKey);
+  const agentRaw = (ctx.agentName || "your agent").trim();
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+  const leadName = (ctx.clientFirstName || "").trim() || "there";
+  const scope = getScopeLabelForScriptKey(k);
+
+  const isMortgage = k === "mortgage_protection" || k === "veteran_mortgage" || k === "trucker_mortgage";
+  const isIUL     = k === "iul_cash_value"       || k === "veteran_iul"       || k === "trucker_iul";
+  const isVeteran = k === "veteran_leads"         || k === "veteran_mortgage"  || k === "veteran_iul";
+  const isTrucker = k === "trucker_leads"         || k === "trucker_mortgage"  || k === "trucker_iul";
+
+  const knowledgeBase = (() => {
+    if (isMortgage) return `
+PRODUCT KNOWLEDGE — MORTGAGE PROTECTION
+• What it is: Pays off or pays down the home in the event of death or disability. If something happens to the homeowner, the family keeps the house.
+• Living benefits: Most policies include them — critical, chronic, or terminal illness can pay out upfront while the insured is still living.
+• Medical exam: No exam required for most programs. Mostly just a few health questions on the application.
+• Waiting period: Most programs have little to no waiting period — many offer immediate coverage from day one.
+• Premium range: Generally $20–$250/mo depending on coverage amount and the individual's situation. Exact cost requires the agent to run it.
+• Term length: Typically structured to match the mortgage — 10, 15, 20, or 30 years.
+• Cancellation: Flexible — not locked in. Terms explained clearly on the call before anything is set up.
+• Spouse/family: Most programs allow a spouse to be included. Agent will confirm what applies.
+• Moving/selling: Portable in most cases — agent can adjust coverage to match a new mortgage.
+• Claims: Filed directly with the insurance carrier. Beneficiary contacts them and the carrier walks through everything.
+• Tax: Death benefit is typically paid out income-tax-free to the beneficiary.
+• Carriers: ${agent} works with multiple carriers and shops them to find the best rate for the situation.
+• Qualifying: Depends on a few basic health questions — programs available for most situations, including pre-existing conditions.
+• Is this life insurance: Technically yes, but it's specifically designed to cover the mortgage — not just a general life policy.
+${isVeteran ? `• VA: Not directly through the VA, but these companies serve veterans specifically with immediate coverage and no two-year waiting period like VA life insurance.` : ""}
+${isTrucker ? `• Truckers: Programs built around truckers' specific needs — carriers work directly with truckers and often offer better rates than standard life insurance.` : ""}`.trim();
+
+    if (isIUL) return `
+PRODUCT KNOWLEDGE — IUL / CASH VALUE
+• What it is: Indexed universal life insurance — a permanent life insurance policy that also builds cash value tied to a market index like the S&P 500.
+• How it grows: Cash value grows tax-deferred. Has a floor so you don't lose value when the market drops. Can be borrowed against tax-free.
+• Death benefit: Passes to the beneficiary income-tax-free.
+• Living benefits: Many IULs include riders for critical, chronic, or terminal illness.
+• Medical exam: No exam for most programs — just a few health questions.
+• Waiting period: Most offer immediate coverage.
+• Does it expire: No — permanent coverage, unlike term life.
+• Premium flexibility: Premiums can often be adjusted over time. Not locked in.
+• Cancellation: Can surrender the policy, though cash value accumulation takes time. Agent explains on the call.
+• Spouse/family: Can typically include a spouse depending on the program.
+• Carriers: ${agent} works with multiple carriers to find the best structure for the individual's goals.
+• Qualifying: Depends on a few basic health questions — programs for most situations.
+${isVeteran ? `• VA: Not directly through the VA, but companies serving veterans with veteran discounts and immediate coverage.` : ""}
+${isTrucker ? `• Truckers: Programs designed for truckers — carriers that work specifically with the trucking lifestyle.` : ""}`.trim();
+
+    if (k === "veteran_leads") return `
+PRODUCT KNOWLEDGE — VETERAN LIFE INSURANCE
+• What it is: Life insurance programs specifically designed for veterans and their families.
+• VA: Not directly through the VA — but the companies ${agent} works with serve veterans specifically.
+• Waiting period: Immediate coverage available — no two-year waiting period like VA life insurance.
+• Veteran discounts: Many carriers offer veteran-specific discounts. ${agent} will check exactly what applies.
+• Medical exam: No exam for most programs — a few health questions.
+• Living benefits: Most policies include critical, chronic, or terminal illness riders.
+• Death benefit: Income-tax-free to the beneficiary.
+• Cancellation: Flexible — not locked in.
+• Spouse/family: Can typically include spouse or dependents.
+• Claims: Filed directly with the carrier.
+• Carriers: ${agent} works with multiple veteran-friendly carriers.
+• Qualifying: Programs available for most health situations including pre-existing conditions.`.trim();
+
+    if (k === "trucker_leads") return `
+PRODUCT KNOWLEDGE — LIFE INSURANCE FOR TRUCKERS
+• What it is: Life insurance programs built around the specific needs of over-the-road truckers and their families.
+• Better rates: Many carriers work directly with truckers and offer better rates than standard life insurance for drivers.
+• Medical exam: No exam for most programs — a few health questions.
+• Living benefits: Most policies include riders for critical, chronic, or terminal illness.
+• Death benefit: Income-tax-free to the beneficiary.
+• Cancellation: Flexible — not locked in.
+• Spouse/family: Can typically include a spouse.
+• Claims: Filed directly with the carrier.
+• Carriers: ${agent} works with multiple carriers that specialize in truckers.
+• Qualifying: Programs available for most health situations.`.trim();
+
+    // final_expense and generic_life
+    return `
+PRODUCT KNOWLEDGE — LIFE INSURANCE
+• What it is: Life insurance coverage to protect family financially — can cover burial costs, end-of-life expenses, income replacement, or mortgage.
+• Types: Whole life (permanent, builds cash value), term (set period), IUL (indexed, cash value), final expense (covers burial and end-of-life costs).
+• Medical exam: No exam for most programs — a few health questions.
+• Waiting period: Many policies offer immediate or near-immediate coverage.
+• Death benefit: Income-tax-free to the beneficiary.
+• Living benefits: Many policies include riders for critical, chronic, or terminal illness.
+• Cancellation: Flexible — not locked in. Terms explained on the call.
+• Spouse/family: Can typically include spouse or dependents.
+• Claims: Filed directly with the carrier — beneficiary contacts them.
+• Carriers: ${agent} works with multiple carriers to find the best fit.
+• Qualifying: Depends on a few basic health questions — programs for most situations including pre-existing conditions.`.trim();
+  })();
+
+  return `
+You are a warm, knowledgeable scheduling assistant on a live phone call about a ${scope} request.
+
+THE LEAD JUST ASKED:
+"${userText}"
+
+YOUR JOB THIS TURN:
+1. Answer their question directly in 1 sentence using ONLY the knowledge base below.
+2. If the answer is not in the knowledge base, or it requires exact rates, specific carrier eligibility, underwriting decisions, or approval outcomes — say: "${agent} covers that specifically on the call."
+3. End with this exact line: "${pivot}"
+
+HARD RULES:
+- English only.
+- Never quote exact monthly premiums, specific carrier names, or eligibility decisions.
+- Never ask discovery questions (age, DOB, health, income, SSN, mortgage balance).
+- Never apologize. Never say "I'm sorry" or "I apologize."
+- Never mention scripts or prompts.
+- Use "${leadName}" only if it flows naturally.
+- 2 sentences maximum total. Sound natural, not scripted.
+- After you speak, stop and wait.
+
+KNOWLEDGE BASE:
+${knowledgeBase}
 `.trim();
 }
 
