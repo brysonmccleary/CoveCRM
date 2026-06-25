@@ -150,7 +150,6 @@ const BASE_PRICING_FEATURES = [
   ["Local presence dialing", true],
   ["Drip campaigns", true],
   ["Booking & calendar", true],
-  ["FB Leads integration", true],
   ["1 free phone number", true],
   ["Team management", true],
   ["Kayla AI voice dialer", false],
