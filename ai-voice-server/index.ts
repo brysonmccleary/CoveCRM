@@ -5352,7 +5352,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     if (normalizeScriptKey(ctx.scriptKey) === "kayla_signup") {
       return `Yes — and that’s exactly the point. What you’re hearing right now is what your leads would hear. This is the CoveCRM AI running live. What else can I answer for you?`;
     }
-    return `Yes — I’m a virtual assistant helping ${agent} with scheduling. ${agentFirst} is the one who handles the actual call. Does later today or tomorrow work better?`;
+    return `Yes — I’m a virtual assistant helping ${agent} with scheduling. ${agent} is the one who handles the actual call. Does later today or tomorrow work better?`;
   }
 
   if (kind === "confused_identity") {
