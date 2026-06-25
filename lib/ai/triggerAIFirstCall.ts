@@ -23,6 +23,7 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import AISettings from "@/models/AISettings";
 import User from "@/models/User";
+import { isAdmin } from "@/lib/featureFlags";
 
 const AI_VOICE_SERVER_URL = (
   process.env.AI_VOICE_HTTP_BASE ||
@@ -167,13 +168,21 @@ export async function triggerAIFirstCall(
   leadId: string,
   folderId: string,
   userEmail: string
-): Promise<void> {
+): Promise<void | { triggered: false; reason: string }> {
   if (!AI_VOICE_SERVER_URL || !COVECRM_API_SECRET) {
     console.warn("[triggerAIFirstCall] Missing env vars — skipping");
     return;
   }
 
   try {
+    const user = await User.findOne({ email: String(userEmail || "").toLowerCase() })
+      .select("email hasAI")
+      .lean() as any;
+    if (!user || (user.hasAI !== true && !isAdmin(String(user.email || userEmail)))) {
+      console.log(`[AI] Skipping first call for ${String(user?.email || userEmail)} — no AI entitlement`);
+      return { triggered: false, reason: "no_ai_entitlement" };
+    }
+
     // Guard 1 — account-level AI toggle (check FIRST before any DB lead/folder queries)
     const aiSettings = await AISettings.findOne({ userEmail }).lean() as any;
     if (!aiSettings?.aiNewLeadCallEnabled) {

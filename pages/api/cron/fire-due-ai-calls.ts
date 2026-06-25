@@ -10,6 +10,7 @@ import AISettings from "@/models/AISettings";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import User from "@/models/User";
+import { isAdmin } from "@/lib/featureFlags";
 
 const AI_VOICE_SERVER_URL = (
   process.env.AI_VOICE_HTTP_BASE ||
@@ -111,7 +112,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       continue;
     }
 
-    const userDoc = await User.findOne({ email: userEmail }).lean() as any;
+    const userDoc = await User.findOne({ email: userEmail })
+      .select("email hasAI numbers")
+      .lean() as any;
+    if (!userDoc || (userDoc.hasAI !== true && !isAdmin(String(userDoc.email || userEmail)))) {
+      await Lead.updateOne({ _id: lead._id }, { $set: { aiFirstCallStatus: "failed" } });
+      console.log(`[Cron] Skipping AI call for ${String(userDoc?.email || userEmail)} — no AI entitlement`);
+      skipped++;
+      continue;
+    }
+
     const userNumbers: any[] = Array.isArray(userDoc?.numbers) ? userDoc.numbers : [];
     const primaryNumber = userNumbers.find((n: any) =>
       n?.capabilities?.voice === true &&

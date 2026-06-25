@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AISettings from "@/models/AISettings";
 import User from "@/models/User";
+import { isAdmin } from "@/lib/featureFlags";
 
 const MOBILE_JWT_SECRET =
   process.env.MOBILE_JWT_SECRET ||
@@ -64,10 +65,15 @@ export default async function handler(
     }
 
     const user = await User.findOne({ email: userEmail })
-      .select({ _id: 1 })
+      .select({ _id: 1, email: 1, hasAI: 1 })
       .lean();
     if (!user) {
       return res.status(404).json({ ok: false, error: "User not found" });
+    }
+    if ((user as any).hasAI !== true && !isAdmin(String((user as any).email || userEmail))) {
+      return res.status(403).json({
+        error: "AI features require the AI plan. Upgrade in Settings → Billing & Usage.",
+      });
     }
 
     const update: Record<string, any> = {};

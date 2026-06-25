@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import type { GetServerSideProps } from "next";
 // pages/ai-dial-session.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/router";
+import { useSession } from "next-auth/react";
 import Sidebar from "@/components/Sidebar";
 import { getNumberState } from "@/lib/twilio/localPresence";
 
@@ -402,7 +402,8 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
 };
 
 export default function AIDialSessionPage() {
-  const router = useRouter();
+  const { data: session } = useSession();
+  const sessionUser = session?.user as any;
 
   const [folders, setFolders] = useState<Folder[]>([]);
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
@@ -833,6 +834,12 @@ export default function AIDialSessionPage() {
     !!selectedFromNumber;
 
   const aiDialerLocked = !hasAiDialer;
+  const billingReadyForAI = sessionUser?.cardOnFile === true;
+  const aiUpgradeRequired =
+    aiDialerLocked &&
+    sessionUser?.hasAI === false &&
+    billingReadyForAI &&
+    (sessionUser?.planCode === "base" || sessionUser?.planCode == null);
   const certificationRequired =
     !certificationLoading && !certificationAccepted;
 
@@ -877,8 +884,10 @@ export default function AIDialSessionPage() {
   /** Start a brand new AI dial session for the selected folder (mode: fresh) */
   const handleStartSession = async () => {
     if (aiDialerLocked) {
-      alert(
-        "AI Dialer is locked. Complete billing in Settings → Billing before starting.",
+      setSessionError(
+        aiUpgradeRequired
+          ? "AI Dialer requires the AI plan. Go to Settings → Billing & Usage to upgrade for $50/month."
+          : "Add a payment method in Settings → Billing & Usage before starting AI Dialer.",
       );
       return;
     }
@@ -941,8 +950,10 @@ export default function AIDialSessionPage() {
   /** Resume AI dial session (keep lastIndex, mark as queued) */
   const handleResumeSession = async () => {
     if (aiDialerLocked) {
-      alert(
-        "AI Dialer is locked. Complete billing in Settings → Billing before resuming.",
+      setSessionError(
+        aiUpgradeRequired
+          ? "AI Dialer requires the AI plan. Go to Settings → Billing & Usage to upgrade for $50/month."
+          : "Add a payment method in Settings → Billing & Usage before resuming AI Dialer.",
       );
       return;
     }
@@ -1056,15 +1067,17 @@ export default function AIDialSessionPage() {
             <h1 className="text-2xl font-bold">AI Dial Session</h1>
             <div className="flex flex-wrap gap-2">
               <button
-                onClick={() => router.push("/dashboard").catch(() => {})}
+                onClick={() => {
+                  window.location.href = "/dashboard";
+                }}
                 className="rounded-xl bg-slate-800 px-3 py-2 text-sm font-semibold text-gray-100 transition hover:bg-slate-700"
               >
                 ← Back to Dashboard
               </button>
               <button
-                onClick={() =>
-                  router.push("/dashboard?tab=leads").catch(() => {})
-                }
+                onClick={() => {
+                  window.location.href = "/dashboard?tab=leads";
+                }}
                 className="rounded-xl bg-slate-800 px-3 py-2 text-sm font-semibold text-gray-100 transition hover:bg-slate-700"
               >
                 Lead Folders
@@ -1084,14 +1097,47 @@ export default function AIDialSessionPage() {
             </div>
           ) : aiDialerLocked ? (
             <div className="rounded-xl border border-yellow-500/70 bg-slate-900 p-4 text-sm">
-              <div className="mb-1 font-semibold text-yellow-100">
-                Billing Required
-              </div>
-              <p className="text-xs text-gray-200">
-                Complete billing in <span className="font-semibold">Settings → Billing</span> to use AI Dialer features.
-                <br />
-                <span className="font-semibold">$20 for every 4 hours of dial time.</span>
-              </p>
+              {aiUpgradeRequired ? (
+                <>
+                  <div className="mb-1 font-semibold text-yellow-100">
+                    AI Dialer Requires the AI Plan
+                  </div>
+                  <p className="text-xs text-gray-200">
+                    You&apos;re on the Base plan. Upgrade to AI for $50/month to unlock Kayla, the AI voice dialer.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.location.href = "/settings?tab=billing";
+                    }}
+                    className="mt-3 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-indigo-500"
+                    style={{ cursor: "pointer" }}
+                  >
+                    Upgrade to AI — $50/month
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="mb-1 font-semibold text-yellow-100">
+                    Billing Required
+                  </div>
+                  <p className="text-xs text-gray-200">
+                    Complete billing in <span className="font-semibold">Settings → Billing</span> to use AI Dialer features.
+                    <br />
+                    <span className="font-semibold">$20 for every 4 hours of dial time.</span>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.location.href = "/settings?tab=billing";
+                    }}
+                    className="mt-3 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-indigo-500"
+                    style={{ cursor: "pointer" }}
+                  >
+                    Go to Billing
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <div className="rounded-xl border border-emerald-500/50 bg-emerald-900/40 p-4 text-sm">
@@ -1326,8 +1372,9 @@ export default function AIDialSessionPage() {
                   </p>
                   {aiDialerLocked && !aiBillingLoading && (
                     <p className="mt-1 text-xs text-yellow-300">
-                      AI Dialer is currently locked. Complete billing in Settings →
-                      Billing to enable these controls.
+                      {aiUpgradeRequired
+                        ? "AI Dialer is currently locked. Upgrade to AI in Settings → Billing & Usage to enable these controls."
+                        : "AI Dialer is currently locked. Complete billing in Settings → Billing to enable these controls."}
                     </p>
                   )}
                   {certificationRequired && (
