@@ -2850,6 +2850,14 @@ function detectQuestionKindForTurn(textRaw: string): string | null {
     t.includes("just lost my dad") ||
     t.includes("just lost my father") ||
     t.includes("just lost my mother") ||
+    t.includes("my husband just died") ||
+    t.includes("my wife just died") ||
+    t.includes("husband just died") ||
+    t.includes("wife just died") ||
+    t.includes("my mom just died") ||
+    t.includes("my dad just died") ||
+    t.includes("my father just died") ||
+    t.includes("my mother just died") ||
     t.includes("just diagnosed") ||
     t.includes("been diagnosed with") ||
     t.includes("not in a good place") ||
@@ -4918,7 +4926,12 @@ function detectObjection(textRaw: string): string | null {
     t.includes("don't call me again") ||
     t.includes("dont call me again") ||
     t.includes("stop calling me") ||
-    t.includes("stop calling")
+    t.includes("stop calling") ||
+    t.includes("on the dnc list") ||
+    t.includes("on the do not call list") ||
+    t.includes("on your dnc") ||
+    t.includes("registered on the dnc") ||
+    t.includes("on a do not call")
   ) return "do_not_call";
 
   // "I don't need it anymore" / "don't think I need this" -> treat as not interested (booking-only rebuttal)
@@ -5857,7 +5870,13 @@ function classifyTurnIntent(
     t.includes("ive told you") || t.includes("i've told you") ||
     t.includes("you people") ||
     t.includes("never call me again") ||
-    t.includes("dont call me again") || t.includes("don't call me again");
+    t.includes("dont call me again") || t.includes("don't call me again") ||
+    t.includes("this is harassment") || t.includes("this is harassing") ||
+    t.includes("calling the fcc") || t.includes("call the fcc") ||
+    t.includes("report you") || t.includes("file a complaint") ||
+    t.includes("sue you") || t.includes("i'll sue") || t.includes("ill sue") ||
+    t.includes("calling my lawyer") || t.includes("call my lawyer") ||
+    t.includes("taking legal action");
   if (hasProfanity || hasAngerSignal) {
     return { kind: "angry_or_profane", raw };
   }
@@ -6105,6 +6124,11 @@ function buildContextualProductAnswer(ctx: AICallContext, userText: string): { a
     return { answer: `Good news — there's no medical exam required for most of what ${agent} goes over. It's mostly just a few health questions on the application.`, matched: true };
   }
 
+  // Personal disclosure ("I was just diagnosed with cancer") must NOT match as a product question.
+  // Route to free_response so GPT can lead with empathy instead of a product pitch.
+  if (/just diagnosed|been diagnosed with|i was diagnosed|i got diagnosed|recently diagnosed/.test(t) && !/what.*living benefit|do.*living benefit|does.*living benefit/.test(t)) {
+    return { answer: "", matched: false };
+  }
   if (/living benefit|get sick|get hurt|critical illness|terminal|chronic illness|if i get sick|if i get hurt|paid.*while.*alive|pay out.*alive|diagnos|disability benefit/.test(t)) {
     return { answer: `Yeah — a lot of these policies do come with living benefits, so if you're ever diagnosed with a critical, chronic, or terminal illness, the policy can pay out upfront while you're still here. ${agent} will go over exactly what applies to your situation on the call.`, matched: true };
   }
@@ -6129,6 +6153,10 @@ function buildContextualProductAnswer(ctx: AICallContext, userText: string): { a
     return { answer: `Most policies have a grace period if you miss a payment, so you won't lose coverage right away. ${agent} will go over the exact terms on the call.`, matched: true };
   }
 
+  // Grief disclosures must not match as spouse coverage product questions.
+  if (/my husband died|my wife died|just lost my husband|just lost my wife|husband died|wife died|my husband passed|my wife passed|lost my spouse|spouse passed|spouse died/.test(t)) {
+    return { answer: getVerticalProductAnswer(ctx), matched: false };
+  }
   if (/\bspouse\b|my wife|my husband|my partner|my kid|my child|family member|both of us|cover.*together|include.*wife|include.*husband|cover.*spouse/.test(t)) {
     return { answer: `A lot of these programs do allow you to include a spouse or family members depending on what you qualify for. ${agent} will go over what options apply to your household on the call.`, matched: true };
   }
@@ -7435,7 +7463,13 @@ function buildConversationPolicyDecision(
         lineToSay: "I completely understand — I'll make a note and remove you right away. Sorry for the interruption. Take care.",
         requiredClosingPivot: "",
         forbiddenTopics: [],
-        stateWrites: {},
+        stateWrites: {
+          pendingHangupAfterGoodbye: true,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+        },
         shouldAdvanceStep: false,
       };
     }
@@ -7765,7 +7799,11 @@ function buildConversationPolicyDecision(
     }
 
     if (sk === "call_purpose_confusion" || sk === "source_memory" || sk === "permission_to_ask") {
-      lineToSay = `${getRebuttalLine(ctx, sk)}${requiredObjective}`;
+      const rebuttalRaw = getRebuttalLine(ctx, sk);
+      // source_memory rebuttal already ends with a closing question — don't double-append requiredObjective
+      lineToSay = sk === "source_memory" && rebuttalRaw.trimEnd().endsWith("?")
+        ? rebuttalRaw
+        : `${rebuttalRaw}${requiredObjective}`;
     } else if (sk === "scam") {
       lineToSay = buildDeterministicScamRebuttalLine(state);
     } else if (sk === "how_much") {
@@ -7805,9 +7843,9 @@ function buildConversationPolicyDecision(
         ? `Your info came through a form requesting a CoveCRM demo. ${agentFirst} just wants to make sure you got what you were looking for. ${requiredObjective}`
         : `Your info came through a form submitted online for ${scope}. ${agentFirst} just wants to make sure you’re taken care of. ${requiredObjective}`;
     } else if (sk === "spouse_consult") {
-      lineToSay = `${getRebuttalLine(ctx, "spouse_consult")} ${requiredObjective}`;
+      lineToSay = getRebuttalLine(ctx, "spouse_consult");
     } else if (sk === "already_talked") {
-      lineToSay = `${getRebuttalLine(ctx, "already_talked")} ${requiredObjective}`;
+      lineToSay = getRebuttalLine(ctx, "already_talked");
     } else if (sk === "generic_question") {
       if (ctx) {
         const { answer, matched } = buildContextualProductAnswer(ctx, intent.raw);
