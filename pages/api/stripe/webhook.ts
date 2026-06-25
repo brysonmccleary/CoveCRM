@@ -1,4 +1,19 @@
 // pages/api/stripe/webhook.ts
+// STRIPE WEBHOOK EVENTS HANDLED:
+// - account.updated
+// - promotion_code.created
+// - promotion_code.updated
+// - checkout.session.completed
+// - invoice.paid
+// - invoice.payment_succeeded
+// - credit_note.created
+// - customer.subscription.trial_will_end
+// - customer.subscription.updated
+// - customer.subscription.deleted
+// - invoice.payment_failed
+// - customer.subscription.created
+// - transfer.created
+// - transfer.reversed
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
 import type Stripe from "stripe";
@@ -8,6 +23,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import type { IAffiliate } from "@/models/Affiliate";
 import AffiliatePayout from "@/models/AffiliatePayout";
+import AffiliatePayoutLedger from "@/models/AffiliatePayoutLedger";
 import User from "@/models/User";
 import Folder from "@/models/Folder";
 import EmailCampaign from "@/models/EmailCampaign";
@@ -15,7 +31,7 @@ import ProspectingPlan from "@/models/ProspectingPlan";
 import FBLeadSubscription from "@/models/FBLeadSubscription";
 import PhoneNumber from "@/models/PhoneNumber";
 import { assignLeadsToUser } from "@/lib/prospecting/assignLeads";
-import { sendAffiliateApprovedEmail } from "@/lib/email";
+import { sendAffiliateApprovedEmail, sendEmail } from "@/lib/email";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { Resend } from "resend";
 
@@ -113,6 +129,28 @@ async function isPhoneNumberSubscription(subscriptionId?: string | null) {
 }
 
 const toCents = (usd: number) => Math.round(Number(usd || 0) * 100);
+
+const AFFILIATE_MONTHLY_PAYOUT_USD = 12.50;
+
+const currentMonthKey = () => {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+};
+
+const PLAN_PRICE_MAP: Record<string, { planCode: "base" | "ai"; billingInterval: "monthly" | "annual" }> = {
+  ...(process.env.CoveCRM_Base
+    ? { [process.env.CoveCRM_Base]: { planCode: "base" as const, billingInterval: "monthly" as const } }
+    : {}),
+  ...(process.env.CoveCRM_Annual_Base_Plan
+    ? { [process.env.CoveCRM_Annual_Base_Plan]: { planCode: "base" as const, billingInterval: "annual" as const } }
+    : {}),
+  ...(process.env.CoveCRM_AI_Plan
+    ? { [process.env.CoveCRM_AI_Plan]: { planCode: "ai" as const, billingInterval: "monthly" as const } }
+    : {}),
+  ...(process.env.CoveCRM_AI_Annual_Plan
+    ? { [process.env.CoveCRM_AI_Annual_Plan]: { planCode: "ai" as const, billingInterval: "annual" as const } }
+    : {}),
+};
 
 // House code exclusion (defaults to COVE50 if env unset)
 const HOUSE_CODE = U(process.env.AFFILIATE_HOUSE_CODE || "COVE50");
@@ -524,6 +562,102 @@ async function maybeAutoPayout(affiliateInput: IAffiliate, invoiceId: string) {
       currency: "usd",
       status: "failed",
       idempotencyKey,
+    });
+  }
+}
+
+async function processReferralLinkMonthlyPayout(user: any) {
+  if (!user?._id || !user?.affiliateId) return;
+
+  const affiliate = await Affiliate.findById(user.affiliateId);
+  if (!affiliate?.stripeConnectId) return;
+
+  const affiliateId = String((affiliate as any)._id);
+  const userId = String(user._id);
+  const month = currentMonthKey();
+  const idempotencyKey = `${affiliateId}-${userId}-${month}`;
+
+  let ledger = await AffiliatePayoutLedger.findOne({ idempotencyKey });
+  if (!ledger) {
+    ledger = await AffiliatePayoutLedger.create({
+      affiliateId: (affiliate as any)._id,
+      userId: user._id,
+      month,
+      amount: AFFILIATE_MONTHLY_PAYOUT_USD,
+      status: "pending",
+      idempotencyKey,
+    });
+  }
+
+  if ((ledger as any).status === "paid") return;
+
+  try {
+    const transfer = await stripe.transfers.create(
+      {
+        amount: 1250,
+        currency: "usd",
+        destination: affiliate.stripeConnectId,
+        transfer_group: `affiliate-${affiliateId}-${month}`,
+        metadata: { affiliateId, userId, month },
+      },
+      { idempotencyKey },
+    );
+
+    (ledger as any).status = "paid";
+    (ledger as any).paidAt = new Date();
+    (ledger as any).stripeTransferId = transfer.id;
+    await ledger.save();
+
+    const referredUserMatch = {
+      _id: (affiliate as any)._id,
+      "referredUsers.userId": user._id,
+    };
+    const referredUserUpdate = await Affiliate.updateOne(referredUserMatch, {
+      $set: {
+        "referredUsers.$.lastPayoutAt": new Date(),
+        "referredUsers.$.isActive": true,
+      },
+      $inc: {
+        "referredUsers.$.totalPayoutsSentToAffiliate": AFFILIATE_MONTHLY_PAYOUT_USD,
+        totalPayoutsSent: AFFILIATE_MONTHLY_PAYOUT_USD,
+      },
+    });
+
+    if ((referredUserUpdate as any).matchedCount === 0) {
+      await Affiliate.updateOne(
+        { _id: (affiliate as any)._id },
+        {
+          $push: {
+            referredUsers: {
+              userId: user._id,
+              joinedAt: user.createdAt || new Date(),
+              planCode: user.planCode || "",
+              billingInterval: user.billingInterval || "",
+              isActive: true,
+              lastPayoutAt: new Date(),
+              totalPayoutsSentToAffiliate: AFFILIATE_MONTHLY_PAYOUT_USD,
+            },
+          },
+          $inc: { totalPayoutsSent: AFFILIATE_MONTHLY_PAYOUT_USD },
+        },
+      );
+    }
+
+    await Affiliate.updateOne(
+      { _id: (affiliate as any)._id },
+      {
+        $set: {
+          payoutDue: 0,
+          lastPayoutDate: new Date(),
+        },
+      },
+    );
+  } catch (e: any) {
+    audit("referral link affiliate transfer failed", {
+      affiliateId,
+      userId,
+      month,
+      message: e?.message || String(e),
     });
   }
 }
@@ -1110,6 +1244,9 @@ export default async function handler(
             (user as any).pastDueSince = null;
             (user as any).callingBlocked = false;
             await user.save();
+            if ((user as any).affiliateId && paidCents > 0) {
+              await processReferralLinkMonthlyPayout(user);
+            }
             userEmail = user.email;
             if (!codeText) codeText = U((user as any).referredBy);
           }
@@ -1259,6 +1396,22 @@ export default async function handler(
         break;
       }
 
+      case "customer.subscription.trial_will_end": {
+        const sub = event.data.object as Stripe.Subscription;
+        const customerId = sub.customer as string;
+        const user = await User.findOne({ stripeCustomerId: customerId });
+        if (user && (user as any).cardOnFile === false) {
+          const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "https://covecrm.com";
+          const billingUrl = `${baseUrl.replace(/\/$/, "")}/settings?tab=billing`;
+          await sendEmail(
+            user.email,
+            "Your CoveCRM trial ends in 3 days",
+            `<p>Your CoveCRM trial ends in 3 days.</p><p>Add a payment method to keep access: <a href="${billingUrl}">${billingUrl}</a></p>`,
+          );
+        }
+        break;
+      }
+
       case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = sub.customer as string;
@@ -1277,6 +1430,23 @@ export default async function handler(
           // Ensure flag exists (do not arm it here)
           if (typeof (user as any).aiDialerAutoReloadArmed !== "boolean") {
             (user as any).aiDialerAutoReloadArmed = false;
+          }
+
+          const firstPrice = sub.items?.data?.[0]?.price as Stripe.Price | undefined;
+          const firstPriceId = firstPrice?.id || "";
+          const mappedPlan = firstPriceId ? PLAN_PRICE_MAP[firstPriceId] : null;
+          if (firstPriceId) (user as any).stripePriceId = firstPriceId;
+          if (firstPrice?.recurring?.interval === "month") {
+            (user as any).billingInterval = "monthly";
+          } else if (firstPrice?.recurring?.interval === "year") {
+            (user as any).billingInterval = "annual";
+          } else if (mappedPlan?.billingInterval) {
+            (user as any).billingInterval = mappedPlan.billingInterval;
+          }
+          if (mappedPlan?.planCode) {
+            (user as any).planCode = mappedPlan.planCode;
+            user.hasAI = isAdminFree(user.email) ? true : mappedPlan.planCode === "ai";
+            (user as any).aiEntitlementSource = mappedPlan.planCode === "ai" ? "plan" : "none";
           }
 
           await user.save();
@@ -1300,7 +1470,39 @@ export default async function handler(
             (user as any).aiDialerAutoReloadArmed = false;
           }
 
+          try {
+            const activeSubs = await stripe.subscriptions.list({
+              customer: customerId,
+              status: "all",
+              limit: 20,
+            });
+            const hasOtherActive = activeSubs.data.some(
+              (activeSub) =>
+                activeSub.id !== sub.id &&
+                ["active", "trialing", "past_due", "incomplete"].includes(activeSub.status),
+            );
+            if (!hasOtherActive) {
+              (user as any).cardOnFile = false;
+            }
+          } catch (e: any) {
+            audit("subscription.deleted active subscription check failed", {
+              customerId,
+              message: e?.message || String(e),
+            });
+          }
+
           await user.save();
+
+          if ((user as any).affiliateId) {
+            await AffiliatePayoutLedger.updateMany(
+              { userId: (user as any)._id, status: "pending" },
+              { $set: { status: "failed" } },
+            );
+            await Affiliate.updateOne(
+              { _id: (user as any).affiliateId, "referredUsers.userId": (user as any)._id },
+              { $set: { "referredUsers.$.isActive": false } },
+            );
+          }
         }
 
         // Cancel FB Lead Manager subscription if matched
@@ -1361,6 +1563,13 @@ export default async function handler(
                 (failedUser as any).pastDueSince = new Date();
               }
               await failedUser.save();
+              if ((failedUser as any).affiliateId) {
+                audit("invoice.payment_failed: affiliate payout skipped", {
+                  userId: String((failedUser as any)._id),
+                  affiliateId: String((failedUser as any).affiliateId),
+                  month: currentMonthKey(),
+                });
+              }
             }
           } catch (e) {
             console.error("invoice.payment_failed calling-block error:", e);

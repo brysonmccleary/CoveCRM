@@ -33,6 +33,7 @@ export async function grantTrialIfEligible(user: any, stripe: Stripe): Promise<G
   if (!user?._id) return { ok: false, granted: false, reason: "user_not_found" };
   if ((user as any).role === "admin") return { ok: true, granted: true, reason: "admin_bypass" };
   if ((user as any).trialGranted === true) {
+    await User.updateOne({ _id: user._id }, { $set: { cardOnFile: true } });
     return {
       ok: true,
       granted: true,
@@ -115,6 +116,7 @@ export async function grantTrialIfEligible(user: any, stripe: Stripe): Promise<G
       billingBlockedReason: null,
       callingBlocked: false,
       subscriptionStatus: "active",
+      cardOnFile: true,
     },
   };
   if (trialCreditDollars > 0) update.$inc = { usageBalance: trialCreditDollars };
@@ -123,6 +125,9 @@ export async function grantTrialIfEligible(user: any, stripe: Stripe): Promise<G
 
   if ((result as any).modifiedCount === 0) {
     const fresh = await User.findById(user._id).select({ trialGranted: 1, stripeCardFingerprint: 1 }).lean();
+    if ((fresh as any)?.trialGranted) {
+      await User.updateOne({ _id: user._id }, { $set: { cardOnFile: true } });
+    }
     return {
       ok: Boolean((fresh as any)?.trialGranted),
       granted: Boolean((fresh as any)?.trialGranted),

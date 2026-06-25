@@ -12,6 +12,7 @@ import AffiliatePanel from "@/components/Admin/AffiliatePanel";
 import AffiliatesDashboard from "@/components/Admin/AffiliatesDashboard";
 import AffiliateCodeManager from "@/components/Admin/AffiliateCodeManager";
 import AISettingsPanel from "@/components/settings/AISettingsPanel";
+import BillingPanel from "@/components/settings/BillingPanel";
 
 const sections = [
   {
@@ -21,6 +22,7 @@ const sections = [
       { id: "profile", label: "Profile" },
       { id: "a2p", label: "A2P Registration" },
       { id: "ai", label: "AI Settings" },
+      { id: "billing", label: "Billing & Usage" },
     ],
   },
   {
@@ -74,6 +76,9 @@ export default function SettingsPage() {
       setMessage("✅ Stripe Connect onboarding completed!");
     }
 
+    const tab = query.get("tab");
+    if (tab) setActiveTab(tab);
+
     const timer = setTimeout(() => setMessage(""), 6000);
     return () => clearTimeout(timer);
   }, []);
@@ -86,6 +91,8 @@ export default function SettingsPage() {
         return <A2PVerificationPanel />;
       case "ai":
         return <AISettingsPanel />;
+      case "billing":
+        return <BillingPanel />;
       case "referral":
         return <ReferralPanel />;
       case "settings":
@@ -105,7 +112,10 @@ export default function SettingsPage() {
     <DashboardLayout>
       <div className="flex min-h-screen bg-[#1e293b] text-white">
         {/* Sidebar */}
-        <aside className="w-64 border-r border-gray-800 p-4 bg-[#0f172a] overflow-y-auto">
+        <aside
+          className="border-r border-gray-800 p-4 bg-[#0f172a] overflow-y-auto"
+          style={{ width: 240, minWidth: 240, flexShrink: 0 }}
+        >
           <h2 className="text-lg font-bold mb-4 text-white">Settings</h2>
 
           {message && (
@@ -125,6 +135,7 @@ export default function SettingsPage() {
                     <button
                       key={child.id}
                       onClick={() => setActiveTab(child.id)}
+                      style={{ cursor: "pointer" }}
                       className={`block w-full text-left px-3 py-2 rounded text-sm transition font-medium ${
                         activeTab === child.id
                           ? "bg-blue-600 text-white"

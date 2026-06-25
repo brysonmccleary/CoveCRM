@@ -1,5 +1,6 @@
 // components/settings/AISettingsPanel.tsx
 import { useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 import toast from "react-hot-toast";
 
 interface AISettings {
@@ -51,15 +52,20 @@ function SettingRow({
   label,
   description,
   children,
+  locked,
 }: {
   label: string;
   description?: string;
   children: React.ReactNode;
+  locked?: boolean;
 }) {
   return (
     <div className="flex items-start justify-between py-4 border-b border-white/5">
       <div className="flex-1 pr-6">
-        <p className="text-white text-sm font-medium">{label}</p>
+        <p className="text-white text-sm font-medium">
+          {locked && <span className="mr-2 text-gray-400">🔒</span>}
+          {label}
+        </p>
         {description && <p className="text-gray-400 text-xs mt-0.5">{description}</p>}
       </div>
       <div className="shrink-0">{children}</div>
@@ -68,6 +74,7 @@ function SettingRow({
 }
 
 export default function AISettingsPanel() {
+  const { data: session } = useSession();
   const [settings, setSettings] = useState<AISettings>({});
   const [aiInsightUsage, setAiInsightUsage] = useState<AIInsightUsage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -110,8 +117,31 @@ export default function AISettingsPanel() {
     );
   }
 
+  const user = session?.user as any;
+  const aiLocked = user?.hasAI === false && user?.planCode === "base";
+
   return (
     <div className="p-6 max-w-2xl space-y-6">
+      {aiLocked && (
+        <div className="rounded-xl border border-purple-500/30 bg-purple-500/10 p-5">
+          <h3 className="text-lg font-semibold text-white">
+            AI features are not included in your Base plan
+          </h3>
+          <p className="mt-2 text-sm text-gray-300">
+            Upgrade for $50/month to unlock Kayla, auto-calling, transcripts, and AI SMS.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = "/settings?tab=billing";
+            }}
+            className="mt-4 rounded bg-[var(--cove-accent)] px-4 py-2 text-sm font-semibold text-white hover:opacity-95"
+          >
+            Upgrade to AI — $50/month
+          </button>
+        </div>
+      )}
+
       <div>
         <h2 className="text-xl font-bold text-white">AI Settings</h2>
         <p className="text-gray-400 text-sm mt-1">
@@ -119,6 +149,7 @@ export default function AISettingsPanel() {
         </p>
       </div>
 
+      <div className={aiLocked ? "space-y-6 opacity-40 pointer-events-none" : "space-y-6"}>
       {/* AI Calling */}
       <div className="bg-[#0f172a] border border-white/10 rounded-xl">
         <div className="px-5 pt-4 pb-2 border-b border-white/5">
@@ -130,11 +161,12 @@ export default function AISettingsPanel() {
           <SettingRow
             label="New Lead Auto-Call"
             description="Automatically call new leads with AI when they're added to your CRM."
+            locked={aiLocked}
           >
             <Toggle
               checked={!!settings.aiNewLeadCallEnabled}
               onChange={(v) => save({ aiNewLeadCallEnabled: v })}
-              disabled={saving}
+              disabled={saving || aiLocked}
             />
           </SettingRow>
 
@@ -142,12 +174,13 @@ export default function AISettingsPanel() {
             <SettingRow
               label="Call Delay"
               description="How many minutes to wait before calling a new lead."
+              locked={aiLocked}
             >
               <select
                 value={settings.newLeadCallDelayMinutes ?? 5}
                 onChange={(e) => save({ newLeadCallDelayMinutes: Number(e.target.value) })}
                 className="bg-[#1e293b] border border-white/10 text-white text-sm rounded px-3 py-1.5"
-                disabled={saving}
+                disabled={saving || aiLocked}
               >
                 {[0, 1, 2, 5, 10, 15, 30].map((n) => (
                   <option key={n} value={n}>
@@ -161,11 +194,12 @@ export default function AISettingsPanel() {
           <SettingRow
             label="Live Transfer"
             description="Transfer AI calls to your phone when the lead is ready to talk."
+            locked={aiLocked}
           >
             <Toggle
               checked={!!settings.liveTransferEnabled}
               onChange={(v) => save({ liveTransferEnabled: v })}
-              disabled={saving}
+              disabled={saving || aiLocked}
             />
           </SettingRow>
 
@@ -173,6 +207,7 @@ export default function AISettingsPanel() {
             <SettingRow
               label="Transfer Phone"
               description="Your phone number for live transfers (E.164 format, e.g. +14805551234). If you don't answer within 25 seconds, the appointment is automatically booked."
+              locked={aiLocked}
             >
               <input
                 type="tel"
@@ -183,7 +218,7 @@ export default function AISettingsPanel() {
                 onBlur={(e) => save({ liveTransferPhone: e.target.value })}
                 placeholder="+14805551234"
                 className="bg-[#1e293b] border border-white/10 text-white text-sm rounded px-3 py-1.5 w-44"
-                disabled={saving}
+                disabled={saving || aiLocked}
               />
             </SettingRow>
           )}
@@ -191,11 +226,12 @@ export default function AISettingsPanel() {
           <SettingRow
             label="AI Dialer Transcripts"
             description="Save Kayla call transcripts for calls over 1:30. Transcript minutes are billed in your AI Dialer bucket at $0.01/min, rounded up."
+            locked={aiLocked}
           >
             <Toggle
               checked={!!settings.aiDialerTranscriptsEnabled}
               onChange={(v) => save({ aiDialerTranscriptsEnabled: v })}
-              disabled={saving}
+              disabled={saving || aiLocked}
             />
           </SettingRow>
         </div>
@@ -212,22 +248,24 @@ export default function AISettingsPanel() {
           <SettingRow
             label="AI Call Insights"
             description="Automatically generates call overviews from recordings. $0.02/min, rounded up, billed only for calls 20 seconds or longer."
+            locked={aiLocked}
           >
             <Toggle
               checked={settings.aiCallOverviewEnabled !== false}
               onChange={(v) => save({ aiCallOverviewEnabled: v })}
-              disabled={saving}
+              disabled={saving || aiLocked}
             />
           </SettingRow>
 
           <SettingRow
             label="AI Coaching"
             description="Adds coaching reports when enabled. Included in the same AI Call Insights charge."
+            locked={aiLocked}
           >
             <Toggle
               checked={!!settings.aiCallCoachingEnabled}
               onChange={(v) => save({ aiCallCoachingEnabled: v })}
-              disabled={saving}
+              disabled={saving || aiLocked}
             />
           </SettingRow>
 
@@ -252,14 +290,16 @@ export default function AISettingsPanel() {
           <SettingRow
             label="AI SMS Assistant"
             description="Let AI respond to inbound lead texts and send queued AI SMS replies."
+            locked={aiLocked}
           >
             <Toggle
               checked={!!settings.aiTextingEnabled}
               onChange={(v) => save({ aiTextingEnabled: v })}
-              disabled={saving}
+              disabled={saving || aiLocked}
             />
           </SettingRow>
         </div>
+      </div>
       </div>
     </div>
   );

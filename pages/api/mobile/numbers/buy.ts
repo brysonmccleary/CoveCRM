@@ -9,6 +9,7 @@ import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
+import { isAdmin } from "@/lib/featureFlags";
 
 const DEFAULT_PHONE_PRICE_ID = "price_1TkCtfDF9aEsjVyJRrUfYdLF";
 const LEGACY_PHONE_PRICE_IDS = [
@@ -365,6 +366,10 @@ export default async function handler(
 
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
+    const allowCardBypass = (user as any).role === "admin" || isAdmin(email) || canBypassNumberPurchaseBilling(user, email);
+    if ((user as any).cardOnFile !== true && !allowCardBypass) {
+      return res.status(403).json({ error: "Please add a payment method before purchasing a number" });
+    }
 
     const {
       client,
@@ -673,6 +678,7 @@ export default async function handler(
     } as any);
     user.a2p = user.a2p || ({} as any);
     if (a2pVerified && targetMS) (user.a2p as any).messagingServiceSid = targetMS;
+    (user as any).numberProvisionedAt = new Date();
     await user.save();
 
     return res.status(200).json({

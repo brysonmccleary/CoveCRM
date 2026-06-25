@@ -146,6 +146,9 @@ export default function PublicBookingPage() {
           >
             Confirm Booking
           </button>
+          <p className="text-xs text-gray-500 mt-2">
+            By booking this appointment, you agree to receive a confirmation message and appointment reminder via SMS at the phone number you provide. Message and data rates may apply. Reply STOP to opt out.
+          </p>
         </>
       )}
     </div>

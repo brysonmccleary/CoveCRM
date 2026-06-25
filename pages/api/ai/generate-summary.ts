@@ -10,6 +10,7 @@ import Call from "@/models/Call";
 import { getUserByEmail } from "@/models/User";
 import { OpenAI } from "openai";
 import { trackUsage } from "@/lib/billing/trackUsage";
+import { isAdmin } from "@/lib/featureFlags";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const BASE_URL = (
@@ -31,6 +32,7 @@ async function generateLeadSummary(leadId: string): Promise<void> {
 
   const user = await getUserByEmail(String(lead.userEmail || "").toLowerCase());
   if (!user) return;
+  if ((user as any).hasAI !== true && !isAdmin(String((user as any).email || lead.userEmail || ""))) return;
 
   const agentName = (user as any)?.name || "The agent";
   const clientName = (lead as any)?.name || "The client";
@@ -110,13 +112,33 @@ export default async function handler(
   try {
     await dbConnect();
 
-    // Preferred new flow: trigger worker by Call (keeps single source of truth)
+    let targetCall: any = null;
+    let targetLead: any = null;
+    let targetUserEmail = "";
+
     if (callId || callSid) {
-      const call =
+      targetCall =
         (callId && (await Call.findById(callId))) ||
         (callSid && (await Call.findOne({ callSid })));
+      if (!targetCall) return res.status(404).json({ message: "Call not found" });
+      targetUserEmail = String(targetCall.userEmail || "").toLowerCase();
+    } else if (leadId) {
+      targetLead = await Lead.findById(leadId);
+      if (!targetLead) return res.status(404).json({ message: "Lead not found" });
+      targetUserEmail = String(targetLead.userEmail || "").toLowerCase();
+    }
 
-      if (!call) return res.status(404).json({ message: "Call not found" });
+    if (targetUserEmail) {
+      const user = await getUserByEmail(targetUserEmail);
+      if (!user) return res.status(404).json({ message: "User not found for AI summary." });
+      if ((user as any).hasAI !== true && !isAdmin(String((user as any).email || targetUserEmail))) {
+        return res.status(403).json({ error: "AI features require the AI plan or upgrade" });
+      }
+    }
+
+    // Preferred new flow: trigger worker by Call (keeps single source of truth)
+    if (callId || callSid) {
+      const call = targetCall;
 
       const user = await getUserByEmail(
         String(call.userEmail || "").toLowerCase(),

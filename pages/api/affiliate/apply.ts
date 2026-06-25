@@ -18,23 +18,28 @@ const BASE_URL =
 const AFFILIATE_RETURN_PATH =
   process.env.AFFILIATE_RETURN_PATH || "/dashboard?tab=settings";
 
-// Flat payout to affiliate on first paid invoice
-const DEFAULT_PAYOUT_FLAT = Number(
-  process.env.AFFILIATE_DEFAULT_PAYOUT || "25",
-);
-
-// Helpers to mirror other affiliate code
-const U = (s?: string | null) => (s || "").trim().toUpperCase();
-const HOUSE_CODE = U(process.env.AFFILIATE_HOUSE_CODE || "COVE50");
-
 /**
- * Every affiliate promo code should use THIS same Stripe coupon,
- * which is your $50-off discount.
- *
- * You can also set STRIPE_REFERRAL_COUPON_ID in env and override it.
+ * Legacy note: STRIPE_REFERRAL_COUPON_ID used to back affiliate promo codes.
+ * New referral-link affiliates do not create or attach Stripe coupons or promo codes.
  */
-const REFERRAL_COUPON_ID =
-  process.env.STRIPE_REFERRAL_COUPON_ID || "A5t6ytdl";
+
+function nameSlug(name: string) {
+  return name.replace(/[^a-z]/gi, "").toUpperCase().slice(0, 6).padEnd(6, "X");
+}
+
+function randomAlpha(length = 4) {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
+async function generateUniqueReferralCode(name: string, userId: string) {
+  for (let i = 0; i < 8; i++) {
+    const code = `${nameSlug(name)}${userId.slice(-4).toUpperCase()}${randomAlpha(4)}`;
+    const exists = await Affiliate.findOne({ referralCode: code }).select({ _id: 1 }).lean();
+    if (!exists) return code;
+  }
+  return `${nameSlug(name)}${userId.slice(-4).toUpperCase()}${Date.now().toString(36).slice(-4).toUpperCase()}`;
+}
 
 export default async function handler(
   req: NextApiRequest,
@@ -54,106 +59,26 @@ export default async function handler(
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const { name, email, teamSize, code } = req.body as {
+    const { name, email, teamSize } = req.body as {
       name?: string;
       email?: string;
       teamSize?: string | number;
-      code?: string;
     };
 
-    if (!name || !email || !teamSize || !code) {
+    if (!name || !email || !teamSize) {
       return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    const promoCode = U(code);
-    if (!promoCode) {
-      return res.status(400).json({ error: "Invalid promo code" });
-    }
-
-    // Block house / reserved code from being used by affiliates
-    if (promoCode === HOUSE_CODE) {
-      return res
-        .status(400)
-        .json({ error: "This promo code is reserved and cannot be used." });
     }
 
     const SKIP_CONNECT = process.env.DEV_SKIP_BILLING === "1"; // dev-only bypass for Connect
 
     await dbConnect();
 
-    // Ensure code is unique in our DB
-    const existing = await Affiliate.findOne({ promoCode });
-    if (existing) {
-      return res.status(400).json({ error: "Promo code already taken" });
-    }
-
     const user = await User.findOne({ email: session.user.email });
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const userIdStr = String((user as any)._id ?? (user as any).id);
-
-    // 1) Create (or reuse) Stripe Promotion Code so the code is live immediately
-    let couponId: string | undefined;
-    let promotionCodeId: string | undefined;
-
-    try {
-      // First, see if a promotion code with this exact code already exists
-      const listResp = await stripe.promotionCodes.list({
-        code: promoCode,
-        limit: 1,
-      });
-
-      const promos = Array.isArray((listResp as any).data)
-        ? (listResp as any).data
-        : [];
-
-      if (promos.length) {
-        const p: any = promos[0];
-        promotionCodeId = String(p.id);
-
-        // If the promo code points at some other coupon, we still accept it,
-        // but going forward all new codes will use REFERRAL_COUPON_ID.
-        couponId =
-          typeof p.coupon === "string"
-            ? String(p.coupon)
-            : String(p.coupon?.id);
-
-        if (!p.active) {
-          await stripe.promotionCodes.update(String(p.id), { active: true });
-        }
-      } else {
-        // IMPORTANT: Do NOT create a coupon. We ALWAYS reuse the
-        // existing $50-off coupon (REFERRAL_COUPON_ID) and only
-        // create a promotion code that points to it.
-        couponId = REFERRAL_COUPON_ID;
-
-        const promo = await stripe.promotionCodes.create({
-          coupon: REFERRAL_COUPON_ID,
-          code: promoCode,
-          active: true,
-          metadata: {
-            promoCode,
-            affiliateUserId: userIdStr,
-          },
-        });
-
-        promotionCodeId = promo.id;
-      }
-    } catch (err: any) {
-      console.error("[affiliate/apply] Stripe promotion code error", {
-        message: err?.message,
-        code: err?.code,
-        type: err?.type,
-      });
-
-      const devMsg =
-        process.env.NODE_ENV !== "production" &&
-        (err?.message || err?.error?.message);
-
-      return res
-        .status(500)
-        .json({ error: devMsg || "Failed to create promotion code" });
-    }
+    const referralCode = await generateUniqueReferralCode(name, userIdStr);
+    const referralLink = `https://covecrm.com/pricing-select?ref=${encodeURIComponent(referralCode)}`;
 
     // 2) Create Stripe Connect account (or skip in dev)
     let accountId: string;
@@ -168,7 +93,8 @@ export default async function handler(
           },
           metadata: {
             userId: userIdStr,
-            affiliateCode: promoCode,
+            affiliateCode: referralCode,
+            referralCode,
           },
         });
         accountId = account.id;
@@ -198,9 +124,11 @@ export default async function handler(
         name,
         email,
         teamSize: String(teamSize),
-        promoCode,
+        promoCode: referralCode,
+        referralCode,
         stripeConnectId: accountId,
-        flatPayoutAmount: DEFAULT_PAYOUT_FLAT,
+        flatPayoutAmount: 12.50,
+        monthlyPayoutRate: 12.50,
         totalReferrals: 0,
         totalRevenueGenerated: 0,
         totalPayoutsSent: 0,
@@ -212,8 +140,8 @@ export default async function handler(
         payoutHistory: [],
         approved: true,
         approvedAt: new Date(),
-        couponId,
-        promotionCodeId,
+        couponId: undefined,
+        promotionCodeId: undefined,
       } as any);
     } catch (err: any) {
       console.error("[affiliate/apply] Affiliate.create error", {
@@ -226,7 +154,7 @@ export default async function handler(
 
     // 4) Update user with referral code (non-critical)
     try {
-      (user as any).referralCode = promoCode;
+      (user as any).referralCode = referralCode;
       await user.save();
     } catch (err: any) {
       console.warn("[affiliate/apply] Failed to save referralCode on user", {
@@ -274,7 +202,7 @@ export default async function handler(
         email,
         company: "(n/a)",
         agents: teamSize,
-        promoCode,
+        promoCode: referralCode,
         timestampISO: new Date().toISOString(),
       });
     } catch (err: any) {
@@ -283,7 +211,7 @@ export default async function handler(
       });
     }
 
-    return res.status(200).json({ stripeUrl: accountLinkUrl });
+    return res.status(200).json({ stripeUrl: accountLinkUrl, referralCode, referralLink });
   } catch (err: any) {
     console.error("[affiliate/apply] Top-level error", {
       message: err?.message,

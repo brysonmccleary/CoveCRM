@@ -153,7 +153,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="flex min-h-screen text-white">
       {/* Incoming Call Banner overlay (fixed; safe anywhere) */}
 
-      <div className="w-60 p-4 bg-[#0f172a] flex flex-col justify-between border-r border-[#1e293b]">
+      <div
+        className="p-4 bg-[#0f172a] flex flex-col justify-between border-r border-[#1e293b]"
+        style={{ width: 240, minWidth: 240, flexShrink: 0 }}
+      >
         <div>
           <div className="flex items-center gap-2 mb-6">
             <Image

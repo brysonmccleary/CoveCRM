@@ -13,14 +13,15 @@ export default function VerifyEmailPage() {
     return (Array.isArray(raw) ? raw[0] : raw) || "";
   }, [router.query.email]);
 
-  const nextBillingUrl = useMemo(() => {
+  const nextDashboardUrl = useMemo(() => {
     const params = new URLSearchParams();
-    for (const key of ["email", "price", "ai", "trial", "code"]) {
+    for (const key of ["plan", "interval"]) {
       const raw = router.query[key];
       const value = (Array.isArray(raw) ? raw[0] : raw) || "";
-      if (value) params.set(key === "code" ? "promoCode" : key, value);
+      if (value) params.set(key, value);
     }
-    return `/billing?${params.toString()}`;
+    const query = params.toString();
+    return query ? `/dashboard?${query}` : "/dashboard";
   }, [router.query]);
 
   const verify = async (e: React.FormEvent) => {
@@ -39,8 +40,8 @@ export default function VerifyEmailPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) throw new Error(data?.error || "Verification failed");
-      toast.success("Email verified. Continue to billing.");
-      window.location.assign(nextBillingUrl);
+      toast.success("Email verified. Welcome to CoveCRM.");
+      window.location.href = nextDashboardUrl;
     } catch (err: any) {
       toast.error(err?.message || "Verification failed");
     } finally {

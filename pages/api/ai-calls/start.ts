@@ -7,10 +7,12 @@ import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Call from "@/models/Call";
 import AICallSession from "@/models/AICallSession";
+import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
+import { isAdmin } from "@/lib/featureFlags";
 
 type StartAiSessionBody = {
   // New AI dial session fields
@@ -335,6 +337,13 @@ export default async function handler(
     return res.status(401).json({ error: "Unauthorized", ok: false });
 
   const body = (req.body || {}) as StartAiSessionBody;
+
+  await dbConnect();
+  const user = await User.findOne({ email: userEmail }).lean();
+  if (!user) return res.status(404).json({ error: "User not found", ok: false });
+  if ((user as any).hasAI !== true && !isAdmin(userEmail)) {
+    return res.status(403).json({ error: "AI features require the AI plan or upgrade", ok: false });
+  }
 
   const billingCheck = await checkCallingAllowed(userEmail);
   if (!billingCheck.allowed) {

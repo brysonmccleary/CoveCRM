@@ -282,6 +282,22 @@ export const authOptions: NextAuthOptions = {
         (session.user as any).emailVerified = (u as any)?.emailVerified === true;
         (session.user as any).trialGranted = (u as any)?.trialGranted === true;
         (session.user as any).trialBlockedReason = (u as any)?.trialBlockedReason || null;
+        (session.user as any).trialStartedAt = (u as any)?.trialStartedAt
+          ? new Date((u as any).trialStartedAt).toISOString()
+          : null;
+        (session.user as any).trialEndsAt = (u as any)?.trialEndsAt
+          ? new Date((u as any).trialEndsAt).toISOString()
+          : null;
+        (session.user as any).cardOnFile = (u as any)?.cardOnFile === true;
+        (session.user as any).numberProvisionedAt = (u as any)?.numberProvisionedAt
+          ? new Date((u as any).numberProvisionedAt).toISOString()
+          : null;
+        (session.user as any).subscriptionStatus = (u as any)?.subscriptionStatus || null;
+        (session.user as any).planCode = (u as any)?.planCode || null;
+        (session.user as any).billingInterval = (u as any)?.billingInterval || null;
+        (session.user as any).hasAI = (u as any)?.hasAI === true;
+        (session.user as any).aiEntitlementSource = (u as any)?.aiEntitlementSource || null;
+        (session.user as any).affiliateReferralCode = (u as any)?.affiliateReferralCode || null;
         (session.user as any).accountActivated = isAccountActivated(u);
         const last = u?.a2p?.lastSyncedAt
           ? new Date(u.a2p.lastSyncedAt).getTime()

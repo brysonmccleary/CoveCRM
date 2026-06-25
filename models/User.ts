@@ -150,7 +150,19 @@ export interface IUser {
 
   hasAI?: boolean;
   plan?: "Free" | "Pro";
+  planCode?: "free" | "base" | "ai";
+  billingInterval?: "monthly" | "annual";
+  aiEntitlementSource?: "plan" | "upgrade" | "legacy" | "none";
   subscriptionStatus?: "active" | "canceled" | "pending";
+  trialStartedAt?: Date | null;
+  trialEndsAt?: Date | null;
+  cardOnFile?: boolean;
+  stripePriceId?: string | null;
+  stripeSubscriptionId?: string | null;
+  aiUpgradeSubscriptionId?: string | null;
+  affiliateReferralCode?: string | null;
+  affiliateId?: mongoose.Types.ObjectId | null;
+  numberProvisionedAt?: Date | null;
 
   aiUsage?: { openAiCost: number; twilioCost: number; totalCost: number };
 
@@ -489,11 +501,27 @@ const UserSchema = new Schema<IUser>({
 
   hasAI: { type: Boolean, default: false },
   plan: { type: String, enum: ["Free", "Pro"], default: "Free" },
+  planCode: { type: String, enum: ["free", "base", "ai"], default: "free" },
+  billingInterval: { type: String, enum: ["monthly", "annual"], default: "monthly" },
+  aiEntitlementSource: {
+    type: String,
+    enum: ["plan", "upgrade", "legacy", "none"],
+    default: "none",
+  },
   subscriptionStatus: {
     type: String,
     enum: ["active", "canceled", "pending"],
     default: "pending",
   },
+  trialStartedAt: { type: Date, default: null },
+  trialEndsAt: { type: Date, default: null },
+  cardOnFile: { type: Boolean, default: false },
+  stripePriceId: { type: String, default: null },
+  stripeSubscriptionId: { type: String, default: null },
+  aiUpgradeSubscriptionId: { type: String, default: null },
+  affiliateReferralCode: { type: String, default: null },
+  affiliateId: { type: Schema.Types.ObjectId, ref: "Affiliate", default: null },
+  numberProvisionedAt: { type: Date, default: null },
 
   aiUsage: {
     openAiCost: { type: Number, default: 0 },

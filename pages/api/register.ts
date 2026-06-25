@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import Affiliate from "@/models/Affiliate";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { enforceRateLimit } from "@/lib/rateLimit";
@@ -105,12 +106,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await dbConnect();
     }
 
-    const { name, email, password, confirmPassword, usedCode } = (req.body || {}) as {
+    const { name, email, password, confirmPassword, usedCode, plan, interval, ref } = (req.body || {}) as {
       name?: string;
       email?: string;
       password?: string;
       confirmPassword?: string;
       usedCode?: string; // optional
+      plan?: string;
+      interval?: string;
+      ref?: string;
     };
 
     const cleanEmail = String(email || "").trim().toLowerCase();
@@ -166,6 +170,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!hashed) return res.status(500).json({ message: "Password could not be secured" });
     const admin = isAdminEmail(cleanEmail);
     const myReferralCode = await generateUniqueReferralCode();
+    const selectedPlanCode = plan === "ai" ? "ai" : "base";
+    const selectedBillingInterval = interval === "annual" ? "annual" : "monthly";
+    const affiliateReferralCode = String(ref || "").trim() || null;
+    const trialStartedAt = new Date();
+    const trialEndsAt = new Date(trialStartedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const effectivePlanCode = admin ? "free" : selectedPlanCode;
+    const effectiveHasAI = admin || effectivePlanCode === "ai";
+    const aiEntitlementSource =
+      effectivePlanCode === "ai" ? "plan" : effectivePlanCode === "free" ? "legacy" : "none";
     const verificationCode = makeVerificationCode();
     const verificationCodeHash = hashVerificationCode(cleanEmail, verificationCode);
     const verificationExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
@@ -186,6 +199,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             agentFirstName: firstName,
             agentLastName: lastName,
             usedCode: codeInputRaw || "",
+            selectedPlanCode,
+            selectedBillingInterval,
+            affiliateReferralCode: affiliateReferralCode || "",
             isHouseCode: String(isHouse),
             referredByUserId: referredByUserId ? String(referredByUserId) : "",
             source: "covecrm-register",
@@ -207,22 +223,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       password: hashed,
       role: admin ? "admin" : "user",
       plan: admin ? "Pro" : "Free",
+      planCode: effectivePlanCode,
+      billingInterval: selectedBillingInterval,
       subscriptionStatus: admin ? "active" : "pending",
-      hasAI: true,
+      hasAI: effectiveHasAI,
+      aiEntitlementSource,
       emailVerified: admin,
       emailVerificationCodeHash: admin ? null : verificationCodeHash,
       emailVerificationExpiresAt: admin ? null : verificationExpiresAt,
       trialGranted: admin,
       trialActivatedAt: admin ? new Date() : null,
+      trialStartedAt,
+      trialEndsAt,
+      cardOnFile: false,
       trialEmailUsed: admin,
       trialBlockedReason: null,
       referralCode: myReferralCode,
       referredByCode,
       referredByUserId,
+      affiliateReferralCode,
+      affiliateId: null,
       stripeCustomerId,
       usedCode: codeInputRaw || undefined,
       isHouseCode: isHouse,
     });
+
+    if (affiliateReferralCode) {
+      void (async () => {
+        try {
+          const affiliate = await Affiliate.findOne({
+            referralCode: affiliateReferralCode,
+            approved: true,
+          })
+            .select({ _id: 1 })
+            .lean() as any;
+
+          if (!affiliate?._id) return;
+
+          await User.updateOne(
+            { _id: newUser._id },
+            { $set: { affiliateId: affiliate._id } },
+          );
+          await Affiliate.updateOne(
+            { _id: affiliate._id },
+            {
+              $push: {
+                referredUsers: {
+                  userId: newUser._id,
+                  joinedAt: new Date(),
+                  planCode: effectivePlanCode,
+                  billingInterval: selectedBillingInterval,
+                  isActive: true,
+                  lastPayoutAt: null,
+                  totalPayoutsSentToAffiliate: 0,
+                },
+              },
+            },
+          );
+        } catch (e: any) {
+          console.warn("[/api/register] async affiliate referral lookup failed:", e?.message || e);
+        }
+      })();
+    }
 
     try {
       if (!admin) {

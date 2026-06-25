@@ -33,7 +33,7 @@ const RETURN_PATH =
 
 export default function BillingPage() {
   const router = useRouter();
-  const { email, ai, affiliateEmail, promoCode, trial } = router.query;
+  const { email, ai, affiliateEmail, trial } = router.query;
 
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [setupClientSecret, setSetupClientSecret] = useState<string | null>(null);
@@ -41,11 +41,6 @@ export default function BillingPage() {
   const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
-
-  // Display data coming back from the server
-  const [discount, setDiscount] = useState<string | undefined>();
-  const [totalBefore, setTotalBefore] = useState<number | null>(null);
-  const [totalAfter, setTotalAfter] = useState<number | null>(null);
 
   // Helper to coerce query values
   const aiUpgrade = useMemo(() => {
@@ -62,10 +57,6 @@ export default function BillingPage() {
       (Array.isArray(affiliateEmail) ? affiliateEmail[0] : affiliateEmail) ||
       "",
     [affiliateEmail],
-  );
-  const promoCodeStr = useMemo(
-    () => (Array.isArray(promoCode) ? promoCode[0] : promoCode) || "",
-    [promoCode],
   );
 
   const isTrial = useMemo(() => {
@@ -88,7 +79,6 @@ export default function BillingPage() {
             email: emailStr,
             aiUpgrade,
             affiliateEmail: affiliateEmailStr || undefined,
-            promoCode: promoCodeStr || undefined, // server treats empty as "no code"
             trialDays: isTrial ? 7 : 0,
           }),
         });
@@ -107,13 +97,6 @@ export default function BillingPage() {
         setSetupClientSecret(data.setupClientSecret ?? null);
         setIntentMode(data.clientSecret ? "payment" : (data.setupClientSecret ? "setup" : "payment"));
         setSubscriptionId(data.subscriptionId ?? null);
-
-        // Optional UI info
-        if (typeof data.discount === "string") setDiscount(data.discount);
-        if (typeof data.totalBeforeDiscount === "number")
-          setTotalBefore(data.totalBeforeDiscount);
-        if (typeof data.totalAfterDiscount === "number")
-          setTotalAfter(data.totalAfterDiscount);
 
         // If clientSecret is null, Stripe made a $0 invoice: auto-success → redirect
         if (!data.clientSecret && !data.setupClientSecret) {
@@ -135,7 +118,7 @@ export default function BillingPage() {
     return () => {
       cancelled = true;
     };
-  }, [emailStr, aiUpgrade, affiliateEmailStr, promoCodeStr, isTrial]);
+  }, [emailStr, aiUpgrade, affiliateEmailStr, isTrial]);
 
   const elementsOptions = useMemo<StripeElementsOptions | undefined>(() => {
     const activeSecret = intentMode === "setup" ? setupClientSecret : clientSecret;
@@ -173,35 +156,11 @@ export default function BillingPage() {
         {/* Payment required */}
         {!loading && (clientSecret || setupClientSecret) && elementsOptions && (
           <>
-            <div className="mb-4 text-center">
-              {promoCodeStr && (
-                <p className="text-green-600 dark:text-green-400 font-semibold">
-                  Promo Code <span className="underline">{promoCodeStr}</span>{" "}
-                  applied!
-                </p>
-              )}
-              {discount && (
-                <p className="text-sm text-gray-700 dark:text-gray-300">
-                  Discount: <strong>{discount}</strong>
-                </p>
-              )}
-              {totalBefore !== null && totalAfter !== null && (
-                <p className="text-sm text-gray-700 dark:text-gray-300">
-                  Total: <del>${totalBefore.toFixed(2)}</del> →{" "}
-                  <span className="text-green-600 dark:text-green-400 font-bold">
-                    ${totalAfter.toFixed(2)}
-                  </span>
-                </p>
-              )}
-            </div>
-
             <Elements stripe={stripePromise} options={elementsOptions}>
               <CheckoutForm
                 email={emailStr}
                 aiUpgrade={aiUpgrade}
                 affiliateEmail={affiliateEmailStr}
-                discount={discount}
-                promoCode={promoCodeStr}
                 clientSecret={intentMode === "setup" ? setupClientSecret : clientSecret}
                 mode={intentMode}
                 subscriptionId={subscriptionId}
@@ -225,33 +184,6 @@ export default function BillingPage() {
         {/* Zero-amount success path (no clientSecret, no error) */}
         {!loading && !hasError && !clientSecret && !setupClientSecret && (
           <div className="text-center space-y-2">
-            {promoCodeStr && (
-              <p className="text-green-600 dark:text-green-400 font-semibold">
-                Promo Code <span className="underline">{promoCodeStr}</span>{" "}
-                applied!
-              </p>
-            )}
-            {typeof totalBefore === "number" &&
-            typeof totalAfter === "number" ? (
-              <p className="text-sm text-gray-700 dark:text-gray-300">
-                Total:{" "}
-                {totalAfter === 0 && totalBefore > 0 ? (
-                  <>
-                    <del>${totalBefore.toFixed(2)}</del> →{" "}
-                    <span className="text-green-600 dark:text-green-400 font-bold">
-                      $0.00
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <del>${totalBefore.toFixed(2)}</del> →{" "}
-                    <span className="text-green-600 dark:text-green-400 font-bold">
-                      ${totalAfter.toFixed(2)}
-                    </span>
-                  </>
-                )}
-              </p>
-            ) : null}
             {subscriptionId && (
               <p className="text-xs text-gray-500">
                 Subscription: {subscriptionId}

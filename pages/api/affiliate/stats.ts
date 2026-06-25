@@ -38,11 +38,15 @@ export default async function handler(
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({
       code: null,
+      referralCode: null,
+      referralLink: null,
       signups: 0,
+      referredUsersCount: 0,
       referrals: [],
       totalCommission: 0,
       payoutDue: 0,
       totalPayoutsSent: 0,
+      monthlyPayoutRate: 12.50,
       payoutHistory: [],
       stripeConnectId: null,
       onboardingCompleted: false,
@@ -52,8 +56,9 @@ export default async function handler(
   }
 
   // Ensure user's referralCode mirrors the affiliate's (normalized)
-  if (U(user.referralCode) !== U(affiliate.promoCode)) {
-    user.referralCode = affiliate.promoCode;
+  const referralCode = String((affiliate as any).referralCode || affiliate.promoCode || "").trim();
+  if (U(user.referralCode) !== U(referralCode)) {
+    user.referralCode = referralCode;
     await user.save().catch(() => {});
   }
 
@@ -141,16 +146,25 @@ export default async function handler(
   const payoutDue = Number(affiliate.payoutDue || 0);
   const totalPayoutsSent = Number(affiliate.totalPayoutsSent || 0);
   const totalCommission = Number((payoutDue + totalPayoutsSent).toFixed(2));
+  const referredUsersCount = Array.isArray((affiliate as any).referredUsers)
+    ? (affiliate as any).referredUsers.filter((u: any) => u?.isActive !== false).length
+    : 0;
 
   // Response
   res.setHeader("Cache-Control", "no-store");
   return res.status(200).json({
-    code: affiliate.promoCode, // “Your Referral Code”
-    signups,
+    code: referralCode,
+    referralCode,
+    referralLink: referralCode
+      ? `https://covecrm.com/pricing-select?ref=${encodeURIComponent(referralCode)}`
+      : null,
+    signups: referredUsersCount || signups,
+    referredUsersCount,
     referrals,
     totalCommission,
     payoutDue,
     totalPayoutsSent,
+    monthlyPayoutRate: Number((affiliate as any).monthlyPayoutRate || 12.5),
     payoutHistory: affiliate.payoutHistory || [],
     stripeConnectId: affiliate.stripeConnectId || null,
     onboardingCompleted,

@@ -6,6 +6,7 @@ import Call from "@/models/Call";
 import { getUserByEmail } from "@/models/User";
 import axios from "axios";
 import FormData from "form-data";
+import { isAdmin } from "@/lib/featureFlags";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
@@ -132,12 +133,12 @@ export default async function handler(
     if (!call) return errJson(res, "Call not found", 404);
 
     const user = await getUserByEmail(call.userEmail);
-    const aiEnabled = !!user;
+    const aiEnabled = !!user && ((user as any).hasAI === true || isAdmin(String(call.userEmail || "")));
     call.aiEnabledAtCallTime = aiEnabled;
 
     if (!aiEnabled) {
       await call.save();
-      return okJson(res, { skipped: "user-not-found" });
+      return errJson(res, "AI features require the AI plan or upgrade", 403);
     }
 
     if (

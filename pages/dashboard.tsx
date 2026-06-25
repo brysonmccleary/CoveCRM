@@ -41,6 +41,10 @@ import {
   FaSms,
 } from "react-icons/fa";
 
+function hasVerifiedSignupTrial(user: any) {
+  return Boolean(user?.emailVerified === true && user?.trialStartedAt);
+}
+
 type KPI = {
   dials: number;
   connects: number;
@@ -612,11 +616,11 @@ function DashboardOverview() {
   const chartHeight = 220;
 
   const openLead = (leadId: string) => {
-    router.push(`/dial/${encodeURIComponent(leadId)}`).catch(() => {});
+    window.location.href = `/dial/${encodeURIComponent(leadId)}`;
   };
 
   const callLead = (leadId: string) => {
-    router.push(`/dial-session?leadId=${encodeURIComponent(leadId)}`).catch(() => {});
+    window.location.href = `/dial-session?leadId=${encodeURIComponent(leadId)}`;
   };
 
   return (
@@ -1089,7 +1093,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
   await dbConnect();
   const user = await User.findOne({ email: session.user.email as string });
 
-  if (!isAccountActivated(user)) {
+  if (!isAccountActivated(user) && !hasVerifiedSignupTrial(user)) {
     const emailEnc = encodeURIComponent(String(session.user.email));
     let destination: string;
     if ((user as any)?.emailVerified === true) {

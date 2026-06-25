@@ -27,6 +27,9 @@ export function requireBillingReady(user: any): BillingReadyResult {
   // entirely for these users and force them back to billing.
   if (user.billingBlocked === true) return block("missing_payment_method", user);
 
+  // cardOnFile: new signup flow sets this after a verified payment method is confirmed.
+  if (user.cardOnFile === true) return { ok: true };
+
   // trialGranted: set only after a card is saved via grantTrialIfEligible (verified fingerprint).
   // hasEverPaid: set only after invoice.payment_succeeded with paidCents > 0 (fixed in webhook).
   if (user.trialGranted === true || user.hasEverPaid === true) return { ok: true };

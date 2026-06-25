@@ -41,6 +41,7 @@ interface FunnelData {
   leadType: string;
   audienceSegment?: string;
   campaignType?: string;
+  funnelVersion?: string;
   headline: string;
   subheadline: string;
   benefitBullets: string[];
@@ -367,7 +368,11 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
     businessName,
     campaignType: funnelData.leadType,
   });
-  const smsConsentLabel = `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to my inquiry. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`;
+  const isA2PComplianceStub = funnelData.funnelVersion === "a2p-compliance-stub";
+
+  const smsConsentLabel = isA2PComplianceStub
+    ? `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to my inquiry. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`
+    : `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to my inquiry. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. I also agree that a licensed agent may contact me at the phone number I provide via telephone calls, including calls made using artificial or prerecorded voice and AI-assisted voice technology. By checking this box and submitting this form, I agree to the communications described above.`;
 
   const storedConsentText = funnelData.complianceProfile?.consentText?.trim() || "";
   const consentText =
@@ -409,14 +414,16 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               {smsConsentLabel}
             </span>
           </label>
-          <p style={{ margin: "0 0 16px", fontSize: 11, color: theme.muted, lineHeight: 1.5 }}>
-            SMS consent is optional. You may submit your request without checking this box.
-          </p>
+          {isA2PComplianceStub && (
+            <p style={{ margin: "0 0 16px", fontSize: 11, color: theme.muted, lineHeight: 1.5 }}>
+              SMS consent is optional. You may submit your request without checking this box.
+            </p>
+          )}
           <button
             onClick={() => {
               next(smsConsentGiven ? "Yes, I agree" : "No SMS consent");
             }}
-            disabled={submitting}
+            disabled={submitting || (!isA2PComplianceStub && !smsConsentGiven)}
             style={{
               ...choiceButtonStyle(theme, false),
               width: "100%",
@@ -426,8 +433,8 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               fontWeight: 800,
               fontSize: 16,
               padding: "16px 20px",
-              opacity: submitting ? 0.7 : 1,
-              cursor: submitting ? "wait" : "pointer",
+              opacity: submitting || (!isA2PComplianceStub && !smsConsentGiven) ? 0.7 : 1,
+              cursor: submitting ? "wait" : !isA2PComplianceStub && !smsConsentGiven ? "not-allowed" : "pointer",
             }}
           >
             {submitting ? "Submitting…" : "Submit Request"}
@@ -868,7 +875,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
   try {
     await mongooseConnect();
     const campaign = await (FBLeadCampaign as any).findById(id)
-      .select("userId leadType audienceSegment campaignType notes webhookKey funnelStatus landingPageConfig publicAgentProfile complianceProfile licensedStates borderStateBehavior")
+      .select("userId leadType audienceSegment campaignType funnelVersion notes webhookKey funnelStatus landingPageConfig publicAgentProfile complianceProfile licensedStates borderStateBehavior")
       .lean() as any;
 
     if (!campaign || campaign.funnelStatus === "paused") {
@@ -906,6 +913,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
       leadType: String(campaign.leadType || "mortgage_protection"),
       audienceSegment: String(campaign.audienceSegment || "standard"),
       campaignType: String(campaign.campaignType || "hosted_funnel"),
+      funnelVersion: String(campaign.funnelVersion || ""),
       headline: String(safeConfig?.headline || safeConfig?.adHeadline || template.defaultHeadline),
       subheadline: String(safeConfig?.subheadline || template.defaultSubheadline),
       benefitBullets: Array.isArray(safeConfig?.benefitBullets) ? safeConfig.benefitBullets.map(String).slice(0, 4) : [],

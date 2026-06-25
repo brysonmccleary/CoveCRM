@@ -2,7 +2,7 @@
 import Head from "next/head";
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import StatsBar from "@/components/home/StatsBar";
 
 const FEATURES = [
@@ -140,6 +140,34 @@ const CORE_CRM_CARDS = [
   },
 ];
 
+type PricingInterval = "monthly" | "annual";
+type PricingPlan = "base" | "ai";
+
+const BASE_PRICING_FEATURES = [
+  ["Full CRM & lead management", true],
+  ["Power dialer", true],
+  ["SMS & calling", true],
+  ["Local presence dialing", true],
+  ["Drip campaigns", true],
+  ["Booking & calendar", true],
+  ["FB Leads integration", true],
+  ["1 free phone number", true],
+  ["Team management", true],
+  ["Kayla AI voice dialer", false],
+  ["AI auto-calling", false],
+  ["AI transcripts & summaries", false],
+] as const;
+
+const AI_PRICING_FEATURES = [
+  "Everything in Base, plus:",
+  "Kayla AI voice dialer",
+  "AI auto-call new leads",
+  "AI transcripts & summaries",
+  "Live transfer AI to agent",
+  "AI SMS responses",
+  "AI lead scoring",
+];
+
 // Suppress unused-variable warning — value lives in KaylaSection/ChatThread via shared CSS convention
 void PURPLE_ACCENT;
 
@@ -225,6 +253,18 @@ export default function Home() {
   const homepageTitle = "Cove CRM – CRM for Insurance Agents, AI Dialer, SMS & Facebook Leads";
   const homepageDescription =
     "CoveCRM is a CRM for insurance agents with AI dialer tools, SMS automation, Facebook lead workflows, power dialing, and appointment booking built for high-volume insurance sales.";
+  const [pricingInterval, setPricingInterval] = useState<PricingInterval>("monthly");
+
+  const goToSignup = (plan: PricingPlan) => {
+    const params = new URLSearchParams({ plan, interval: pricingInterval });
+    if (typeof window !== "undefined") {
+      const ref =
+        new URLSearchParams(window.location.search).get("ref") ||
+        window.localStorage.getItem("affiliate_code");
+      if (ref) params.set("ref", ref);
+    }
+    window.location.href = `/signup?${params.toString()}`;
+  };
 
   // ── Scroll reveal setup ──
   useEffect(() => {
@@ -280,7 +320,7 @@ export default function Home() {
               brand: "CoveCRM",
               offers: {
                 "@type": "Offer",
-                price: "199.99",
+                price: "100",
                 priceCurrency: "USD",
               },
             }),
@@ -298,7 +338,7 @@ export default function Home() {
             <h1 className="text-2xl font-bold text-blue-400">Cove CRM</h1>
           </div>
           <div className="hidden md:flex items-center gap-5 text-sm">
-            <Link href="/covecrm-features" className="text-slate-300 hover:text-white font-medium transition">
+            <Link href="/covecrm-features" className="text-slate-300 hover:text-white font-medium transition cursor-pointer">
               Features
             </Link>
           </div>
@@ -309,7 +349,7 @@ export default function Home() {
               </button>
             </Link>
 
-            <Link href="/signup">
+            <Link href="/#pricing">
               <button className="bg-blue-600 text-white px-5 py-2 rounded-xl font-semibold hover:bg-blue-500 text-sm cursor-pointer transition shadow-[0_0_24px_rgba(59,130,246,0.35)] border border-blue-500/50 hover:shadow-[0_0_36px_rgba(59,130,246,0.5)]">
                 Start Free Trial
               </button>
@@ -498,7 +538,7 @@ export default function Home() {
             </div>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <Link href="/signup">
+              <Link href="/#pricing">
                 <button className="relative bg-blue-600 text-white px-10 py-4 rounded-xl font-bold hover:bg-blue-500 transition cursor-pointer text-base shadow-[0_0_24px_rgba(59,130,246,0.35)] border border-blue-500/50 hover:shadow-[0_0_36px_rgba(59,130,246,0.5)]">
                   Start Free Trial
                   <span className="absolute inset-0 rounded-xl animate-pulse border border-blue-400/30 pointer-events-none" />
@@ -979,67 +1019,108 @@ export default function Home() {
         {/* ── Pricing ── */}
         <section id="pricing" className="py-24 px-6 text-center bg-[#020617]">
           <h2 className="text-3xl md:text-4xl font-bold mb-3">Simple, transparent pricing</h2>
-          <p className="text-slate-400 mb-12 max-w-xl mx-auto text-sm">No per-seat fees, no surprise add-ons. One flat monthly rate — every AI feature included.</p>
+          <p className="text-slate-400 mb-8 max-w-xl mx-auto text-sm">Choose the CRM plan that fits your workflow. Upgrade to AI anytime.</p>
 
-          <div className="max-w-md mx-auto">
+          <div className="mb-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <div className="inline-flex rounded-xl border border-white/10 bg-[#07101e] p-1">
+              {(["monthly", "annual"] as PricingInterval[]).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setPricingInterval(option)}
+                  className={`rounded-lg px-4 py-2 text-sm font-semibold transition cursor-pointer ${
+                    pricingInterval === option
+                      ? "bg-blue-600 text-white"
+                      : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  {option === "monthly" ? "Monthly" : "Annually"}
+                </button>
+              ))}
+            </div>
+            <span className="rounded-full border border-purple-500/30 bg-purple-500/10 px-3 py-1 text-xs font-bold text-purple-300">
+              Save 2 months
+            </span>
+          </div>
+
+          <div className="mx-auto grid max-w-5xl gap-6 md:grid-cols-2">
             <div
-              className="rounded-3xl border border-blue-500/40 bg-gradient-to-b from-blue-950/30 to-[#020617] p-10 text-left relative"
-              style={{ boxShadow: "0 0 40px rgba(59,130,246,0.2)" }}
+              className="rounded-3xl border border-blue-500/30 bg-gradient-to-b from-blue-950/30 to-[#020617] p-7 text-left"
+              style={{ boxShadow: "0 0 40px rgba(59,130,246,0.14)" }}
             >
-              <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-emerald-600 px-4 py-1 text-xs font-bold text-white shadow-lg">
-                Everything Included
+              <h3 className="text-2xl font-bold text-white">Base</h3>
+              <p className="mt-1 text-sm text-slate-400">Everything you need to start selling</p>
+              <div className="mt-5 flex items-end gap-1">
+                <span className="text-5xl font-bold text-white">
+                  {pricingInterval === "annual" ? "$83" : "$100"}
+                </span>
+                <span className="pb-2 text-xl font-normal text-slate-400">/mo</span>
               </div>
-              <h3 className="text-2xl font-bold mb-1 text-white">Cove CRM</h3>
-              <p className="text-5xl font-bold mb-1 text-white">$199.99<span className="text-xl font-normal text-slate-400">/mo</span></p>
-              <p className="text-xs text-slate-400 mb-7">+ tax &amp; call/SMS usage</p>
-              <ul className="text-sm text-slate-200 space-y-2.5 mb-6">
-                {[
-                  "Unlimited users per account",
-                  "Power dialer, SMS inbox, lead management",
-                  "Google Calendar sync + booking forms",
-                  "Prebuilt drip campaigns",
-                  "AI Call Coach — score + feedback every call",
-                  "AI Call Overview — auto-summarized after every call",
-                  "AI SMS Assistant — automated lead follow-up",
-                  "AI lead scoring + smart nudges",
-                  "7-day free trial included",
-                ].map((f) => (
-                  <li key={f} className="flex gap-3 items-start">
-                    <span className="text-blue-400 mt-0.5 shrink-0">✔</span>
-                    {f}
+              <p className="mt-1 text-xs text-slate-400">
+                {pricingInterval === "annual" ? "$1,000 billed yearly" : "Billed monthly"} + tax &amp; call/SMS usage
+              </p>
+
+              <button
+                type="button"
+                onClick={() => goToSignup("base")}
+                className="mt-6 w-full rounded-xl border border-blue-500/50 px-6 py-3.5 font-bold text-blue-200 transition hover:bg-blue-500/10 cursor-pointer"
+              >
+                Start Free Trial
+              </button>
+
+              <ul className="mt-6 space-y-1.5 text-sm leading-tight text-slate-200">
+                {BASE_PRICING_FEATURES.map(([feature, included]) => (
+                  <li key={feature} className="flex gap-2.5 items-start">
+                    <span className={`${included ? "text-blue-400" : "text-slate-500"} mt-0.5 shrink-0`}>
+                      {included ? "✓" : "✗"}
+                    </span>
+                    <span className={included ? "" : "text-slate-500"}>{feature}</span>
                   </li>
                 ))}
               </ul>
+            </div>
 
-              {/* Competitor callout — moved inside card */}
-              <div
-                style={{
-                  background: "rgba(59,130,246,0.1)",
-                  border: "1px solid rgba(59,130,246,0.25)",
-                  borderRadius: "10px",
-                  padding: "10px 14px",
-                  marginBottom: "20px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                }}
-              >
-                <span style={{ fontSize: "14px", flexShrink: 0 }}>💰</span>
-                <p style={{ color: "#93c5fd", fontSize: "12px", margin: 0, lineHeight: 1.5 }}>
-                  Compare to competitors charging $300–500/month for less features.
-                </p>
+            <div
+              className="relative rounded-3xl border border-blue-500/40 bg-gradient-to-b from-blue-950/30 to-[#020617] p-7 text-left"
+              style={{ boxShadow: "0 0 40px rgba(59,130,246,0.2)" }}
+            >
+              <div className="absolute right-5 top-5 rounded-full bg-[#7c3aed] px-3 py-1 text-xs font-bold uppercase tracking-wide text-white">
+                Most Popular
               </div>
-
-              <Link href="/signup">
-                <button className="w-full bg-blue-600 text-white px-6 py-3.5 rounded-xl hover:bg-blue-500 cursor-pointer transition font-bold text-base shadow-lg shadow-blue-600/20">
-                  Start Free Trial
-                </button>
-              </Link>
-              <p className="text-center text-xs text-slate-500 mt-4">
-                🤖 AI tools included. Standard Twilio usage charges apply for calls and SMS.
+              <h3 className="pr-32 text-2xl font-bold text-white">AI</h3>
+              <p className="mt-1 pr-24 text-sm text-slate-400">Everything in Base plus Kayla</p>
+              <div className="mt-5 flex items-end gap-1">
+                <span className="text-5xl font-bold text-white">
+                  {pricingInterval === "annual" ? "$125" : "$150"}
+                </span>
+                <span className="pb-2 text-xl font-normal text-slate-400">/mo</span>
+              </div>
+              <p className="mt-1 text-xs text-slate-400">
+                {pricingInterval === "annual" ? "$1,500 billed yearly" : "Billed monthly"} + tax &amp; call/SMS usage
               </p>
+
+              <button
+                type="button"
+                onClick={() => goToSignup("ai")}
+                className="mt-6 w-full rounded-xl bg-blue-600 px-6 py-3.5 font-bold text-white transition hover:bg-blue-500 cursor-pointer shadow-lg shadow-blue-600/20"
+              >
+                Start Free Trial
+              </button>
+
+              <ul className="mt-6 space-y-1.5 text-sm leading-tight text-slate-200">
+                {AI_PRICING_FEATURES.map((feature) => (
+                  <li key={feature} className="flex gap-2.5 items-start">
+                    <span className="text-blue-400 mt-0.5 shrink-0">✓</span>
+                    <span>{feature}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
+
+          <p className="mt-6 text-xs text-slate-500">
+            Compare to competitors charging $300–500/month for less features. Standard Twilio usage charges apply for calls and SMS.
+          </p>
         </section>
 
         {/* ── CTA Section ── */}
@@ -1048,7 +1129,7 @@ export default function Home() {
           <p className="text-lg mb-8 text-slate-300 max-w-xl mx-auto">
             Join thousands of top life insurance agents using Cove CRM to sell smarter and grow their teams.
           </p>
-          <Link href="/signup">
+          <Link href="/#pricing">
             <button className="bg-white text-black px-10 py-3.5 rounded-xl font-bold hover:bg-slate-100 cursor-pointer transition text-base shadow-lg">
               Start Free Trial Now
             </button>
@@ -1089,38 +1170,38 @@ export default function Home() {
               <div>
                 <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-300">Company</h3>
                 <div className="flex flex-col gap-2">
-                  <Link href="/legal/privacy" className="hover:text-white transition">Privacy</Link>
-                  <Link href="/legal/cookies" className="hover:text-white transition">Cookies</Link>
-                  <Link href="/legal/terms" className="hover:text-white transition">Terms</Link>
-                  <Link href="/accessibility" className="hover:text-white transition">Accessibility</Link>
-                  <a href="mailto:support@covecrm.com" className="hover:text-white transition">Support</a>
-                  <Link href="/security" className="hover:text-white transition">Security</Link>
+                  <Link href="/legal/privacy" className="hover:text-white transition cursor-pointer">Privacy</Link>
+                  <Link href="/legal/cookies" className="hover:text-white transition cursor-pointer">Cookies</Link>
+                  <Link href="/legal/terms" className="hover:text-white transition cursor-pointer">Terms</Link>
+                  <Link href="/accessibility" className="hover:text-white transition cursor-pointer">Accessibility</Link>
+                  <a href="mailto:support@covecrm.com" className="hover:text-white transition cursor-pointer">Support</a>
+                  <Link href="/security" className="hover:text-white transition cursor-pointer">Security</Link>
                 </div>
               </div>
               <div>
                 <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-300">Core</h3>
                 <div className="flex flex-col gap-2">
-                  <a href="/best-crm-for-insurance-agents" className="hover:text-white transition">Best CRM for Insurance Agents</a>
-                  <a href="/life-insurance-crm" className="hover:text-white transition">Life Insurance CRM</a>
-                  <a href="/covecrm-features" className="hover:text-white transition">CoveCRM Features</a>
-                  <a href="/insurance-crm-faq" className="hover:text-white transition">Insurance CRM FAQ</a>
+                  <a href="/best-crm-for-insurance-agents" className="hover:text-white transition cursor-pointer">Best CRM for Insurance Agents</a>
+                  <a href="/life-insurance-crm" className="hover:text-white transition cursor-pointer">Life Insurance CRM</a>
+                  <a href="/covecrm-features" className="hover:text-white transition cursor-pointer">CoveCRM Features</a>
+                  <a href="/insurance-crm-faq" className="hover:text-white transition cursor-pointer">Insurance CRM FAQ</a>
                 </div>
               </div>
               <div>
                 <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-300">Compare</h3>
                 <div className="flex flex-col gap-2">
-                  <a href="/go-high-level-vs-covecrm" className="hover:text-white transition">GoHighLevel vs CoveCRM</a>
-                  <a href="/close-vs-covecrm" className="hover:text-white transition">Close vs CoveCRM</a>
-                  <a href="/ringy-vs-covecrm" className="hover:text-white transition">Ringy vs CoveCRM</a>
+                  <a href="/go-high-level-vs-covecrm" className="hover:text-white transition cursor-pointer">GoHighLevel vs CoveCRM</a>
+                  <a href="/close-vs-covecrm" className="hover:text-white transition cursor-pointer">Close vs CoveCRM</a>
+                  <a href="/ringy-vs-covecrm" className="hover:text-white transition cursor-pointer">Ringy vs CoveCRM</a>
                 </div>
               </div>
               <div>
                 <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-300">Solutions</h3>
                 <div className="flex flex-col gap-2">
-                  <a href="/ai-dialer-for-insurance-agents" className="hover:text-white transition">AI Dialer for Insurance Agents</a>
-                  <a href="/crm-that-texts-leads-automatically" className="hover:text-white transition">CRM That Texts Leads Automatically</a>
-                  <a href="/facebook-leads-for-insurance-agents" className="hover:text-white transition">Facebook Leads for Insurance Agents</a>
-                  <a href="/insurance-agent-follow-up-system" className="hover:text-white transition">Insurance Agent Follow-Up System</a>
+                  <a href="/ai-dialer-for-insurance-agents" className="hover:text-white transition cursor-pointer">AI Dialer for Insurance Agents</a>
+                  <a href="/crm-that-texts-leads-automatically" className="hover:text-white transition cursor-pointer">CRM That Texts Leads Automatically</a>
+                  <a href="/facebook-leads-for-insurance-agents" className="hover:text-white transition cursor-pointer">Facebook Leads for Insurance Agents</a>
+                  <a href="/insurance-agent-follow-up-system" className="hover:text-white transition cursor-pointer">Insurance Agent Follow-Up System</a>
                 </div>
               </div>
             </div>
@@ -1150,7 +1231,7 @@ export default function Home() {
                 <li>Vault Commerce Group LLC</li>
                 <li>Built by a professional development team</li>
                 <li>
-                  <a href="mailto:support@covecrm.com" className="hover:text-white transition">
+                  <a href="mailto:support@covecrm.com" className="hover:text-white transition cursor-pointer">
                     support@covecrm.com
                   </a>
                 </li>

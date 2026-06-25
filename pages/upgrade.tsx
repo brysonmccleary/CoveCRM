@@ -37,7 +37,7 @@ export default function UpgradePage() {
       if (!session?.user?.email) return;
       try {
         const res = await axios.get("/api/user/plan");
-        if (res.data?.hasAI || res.data?.plan === "Pro") setHasPro(true);
+        if (res.data?.hasAI || res.data?.planCode === "ai") setHasPro(true);
       } catch {}
     };
     checkPlan();

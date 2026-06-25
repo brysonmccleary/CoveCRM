@@ -11,6 +11,7 @@ import { requireBillingReady } from "@/lib/billing/requireBillingReady";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { trackAiDialerSessionUsage } from "@/lib/billing/trackAiDialerSessionUsage";
 import { Types } from "mongoose";
+import { isAdmin } from "@/lib/featureFlags";
 
 type GetResponse =
   | { ok: false; message: string }
@@ -387,10 +388,10 @@ export default async function handler(
 
       const userDoc = await User.findOne({ email }).lean();
       const billingReady = requireBillingReady(userDoc);
-      if (!userDoc || (userDoc as any).hasAI !== true || !billingReady.ok) {
+      if (!userDoc || (((userDoc as any).hasAI !== true) && !isAdmin(email)) || !billingReady.ok) {
         return res
           .status(403)
-          .json({ ok: false, error: "AI Dialer not available for this account" });
+          .json({ ok: false, error: "AI features require the AI plan or upgrade" });
       }
       if (
         (userDoc as any).aiCallingCertificationAccepted !== true ||

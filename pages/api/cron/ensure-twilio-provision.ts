@@ -1,8 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import { provisionUserTwilio } from "@/lib/twilio/provision";
+import { ensureUserTwilioIdentity, provisionUserTwilio } from "@/lib/twilio/provision";
 import { checkCronAuth } from "@/lib/cronAuth";
+import { isAdmin } from "@/lib/featureFlags";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ✅ Auth gate (Bearer header OR ?token)
@@ -24,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { numbers: { $size: 0 } },
       ],
     })
-      .select({ email: 1, twilio: 1, numbers: 1 })
+      .select({ email: 1, role: 1, cardOnFile: 1, twilio: 1, numbers: 1, numberProvisionedAt: 1 })
       .lean()
       .cursor();
 
@@ -32,7 +33,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for await (const u of cursor as any) {
       const email = String(u.email || "").toLowerCase();
       try {
-        const r = await provisionUserTwilio(email);
+        const identity = await ensureUserTwilioIdentity(email);
+        const hasNumber = (Array.isArray(u.numbers) && u.numbers.length > 0) || Boolean(u.numberProvisionedAt);
+        const adminBypass = u.role === "admin" || isAdmin(email);
+        const shouldBuyNumber = !hasNumber && (u.cardOnFile === true || adminBypass);
+
+        let r = identity;
+        if (shouldBuyNumber) {
+          r = await provisionUserTwilio(email);
+        } else if (!hasNumber) {
+          console.log(`[Cron] Skipping number purchase for ${u.email} — no card on file`);
+        }
+
         processed++;
         console.log(`[ensure-twilio] ${email} -> ${r.ok ? "ok" : `fail: ${r.message}`}`);
       } catch (e: any) {

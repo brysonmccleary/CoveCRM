@@ -10,6 +10,7 @@ import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { Types } from "mongoose";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 import { selectLocalPresenceNumber } from "@/lib/twilio/localPresence";
+import { isAdmin } from "@/lib/featureFlags";
 import {
   maybeMarkAICallSessionCompleted,
   transitionAICallRecordingOutcome,
@@ -535,7 +536,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, message: "user_disabled", sessionId });
     }
 
-    const adminFree = isAdminFreeEmail(userEmail);
+    const adminFree = isAdminFreeEmail(userEmail) || isAdmin(userEmail) || userDoc.role === "admin";
     const bypassAmd = isBypassAmdEmail(userEmail);
 
     if (!adminFree && userDoc.hasAI !== true) {
@@ -554,11 +555,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
       });
       await releaseLock(sessionId);
-      return res.status(200).json({
-        ok: true,
-        message: "stopped_ai_not_enabled",
-        sessionId,
-      });
+      return res.status(403).json({ error: "AI features require the AI plan or upgrade" });
     }
 
     // Block calling if the account is not billing-ready or a payment issue blocks calling.

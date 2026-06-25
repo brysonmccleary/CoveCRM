@@ -307,8 +307,10 @@ export default function KaylaPage() {
                   </button>
                   <p className="text-xs leading-6 text-slate-300">
                     By clicking ‘Have Kayla call me,’ you agree to receive an AI-powered call and
-                    text from CoveCRM at the number provided. Message and data rates may apply.
-                    Reply STOP to opt out.
+                    text from CoveCRM at the number provided, including calls made using artificial
+                    or prerecorded voice and AI-assisted voice technology. Message and data rates
+                    may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a
+                    condition of purchase.
                   </p>
                   {submitState ? (
                     <div

@@ -17,11 +17,22 @@ export interface IPayoutEntry {
   note?: string;
 }
 
+export interface IReferredUser {
+  userId?: mongoose.Types.ObjectId;
+  joinedAt?: Date;
+  planCode?: string;
+  billingInterval?: string;
+  isActive?: boolean;
+  lastPayoutAt?: Date | null;
+  totalPayoutsSentToAffiliate?: number;
+}
+
 export interface IAffiliate extends Document {
   userId: mongoose.Types.ObjectId;
   name: string;
   email: string;
   promoCode: string;
+  referralCode?: string | null;
 
   // Stripe / onboarding
   stripeConnectId?: string;
@@ -43,10 +54,12 @@ export interface IAffiliate extends Document {
   totalPayoutsSent: number;        // dollars
   payoutDue: number;               // dollars
   lastPayoutDate?: Date;
+  monthlyPayoutRate: number;
 
   // Relations
   referrals: IReferral[];
   payoutHistory: IPayoutEntry[];
+  referredUsers: IReferredUser[];
 
   // Promo linkage
   promotionCodeId?: string;
@@ -78,12 +91,26 @@ const PayoutEntrySchema = new Schema<IPayoutEntry>(
   { _id: false },
 );
 
+const ReferredUserSchema = new Schema<IReferredUser>(
+  {
+    userId: { type: Schema.Types.ObjectId, ref: "User" },
+    joinedAt: { type: Date },
+    planCode: { type: String },
+    billingInterval: { type: String },
+    isActive: { type: Boolean, default: true },
+    lastPayoutAt: { type: Date, default: null },
+    totalPayoutsSentToAffiliate: { type: Number, default: 0 },
+  },
+  { _id: false },
+);
+
 const AffiliateSchema = new Schema<IAffiliate>(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     name: { type: String, required: true },
     email: { type: String, required: true, lowercase: true, trim: true },
     promoCode: { type: String, required: true, unique: true, uppercase: true },
+    referralCode: { type: String, unique: true, sparse: true, default: null },
 
     // Stripe / onboarding
     stripeConnectId: { type: String },
@@ -105,10 +132,12 @@ const AffiliateSchema = new Schema<IAffiliate>(
     totalPayoutsSent: { type: Number, default: 0 },
     payoutDue: { type: Number, default: 0 },
     lastPayoutDate: { type: Date },
+    monthlyPayoutRate: { type: Number, default: 12.50 },
 
     // Relations
     referrals: { type: [ReferralSchema], default: [] },
     payoutHistory: { type: [PayoutEntrySchema], default: [] },
+    referredUsers: { type: [ReferredUserSchema], default: [] },
 
     // Promo linkage
     promotionCodeId: { type: String },

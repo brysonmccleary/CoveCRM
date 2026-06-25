@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import axios from "axios";
 import { useSession } from "next-auth/react";
-import { useRouter } from "next/router";
 import toast from "react-hot-toast";
 
 interface Referral {
@@ -17,14 +16,26 @@ interface Payout {
   date: string;
 }
 
+interface LedgerPayout {
+  month: string;
+  amount: number;
+  status: string;
+  paidAt?: string | null;
+  stripeTransferId?: string | null;
+}
+
 type ConnectStatus = "pending" | "verified" | "incomplete" | "restricted" | "disabled";
 
 interface AffiliateStats {
   // Core
   code?: string; // undefined => hasn’t applied yet
+  referralCode?: string | null;
+  referralLink?: string | null;
   signups: number;
+  referredUsersCount?: number;
   referrals: Referral[];
   totalCommission: number;
+  monthlyPayoutRate?: number;
 
   // Payouts & Stripe
   stripeConnectId?: string;
@@ -42,16 +53,13 @@ interface AffiliateStats {
 
 export default function AffiliateProgramPanel() {
   const { data: session } = useSession();
-  const router = useRouter();
 
   const [stats, setStats] = useState<AffiliateStats | null>(null);
+  const [ledgerPayouts, setLedgerPayouts] = useState<LedgerPayout[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [name, setName] = useState("");
   const [teamSize, setTeamSize] = useState("");
-  const [codeInput, setCodeInput] = useState("");
-  const [codeAvailable, setCodeAvailable] = useState<null | boolean>(null);
-  const [checkingCode, setCheckingCode] = useState(false);
   const [submittingForm, setSubmittingForm] = useState(false);
 
   const [copySuccess, setCopySuccess] = useState(false);
@@ -63,6 +71,12 @@ export default function AffiliateProgramPanel() {
         headers: { "Cache-Control": "no-cache" },
       });
       setStats(res.data);
+      if (res.data?.code) {
+        const payouts = await axios.get<LedgerPayout[]>("/api/affiliate/payout-history", {
+          headers: { "Cache-Control": "no-cache" },
+        });
+        setLedgerPayouts(Array.isArray(payouts.data) ? payouts.data : []);
+      }
     } catch {
       toast.error("Failed to load affiliate data");
     } finally {
@@ -82,51 +96,32 @@ export default function AffiliateProgramPanel() {
 
   // Handle query params we may set in dev (e.g. ?stripe=mock) or if you add ?connected=1
   useEffect(() => {
-    if (!router.isReady) return;
-    const { stripe, connected } = router.query;
+    const query = new URLSearchParams(window.location.search);
+    const stripe = query.get("stripe");
+    const connected = query.get("connected");
 
     if (stripe === "mock" || connected === "1") {
       toast.success("Stripe status refreshed");
       refreshStats().finally(() => {
-        // Clean the URL so the toast doesn’t repeat
-        const newQuery = { ...router.query };
-        delete (newQuery as any).stripe;
-        delete (newQuery as any).connected;
-        router.replace({ pathname: router.pathname, query: newQuery }, undefined, { shallow: true });
+        query.delete("stripe");
+        query.delete("connected");
+        const next = `${window.location.pathname}${query.toString() ? `?${query.toString()}` : ""}`;
+        window.history.replaceState(null, "", next);
       });
     }
-  }, [router, refreshStats]);
-
-  const checkCodeAvailability = async () => {
-    if (!codeInput) return;
-    setCheckingCode(true);
-    setCodeAvailable(null);
-    try {
-      const res = await axios.post<{ available: boolean }>("/api/affiliate/check-code", {
-        code: codeInput.trim().toUpperCase(),
-      });
-      setCodeAvailable(res.data.available);
-      if (res.data.available) toast.success("Code is available!");
-      else toast.error("Code is already taken.");
-    } catch {
-      toast.error("Failed to check code");
-    } finally {
-      setCheckingCode(false);
-    }
-  };
+  }, [refreshStats]);
 
   const submitApplication = async () => {
-    if (!codeAvailable || !name || !teamSize) {
-      toast.error("Please complete the form and ensure code is available");
+    if (!name || !teamSize) {
+      toast.error("Please complete the form");
       return;
     }
     setSubmittingForm(true);
-    try {
-      const res = await axios.post<{ stripeUrl: string }>("/api/affiliate/apply", {
+    try { 
+      const res = await axios.post<{ stripeUrl: string; referralCode: string; referralLink: string }>("/api/affiliate/apply", {
         name,
         email: session?.user?.email,
         teamSize,
-        code: codeInput.trim().toUpperCase(),
       });
       // Redirect to Stripe onboarding (or mock in dev)
       window.location.href = res.data.stripeUrl;
@@ -180,9 +175,7 @@ export default function AffiliateProgramPanel() {
 
   const copyCode = async () => {
     if (!stats?.code) return;
-    const referralLink = `https://covecrm.com/signup?ref=${encodeURIComponent(
-      String(stats.code),
-    )}`;
+    const referralLink = `https://covecrm.com/?ref=${encodeURIComponent(String(stats.code))}#pricing`;
     const ok = await copyToClipboard(referralLink);
     setCopySuccess(true);
     ok ? toast.success("Link copied") : toast.error("Copy failed");
@@ -264,36 +257,9 @@ export default function AffiliateProgramPanel() {
             onChange={(e) => setTeamSize(e.target.value)}
           />
 
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              placeholder="Desired Code (e.g. JESS25)"
-              className="bg-[#1E2533] border border-gray-600 p-2 rounded w-full text-white uppercase"
-              value={codeInput}
-              onChange={(e) => {
-                setCodeInput(e.target.value.toUpperCase());
-                setCodeAvailable(null);
-              }}
-            />
-            <button
-              onClick={checkCodeAvailability}
-              disabled={checkingCode || !codeInput}
-              className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm"
-            >
-              {checkingCode ? "Checking..." : "Check"}
-            </button>
-          </div>
-
-          {codeAvailable === true && (
-            <div className="text-green-400 text-sm">Code is available!</div>
-          )}
-          {codeAvailable === false && (
-            <div className="text-red-400 text-sm">Code is already taken.</div>
-          )}
-
           <button
             onClick={submitApplication}
-            disabled={!codeAvailable || submittingForm}
+            disabled={submittingForm}
             className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-sm w-full"
           >
             {submittingForm ? "Submitting..." : "Apply & Connect Stripe"}
@@ -309,8 +275,10 @@ export default function AffiliateProgramPanel() {
           <div className="bg-[#2C3447] p-4 rounded-xl space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-300">Your Referral Code</p>
-                <p className="text-lg font-mono">{stats.code}</p>
+                <p className="text-sm text-gray-300">Your referral link</p>
+                <p className="text-sm font-mono break-all">
+                  {`https://covecrm.com/?ref=${stats.code}#pricing`}
+                </p>
               </div>
               <button
                 onClick={copyCode}
@@ -322,8 +290,15 @@ export default function AffiliateProgramPanel() {
 
             <div className="grid grid-cols-2 gap-4 text-sm text-gray-300">
               <div>
-                <p className="text-xs">Total Referrals</p>
-                <p className="text-lg text-white font-bold">{stats.signups}</p>
+                <p className="text-xs">Active Referred Agents</p>
+                <p className="text-lg text-white font-bold">{stats.referredUsersCount ?? stats.signups}</p>
+              </div>
+              <div>
+                <p className="text-xs">Payout Rate</p>
+                <p className="text-lg text-green-400 font-bold">
+                  ${(stats.monthlyPayoutRate || 12.5).toFixed(2)}/month
+                </p>
+                <p className="text-xs text-gray-500">per active referred agent</p>
               </div>
               <div>
                 <p className="text-xs">Total Commission</p>
@@ -367,25 +342,6 @@ export default function AffiliateProgramPanel() {
                 >
                   {stats.approved ? "Approved" : "Pending"}
                 </p>
-                  {stats?.code && (
-                    <div className="mt-2">
-                      <p className="text-xs text-gray-300">Affiliate Link</p>
-                      <div className="mt-1 flex items-center gap-2">
-                        <div className="flex-1 bg-[#1E2533] border border-white/10 rounded px-3 py-2 text-xs text-gray-200 truncate">
-                          {`https://covecrm.com/signup?ref=${stats.code}`}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            copyToClipboard(`https://covecrm.com/signup?ref=${stats.code}`)
-                          }
-                          className="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-xs"
-                        >
-                          Copy Link
-                        </button>
-                      </div>
-                    </div>
-                  )}
               </div>
             </div>
 
@@ -459,6 +415,24 @@ export default function AffiliateProgramPanel() {
                     <span className="text-gray-400">
                       {new Date(payout.date).toLocaleDateString()}
                     </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {ledgerPayouts.length > 0 && (
+            <div>
+              <p className="text-sm text-gray-400 mt-6 mb-2">Monthly Payout Ledger</p>
+              <ul className="space-y-1 text-sm">
+                {ledgerPayouts.map((payout) => (
+                  <li
+                    key={`${payout.month}-${payout.stripeTransferId || payout.status}`}
+                    className="flex justify-between bg-[#1E2533] px-4 py-2 rounded-md"
+                  >
+                    <span>{payout.month}</span>
+                    <span>${Number(payout.amount || 0).toFixed(2)}</span>
+                    <span className="capitalize text-gray-400">{payout.status}</span>
                   </li>
                 ))}
               </ul>

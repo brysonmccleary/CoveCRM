@@ -1,14 +1,11 @@
 import { useEffect, useState } from "react";
 import { useStripe, useElements, CardElement } from "@stripe/react-stripe-js";
-import { useRouter } from "next/router";
 import toast from "react-hot-toast";
 
 interface CheckoutFormProps {
   email: string;
   aiUpgrade?: boolean;
   affiliateEmail?: string;
-  promoCode?: string;
-  discount?: string;
 
   // Trial support
   clientSecret?: string | null;
@@ -20,15 +17,12 @@ export default function CheckoutForm({
   email,
   aiUpgrade,
   affiliateEmail,
-  promoCode,
-  discount,
   clientSecret,
   mode = "payment",
   subscriptionId,
 }: CheckoutFormProps) {
   const stripe = useStripe();
   const elements = useElements();
-  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [cardBrand, setCardBrand] = useState<string>("");
 
@@ -100,7 +94,7 @@ export default function CheckoutForm({
           }
 
           toast.success("✅ Trial started! Card saved for usage billing.");
-          router.push("/dashboard");
+          window.location.href = "/dashboard";
         } else {
           toast.error("Card setup did not complete.");
         }
@@ -125,7 +119,7 @@ export default function CheckoutForm({
 
       if (paymentIntent?.status === "succeeded") {
         toast.success("✅ Payment successful!");
-        router.push("/dashboard");
+        window.location.href = "/dashboard";
       } else {
         toast.error("Payment did not complete.");
       }
@@ -156,14 +150,6 @@ export default function CheckoutForm({
       onSubmit={handleSubmit}
       className="space-y-4 bg-white rounded-lg shadow-lg p-6 text-black"
     >
-      {/* Promo code notice */}
-      {promoCode && (
-        <div className="text-sm text-green-600 font-semibold">
-          ✅ Promo code <strong>{promoCode}</strong> applied
-          {discount && ` — ${discount}`}
-        </div>
-      )}
-
       {/* Card brand feedback */}
       {cardBrand && (
         <div className="text-sm text-gray-500">Card type: {cardBrand}</div>

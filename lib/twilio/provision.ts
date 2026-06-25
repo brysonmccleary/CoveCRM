@@ -3,6 +3,7 @@ import twilio, { Twilio } from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { getPlatformTwilioAuth } from "@/lib/twilio/getPlatformClient";
+import { isAdmin } from "@/lib/featureFlags";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
 const DEFAULT_AREA_CODE = (process.env.TWILIO_DEFAULT_AREA_CODE || "").trim();
@@ -10,10 +11,11 @@ const DEFAULT_AREA_CODE = (process.env.TWILIO_DEFAULT_AREA_CODE || "").trim();
 type ProvisionResult =
   | {
       ok: true;
+      provisioned?: true;
       message: string;
       data: { subaccountSid: string; apiKeySid: string; phoneSid: string; phoneNumber: string };
     }
-  | { ok: false; message: string; error?: string };
+  | { ok: false; provisioned?: false; reason?: string; message: string; error?: string };
 
 function buildStatusCallback(email: string) {
   return `${BASE_URL}/api/twilio/voice-status?userEmail=${encodeURIComponent(email)}`;
@@ -303,6 +305,18 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
     const user = await User.findOne({ email: String(email || "").toLowerCase().trim() });
     if (!user) return { ok: false, message: "User not found." };
 
+    const userEmail = String(user.email || email || "").toLowerCase();
+    const adminBypass = (user as any).role === "admin" || isAdmin(userEmail);
+    if ((user as any).cardOnFile !== true && !adminBypass) {
+      console.log(`[Twilio] Skipping number provisioning for ${email} — no card on file`);
+      return {
+        ok: false,
+        provisioned: false,
+        reason: "no_card_on_file",
+        message: "No card on file.",
+      };
+    }
+
     const master = getMasterClient();
 
     // 1) Subaccount
@@ -373,8 +387,12 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
       // ignore
     }
 
+    (user as any).numberProvisionedAt = new Date();
+    await user.save();
+
     return {
       ok: true,
+      provisioned: true,
       message: "Provisioned",
       data: { subaccountSid: subSid, apiKeySid: keySid, phoneSid, phoneNumber },
     };

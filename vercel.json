@@ -5,6 +5,14 @@
   ],
   "crons": [
     {
+      "path": "/api/cron/process-affiliate-payouts",
+      "schedule": "0 9 1 * *"
+    },
+    {
+      "path": "/api/cron/ensure-twilio-provision",
+      "schedule": "0 * * * *"
+    },
+    {
       "path": "/api/poll-new-lead",
       "schedule": "* * * * *"
     },

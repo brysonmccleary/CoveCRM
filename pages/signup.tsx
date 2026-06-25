@@ -1,7 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
 import { useRouter } from "next/router";
+
+type PlanCode = "base" | "ai";
+type BillingInterval = "monthly" | "annual";
+
+const PLAN_COPY: Record<PlanCode, { label: string; monthly: string; annual: string }> = {
+  base: {
+    label: "Base Plan",
+    monthly: "$100/month",
+    annual: "$1,000/year",
+  },
+  ai: {
+    label: "AI Plan",
+    monthly: "$150/month",
+    annual: "$1,500/year",
+  },
+};
+
+function getQueryValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] || "" : value || "";
+}
 
 export default function SignUp() {
   const router = useRouter();
@@ -10,124 +30,38 @@ export default function SignUp() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-
-  const [promoCode, setPromoCode] = useState("");
-  const [discountApplied, setDiscountApplied] = useState(false);
-  const [finalPrice, setFinalPrice] = useState(199.99);
-  const [affiliateEmail, setAffiliateEmail] = useState("");
-  const [checkingCode, setCheckingCode] = useState(false);
-
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const basePrice = 199.99;
+  const selectedPlan = useMemo<PlanCode>(() => {
+    const raw = getQueryValue(router.query.plan).toLowerCase();
+    return raw === "ai" ? "ai" : "base";
+  }, [router.query.plan]);
 
-  useEffect(() => {
-    // AUTO_REF_APPLY_EFFECT
-    // ✅ Accept affiliate links in either format:
-    //   /signup?ref=CODE   (new affiliate link)
-    //   /signup?code=CODE  (legacy)
-    const qpRef = router.query.ref;
-    const qpCode = router.query.code;
+  const selectedInterval = useMemo<BillingInterval>(() => {
+    const raw = getQueryValue(router.query.interval).toLowerCase();
+    return raw === "annual" ? "annual" : "monthly";
+  }, [router.query.interval]);
 
-    const fromRef = typeof qpRef === "string" ? qpRef : Array.isArray(qpRef) ? qpRef[0] : "";
-    const fromCode = typeof qpCode === "string" ? qpCode : Array.isArray(qpCode) ? qpCode[0] : "";
+  const referralCode = useMemo(() => getQueryValue(router.query.ref).trim(), [router.query.ref]);
 
-    const incoming = (fromRef || fromCode || "").trim();
-    if (!incoming) return;
+  const selectedPlanCopy = PLAN_COPY[selectedPlan];
+  const selectedPrice =
+    selectedInterval === "annual" ? selectedPlanCopy.annual : selectedPlanCopy.monthly;
 
-    setPromoCode(incoming);
-
-    // Persist so it survives redirects / refreshes
-    try {
-      if (typeof window !== "undefined") {
-        localStorage.setItem("affiliate_code", incoming);
-        document.cookie = `affiliate_code=${encodeURIComponent(incoming)}; path=/; max-age=2592000`; // 30d
-      }
-    } catch {}
-  }, [router.query.ref, router.query.code]);
+  const changePlanHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (referralCode) params.set("ref", referralCode);
+    return `/${params.toString() ? `?${params.toString()}` : ""}#pricing`;
+  }, [referralCode]);
 
   const pwMismatch = useMemo(
     () => confirmPassword.length > 0 && password !== confirmPassword,
-    [password, confirmPassword]
+    [password, confirmPassword],
   );
 
   const canSubmit = useMemo(() => {
     return !!name && !!email && !!password && !!confirmPassword && !pwMismatch && !isSubmitting;
   }, [name, email, password, confirmPassword, pwMismatch, isSubmitting]);
-
-  useEffect(() => {
-    // AUTO_REF_APPLY_RUN
-    // If we arrived with a code already present, auto-apply it once (no blur needed).
-    const code = (promoCode || "").trim();
-    if (!code) return;
-    if (discountApplied) return;
-    if (checkingCode) return;
-
-    const qpRef = router.query.ref;
-    const qpCode = router.query.code;
-
-    const fromQuery =
-      (typeof qpRef === "string" && qpRef.trim() === code) ||
-      (typeof qpCode === "string" && qpCode.trim() === code);
-
-    let fromPersist = false;
-    try {
-      const stored =
-        typeof window !== "undefined" ? localStorage.getItem("affiliate_code") || "" : "";
-      const cookie =
-        typeof document !== "undefined"
-          ? document.cookie.match(/(?:^|; )affiliate_code=([^;]+)/)?.[1] || ""
-          : "";
-      fromPersist =
-        decodeURIComponent(stored || "").trim() === code ||
-        decodeURIComponent(cookie || "").trim() === code;
-    } catch {}
-
-    if (!fromQuery && !fromPersist) return;
-
-    // Fire the same logic as blur would, but silently (no extra toast spam).
-    (async () => {
-      setCheckingCode(true);
-      try {
-        const res = await axios.post("/api/apply-code", { code });
-        const { price, ownerEmail } = res.data || {};
-        if (typeof price === "number") setFinalPrice(price);
-        setAffiliateEmail(ownerEmail || "");
-        setDiscountApplied(true);
-      } catch {
-        setDiscountApplied(false);
-        setFinalPrice(basePrice);
-        setAffiliateEmail("");
-      } finally {
-        setCheckingCode(false);
-      }
-    })();
-  }, [promoCode, router.query.ref, router.query.code]);
-
-  const handleCodeBlur = async () => {
-    if (!promoCode.trim()) {
-      setDiscountApplied(false);
-      setFinalPrice(basePrice);
-      setAffiliateEmail("");
-      return;
-    }
-    setCheckingCode(true);
-    try {
-      const res = await axios.post("/api/apply-code", { code: promoCode.trim() });
-      const { price, ownerEmail } = res.data || {};
-      if (typeof price === "number") setFinalPrice(price);
-      setAffiliateEmail(ownerEmail || "");
-      setDiscountApplied(true);
-      toast.success("✅ Code applied! Price updated.");
-    } catch {
-      toast.error("Invalid or expired code.");
-      setDiscountApplied(false);
-      setFinalPrice(basePrice);
-      setAffiliateEmail("");
-    } finally {
-      setCheckingCode(false);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,24 +78,27 @@ export default function SignUp() {
         email,
         password,
         confirmPassword,
-        usedCode: promoCode.trim(),
-        affiliateEmail,
+        plan: selectedPlan,
+        interval: selectedInterval,
+        ref: referralCode || undefined,
       });
 
       const isAdmin = !!res.data?.admin;
       if (isAdmin) {
         toast.success("Account created! (admin — no billing)");
-        return router.push("/");
+        window.location.href = "/";
+        return;
       }
 
-      // compute display total only for the querystring (server enforces real pricing)
-      const uiTotal = discountApplied ? finalPrice : basePrice;
-
       toast.success("Account created! Check your email for the verification code.");
-      void uiTotal;
-      const veParams = new URLSearchParams({ email, trial: "1" });
-      if (promoCode.trim()) veParams.set("code", promoCode.trim());
-      router.push(`/verify-email?${veParams.toString()}`);
+      const veParams = new URLSearchParams({
+        email,
+        trial: "1",
+        plan: selectedPlan,
+        interval: selectedInterval,
+      });
+      if (referralCode) veParams.set("ref", referralCode);
+      window.location.href = `/verify-email?${veParams.toString()}`;
     } catch (err: any) {
       const msg = err?.response?.data?.message || "Signup failed. Try again.";
       toast.error(msg);
@@ -172,13 +109,30 @@ export default function SignUp() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4
-                    bg-gradient-to-b from-[var(--cove-bg-dark)] to-[var(--cove-bg)]">
-      <div className="max-w-md w-full p-6 rounded-2xl shadow-xl
-                      bg-[var(--cove-card)] text-white border border-[#1e293b]">
-        <h1 className="text-3xl font-bold mb-6 text-center">
+    <div className="min-h-screen flex items-center justify-center px-4 bg-gradient-to-b from-[var(--cove-bg-dark)] to-[var(--cove-bg)]">
+      <div className="max-w-md w-full p-6 rounded-2xl shadow-xl bg-[var(--cove-card)] text-white border border-[#1e293b]">
+        <h1 className="text-3xl font-bold mb-4 text-center">
           Create Your Cove CRM Account
         </h1>
+
+        <div className="mb-6 rounded-xl border border-white/10 bg-[#0f172a] p-4">
+          <p className="text-sm text-gray-400">You selected:</p>
+          <div className="mt-1 flex items-center justify-between gap-4">
+            <p className="font-semibold text-white">
+              {selectedPlanCopy.label} — {selectedPrice}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = changePlanHref;
+              }}
+              className="text-sm text-blue-300 hover:text-blue-200 underline"
+              style={{ cursor: "pointer" }}
+            >
+              Change plan
+            </button>
+          </div>
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <input
@@ -218,35 +172,17 @@ export default function SignUp() {
             </div>
           </div>
 
-          <label className="block text-sm font-medium text-gray-300">
-            Referral / Promo Code (optional)
-          </label>
-          <input
-            type="text"
-            placeholder="Enter a code"
-            className="w-full p-3 rounded bg-[#0f172a] border border-[#1e293b] text-white placeholder-gray-400"
-            value={promoCode}
-            onChange={(e) => setPromoCode(e.target.value)}
-            onBlur={handleCodeBlur}
-          />
-          {checkingCode && <p className="text-sm text-blue-300 mt-1">Checking code...</p>}
-          {discountApplied && (
-            <p className="text-green-400 text-sm mt-1">
-              ✅ Code applied! Your new base price is ${finalPrice}/month.
-            </p>
-          )}
-
           <button
             type="submit"
             disabled={!canSubmit}
-            className="w-full py-3 rounded text-white font-semibold
-                       bg-[var(--cove-accent)] hover:opacity-95 disabled:opacity-60"
+            className="w-full py-3 rounded text-white font-semibold bg-[var(--cove-accent)] hover:opacity-95 disabled:opacity-60"
+            style={{ cursor: canSubmit ? "pointer" : "not-allowed" }}
           >
             {isSubmitting ? "Creating Account..." : "Start Free Trial"}
           </button>
 
           <p className="text-xs text-center text-gray-400 mt-3">
-            7-day free trial • Card required for usage billing
+            7-day free trial • No charge until day 8
           </p>
         </form>
       </div>

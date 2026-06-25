@@ -5,6 +5,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AISettings from "@/models/AISettings";
 import User from "@/models/User";
+import { isAdmin } from "@/lib/featureFlags";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -30,6 +31,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === "POST") {
     const user = await User.findOne({ email }).lean();
     if (!user) return res.status(404).json({ error: "User not found" });
+    if ((user as any).hasAI !== true && !isAdmin(email)) {
+      return res.status(403).json({ error: "AI features require the AI plan or upgrade" });
+    }
 
     const allowed = [
       "aiTextingEnabled",

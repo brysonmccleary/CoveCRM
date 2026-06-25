@@ -8,6 +8,7 @@ import PhoneNumber from "@/models/PhoneNumber";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
 import { requireBillingReady } from "@/lib/billing/requireBillingReady";
+import { isAdmin } from "@/lib/featureFlags";
 
 export default async function handler(
   req: NextApiRequest,
@@ -26,6 +27,11 @@ export default async function handler(
       const { areaCode } = req.body;
       const user = await User.findOne({ email: userEmail });
       if (!user) return res.status(404).json({ message: "User not found" });
+      const normalizedEmail = String(userEmail || "").toLowerCase();
+      const adminBypass = (user as any).role === "admin" || isAdmin(normalizedEmail);
+      if ((user as any).cardOnFile !== true && !adminBypass) {
+        return res.status(403).json({ error: "Please add a payment method before purchasing a number" });
+      }
 
       const billingReady = requireBillingReady(user);
       if (!billingReady.ok) {
@@ -95,6 +101,8 @@ export default async function handler(
         },
         { upsert: true },
       );
+      (user as any).numberProvisionedAt = new Date();
+      await user.save();
 
       res.status(201).json({
         ...newNumber.toObject(),
