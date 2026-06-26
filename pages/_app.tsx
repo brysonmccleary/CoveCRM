@@ -12,12 +12,23 @@ import Head from "next/head";
 import { useRouter } from "next/router";
 import SoftphoneProvider from "@/components/telephony/SoftphoneProvider";
 import IncomingCallBanner from "@/components/IncomingCallBanner";
-import BillingRequiredModal from "@/components/BillingRequiredModal";
+import BillingRequiredModal, { dispatchBillingRequired } from "@/components/BillingRequiredModal";
 
 // 🔌 client socket + unread store
 import { connectAndJoin } from "@/lib/socketClient";
 import { useNotifStore } from "@/lib/notificationsStore";
 import { useTimezoneSync } from "@/hooks/useTimezoneSync";
+
+// Wire 402 billing_required responses to open BillingRequiredModal from any axios call
+axios.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err?.response?.status === 402 && err?.response?.data?.error === "billing_required") {
+      dispatchBillingRequired(err.response.data?.redirect);
+    }
+    return Promise.reject(err);
+  },
+);
 
 /** Public routes where we must NOT init voice/callback/leads/widgets */
 const PUBLIC_ROUTES = new Set<string>([
