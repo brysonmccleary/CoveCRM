@@ -13,6 +13,7 @@ import { useRouter } from "next/router";
 import SoftphoneProvider from "@/components/telephony/SoftphoneProvider";
 import IncomingCallBanner from "@/components/IncomingCallBanner";
 import BillingRequiredModal, { dispatchBillingRequired } from "@/components/BillingRequiredModal";
+import CookieConsentBanner from "@/components/CookieConsentBanner";
 
 // 🔌 client socket + unread store
 import { connectAndJoin } from "@/lib/socketClient";
@@ -299,6 +300,8 @@ function InnerApp({
 
       {/* Page content */}
       <Component {...pageProps} />
+
+      {!authed && <CookieConsentBanner />}
 
       {/* Billing required modal — shown when any billable API returns 402 billing_required */}
       {authed && !isPublic && <BillingRequiredModal />}

@@ -11,7 +11,7 @@ type Stat = {
 };
 
 const STATS: Stat[] = [
-  { to: 10000, suffix: "+", label: "Calls Dialed" },
+  { to: 100000, suffix: "+", label: "Calls Dialed" },
   { to: 15, suffix: "+", label: "Avg Hours Saved Per Week" },
   { to: 3, suffix: "+", label: "Avg Live Transfers Per Day" },
   { to: 30, suffix: "+", label: "Client Touchpoints in Year 1" },
