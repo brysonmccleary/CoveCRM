@@ -11,6 +11,7 @@ import mongoose from "mongoose";
 import User from "@/models/User";
 import AICallSession from "@/models/AICallSession";
 import { createFinalizePayInvoice } from "@/lib/billing/trackUsage";
+import type { BillingEventSource } from "@/models/BillingEvent";
 
 const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
@@ -230,14 +231,15 @@ export async function trackAiDialerSessionUsage({
   }
 
   const billedThroughSeconds = alreadyBilledSeconds + newSeconds;
-  const idempotencyKey = `aisess_${sessionId}_${billCents}_${billedThroughSeconds}`;
 
   try {
     await createFinalizePayInvoice({
       customerId: (userDoc as any).stripeCustomerId as string,
       amountCents: billCents,
       description: `Cove CRM AI Voice session usage ($${(billCents / 100).toFixed(2)})`,
-      idempotencyKey,
+      source: "ai_voice_session",
+      sourceId: `${sessionId}:${billedThroughSeconds}`,
+      userEmail: email,
     });
 
     await User.findOneAndUpdate(
@@ -279,12 +281,12 @@ export async function trackAiDialerCentsUsage({
   userEmail,
   addCents,
   description,
-  idempotencyPrefix,
+  source,
 }: {
   userEmail: string;
   addCents: number;
   description: string;
-  idempotencyPrefix: string;
+  source: BillingEventSource;
 }): Promise<AiDialerCentsUsageResult | null> {
   await ensureDb();
 
@@ -355,7 +357,7 @@ export async function trackAiDialerCentsUsage({
         aiDialerBillingLockExpiresAt: lockExpiresAt,
       },
     },
-    { new: true, projection: { aiDialerAccruedSessionCents: 1 } }
+    { new: true, projection: { aiDialerAccruedSessionCents: 1, aiDialerBilledTotalCents: 1 } }
   );
 
   if (!locked) return { ok: true, accrued: cents, charged: false };
@@ -378,15 +380,17 @@ export async function trackAiDialerCentsUsage({
     return { ok: true, accrued: cents, charged: false };
   }
 
-  const hourBucket = Math.floor(Date.now() / (60 * 60 * 1000));
-  const idempotencyKey = `${idempotencyPrefix}_${email}_${billCents}_${hourBucket}`;
+  const currentAiBilledTotal = Number((locked as any).aiDialerBilledTotalCents || 0);
+  const sourceId = `${email}:ai_dialer_total:${currentAiBilledTotal + billCents}`;
 
   try {
     await createFinalizePayInvoice({
       customerId: (userDoc as any).stripeCustomerId as string,
       amountCents: billCents,
       description,
-      idempotencyKey,
+      source,
+      sourceId,
+      userEmail: email,
     });
 
     await User.findOneAndUpdate(

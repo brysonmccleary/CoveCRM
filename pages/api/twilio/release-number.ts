@@ -5,6 +5,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefault";
 
@@ -21,6 +22,7 @@ function normalizeE164(input: string): string {
 async function tryCancelStripeSubscription(subscriptionId?: string | null) {
   if (!subscriptionId) return { canceled: false };
   try {
+    assertStripeWritesEnabled();
     await stripe.subscriptions.cancel(subscriptionId);
     return { canceled: true };
   } catch (e: any) {

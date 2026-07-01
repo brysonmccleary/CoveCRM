@@ -330,7 +330,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         userEmail,
         addCents: deltaCents,
         description: `Cove CRM AI Dialer transcript usage ($${(deltaCents / 100).toFixed(2)})`,
-        idempotencyPrefix: "aitranscript",
+        source: "ai_transcript",
       });
     }
   }

@@ -6,6 +6,7 @@ import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
 import twilioClient from "@/lib/twilioClient";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 function normalizeE164(p: string) {
   const digits = (p || "").replace(/\D/g, "");
@@ -67,6 +68,7 @@ export default async function handler(
     // 1) Cancel Stripe subscription (best-effort)
     try {
       if (target.subscriptionId) {
+        assertStripeWritesEnabled();
         await stripe.subscriptions.cancel(target.subscriptionId);
       }
     } catch (err) {

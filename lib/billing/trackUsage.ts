@@ -4,6 +4,7 @@ import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import { stripe } from "@/lib/stripe";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
+import BillingEvent, { type BillingEventSource } from "@/models/BillingEvent";
 
 /** ========= Env / Flags ========= */
 const isProd = process.env.NODE_ENV === "production";
@@ -17,6 +18,13 @@ const A2P_APPROVAL_FEE_CENTS = A2P_APPROVAL_FEE_USD * 100;
 // Lock ownership window. Stripe charges complete in <15s in practice; 10min is a
 // very generous TTL that only matters if the process dies mid-charge.
 const BILLING_LOCK_TTL_MS = 10 * 60 * 1000;
+
+// Sources that require account eligibility verification before charging.
+const USAGE_SOURCES: BillingEventSource[] = [
+  "ai_voice_session",
+  "ai_transcript",
+  "regular_usage",
+];
 
 /** ========= Admin allow-list ========= */
 function isAdminEmail(email?: string | null) {
@@ -53,69 +61,190 @@ async function ensureDb() {
 }
 
 /**
- * Create an invoice item, draft an invoice, finalize it, and pay immediately.
+ * Create a BillingEvent ledger entry, then create an invoice item, draft an
+ * invoice, finalize it, and pay immediately — all idempotent.
  *
- * Replaces the old auto_advance:true pattern, which scheduled an async Stripe
- * sweep instead of charging now. Idempotency keys make retries safe.
+ * Idempotency key is derived deterministically from source + sourceId + amountCents
+ * so retries always hit the same Stripe objects (no duplicate charges even if the
+ * MongoDB deduction fails after Stripe succeeds).
  *
- * If invoice creation fails after the item is created, the orphaned item is
- * deleted to prevent it from attaching to a future invoice unexpectedly.
+ * The BillingEvent unique index on (source, sourceId, amountCents) provides a
+ * second layer: if the event is already "paid", we return immediately before
+ * touching Stripe at all.
  */
 export async function createFinalizePayInvoice(params: {
   customerId: string;
   amountCents: number;
   description: string;
-  idempotencyKey: string;
+  source: BillingEventSource;
+  sourceId: string;
+  userEmail?: string;
+  userId?: string;
+  metadata?: Record<string, unknown>;
 }): Promise<void> {
+  // ── Outermost kill switch ─────────────────────────────────────────────────────
   assertStripeWritesEnabled();
 
-  const { customerId, amountCents, description, idempotencyKey } = params;
-  let invoiceItemId: string | undefined;
-  let invoiceId: string | undefined;
+  const { customerId, amountCents, description, source, sourceId, userEmail, userId, metadata } =
+    params;
 
-  // ── Emergency kill switch (kept as belt-and-suspenders) ──────────────────────
-  // Set DISABLE_ALL_STRIPE_BILLING=1 in Vercel env to immediately stop all
-  // app-initiated charges without a code deploy.
+  // ── Idempotency key (stable, derived from billing facts) ─────────────────────
+  const idempotencyKey = `billing_${source}_${sourceId}_${amountCents}`;
+
+  // ── Belt-and-suspenders kill switch ──────────────────────────────────────────
   if (process.env.DISABLE_ALL_STRIPE_BILLING === "1") {
     console.error("[BILLING BLOCKED] DISABLE_ALL_STRIPE_BILLING=1", {
-      customerId,
-      amountCents,
-      description,
-      idempotencyKey,
+      customerId, amountCents, description, source, sourceId, idempotencyKey,
     });
+    await BillingEvent.findOneAndUpdate(
+      { source, sourceId, amountCents },
+      {
+        $set: { status: "blocked", blockedReason: "DISABLE_ALL_STRIPE_BILLING", updatedAt: new Date() },
+        $setOnInsert: {
+          userEmail: userEmail || "", userId: userId || "", stripeCustomerId: customerId,
+          description, idempotencyKey, metadata: metadata || {}, createdAt: new Date(),
+        },
+      },
+      { upsert: true },
+    ).catch(() => {/* non-fatal */});
     throw new Error("Stripe billing is globally disabled");
   }
 
-  // ── Safety cap ───────────────────────────────────────────────────────────────
-  // Blocks any single invoice that exceeds the cap (default $50).
-  // Override with BILLING_SINGLE_CHARGE_CAP_CENTS env var.
+  // ── Safety cap (default $50) ─────────────────────────────────────────────────
   const BILLING_SINGLE_CHARGE_CAP_CENTS = Number(
     process.env.BILLING_SINGLE_CHARGE_CAP_CENTS || "5000",
   );
   if (!Number.isFinite(BILLING_SINGLE_CHARGE_CAP_CENTS) || BILLING_SINGLE_CHARGE_CAP_CENTS <= 0) {
     throw new Error("Invalid BILLING_SINGLE_CHARGE_CAP_CENTS");
   }
-  if (amountCents > BILLING_SINGLE_CHARGE_CAP_CENTS) {
+
+  // Per-source cap: AI voice session capped at $20 by default
+  let effectiveCapCents = BILLING_SINGLE_CHARGE_CAP_CENTS;
+  if (source === "ai_voice_session") {
+    const aiVoiceCap = Number(process.env.AI_VOICE_SINGLE_CHARGE_CAP_CENTS || "2000");
+    if (Number.isFinite(aiVoiceCap) && aiVoiceCap > 0) {
+      effectiveCapCents = Math.min(effectiveCapCents, aiVoiceCap);
+    }
+  }
+
+  if (amountCents > effectiveCapCents) {
+    const blockedReason = `charge_${amountCents}_exceeds_cap_${effectiveCapCents}`;
     console.error("[BILLING ANOMALY BLOCKED] Single charge exceeds cap", {
-      customerId,
-      amountCents,
-      capCents: BILLING_SINGLE_CHARGE_CAP_CENTS,
-      description,
-      idempotencyKey,
+      customerId, amountCents, cap: effectiveCapCents, source, sourceId,
     });
-    throw new Error(
-      `Billing anomaly blocked: ${amountCents} cents exceeds cap of ${BILLING_SINGLE_CHARGE_CAP_CENTS} cents`,
-    );
+    await BillingEvent.findOneAndUpdate(
+      { source, sourceId, amountCents },
+      {
+        $set: { status: "blocked", blockedReason, updatedAt: new Date() },
+        $setOnInsert: {
+          userEmail: userEmail || "", userId: userId || "", stripeCustomerId: customerId,
+          description, idempotencyKey, metadata: metadata || {}, createdAt: new Date(),
+        },
+      },
+      { upsert: true },
+    ).catch(() => {/* non-fatal */});
+    throw new Error(`Billing anomaly blocked: ${amountCents}c exceeds cap of ${effectiveCapCents}c`);
+  }
+
+  // ── Account eligibility guard (usage-style sources) ──────────────────────────
+  // Belt-and-suspenders: callers already check this, but the central helper
+  // verifies independently so a mis-wired caller cannot charge ineligible accounts.
+  if (USAGE_SOURCES.includes(source) && userEmail && !isAdminEmail(userEmail)) {
+    const eligUser = await User.findOne({ email: userEmail.toLowerCase() })
+      .select("hasEverPaid billingBlocked stripeCustomerId")
+      .lean();
+
+    const eligible =
+      eligUser &&
+      (eligUser as any).hasEverPaid === true &&
+      (eligUser as any).billingBlocked !== true &&
+      (eligUser as any).stripeCustomerId;
+
+    if (!eligible) {
+      const blockedReason = !eligUser
+        ? "user_not_found"
+        : !(eligUser as any).hasEverPaid
+        ? "has_ever_paid_false"
+        : (eligUser as any).billingBlocked
+        ? "billing_blocked"
+        : "no_stripe_customer";
+
+      await BillingEvent.findOneAndUpdate(
+        { source, sourceId, amountCents },
+        {
+          $set: { status: "blocked", blockedReason, updatedAt: new Date() },
+          $setOnInsert: {
+            userEmail: userEmail || "", userId: userId || "", stripeCustomerId: customerId,
+            description, idempotencyKey, metadata: metadata || {}, createdAt: new Date(),
+          },
+        },
+        { upsert: true },
+      ).catch(() => {/* non-fatal */});
+
+      console.warn("[BILLING ELIGIBILITY BLOCKED]", { userEmail, source, sourceId, blockedReason });
+      throw new Error(`Billing blocked: ${blockedReason}`);
+    }
+  }
+
+  // ── BillingEvent ledger — idempotency guard ───────────────────────────────────
+  // $setOnInsert fires only if this is a NEW document (first attempt).
+  // If the document already exists, we get back the previous state.
+  const existingEvent = await BillingEvent.findOneAndUpdate(
+    { source, sourceId, amountCents },
+    {
+      $setOnInsert: {
+        userEmail: userEmail || "",
+        userId: userId || "",
+        stripeCustomerId: customerId,
+        description,
+        status: "pending",
+        idempotencyKey,
+        metadata: metadata || {},
+        createdAt: new Date(),
+      },
+      $set: { updatedAt: new Date() },
+    },
+    { upsert: true, new: false },
+  ).catch(async (err: any) => {
+    // Duplicate key race on concurrent upserts — find the winner
+    if (err.code === 11000) {
+      return BillingEvent.findOne({ source, sourceId, amountCents }).lean();
+    }
+    throw err;
+  });
+
+  if (existingEvent) {
+    const st = String((existingEvent as any).status || "");
+    // Already fully paid — no Stripe write needed
+    if (st === "paid") {
+      console.log("[BILLING SKIPPED] Already paid", { source, sourceId, idempotencyKey });
+      return;
+    }
+    // Invoice created in Stripe and handed off — skip re-creation
+    if (st === "stripe_created" && (existingEvent as any).stripeInvoiceId) {
+      console.log("[BILLING SKIPPED] Stripe invoice already created", {
+        source, sourceId, stripeInvoiceId: (existingEvent as any).stripeInvoiceId,
+      });
+      return;
+    }
+    // For "pending", "failed", "blocked" (now eligible): proceed and retry Stripe calls.
+    // Stripe idempotency keys guarantee the same invoice is returned on retry.
+    if (st === "blocked") {
+      await BillingEvent.updateOne(
+        { source, sourceId, amountCents },
+        { $set: { status: "pending", blockedReason: undefined, updatedAt: new Date() } },
+      ).catch(() => {/* non-fatal */});
+    }
   }
 
   // ── Audit log ────────────────────────────────────────────────────────────────
   console.log("[BILLING ATTEMPT]", {
-    customerId,
-    amountCents,
-    description,
-    idempotencyKey,
-    capCents: BILLING_SINGLE_CHARGE_CAP_CENTS,
+    customerId, amountCents, description, source, sourceId,
+    idempotencyKey, cap: effectiveCapCents,
   });
+
+  let invoiceItemId: string | undefined;
+  let invoiceId: string | undefined;
 
   try {
     const item = await stripe.invoiceItems.create(
@@ -134,6 +263,19 @@ export async function createFinalizePayInvoice(params: {
     );
     invoiceId = invoice.id;
 
+    // Mark Stripe objects created — idempotent retry of finalize/pay is now safe
+    await BillingEvent.updateOne(
+      { source, sourceId, amountCents },
+      {
+        $set: {
+          status: "stripe_created",
+          stripeInvoiceItemId: invoiceItemId,
+          stripeInvoiceId: invoiceId,
+          updatedAt: new Date(),
+        },
+      },
+    ).catch(() => {/* non-fatal — Stripe idempotency still protects us */});
+
     await stripe.invoices.finalizeInvoice(
       invoiceId!,
       {},
@@ -146,13 +288,28 @@ export async function createFinalizePayInvoice(params: {
       { idempotencyKey: `pay_${idempotencyKey}` },
     );
 
+    // ── Mark paid — idempotency guard for future retries ─────────────────────
+    await BillingEvent.updateOne(
+      { source, sourceId, amountCents },
+      {
+        $set: {
+          status: "paid",
+          stripeInvoiceItemId: invoiceItemId,
+          stripeInvoiceId: invoiceId,
+          updatedAt: new Date(),
+        },
+      },
+    ).catch(() => {
+      // Non-fatal: if this fails, next retry sees same Stripe idempotency key
+      // and gets the same already-paid invoice → no duplicate charge.
+      console.error("[BILLING] BillingEvent 'paid' update failed; Stripe idempotency is the safety net", {
+        source, sourceId, idempotencyKey,
+      });
+    });
+
     console.log("[BILLING SUCCESS]", {
-      customerId,
-      amountCents,
-      description,
-      idempotencyKey,
-      invoiceItemId,
-      invoiceId,
+      customerId, amountCents, description, source, sourceId,
+      idempotencyKey, invoiceItemId, invoiceId,
     });
   } catch (err) {
     // Clean up orphaned item if invoice was never created
@@ -163,6 +320,11 @@ export async function createFinalizePayInvoice(params: {
         /* ignore cleanup failure */
       }
     }
+    // Mark failed — keeps audit trail; next retry resets to "pending" above
+    await BillingEvent.updateOne(
+      { source, sourceId, amountCents },
+      { $set: { status: "failed", updatedAt: new Date() } },
+    ).catch(() => {/* non-fatal */});
     throw err;
   }
 }
@@ -174,7 +336,7 @@ type UsageSource =
   | "twilio-self"
   | "twilio-voice"
   | "openai"
-  | "ai-dialer"; // Deprecated: pass source:"ai-dialer" is now a no-op; use trackAiDialerUsage directly
+  | "ai-dialer";
 
 /**
  * Track billable usage for the REGULAR bucket ($10 threshold).
@@ -182,7 +344,7 @@ type UsageSource =
  * Covers: browser dialer, manual dialer, inbound voice, SMS/MMS, drips,
  * appointment texts, transcriptions, call coaching, and non-AI-voice OpenAI.
  *
- * AI Voice is a separate bucket handled entirely by trackAiDialerUsage().
+ * AI Voice is a separate bucket handled entirely by trackAiDialerSessionUsage().
  * Passing source:"ai-dialer" here does NOT accrue to the regular bucket.
  *
  * Accrual and threshold charging are fully atomic — no read-modify-write race.
@@ -205,7 +367,7 @@ export async function trackUsage({
     return;
   }
 
-  // ai-dialer has its own $20 bucket in trackAiDialerUsage — excluded here
+  // ai-dialer has its own $20 bucket — excluded here
   const platformBilled =
     source === "twilio" || source === "twilio-voice" || source === "openai";
 
@@ -265,8 +427,6 @@ export async function trackUsage({
   if (!canBill || !platformBilled || newAccrued < TOPUP_AMOUNT_CENTS) return;
 
   // ── Acquire exclusive billing lock ──────────────────────────────────────────
-  // Conditional update: only succeeds if no lock is held (or existing lock has
-  // expired). The unique lockOwner ID ensures only this process can commit.
   const lockOwner = new mongoose.Types.ObjectId().toString();
   const lockExpiresAt = new Date(Date.now() + BILLING_LOCK_TTL_MS);
 
@@ -286,7 +446,8 @@ export async function trackUsage({
         billingLockExpiresAt: lockExpiresAt,
       },
     },
-    { new: true, projection: { usageAccruedCents: 1 } },
+    // Include usageBilledTotalCents for stable BillingEvent sourceId
+    { new: true, projection: { usageAccruedCents: 1, usageBilledTotalCents: 1 } },
   );
 
   if (!locked) return; // another process holds the lock; accrual is safely stored
@@ -303,16 +464,22 @@ export async function trackUsage({
     return;
   }
 
-  // lockOwner is unique per billing attempt → idempotency key is stable for retries
-  const idempotencyKey = `reg_${userDoc.email}_${lockOwner}`;
-  const stripeCustomerId = (userDoc.stripeCustomerId as string);
+  // sourceId encodes: "user X's cumulative billing reaching Y cents".
+  // If Stripe charges but MongoDB deduction fails → next retry computes the
+  // same sourceId → BillingEvent already "paid" → no duplicate charge.
+  const currentBilledTotal = Number((locked as any).usageBilledTotalCents || 0);
+  const sourceId = `usage:${userDoc.email}:${currentBilledTotal + billCents}`;
+  const stripeCustomerId = userDoc.stripeCustomerId as string;
 
   try {
     await createFinalizePayInvoice({
       customerId: stripeCustomerId,
       amountCents: billCents,
       description: `Cove CRM usage charge ($${(billCents / 100).toFixed(2)})`,
-      idempotencyKey,
+      source: "regular_usage",
+      sourceId,
+      userEmail: userDoc.email as string,
+      userId: String(userDoc._id),
     });
 
     // Commit: only our lockOwner can execute this write
@@ -343,7 +510,7 @@ export async function trackUsage({
 }
 
 /**
- * One-time A2P approval charge (idempotent via Stripe customer metadata).
+ * One-time A2P approval charge (idempotent via BillingEvent unique index).
  */
 export async function chargeA2PApprovalIfNeeded({
   user,
@@ -399,27 +566,38 @@ export async function chargeA2PApprovalIfNeeded({
     return { charged: false, pending: true };
   }
 
-  const customer = (await stripe.customers.retrieve(
-    userDoc.stripeCustomerId,
-  )) as any;
+  const customer = (await stripe.customers.retrieve(userDoc.stripeCustomerId)) as any;
 
   if (customer?.deleted) {
     return { charged: false, pending: true };
   }
 
+  // Check BillingEvent first (idempotency via unique index on source+sourceId+amountCents)
+  const sourceId = `a2p:${userDoc.stripeCustomerId}`;
+  const existing = await BillingEvent.findOne({
+    source: "a2p_fee",
+    sourceId,
+    amountCents: A2P_APPROVAL_FEE_CENTS,
+  }).lean();
+  if (existing && (existing as any).status === "paid") {
+    return { charged: false, reason: "already-charged" };
+  }
+
+  // Fallback: also check Stripe customer metadata (legacy path)
   const meta = customer?.metadata || {};
-  const already =
+  const alreadyInMeta =
     String(meta["a2p_approval_charged"] || "").toLowerCase() === "true";
+  if (alreadyInMeta) return { charged: false, reason: "already-charged" };
 
-  if (already) return { charged: false, reason: "already-charged" };
-
-  // Idempotency key is stable per-customer — safe to retry if this call fails
   assertStripeWritesEnabled();
   await createFinalizePayInvoice({
     customerId: userDoc.stripeCustomerId,
     amountCents: A2P_APPROVAL_FEE_CENTS,
     description: `A2P 10DLC registration approval fee ($${A2P_APPROVAL_FEE_USD})`,
-    idempotencyKey: `a2p_${userDoc.stripeCustomerId}`,
+    source: "a2p_fee",
+    sourceId,
+    userEmail: userDoc.email as string,
+    userId: String(userDoc._id),
   });
 
   await stripe.customers.update(userDoc.stripeCustomerId, {

@@ -12,6 +12,7 @@ import "dotenv/config";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 import { cascadeEmailUpdateMany, type CascadeResult } from "@/lib/cascadeEmailUpdate";
 
@@ -126,6 +127,7 @@ async function main() {
     print(`  DRY_RUN — would update customer ${stripeCustomerId} email → ${NEW_EMAIL}`);
   } else {
     try {
+      assertStripeWritesEnabled();
       const customer = await stripe.customers.update(stripeCustomerId, {
         email: NEW_EMAIL,
       });
