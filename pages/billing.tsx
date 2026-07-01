@@ -139,11 +139,21 @@ export default function BillingPage() {
       <div className="max-w-2xl w-full p-6 bg-white dark:bg-gray-900 text-black dark:text-white shadow-xl rounded">
         <h1 className="text-3xl font-bold mb-2 text-center">Secure Billing</h1>
 
-        {/* New explanatory text */}
+        {/* Explanatory text */}
+        <p className="text-sm text-center text-gray-600 dark:text-gray-400 mb-3">
+          Your 7-day free trial begins when you create your account.
+        </p>
+        <p className="text-sm text-center text-gray-600 dark:text-gray-400 mb-3">
+          <span className="font-semibold">You will not be charged today</span>{" "}
+          for your CoveCRM subscription. Your payment method is collected now so
+          your subscription can continue automatically after your 7-day trial
+          ends unless you cancel beforehand.
+        </p>
         <p className="text-sm text-center text-gray-600 dark:text-gray-400 mb-6">
-          Your CRM subscription is handled here. Phone numbers, SMS, and call usage{" "}
-          <span className="font-semibold">are billed separately</span> and may
-          incur additional charges even during any free trial or discount period.
+          If you choose to purchase a phone number or use SMS, AI, or calling
+          during your trial, those usage charges{" "}
+          <span className="font-semibold">are billed separately</span> at the
+          time they are incurred.
         </p>
 
         {/* Loading */}

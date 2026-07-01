@@ -185,7 +185,7 @@ export default function CheckoutForm({
         disabled={loading || !stripe}
         className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition cursor-pointer"
       >
-        {loading ? "Processing..." : "Subscribe Now"}
+        {loading ? "Processing..." : "Start Free Trial"}
       </button>
     </form>
   );
