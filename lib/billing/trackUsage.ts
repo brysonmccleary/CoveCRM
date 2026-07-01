@@ -453,8 +453,9 @@ export async function trackUsage({
   if (!locked) return; // another process holds the lock; accrual is safely stored
 
   const accrued = Number((locked as any).usageAccruedCents || 0);
-  const increments = Math.floor(accrued / TOPUP_AMOUNT_CENTS);
-  const billCents = increments * TOPUP_AMOUNT_CENTS;
+  // Bill exactly one threshold increment per event ($10 max single charge).
+  // Any remainder drains on subsequent usage events — never lump-sum.
+  const billCents = accrued >= TOPUP_AMOUNT_CENTS ? TOPUP_AMOUNT_CENTS : 0;
 
   if (billCents <= 0) {
     await User.updateOne(

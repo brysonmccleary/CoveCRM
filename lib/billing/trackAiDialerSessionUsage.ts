@@ -213,8 +213,9 @@ export async function trackAiDialerSessionUsage({
   if (!locked) return { billedSeconds: newSeconds, accrued: addCents };
 
   const accrued = Number((locked as any).aiDialerAccruedSessionCents || 0);
-  const increments = Math.floor(accrued / SESSION_THRESHOLD_CENTS);
-  const billCents = increments * SESSION_THRESHOLD_CENTS;
+  // Bill exactly one threshold increment per event ($20 max single charge).
+  // Any remainder drains on subsequent billing events — never lump-sum.
+  const billCents = accrued >= SESSION_THRESHOLD_CENTS ? SESSION_THRESHOLD_CENTS : 0;
 
   if (billCents <= 0) {
     await User.updateOne(
@@ -363,8 +364,8 @@ export async function trackAiDialerCentsUsage({
   if (!locked) return { ok: true, accrued: cents, charged: false };
 
   const accrued = Number((locked as any).aiDialerAccruedSessionCents || 0);
-  const increments = Math.floor(accrued / SESSION_THRESHOLD_CENTS);
-  const billCents = increments * SESSION_THRESHOLD_CENTS;
+  // Bill exactly one threshold increment per event ($20 max single charge).
+  const billCents = accrued >= SESSION_THRESHOLD_CENTS ? SESSION_THRESHOLD_CENTS : 0;
 
   if (billCents <= 0) {
     await User.updateOne(
