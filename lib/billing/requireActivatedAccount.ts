@@ -14,6 +14,7 @@ export function isAccountActivated(user: any): boolean {
   if (user.role === "admin") return true;
   if (isLegacyAccount(user)) return true;
   if (user.emailVerified !== true) return false;
+  if (user.cardOnFile === true) return true;
   // trialGranted is set only after a card is saved via grantTrialIfEligible
   if (user.trialGranted === true) return true;
   // hasEverPaid is set only after invoice.payment_succeeded webhook fires

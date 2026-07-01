@@ -125,8 +125,6 @@ function InnerApp({
     () => PUBLIC_ROUTES.has(router.pathname),
     [router.pathname],
   );
-  const [billingBannerDismissed, setBillingBannerDismissed] = useState(false);
-
   const [leads, setLeads] = useState<any[]>([]);
   const isDialing =
     typeof window !== "undefined" &&
@@ -136,42 +134,16 @@ function InnerApp({
     isPublic || router.pathname === "/" || router.pathname === "/billing";
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    setBillingBannerDismissed(
-      window.sessionStorage.getItem("cove.billingBannerDismissed") === "1",
-    );
-  }, [router.pathname]);
-
-  useEffect(() => {
     if (!authed || isPublic) return;
     const user = session?.user as any;
-    if (user?.role === "admin") return;
+    if (user?.role === "admin" || user?.accountActivated === true) return;
 
     if (user?.emailVerified !== true) {
       window.location.href = `/verify-email?email=${encodeURIComponent(String(user?.email || ""))}`;
       return;
     }
 
-    const hasNewSignupTrial = Boolean(user?.trialStartedAt);
-    if (hasNewSignupTrial) {
-      const trialEndsAtMs = user?.trialEndsAt ? new Date(user.trialEndsAt).getTime() : 0;
-      const trialExpired = Boolean(trialEndsAtMs && Date.now() > trialEndsAtMs);
-      const cardOnFile = user?.cardOnFile === true;
-
-      if (trialExpired && !cardOnFile) {
-        window.location.href = "/trial-expired";
-        return;
-      }
-
-      if (trialExpired && cardOnFile && user?.subscriptionStatus !== "active") {
-        window.location.href = `/billing?email=${encodeURIComponent(
-          String(user?.email || ""),
-        )}&reason=reactivate`;
-        return;
-      }
-    }
-
-    if (user?.accountActivated === true) return;
+    window.location.href = `/billing?email=${encodeURIComponent(String(user?.email || ""))}&trial=1`;
   }, [authed, isPublic, session?.user]);
 
   /** Load leads for reminders (only when logged in on internal pages) */
@@ -245,43 +217,6 @@ function InnerApp({
       </Head>
 
       {/* Auth-only banners */}
-      {authed &&
-        !isPublic &&
-        (session?.user as any)?.role !== "admin" &&
-        Boolean((session?.user as any)?.trialStartedAt) &&
-        (session?.user as any)?.cardOnFile !== true &&
-        !billingBannerDismissed && (
-          <div className="sticky top-0 z-[10000] border-b border-[#1e293b] bg-[#0f172a] px-4 py-3 text-white shadow-lg">
-            <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-gray-100">
-                Add a payment method in Billing & Usage to activate your phone number and keep access after your trial ends.
-              </p>
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    window.location.href = "/settings?tab=billing";
-                  }}
-                  className="rounded bg-[var(--cove-accent)] px-4 py-2 text-sm font-semibold text-white hover:opacity-95"
-                >
-                  Go to Billing
-                </button>
-                <button
-                  type="button"
-                  aria-label="Dismiss billing reminder"
-                  onClick={() => {
-                    window.sessionStorage.setItem("cove.billingBannerDismissed", "1");
-                    setBillingBannerDismissed(true);
-                  }}
-                  className="rounded border border-white/15 px-3 py-2 text-sm text-gray-300 hover:bg-white/10 hover:text-white"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
       {authed && !isPublic && <CallbackBanner />}
 
       {authed && !isPublic && (

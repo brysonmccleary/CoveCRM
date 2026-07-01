@@ -41,10 +41,6 @@ import {
   FaSms,
 } from "react-icons/fa";
 
-function hasVerifiedSignupTrial(user: any) {
-  return Boolean(user?.emailVerified === true && user?.trialStartedAt);
-}
-
 type KPI = {
   dials: number;
   connects: number;
@@ -1093,7 +1089,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
   await dbConnect();
   const user = await User.findOne({ email: session.user.email as string });
 
-  if (!isAccountActivated(user) && !hasVerifiedSignupTrial(user)) {
+  if (!isAccountActivated(user)) {
     const emailEnc = encodeURIComponent(String(session.user.email));
     let destination: string;
     if ((user as any)?.emailVerified === true) {

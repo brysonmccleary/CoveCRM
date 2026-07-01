@@ -13,17 +13,6 @@ export default function VerifyEmailPage() {
     return (Array.isArray(raw) ? raw[0] : raw) || "";
   }, [router.query.email]);
 
-  const nextDashboardUrl = useMemo(() => {
-    const params = new URLSearchParams();
-    for (const key of ["plan", "interval"]) {
-      const raw = router.query[key];
-      const value = (Array.isArray(raw) ? raw[0] : raw) || "";
-      if (value) params.set(key, value);
-    }
-    const query = params.toString();
-    return query ? `/dashboard?${query}` : "/dashboard";
-  }, [router.query]);
-
   const verify = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !code.trim()) {
@@ -40,8 +29,8 @@ export default function VerifyEmailPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) throw new Error(data?.error || "Verification failed");
-      toast.success("Email verified. Welcome to CoveCRM.");
-      window.location.href = nextDashboardUrl;
+      toast.success("Email verified. Continue to billing.");
+      window.location.href = `/billing?email=${encodeURIComponent(email)}&trial=1`;
     } catch (err: any) {
       toast.error(err?.message || "Verification failed");
     } finally {

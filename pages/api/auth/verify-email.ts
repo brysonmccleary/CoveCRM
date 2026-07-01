@@ -107,15 +107,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (user as any).emailVerificationExpiresAt = null;
       await user.save();
 
-      const dashboardParams = new URLSearchParams();
-      const planCode = String((user as any).planCode || "").trim().toLowerCase();
-      const billingInterval = String((user as any).billingInterval || "").trim().toLowerCase();
-      if (planCode === "base" || planCode === "ai") dashboardParams.set("plan", planCode);
-      if (billingInterval === "monthly" || billingInterval === "annual") {
-        dashboardParams.set("interval", billingInterval);
-      }
-      const query = dashboardParams.toString();
-      return res.redirect(302, query ? `/dashboard?${query}` : "/dashboard");
+      const billingParams = new URLSearchParams({ email, trial: "1" });
+      return res.redirect(302, `/billing?${billingParams.toString()}`);
     } catch (err: any) {
       console.error("[verify-email] link error:", err?.message || err);
       return redirectToVerifyError(res, email);
