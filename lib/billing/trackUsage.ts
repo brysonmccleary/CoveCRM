@@ -70,6 +70,50 @@ export async function createFinalizePayInvoice(params: {
   let invoiceItemId: string | undefined;
   let invoiceId: string | undefined;
 
+  // ── Emergency kill switch ────────────────────────────────────────────────────
+  // Set DISABLE_ALL_STRIPE_BILLING=1 in Vercel env to immediately stop all
+  // app-initiated charges without a code deploy.
+  if (process.env.DISABLE_ALL_STRIPE_BILLING === "1") {
+    console.error("[BILLING BLOCKED] DISABLE_ALL_STRIPE_BILLING=1", {
+      customerId,
+      amountCents,
+      description,
+      idempotencyKey,
+    });
+    throw new Error("Stripe billing is globally disabled");
+  }
+
+  // ── Safety cap ───────────────────────────────────────────────────────────────
+  // Blocks any single invoice that exceeds the cap (default $50).
+  // Override with BILLING_SINGLE_CHARGE_CAP_CENTS env var.
+  const BILLING_SINGLE_CHARGE_CAP_CENTS = Number(
+    process.env.BILLING_SINGLE_CHARGE_CAP_CENTS || "5000",
+  );
+  if (!Number.isFinite(BILLING_SINGLE_CHARGE_CAP_CENTS) || BILLING_SINGLE_CHARGE_CAP_CENTS <= 0) {
+    throw new Error("Invalid BILLING_SINGLE_CHARGE_CAP_CENTS");
+  }
+  if (amountCents > BILLING_SINGLE_CHARGE_CAP_CENTS) {
+    console.error("[BILLING ANOMALY BLOCKED] Single charge exceeds cap", {
+      customerId,
+      amountCents,
+      capCents: BILLING_SINGLE_CHARGE_CAP_CENTS,
+      description,
+      idempotencyKey,
+    });
+    throw new Error(
+      `Billing anomaly blocked: ${amountCents} cents exceeds cap of ${BILLING_SINGLE_CHARGE_CAP_CENTS} cents`,
+    );
+  }
+
+  // ── Audit log ────────────────────────────────────────────────────────────────
+  console.log("[BILLING ATTEMPT]", {
+    customerId,
+    amountCents,
+    description,
+    idempotencyKey,
+    capCents: BILLING_SINGLE_CHARGE_CAP_CENTS,
+  });
+
   try {
     const item = await stripe.invoiceItems.create(
       { customer: customerId, amount: amountCents, currency: "usd", description },
@@ -98,6 +142,15 @@ export async function createFinalizePayInvoice(params: {
       {},
       { idempotencyKey: `pay_${idempotencyKey}` },
     );
+
+    console.log("[BILLING SUCCESS]", {
+      customerId,
+      amountCents,
+      description,
+      idempotencyKey,
+      invoiceItemId,
+      invoiceId,
+    });
   } catch (err) {
     // Clean up orphaned item if invoice was never created
     if (invoiceItemId && !invoiceId) {

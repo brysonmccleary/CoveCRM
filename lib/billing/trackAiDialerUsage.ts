@@ -87,6 +87,10 @@ export async function trackAiDialerUsage({
   // Admin: analytics only, never billed
   if (isAdminEmail(userDoc.email)) return;
 
+  // Legacy per-call billing is disabled; this function has no active callers.
+  // Guard here so a future accidental re-wire can't produce charges.
+  if (process.env.ENABLE_LEGACY_AI_DIALER_BILLING !== "1") return;
+
   // Must have AI upgrade to accrue AI dialer billing
   if (!userDoc.hasAI) {
     console.log(`[AI Dialer billing] Skipping — hasAI=false for ${userDoc.email}`);
@@ -170,7 +174,8 @@ export async function trackAiDialerUsage({
     return;
   }
 
-  const idempotencyKey = `ai_${userDoc.email}_${lockOwner}`;
+  const hourBucket = Math.floor(Date.now() / (60 * 60 * 1000));
+  const idempotencyKey = `ailegacy_${userDoc.email}_${billCents}_${hourBucket}`;
 
   try {
     await createFinalizePayInvoice({

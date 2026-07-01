@@ -146,10 +146,15 @@ export async function trackAiDialerSessionUsage({
 
   // Fetch user for eligibility + Stripe ID
   const userDoc = await User.findOne({ email })
-    .select("hasAI stripeCustomerId aiDialerAccruedSessionCents")
+    .select("hasAI stripeCustomerId aiDialerAccruedSessionCents hasEverPaid billingBlocked billingMode")
     .lean();
 
-  if (!userDoc || !(userDoc as any).hasAI) {
+  if (
+    !userDoc ||
+    !(userDoc as any).hasAI ||
+    !(userDoc as any).hasEverPaid ||
+    (userDoc as any).billingBlocked === true
+  ) {
     // Still track seconds for analytics
     await User.updateOne({ email }, { $inc: { aiDialerSessionSeconds: newSeconds } });
     return { billedSeconds: newSeconds, accrued: 0 };
@@ -224,7 +229,8 @@ export async function trackAiDialerSessionUsage({
     return { billedSeconds: newSeconds, accrued: addCents };
   }
 
-  const idempotencyKey = `aisess_${email}_${lockOwner}`;
+  const billedThroughSeconds = alreadyBilledSeconds + newSeconds;
+  const idempotencyKey = `aisess_${sessionId}_${billCents}_${billedThroughSeconds}`;
 
   try {
     await createFinalizePayInvoice({
@@ -293,10 +299,15 @@ export async function trackAiDialerCentsUsage({
   }
 
   const userDoc = await User.findOne({ email })
-    .select("hasAI stripeCustomerId aiDialerAccruedSessionCents")
+    .select("hasAI stripeCustomerId aiDialerAccruedSessionCents hasEverPaid billingBlocked billingMode")
     .lean();
 
-  if (!userDoc || !(userDoc as any).hasAI) {
+  if (
+    !userDoc ||
+    !(userDoc as any).hasAI ||
+    !(userDoc as any).hasEverPaid ||
+    (userDoc as any).billingBlocked === true
+  ) {
     return { ok: true, accrued: 0, charged: false };
   }
 
@@ -367,7 +378,8 @@ export async function trackAiDialerCentsUsage({
     return { ok: true, accrued: cents, charged: false };
   }
 
-  const idempotencyKey = `${idempotencyPrefix}_${email}_${lockOwner}`;
+  const hourBucket = Math.floor(Date.now() / (60 * 60 * 1000));
+  const idempotencyKey = `${idempotencyPrefix}_${email}_${billCents}_${hourBucket}`;
 
   try {
     await createFinalizePayInvoice({
