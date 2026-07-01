@@ -4,6 +4,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -48,6 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let upgradeId = "";
     const baseSubscriptionId = String((user as any).stripeSubscriptionId || "").trim();
 
+    assertStripeWritesEnabled();
     if (baseSubscriptionId) {
       const item = await stripe.subscriptionItems.create({
         subscription: baseSubscriptionId,

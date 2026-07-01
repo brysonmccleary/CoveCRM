@@ -7,6 +7,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import FBLeadSubscription from "@/models/FBLeadSubscription";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 const PLAN_PRICE_IDS: Record<string, string> = {
   manager: process.env.STRIPE_FB_MANAGER_PRICE_ID || "",
@@ -58,6 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   ).replace(/\/$/, "");
 
   try {
+    assertStripeWritesEnabled();
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: user.stripeCustomerId || undefined,

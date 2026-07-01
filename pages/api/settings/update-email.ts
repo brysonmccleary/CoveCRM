@@ -6,6 +6,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { cascadeEmailUpdateMany } from "@/lib/cascadeEmailUpdate";
@@ -81,6 +82,7 @@ export default async function handler(
   const stripeCustomerId = user.stripeCustomerId;
   if (stripeCustomerId) {
     try {
+      assertStripeWritesEnabled();
       await stripe.customers.update(stripeCustomerId, { email: normalizedNew });
     } catch (e: any) {
       stripeResult.ok = false;

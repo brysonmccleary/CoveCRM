@@ -8,6 +8,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Affiliate from "@/models/Affiliate";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 const upper = (s?: string | null) => (s || "").trim().toUpperCase();
 
@@ -100,6 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    assertStripeWritesEnabled();
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
       // Prefer existing customer id to avoid duplicates

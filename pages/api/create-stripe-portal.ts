@@ -5,6 +5,7 @@ import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 type Ctx = "platform" | "connected";
 
@@ -86,6 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         return found;
       }
+      assertStripeWritesEnabled();
       const created = await stripe.customers.create({
         email,
         metadata: { userId: (user as any)?._id?.toString?.() || "" },

@@ -4,6 +4,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import { getUserByEmail } from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 export default async function handler(
   req: NextApiRequest,
@@ -35,6 +36,7 @@ export default async function handler(
     const currentItems = subscription.items.data;
     const aiItem = currentItems.find((item) => item.price.id === aiPriceId);
 
+    assertStripeWritesEnabled();
     let updatedSub;
     if (enable && !aiItem) {
       updatedSub = await stripe.subscriptions.update(subscription.id, {

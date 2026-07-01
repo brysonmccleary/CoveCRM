@@ -4,6 +4,7 @@ import Affiliate from "@/models/Affiliate";
 import AffiliatePayoutLedger from "@/models/AffiliatePayoutLedger";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 function monthStart(offsetMonths = 0) {
   const now = new Date();
@@ -25,6 +26,7 @@ async function processLedgerEntry(entry: any) {
     return false;
   }
 
+  assertStripeWritesEnabled();
   const transfer = await stripe.transfers.create(
     {
       amount: Math.round(Number(entry.amount || 12.5) * 100),

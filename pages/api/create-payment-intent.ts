@@ -1,11 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
   try {
+    assertStripeWritesEnabled();
     const paymentIntent = await stripe.paymentIntents.create({
       amount: 5000, // $50.00 — update as needed
       currency: "usd",

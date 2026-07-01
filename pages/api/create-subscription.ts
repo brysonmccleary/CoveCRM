@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { getServerSession } from "next-auth/next";
@@ -60,6 +61,7 @@ async function ensureStripeCustomer(userDoc: any, email: string): Promise<string
     }
   }
 
+  assertStripeWritesEnabled();
   const created = await stripe.customers.create({
     email,
     metadata: { userId: String(userDoc?._id || "") },
@@ -198,6 +200,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       params.trial_period_days = remainingDays;
     }
 
+    assertStripeWritesEnabled();
     const subscription = await stripe.subscriptions.create(params, {
       idempotencyKey: `sub_${customerId}_${selectedPriceId}`,
     });

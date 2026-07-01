@@ -5,6 +5,7 @@ import Affiliate from "@/models/Affiliate";
 import AffiliatePayout from "@/models/AffiliatePayout";
 import { sendAffiliatePayoutEmail } from "@/lib/email";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import crypto from "crypto";
 
 const MIN_PAYOUT = Number(process.env.AFFILIATE_MIN_PAYOUT_USD ?? process.env.AFFILIATE_MIN_PAYOUT ?? 50);
@@ -125,6 +126,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       try {
         // Create Stripe Connect transfer (also idempotent at Stripe)
+        assertStripeWritesEnabled();
         const transfer = await stripe.transfers.create(
           {
             amount: Math.round(amount * 100),

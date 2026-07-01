@@ -7,6 +7,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import AffiliatePayout, { IAffiliatePayout } from "@/models/AffiliatePayout";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -150,6 +151,7 @@ export default async function handler(
     }
 
     // Create Stripe transfer (Connect)
+    assertStripeWritesEnabled();
     const transfer = await stripe.transfers.create(
       {
         amount: Math.round(amt * 100),

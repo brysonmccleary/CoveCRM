@@ -5,6 +5,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 const BASE_URL =
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -28,6 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!user) return res.status(404).json({ error: "User not found" });
 
   try {
+    assertStripeWritesEnabled();
     const checkout = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: user.stripeCustomerId || undefined,

@@ -9,6 +9,7 @@ import { enforceRateLimit } from "@/lib/rateLimit";
 
 /** Stripe */
 import Stripe from "stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 const stripeKey = process.env.STRIPE_SECRET_KEY || "";
 const stripe = stripeKey ? new Stripe(stripeKey) : null;
 const STRIPE_MODE: "live" | "test" | undefined = stripeKey
@@ -192,6 +193,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let stripeCustomerId: string | undefined;
     try {
       if (stripe) {
+        assertStripeWritesEnabled();
         const customer = await stripe.customers.create({
           email: cleanEmail,
           name: cleanName,

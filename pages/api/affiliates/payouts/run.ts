@@ -6,6 +6,7 @@ import Affiliate from "@/models/Affiliate";
 import AffiliatePayout from "@/models/AffiliatePayout";
 import { sendAffiliatePayoutEmail } from "@/lib/email";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import crypto from "crypto";
 
 // Minimum payout threshold (USD)
@@ -91,6 +92,7 @@ export default async function handler(
       }
 
       // Create Stripe Connect transfer
+      assertStripeWritesEnabled();
       const transfer = await stripe.transfers.create(
         {
           amount: Math.round(amount * 100),

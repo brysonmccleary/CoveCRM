@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 /** ========= Env / Flags ========= */
 const isProd = process.env.NODE_ENV === "production";
@@ -66,11 +67,13 @@ export async function createFinalizePayInvoice(params: {
   description: string;
   idempotencyKey: string;
 }): Promise<void> {
+  assertStripeWritesEnabled();
+
   const { customerId, amountCents, description, idempotencyKey } = params;
   let invoiceItemId: string | undefined;
   let invoiceId: string | undefined;
 
-  // ── Emergency kill switch ────────────────────────────────────────────────────
+  // ── Emergency kill switch (kept as belt-and-suspenders) ──────────────────────
   // Set DISABLE_ALL_STRIPE_BILLING=1 in Vercel env to immediately stop all
   // app-initiated charges without a code deploy.
   if (process.env.DISABLE_ALL_STRIPE_BILLING === "1") {
@@ -411,6 +414,7 @@ export async function chargeA2PApprovalIfNeeded({
   if (already) return { charged: false, reason: "already-charged" };
 
   // Idempotency key is stable per-customer — safe to retry if this call fails
+  assertStripeWritesEnabled();
   await createFinalizePayInvoice({
     customerId: userDoc.stripeCustomerId,
     amountCents: A2P_APPROVAL_FEE_CENTS,

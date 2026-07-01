@@ -4,6 +4,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 export default async function handler(
   req: NextApiRequest,
@@ -36,6 +37,7 @@ export default async function handler(
     const amountInCents = Math.round(affiliate.payoutDue * 100);
 
     try {
+      assertStripeWritesEnabled();
       await stripe.transfers.create({
         amount: amountInCents,
         currency: "usd",

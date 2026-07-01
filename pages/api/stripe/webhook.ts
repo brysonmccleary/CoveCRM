@@ -34,6 +34,7 @@ import { assignLeadsToUser } from "@/lib/prospecting/assignLeads";
 import { sendAffiliateApprovedEmail, sendEmail } from "@/lib/email";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { Resend } from "resend";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 export const config = { api: { bodyParser: false } };
 
@@ -528,6 +529,7 @@ async function maybeAutoPayout(affiliateInput: IAffiliate, invoiceId: string) {
   }
 
   try {
+    assertStripeWritesEnabled();
     const transfer = await stripe.transfers.create({
       amount: toCents(amountUSD),
       currency: "usd",
@@ -592,6 +594,7 @@ async function processReferralLinkMonthlyPayout(user: any) {
   if ((ledger as any).status === "paid") return;
 
   try {
+    assertStripeWritesEnabled();
     const transfer = await stripe.transfers.create(
       {
         amount: 1250,

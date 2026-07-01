@@ -5,6 +5,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 type ResponseBody =
   | { ok: true; url: string }
@@ -48,6 +49,7 @@ export default async function handler(
         .status(404)
         .json({ ok: false, error: "User not found for AI Suite checkout" });
 
+    assertStripeWritesEnabled();
     let customerId = user.stripeCustomerId;
     if (!customerId) {
       const customer = await stripe.customers.create({

@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { grantTrialIfEligible } from "@/lib/billing/grantTrialIfEligible";
@@ -37,6 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: "User not found." });
     }
 
+    assertStripeWritesEnabled();
     await stripe.customers.update(String(customerId), {
       invoice_settings: { default_payment_method: paymentMethodId },
     });

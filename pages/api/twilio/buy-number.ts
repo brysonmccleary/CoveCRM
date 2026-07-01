@@ -8,6 +8,7 @@ import A2PProfile from "@/models/A2PProfile";
 import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefault";
 import { isAdmin } from "@/lib/featureFlags";
@@ -423,6 +424,7 @@ export default async function handler(
         return res.status(billingGate.status).json(billingGate.body);
       }
 
+      assertStripeWritesEnabled();
       const subscription = await stripe.subscriptions.create({
         customer: String(user.stripeCustomerId),
         items: [{ price: PHONE_PRICE_ID }],

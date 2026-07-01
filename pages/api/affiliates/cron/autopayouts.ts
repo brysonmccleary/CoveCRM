@@ -3,6 +3,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import AffiliatePayout from "@/models/AffiliatePayout";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 const envBool = (name: string, def = false) => {
   const v = process.env[name];
@@ -73,6 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       try {
+        assertStripeWritesEnabled();
         const transfer = await stripe.transfers.create({
           amount: toCents(amountUSD),
           currency: "usd",

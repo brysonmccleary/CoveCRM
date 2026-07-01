@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { stripe } from "@/lib/stripe";
+import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
 export default async function handler(
   req: NextApiRequest,
@@ -19,6 +20,7 @@ export default async function handler(
   }
 
   try {
+    assertStripeWritesEnabled();
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer_email: email,
