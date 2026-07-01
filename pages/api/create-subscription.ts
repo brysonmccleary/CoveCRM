@@ -145,7 +145,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       customer: customerId,
       status: "all",
       limit: 10,
-      expand: ["data.latest_invoice.payment_intent", "data.latest_invoice.setup_intent"],
+      // Invoice has no setup_intent property — setup intents live on the
+      // subscription as pending_setup_intent (valid expand path).
+      expand: ["data.latest_invoice.payment_intent", "data.pending_setup_intent"],
     });
 
     const reusable = existingSubs.data.find((sub) =>
@@ -155,7 +157,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (reusable) {
       const latest = reusable.latest_invoice as any;
       const existingClientSecret = latest?.payment_intent?.client_secret || null;
-      let existingSetupSecret = latest?.setup_intent?.client_secret || null;
+      let existingSetupSecret =
+        (reusable.pending_setup_intent as any)?.client_secret || null;
 
       if (!existingClientSecret && !existingSetupSecret) {
         existingSetupSecret = await createSetupIntent(customerId, userIdMeta, reusable.id, effectiveEmail);
