@@ -227,14 +227,39 @@ export async function createFinalizePayInvoice(params: {
       });
       return;
     }
-    // For "pending", "failed", "blocked" (now eligible): proceed and retry Stripe calls.
-    // Stripe idempotency keys guarantee the same invoice is returned on retry.
+    // A prior attempt claimed this event and never resolved. It may or may not
+    // have reached Stripe — Mongo alone cannot tell. Fail closed: never
+    // auto-retry an ambiguous attempt.
+    if (st === "charging") {
+      console.error("[BILLING NEEDS REVIEW] Unresolved prior charge attempt — refusing to auto-retry", {
+        source, sourceId, amountCents, idempotencyKey,
+      });
+      throw new Error("Billing needs manual review: unresolved prior charge attempt");
+    }
+    // "blocked" events (cap/eligibility) may retry once re-eligible.
+    // Awaited without catch: if this write fails we abort before Stripe.
     if (st === "blocked") {
       await BillingEvent.updateOne(
         { source, sourceId, amountCents },
         { $set: { status: "pending", blockedReason: undefined, updatedAt: new Date() } },
-      ).catch(() => {/* non-fatal */});
+      );
     }
+  }
+
+  // ── Atomic claim: pending/failed → charging ──────────────────────────────────
+  // Exactly one process can win this transition. If this write fails or another
+  // process holds the claim, we abort BEFORE any Stripe call (fail closed).
+  // Deliberately NOT wrapped in .catch — a Mongo failure here must prevent charging.
+  const claimed = await BillingEvent.findOneAndUpdate(
+    { source, sourceId, amountCents, status: { $in: ["pending", "failed"] } },
+    { $set: { status: "charging", updatedAt: new Date() } },
+    { new: true },
+  );
+  if (!claimed) {
+    console.error("[BILLING NEEDS REVIEW] Could not claim BillingEvent (concurrent attempt or state change)", {
+      source, sourceId, amountCents, idempotencyKey,
+    });
+    throw new Error("Billing claim failed; refusing to charge");
   }
 
   // ── Audit log ────────────────────────────────────────────────────────────────
@@ -274,7 +299,13 @@ export async function createFinalizePayInvoice(params: {
           updatedAt: new Date(),
         },
       },
-    ).catch(() => {/* non-fatal — Stripe idempotency still protects us */});
+    ).catch(() => {
+      // Non-fatal for THIS in-flight attempt: status remains "charging", which
+      // permanently blocks any future automatic retry — no duplicate possible.
+      console.error("[BILLING NEEDS REVIEW] Failed to record stripe_created; event stays 'charging'", {
+        source, sourceId, invoiceId,
+      });
+    });
 
     await stripe.invoices.finalizeInvoice(
       invoiceId!,
@@ -300,10 +331,11 @@ export async function createFinalizePayInvoice(params: {
         },
       },
     ).catch(() => {
-      // Non-fatal: if this fails, next retry sees same Stripe idempotency key
-      // and gets the same already-paid invoice → no duplicate charge.
-      console.error("[BILLING] BillingEvent 'paid' update failed; Stripe idempotency is the safety net", {
-        source, sourceId, idempotencyKey,
+      // Non-fatal: event stays "charging" (or "stripe_created"), both of which
+      // block automatic retries — the charge cannot be duplicated. Needs manual
+      // reconciliation to mark it paid.
+      console.error("[BILLING NEEDS REVIEW] Failed to record 'paid'; event blocks auto-retry until reconciled", {
+        source, sourceId, idempotencyKey, invoiceId,
       });
     });
 
@@ -312,19 +344,34 @@ export async function createFinalizePayInvoice(params: {
       idempotencyKey, invoiceItemId, invoiceId,
     });
   } catch (err) {
-    // Clean up orphaned item if invoice was never created
+    // Only mark "failed" (retryable) when we KNOW no Stripe state survived:
+    // no invoice was created AND any orphaned invoice item was deleted.
+    // Anything ambiguous stays "charging", which blocks automatic retry.
+    let safeToRetry = !invoiceItemId && !invoiceId;
     if (invoiceItemId && !invoiceId) {
       try {
         await stripe.invoiceItems.del(invoiceItemId);
+        safeToRetry = true;
       } catch {
-        /* ignore cleanup failure */
+        safeToRetry = false; // orphaned item may still exist in Stripe
       }
     }
-    // Mark failed — keeps audit trail; next retry resets to "pending" above
-    await BillingEvent.updateOne(
-      { source, sourceId, amountCents },
-      { $set: { status: "failed", updatedAt: new Date() } },
-    ).catch(() => {/* non-fatal */});
+
+    if (safeToRetry) {
+      await BillingEvent.updateOne(
+        { source, sourceId, amountCents },
+        { $set: { status: "failed", updatedAt: new Date() } },
+      ).catch(() => {
+        // If even this fails, event stays "charging" → auto-retry blocked (fail closed)
+        console.error("[BILLING NEEDS REVIEW] Failed to mark 'failed'; event stays 'charging'", {
+          source, sourceId,
+        });
+      });
+    } else {
+      console.error("[BILLING NEEDS REVIEW] Stripe state ambiguous after failure; event stays 'charging' — no auto-retry", {
+        source, sourceId, invoiceItemId, invoiceId,
+      });
+    }
     throw err;
   }
 }

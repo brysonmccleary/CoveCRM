@@ -207,7 +207,7 @@ export async function trackAiDialerSessionUsage({
         aiDialerBillingLockExpiresAt: lockExpiresAt,
       },
     },
-    { new: true, projection: { aiDialerAccruedSessionCents: 1 } }
+    { new: true, projection: { aiDialerAccruedSessionCents: 1, aiDialerBilledTotalCents: 1 } }
   );
 
   if (!locked) return { billedSeconds: newSeconds, accrued: addCents };
@@ -231,7 +231,11 @@ export async function trackAiDialerSessionUsage({
     return { billedSeconds: newSeconds, accrued: addCents };
   }
 
-  const billedThroughSeconds = alreadyBilledSeconds + newSeconds;
+  // sourceId derives from the billed-total counter, which only advances on a
+  // successful deduction. A retry after a failed/no-op deduction recomputes the
+  // SAME sourceId → BillingEvent unique index blocks a second charge, and the
+  // "paid" skip lets the deduction complete without touching Stripe.
+  const currentAiBilledTotal = Number((locked as any).aiDialerBilledTotalCents || 0);
 
   try {
     await createFinalizePayInvoice({
@@ -239,7 +243,7 @@ export async function trackAiDialerSessionUsage({
       amountCents: billCents,
       description: `Cove CRM AI Voice session usage ($${(billCents / 100).toFixed(2)})`,
       source: "ai_voice_session",
-      sourceId: `${sessionId}:${billedThroughSeconds}`,
+      sourceId: `${email}:ai_session_total:${currentAiBilledTotal + billCents}`,
       userEmail: email,
     });
 

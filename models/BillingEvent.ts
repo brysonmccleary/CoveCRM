@@ -12,6 +12,7 @@ export type BillingEventSource =
 
 export type BillingEventStatus =
   | "pending"
+  | "charging"
   | "stripe_created"
   | "paid"
   | "failed"
@@ -60,7 +61,7 @@ const BillingEventSchema = new Schema<IBillingEvent>(
     status: {
       type: String,
       required: true,
-      enum: ["pending", "stripe_created", "paid", "failed", "blocked"],
+      enum: ["pending", "charging", "stripe_created", "paid", "failed", "blocked"],
       default: "pending",
     },
     stripeInvoiceItemId: { type: String },
