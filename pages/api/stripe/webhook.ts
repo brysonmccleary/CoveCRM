@@ -7,6 +7,8 @@
 // - invoice.paid
 // - invoice.payment_succeeded
 // - credit_note.created
+// - charge.refunded
+// - charge.dispute.created
 // - customer.subscription.trial_will_end
 // - customer.subscription.updated
 // - customer.subscription.deleted
@@ -600,6 +602,119 @@ async function createHeldAffiliateCreditForPaidInvoice(args: {
   }
 }
 
+async function resolveInvoiceIdFromCharge(
+  chargeOrId?: Stripe.Charge | string | null,
+): Promise<string | null> {
+  if (!chargeOrId) return null;
+
+  let charge: Stripe.Charge | null = null;
+  if (typeof chargeOrId === "string") {
+    try {
+      charge = await stripe.charges.retrieve(chargeOrId);
+    } catch (e: any) {
+      audit("affiliate clawback charge retrieve failed", {
+        chargeId: chargeOrId,
+        message: e?.message || String(e),
+      });
+      return null;
+    }
+  } else {
+    charge = chargeOrId;
+  }
+
+  const invoice = (charge as any)?.invoice;
+  if (!invoice) return null;
+  return typeof invoice === "string" ? invoice : String(invoice.id || "") || null;
+}
+
+async function reverseAffiliateCreditForInvoice(args: {
+  invoiceId: string;
+  reason: "charge.refunded" | "charge.dispute.created";
+  stripeObjectId: string;
+  chargeId?: string | null;
+  amountRefundedCents?: number | null;
+  partialRefund?: boolean;
+}): Promise<void> {
+  const {
+    invoiceId,
+    reason,
+    stripeObjectId,
+    chargeId,
+    amountRefundedCents,
+    partialRefund,
+  } = args;
+
+  const credit = await AffiliatePayoutLedger.findOne({ stripeInvoiceId: invoiceId });
+  if (!credit) {
+    audit("affiliate clawback skipped: no ledger credit", {
+      invoiceId,
+      reason,
+      stripeObjectId,
+      chargeId,
+    });
+    return;
+  }
+
+  const status = String((credit as any).status || "");
+  const reversalReason = [
+    reason,
+    stripeObjectId,
+    partialRefund ? "partial_refund_voids_flat_credit" : null,
+  ]
+    .filter(Boolean)
+    .join(":");
+
+  if (status === "held" || status === "processing") {
+    (credit as any).status = "reversed";
+    (credit as any).reversedAt = new Date();
+    (credit as any).reversalReason = reversalReason;
+    await credit.save();
+    audit("affiliate credit reversed for clawback", {
+      ledgerId: String((credit as any)._id),
+      affiliateId: String((credit as any).affiliateId),
+      userId: String((credit as any).userId),
+      invoiceId,
+      reason,
+      stripeObjectId,
+      amountRefundedCents,
+      partialRefund: !!partialRefund,
+    });
+    return;
+  }
+
+  if (status === "paid") {
+    (credit as any).status = "clawback_owed";
+    (credit as any).reversedAt = new Date();
+    (credit as any).reversalReason = reversalReason;
+    await credit.save();
+    const details = {
+      ledgerId: String((credit as any)._id),
+      affiliateId: String((credit as any).affiliateId),
+      userId: String((credit as any).userId),
+      invoiceId,
+      reason,
+      stripeObjectId,
+      chargeId,
+      amountRefundedCents,
+      partialRefund: !!partialRefund,
+    };
+    console.error("[affiliate-clawback] PAID affiliate credit needs recovery", details);
+    audit("affiliate credit marked clawback_owed", details);
+    return;
+  }
+
+  audit("affiliate clawback skipped: credit not reversible", {
+    ledgerId: String((credit as any)._id),
+    affiliateId: String((credit as any).affiliateId),
+    userId: String((credit as any).userId),
+    invoiceId,
+    status,
+    reason,
+    stripeObjectId,
+    chargeId,
+  });
+}
+
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* AI entitlement helper: compute hasAI across ALL active subs for customer     */
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -1179,6 +1294,60 @@ export default async function handler(
           invoiceId,
           creditNoteId: note.id,
           reason: "ledger refund/dispute reversal handled in clawback stage",
+        });
+        break;
+      }
+
+      case "charge.refunded": {
+        const charge = event.data.object as Stripe.Charge;
+        const invoiceId = await resolveInvoiceIdFromCharge(charge);
+        if (!invoiceId) {
+          audit("affiliate clawback skipped: refund charge has no invoice", {
+            chargeId: charge.id,
+            amountRefundedCents: Number(charge.amount_refunded || 0),
+          });
+          break;
+        }
+
+        const amountRefundedCents = Number(charge.amount_refunded || 0);
+        const chargeAmountCents = Number(charge.amount || 0);
+        await reverseAffiliateCreditForInvoice({
+          invoiceId,
+          reason: "charge.refunded",
+          stripeObjectId: charge.id,
+          chargeId: charge.id,
+          amountRefundedCents,
+          partialRefund:
+            amountRefundedCents > 0 &&
+            chargeAmountCents > 0 &&
+            amountRefundedCents < chargeAmountCents,
+        });
+        break;
+      }
+
+      case "charge.dispute.created": {
+        const dispute = event.data.object as Stripe.Dispute;
+        const chargeRef = (dispute as any).charge as Stripe.Charge | string | null;
+        const invoiceId = await resolveInvoiceIdFromCharge(chargeRef);
+        if (!invoiceId) {
+          audit("affiliate clawback skipped: dispute charge has no invoice", {
+            disputeId: dispute.id,
+            chargeId:
+              typeof chargeRef === "string"
+                ? chargeRef
+                : chargeRef?.id || null,
+          });
+          break;
+        }
+
+        await reverseAffiliateCreditForInvoice({
+          invoiceId,
+          reason: "charge.dispute.created",
+          stripeObjectId: dispute.id,
+          chargeId:
+            typeof chargeRef === "string"
+              ? chargeRef
+              : chargeRef?.id || null,
         });
         break;
       }
