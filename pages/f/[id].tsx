@@ -9,10 +9,7 @@ import User from "@/models/User";
 import { getFunnelTemplate, FunnelStep } from "@/lib/facebook/funnels/funnelTemplates";
 import { US_STATES, isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
-import {
-  buildLeadGenerationConsentText,
-  buildLeadGenerationSenderName,
-} from "@/lib/a2p/flowSelection";
+import { buildLeadGenerationSenderName } from "@/lib/a2p/flowSelection";
 
 // ── Validation helpers ─────────────────────────────────────────────────────────
 
@@ -77,17 +74,6 @@ function getLeadTypeLabel(leadType: string, audienceSegment?: string): string {
     iul_trucker: "Trucker IUL",
   };
   return labels[compositeKey] || labels[leadType] || "Insurance";
-}
-
-function includesIdentity(text: string, value?: string): boolean {
-  const needle = String(value || "").trim().toLowerCase();
-  return !needle || text.toLowerCase().includes(needle);
-}
-
-function shouldUseStoredConsentText(text: string, agentName?: string, businessName?: string): boolean {
-  const cleanText = text.trim();
-  if (!cleanText) return false;
-  return includesIdentity(cleanText, agentName) && includesIdentity(cleanText, businessName);
 }
 
 const DISCLAIMER_TEXT =
@@ -363,20 +349,11 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   const businessName = agent.businessName?.trim() || "";
   const consentSenderName = buildLeadGenerationSenderName({ agentName, businessName });
   const leadTypeLabel = getLeadTypeLabel(funnelData.leadType, funnelData.audienceSegment);
-  const dynamicConsentText = buildLeadGenerationConsentText({
-    agentName,
-    businessName,
-    campaignType: funnelData.leadType,
-  });
   const isA2PComplianceStub = funnelData.funnelVersion === "a2p-compliance-stub";
 
   const smsConsentLabel = isA2PComplianceStub
     ? `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to my inquiry. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`
     : `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to my inquiry. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. I also agree that a licensed agent may contact me at the phone number I provide via telephone calls, including calls made using artificial or prerecorded voice and AI-assisted voice technology. By checking this box and submitting this form, I agree to the communications described above.`;
-
-  const storedConsentText = funnelData.complianceProfile?.consentText?.trim() || "";
-  const consentText =
-    shouldUseStoredConsentText(storedConsentText, agentName, businessName) ? storedConsentText : dynamicConsentText;
 
   const renderStep = (step: FunnelStep) => {
     // ── Consent step: show full TCPA text + single submit button ────────────

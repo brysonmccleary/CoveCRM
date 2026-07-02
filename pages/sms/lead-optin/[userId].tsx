@@ -43,10 +43,6 @@ export default function LeadOptInPage(props: Props) {
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (!consent) {
-      setError("Please check the SMS consent box to opt in to text messages.");
-      return;
-    }
     setSubmitting(true);
     try {
       const res = await fetch(`/api/sms/lead-optin/${encodeURIComponent(userId)}`, {
@@ -121,6 +117,10 @@ export default function LeadOptInPage(props: Props) {
                   {consentText}
                 </span>
               </label>
+              <p className="text-xs text-slate-400 mt-3">
+                SMS consent is optional. It is unchecked by default and is not required to submit
+                this request or purchase any product.
+              </p>
               <div className="text-xs text-slate-400 mt-3">
                 <a className="underline text-slate-300 hover:text-white" href={`/sms/lead-optin-terms/${encodeURIComponent(userId)}`}>SMS Terms</a>
                 {" • "}
@@ -131,16 +131,22 @@ export default function LeadOptInPage(props: Props) {
             {error && <p className="text-sm text-red-300">{error}</p>}
 
             <button type="submit" disabled={submitting} className="w-full rounded-lg bg-white text-slate-900 font-semibold py-2 hover:bg-slate-200 transition disabled:opacity-60">
-              {submitting ? "Submitting..." : "Submit Opt-In"}
+              {submitting ? "Submitting..." : "Submit Request"}
             </button>
           </form>
         ) : (
           <div className="rounded-xl border border-green-800 bg-green-900/20 p-6">
             <h2 className="text-xl font-bold text-green-200">Submitted</h2>
-            <p className="text-slate-200 mt-2">Thanks. Your SMS opt-in has been recorded for {senderName}.</p>
-            <div className="mt-4 text-sm text-slate-200">
-              You can opt out anytime by replying <span className="font-semibold">STOP</span>. For help, reply <span className="font-semibold">HELP</span>.
-            </div>
+            <p className="text-slate-200 mt-2">
+              {consent
+                ? `Thanks. Your SMS opt-in has been recorded for ${senderName}.`
+                : `Thanks. Your request has been recorded for ${senderName}. You have not opted in to SMS messages.`}
+            </p>
+            {consent && (
+              <div className="mt-4 text-sm text-slate-200">
+                You can opt out anytime by replying <span className="font-semibold">STOP</span>. For help, reply <span className="font-semibold">HELP</span>.
+              </div>
+            )}
           </div>
         )}
       </div>

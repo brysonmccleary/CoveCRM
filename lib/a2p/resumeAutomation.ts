@@ -1275,7 +1275,10 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
           const brandPayload = {
             customerProfileBundleSid: profile.profileSid,
             a2PProfileBundleSid: trustProductSid,
-            brandType: "LOW_VOLUME_STANDARD",
+            // Twilio-confirmed Low Volume Standard mapping: STANDARD + skipAutomaticSecVet
+            // (LOW_VOLUME_STANDARD is deprecated; this avoids Brand Vetting).
+            brandType: "STANDARD",
+            skipAutomaticSecVet: true,
           };
           console.log("[A2P][BRAND_CREATE_DIAGNOSTIC]", {
             userEmail: normalizedEmail,

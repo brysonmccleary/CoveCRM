@@ -36,9 +36,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!firstName || !lastName || !phone) {
     return res.status(400).json({ ok: false, error: "First name, last name, and phone are required" });
   }
-  if (!consentGiven) {
-    return res.status(400).json({ ok: false, error: "SMS consent checkbox is required" });
-  }
+  // SMS consent is optional and not a condition of submitting the request.
+  // consentGiven is recorded as-is in the evidence record below.
 
   await mongooseConnect();
   const user = await User.findById(userId).lean<any>();

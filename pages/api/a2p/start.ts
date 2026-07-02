@@ -2275,7 +2275,10 @@ export default async function handler(
       const payload: any = {
         customerProfileBundleSid: secondaryProfileSid!,
         a2PProfileBundleSid: trustProductSid!,
-        brandType: "LOW_VOLUME_STANDARD",
+        // Twilio-confirmed Low Volume Standard mapping: STANDARD + skipAutomaticSecVet
+        // (LOW_VOLUME_STANDARD is deprecated; this avoids Brand Vetting).
+        brandType: "STANDARD",
+        skipAutomaticSecVet: true,
       };
 
       log("step: brandRegistrations.create", {
