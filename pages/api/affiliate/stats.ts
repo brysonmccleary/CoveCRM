@@ -6,6 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Affiliate from "@/models/Affiliate";
 import { stripe } from "@/lib/stripe";
+import { AFFILIATE_MONTHLY_CREDIT_USD } from "@/lib/affiliate/payoutPolicy";
 
 const U = (s?: string | null) => (s || "").trim().toUpperCase();
 
@@ -46,7 +47,7 @@ export default async function handler(
       totalCommission: 0,
       payoutDue: 0,
       totalPayoutsSent: 0,
-      monthlyPayoutRate: 12.50,
+      monthlyPayoutRate: AFFILIATE_MONTHLY_CREDIT_USD,
       payoutHistory: [],
       stripeConnectId: null,
       onboardingCompleted: false,
@@ -164,7 +165,9 @@ export default async function handler(
     totalCommission,
     payoutDue,
     totalPayoutsSent,
-    monthlyPayoutRate: Number((affiliate as any).monthlyPayoutRate || 12.5),
+    monthlyPayoutRate: Number(
+      (affiliate as any).monthlyPayoutRate || AFFILIATE_MONTHLY_CREDIT_USD,
+    ),
     payoutHistory: affiliate.payoutHistory || [],
     stripeConnectId: affiliate.stripeConnectId || null,
     onboardingCompleted,

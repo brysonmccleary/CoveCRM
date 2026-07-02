@@ -35,6 +35,11 @@ import { sendAffiliateApprovedEmail, sendEmail } from "@/lib/email";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { Resend } from "resend";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
+import {
+  AFFILIATE_MONTHLY_CREDIT_CENTS,
+  AFFILIATE_MONTHLY_CREDIT_USD,
+  affiliateCreditPayableAt,
+} from "@/lib/affiliate/payoutPolicy";
 
 export const config = { api: { bodyParser: false } };
 
@@ -128,10 +133,6 @@ async function isPhoneNumberSubscription(subscriptionId?: string | null) {
     };
   }
 }
-
-const toCents = (usd: number) => Math.round(Number(usd || 0) * 100);
-
-const AFFILIATE_MONTHLY_PAYOUT_USD = 12.50;
 
 const currentMonthKey = () => {
   const now = new Date();
@@ -445,223 +446,157 @@ interface CreditOnceOpts {
   subscriptionId?: string | null;
   customerId?: string | null;
   userEmail?: string | null;
-  amountUSD: number;
-  isFirstInvoice: boolean;
+  amountUSD?: number;
+  isFirstInvoice?: boolean;
   note?: string;
 }
 async function creditAffiliateOnce(opts: CreditOnceOpts) {
-  const {
-    affiliate,
-    invoiceId,
-    subscriptionId,
-    customerId,
-    userEmail,
-    amountUSD,
-    isFirstInvoice,
-    note,
-  } = opts;
-
-  (affiliate as any).payoutHistory = (affiliate as any).payoutHistory || [];
-
-  if (
-    (affiliate as any).payoutHistory.some(
-      (p: any) => p?.invoiceId === invoiceId,
-    )
-  )
-    return false;
-
-  (affiliate as any).payoutHistory.push({
-    invoiceId,
-    subscriptionId: subscriptionId || null,
-    customerId: customerId || null,
-    amount: Number(amountUSD),
-    userEmail: userEmail || null,
-    date: new Date(),
-    note: note || "invoice.payment_succeeded",
+  audit("legacy flat affiliate credit skipped", {
+    affiliateId: String((opts.affiliate as any)?._id || ""),
+    invoiceId: opts.invoiceId,
   });
-  (affiliate as any).payoutDue =
-    Number((affiliate as any).payoutDue || 0) + Number(amountUSD);
-
-  await (Affiliate as any).updateOne(
-    { _id: (affiliate as any)._id },
-    {
-      $set: {
-        payoutHistory: (affiliate as any).payoutHistory,
-        payoutDue: (affiliate as any).payoutDue,
-      },
-    },
-  );
-  return true;
+  return false;
 }
 
 async function maybeAutoPayout(affiliateInput: IAffiliate, invoiceId: string) {
-  const affiliate =
-    (await Affiliate.findById((affiliateInput as any)._id)) || null;
-  if (!affiliate) return;
-
-  const minUSD = Number(process.env.AFFILIATE_MIN_PAYOUT_USD || 50);
-  const autopay = envBool("AFFILIATE_AUTOPAY", false);
-  const dueUSD = Number(affiliate.payoutDue || 0);
-  if (dueUSD < minUSD) return;
-
-  const amountUSD = Math.floor(dueUSD * 100) / 100;
-  const idempotencyKey = `${affiliate._id}:${invoiceId}`;
-
-  const existing = await AffiliatePayout.findOne({ idempotencyKey }).lean();
-  if (existing) return;
-
-  const canAutopay =
-    autopay &&
-    affiliate.stripeConnectId &&
-    (affiliate.connectedAccountStatus === "verified" ||
-      (affiliate as any).onboardingCompleted === true);
-
-  if (!canAutopay) {
-    await AffiliatePayout.create({
-      affiliateId: String(affiliate._id),
-      affiliateEmail: affiliate.email,
-      amount: amountUSD,
-      currency: "usd",
-      status: "queued",
-      idempotencyKey,
-    });
-    return;
-  }
-
-  try {
-    assertStripeWritesEnabled();
-    const transfer = await stripe.transfers.create({
-      amount: toCents(amountUSD),
-      currency: "usd",
-      destination: affiliate.stripeConnectId!,
-      description: `Affiliate payout for ${affiliate.promoCode} (inv ${invoiceId})`,
-    });
-
-    await AffiliatePayout.create({
-      affiliateId: String(affiliate._id),
-      affiliateEmail: affiliate.email,
-      amount: amountUSD,
-      currency: "usd",
-      stripeTransferId: transfer.id,
-      status: "sent",
-      idempotencyKey,
-    });
-
-    affiliate.payoutDue = Math.max(
-      0,
-      Number(affiliate.payoutDue || 0) - amountUSD,
-    );
-    affiliate.totalPayoutsSent =
-      Number(affiliate.totalPayoutsSent || 0) + amountUSD;
-    affiliate.lastPayoutDate = new Date();
-    await affiliate.save();
-  } catch (e) {
-    audit("autopayout failed", { affiliateId: String(affiliate._id), invoiceId });
-    await AffiliatePayout.create({
-      affiliateId: String(affiliate._id),
-      affiliateEmail: affiliate.email,
-      amount: amountUSD,
-      currency: "usd",
-      status: "failed",
-      idempotencyKey,
-    });
-  }
+  audit("legacy affiliate autopayout skipped", {
+    affiliateId: String((affiliateInput as any)?._id || ""),
+    invoiceId,
+  });
 }
 
-async function processReferralLinkMonthlyPayout(user: any) {
-  if (!user?._id || !user?.affiliateId) return;
+async function affiliateOwnerActive(affiliate: any) {
+  const ownerId = affiliate?.userId;
+  if (!ownerId) {
+    return { active: false, reason: "missing_affiliate_userId" };
+  }
+
+  const owner = await User.findById(ownerId)
+    .select({ subscriptionStatus: 1, billingBlocked: 1, email: 1 })
+    .lean();
+
+  if (!owner) return { active: false, reason: "affiliate_owner_not_found" };
+  if ((owner as any).subscriptionStatus !== "active") {
+    return { active: false, reason: "affiliate_owner_subscription_not_active" };
+  }
+  if ((owner as any).billingBlocked === true) {
+    return { active: false, reason: "affiliate_owner_billing_blocked" };
+  }
+  return { active: true, reason: "active" };
+}
+
+async function createHeldAffiliateCreditForPaidInvoice(args: {
+  user: any;
+  invoiceId: string;
+  subscriptionId?: string | null;
+  customerId?: string | null;
+  paidCents: number;
+}) {
+  const { user, invoiceId, subscriptionId, customerId, paidCents } = args;
+  if (!user?._id || !user?.affiliateId || !invoiceId || paidCents <= 0) {
+    return false;
+  }
 
   const affiliate = await Affiliate.findById(user.affiliateId);
-  if (!affiliate?.stripeConnectId) return;
+  if (!affiliate || affiliate.approved !== true) return false;
 
   const affiliateId = String((affiliate as any)._id);
   const userId = String(user._id);
-  const month = currentMonthKey();
-  const idempotencyKey = `${affiliateId}-${userId}-${month}`;
+  const affiliateEmail = L((affiliate as any).email);
+  const userEmail = L((user as any).email);
+  const affiliateOwnerId = String((affiliate as any).userId || "");
 
-  let ledger = await AffiliatePayoutLedger.findOne({ idempotencyKey });
-  if (!ledger) {
-    ledger = await AffiliatePayoutLedger.create({
+  if (
+    affiliateEmail === userEmail ||
+    (affiliateOwnerId && affiliateOwnerId === userId)
+  ) {
+    audit("affiliate credit skipped: self-referral", {
+      affiliateId,
+      userId,
+      invoiceId,
+    });
+    return false;
+  }
+
+  const active = await affiliateOwnerActive(affiliate);
+  if (!active.active) {
+    audit("affiliate credit skipped: affiliate inactive", {
+      affiliateId,
+      userId,
+      invoiceId,
+      reason: active.reason,
+    });
+    return false;
+  }
+
+  const month = currentMonthKey();
+  const idempotencyKey = `${affiliateId}:${invoiceId}`;
+
+  const existing = await AffiliatePayoutLedger.findOne({ idempotencyKey });
+  if (existing) return false;
+
+  const earnedAt = new Date();
+  const payableAt = affiliateCreditPayableAt(earnedAt);
+
+  try {
+    await AffiliatePayoutLedger.create({
       affiliateId: (affiliate as any)._id,
       userId: user._id,
       month,
-      amount: AFFILIATE_MONTHLY_PAYOUT_USD,
-      status: "pending",
+      amount: AFFILIATE_MONTHLY_CREDIT_USD,
+      amountCents: AFFILIATE_MONTHLY_CREDIT_CENTS,
+      stripeInvoiceId: invoiceId,
+      stripeSubscriptionId: subscriptionId || null,
+      stripeCustomerId: customerId || null,
+      referredUserEmail: userEmail || null,
+      earnedAt,
+      payableAt,
+      status: "held",
       idempotencyKey,
     });
-  }
-
-  if ((ledger as any).status === "paid") return;
-
-  try {
-    assertStripeWritesEnabled();
-    const transfer = await stripe.transfers.create(
-      {
-        amount: 1250,
-        currency: "usd",
-        destination: affiliate.stripeConnectId,
-        transfer_group: `affiliate-${affiliateId}-${month}`,
-        metadata: { affiliateId, userId, month },
-      },
-      { idempotencyKey },
-    );
-
-    (ledger as any).status = "paid";
-    (ledger as any).paidAt = new Date();
-    (ledger as any).stripeTransferId = transfer.id;
-    await ledger.save();
-
-    const referredUserMatch = {
-      _id: (affiliate as any)._id,
-      "referredUsers.userId": user._id,
-    };
-    const referredUserUpdate = await Affiliate.updateOne(referredUserMatch, {
-      $set: {
-        "referredUsers.$.lastPayoutAt": new Date(),
-        "referredUsers.$.isActive": true,
-      },
-      $inc: {
-        "referredUsers.$.totalPayoutsSentToAffiliate": AFFILIATE_MONTHLY_PAYOUT_USD,
-        totalPayoutsSent: AFFILIATE_MONTHLY_PAYOUT_USD,
-      },
-    });
-
-    if ((referredUserUpdate as any).matchedCount === 0) {
-      await Affiliate.updateOne(
-        { _id: (affiliate as any)._id },
-        {
-          $push: {
-            referredUsers: {
-              userId: user._id,
-              joinedAt: user.createdAt || new Date(),
-              planCode: user.planCode || "",
-              billingInterval: user.billingInterval || "",
-              isActive: true,
-              lastPayoutAt: new Date(),
-              totalPayoutsSentToAffiliate: AFFILIATE_MONTHLY_PAYOUT_USD,
-            },
-          },
-          $inc: { totalPayoutsSent: AFFILIATE_MONTHLY_PAYOUT_USD },
-        },
-      );
-    }
 
     await Affiliate.updateOne(
       { _id: (affiliate as any)._id },
       {
         $set: {
-          payoutDue: 0,
-          lastPayoutDate: new Date(),
+          totalRevenueGenerated:
+            Number((affiliate as any).totalRevenueGenerated || 0) +
+            paidCents / 100,
+        },
+        $addToSet: {
+          referrals: {
+            email: userEmail,
+            joinedAt: (user as any).createdAt || new Date(),
+          },
+          referredUsers: {
+            userId: user._id,
+            joinedAt: (user as any).createdAt || new Date(),
+            planCode: user.planCode || "",
+            billingInterval: user.billingInterval || "",
+            isActive: true,
+            lastPayoutAt: null,
+            totalPayoutsSentToAffiliate: 0,
+          },
         },
       },
     );
-  } catch (e: any) {
-    audit("referral link affiliate transfer failed", {
+    audit("affiliate held credit created", {
       affiliateId,
       userId,
-      month,
+      invoiceId,
+      amountCents: AFFILIATE_MONTHLY_CREDIT_CENTS,
+      payableAt: payableAt.toISOString(),
+    });
+    return true;
+  } catch (e: any) {
+    if (e?.code === 11000) return false;
+    audit("affiliate held credit create failed", {
+      affiliateId,
+      userId,
+      invoiceId,
       message: e?.message || String(e),
     });
+    return false;
   }
 }
 
@@ -1195,43 +1130,10 @@ export default async function handler(
         const customerId = inv.customer as string | undefined;
         const paidCents = Number(inv.amount_paid || 0);
 
-        const isFirst =
-          inv.billing_reason === "subscription_create" ||
-          (!!inv.subscription && inv.attempt_count === 1);
-
-        let codeText: string | null = null;
-
-        const promoId = (inv.discount as any)?.promotion_code as
-          | string
-          | undefined;
-        if (promoId) {
-          try {
-            const pc = await stripe.promotionCodes.retrieve(promoId);
-            codeText = pc.code || null;
-            if (pc) await upsertAffiliateFromPromo(pc);
-          } catch {}
-        }
-
         let subscriptionId: string | null =
           (inv.subscription as string) || null;
-        if (!codeText && subscriptionId) {
-          try {
-            const sub = await stripe.subscriptions.retrieve(subscriptionId);
-            codeText =
-              U(sub.metadata?.referralCodeUsed) ||
-              U(sub.metadata?.appliedPromoCode) ||
-              null;
-            if (codeText) {
-              const list = await stripe.promotionCodes.list({
-                code: codeText,
-                limit: 1,
-              });
-              if (list.data[0]) await upsertAffiliateFromPromo(list.data[0]);
-            }
-          } catch {}
-        }
 
-        let userEmail: string | null = null;
+        let affiliateCreditCreated = false;
         if (customerId) {
           const user = await User.findOne({ stripeCustomerId: customerId });
           if (user) {
@@ -1247,86 +1149,23 @@ export default async function handler(
             (user as any).pastDueSince = null;
             (user as any).callingBlocked = false;
             await user.save();
-            if ((user as any).affiliateId && paidCents > 0) {
-              await processReferralLinkMonthlyPayout(user);
+            if (paidCents > 0) {
+              affiliateCreditCreated = await createHeldAffiliateCreditForPaidInvoice({
+                user,
+                invoiceId: String(inv.id || ""),
+                subscriptionId,
+                customerId: customerId || null,
+                paidCents,
+              });
             }
-            userEmail = user.email;
-            if (!codeText) codeText = U((user as any).referredBy);
           }
         }
-
-        if (codeText) {
-          const affForRevenue = await findAffiliateByPromoCode(codeText);
-          if (affForRevenue) {
-            const newRevenue =
-              Number((affForRevenue as any).totalRevenueGenerated || 0) +
-              paidCents / 100;
-
-            const updates: Partial<IAffiliate> & { [k: string]: any } = {
-              totalRevenueGenerated: newRevenue,
-            };
-
-            if (userEmail) {
-              const referrals = (
-                (affForRevenue as any).referrals || []
-              ).slice();
-              const alreadyReferral = referrals.some(
-                (r: any) => r?.email?.toLowerCase() === L(userEmail!),
-              );
-              if (!alreadyReferral) {
-                referrals.push({ email: userEmail, joinedAt: new Date() });
-                updates.totalReferrals =
-                  Number((affForRevenue as any).totalReferrals || 0) + 1;
-              }
-              (updates as any).referrals = referrals;
-            }
-
-            await Affiliate.updateOne(
-              { _id: (affForRevenue as any)._id },
-              { $set: updates },
-            );
-          }
-        }
-
-        if (!codeText || isHouseCode(codeText) || paidCents <= 0) {
-          audit("skip payout", {
-            reason: !codeText
-              ? "no code"
-              : isHouseCode(codeText)
-              ? "house code"
-              : "zero paid amount",
-            invoiceId: inv.id,
-            code: codeText || null,
-          });
-          break;
-        }
-
-        const aff = await findAffiliateByPromoCode(codeText);
-        if (!aff) break;
-
-        const payoutUSD =
-          Number(aff.flatPayoutAmount || 0) ||
-          Number(process.env.AFFILIATE_DEFAULT_PAYOUT || 25);
-
-        const credited = await creditAffiliateOnce({
-          affiliate: aff as any,
-          invoiceId: String(inv.id || ""),
-          subscriptionId,
-          customerId: customerId || null,
-          userEmail,
-          amountUSD: payoutUSD,
-          isFirstInvoice: isFirst,
-          note: `commission for ${codeText}`,
-        });
-
-        if (credited) await maybeAutoPayout(aff, String(inv.id || ""));
 
         audit("invoice.payment_succeeded processed", {
           invoiceId: inv.id,
           subscriptionId,
           customerId,
-          code: codeText,
-          credited,
+          affiliateCreditCreated,
         });
         break;
       }
@@ -1336,65 +1175,10 @@ export default async function handler(
         const invoiceId = (note.invoice as string) || "";
         if (!invoiceId) break;
 
-        let aff: IAffiliate | null = null;
-        try {
-          const inv = await stripe.invoices.retrieve(invoiceId);
-          let code: string | null = null;
-
-          const promoId = (inv.discount as any)?.promotion_code as
-            | string
-            | undefined;
-          if (promoId) {
-            try {
-              const pc = await stripe.promotionCodes.retrieve(promoId);
-              code = pc.code || null;
-            } catch {}
-          }
-          if (!code && inv.subscription) {
-            try {
-              const sub = await stripe.subscriptions.retrieve(
-                inv.subscription as string,
-              );
-              code =
-                U(sub.metadata?.referralCodeUsed) ||
-                U(sub.metadata?.appliedPromoCode) ||
-                null;
-            } catch {}
-          }
-          if (!code && inv.customer) {
-            const u = await User.findOne({
-              stripeCustomerId: inv.customer as string,
-            });
-            if (u) code = U((u as any).referredBy);
-          }
-          if (code) aff = await findAffiliateByPromoCode(code);
-        } catch {}
-
-        if (!aff) break;
-
-        const flatUSD =
-          Number((aff as any).flatPayoutAmount || 0) ||
-          Number(process.env.AFFILIATE_DEFAULT_PAYOUT || 25);
-        const negative = -1 * flatUSD;
-
-        await Affiliate.updateOne(
-          { _id: (aff as any)._id },
-          {
-            $inc: { payoutDue: negative },
-            $push: {
-              payoutHistory: {
-                amount: negative,
-                userEmail: null,
-                date: new Date(),
-                invoiceId,
-                note: `refund reversal (credit_note ${note.id})`,
-              },
-            },
-          },
-        );
-        audit("credit_note reversal", {
+        audit("credit_note affiliate payoutDue reversal skipped", {
           invoiceId,
-          affiliateId: String((aff as any)._id),
+          creditNoteId: note.id,
+          reason: "ledger refund/dispute reversal handled in clawback stage",
         });
         break;
       }

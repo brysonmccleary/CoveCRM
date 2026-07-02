@@ -174,6 +174,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const selectedPlanCode = plan === "ai" ? "ai" : "base";
     const selectedBillingInterval = interval === "annual" ? "annual" : "monthly";
     const affiliateReferralCode = String(ref || "").trim() || null;
+    let attributedAffiliateId: any | null = null;
+    if (affiliateReferralCode) {
+      const affiliate = await Affiliate.findOne({
+        referralCode: affiliateReferralCode,
+        approved: true,
+      })
+        .select({ _id: 1, email: 1 })
+        .lean() as any;
+
+      if (
+        affiliate?._id &&
+        String(affiliate.email || "").trim().toLowerCase() !== cleanEmail
+      ) {
+        attributedAffiliateId = affiliate._id;
+      }
+    }
     const trialStartedAt = new Date();
     const trialEndsAt = new Date(trialStartedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
     const effectivePlanCode = admin ? "free" : selectedPlanCode;
@@ -244,48 +260,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       referredByCode,
       referredByUserId,
       affiliateReferralCode,
-      affiliateId: null,
+      affiliateId: attributedAffiliateId,
       stripeCustomerId,
       usedCode: codeInputRaw || undefined,
       isHouseCode: isHouse,
     });
 
-    if (affiliateReferralCode) {
-      void (async () => {
-        try {
-          const affiliate = await Affiliate.findOne({
-            referralCode: affiliateReferralCode,
-            approved: true,
-          })
-            .select({ _id: 1 })
-            .lean() as any;
-
-          if (!affiliate?._id) return;
-
-          await User.updateOne(
-            { _id: newUser._id },
-            { $set: { affiliateId: affiliate._id } },
-          );
-          await Affiliate.updateOne(
-            { _id: affiliate._id },
-            {
-              $push: {
-                referredUsers: {
-                  userId: newUser._id,
-                  joinedAt: new Date(),
-                  planCode: effectivePlanCode,
-                  billingInterval: selectedBillingInterval,
-                  isActive: true,
-                  lastPayoutAt: null,
-                  totalPayoutsSentToAffiliate: 0,
-                },
+    if (attributedAffiliateId) {
+      try {
+        await Affiliate.updateOne(
+          { _id: attributedAffiliateId },
+          {
+            $addToSet: {
+              referredUsers: {
+                userId: newUser._id,
+                joinedAt: new Date(),
+                planCode: effectivePlanCode,
+                billingInterval: selectedBillingInterval,
+                isActive: true,
+                lastPayoutAt: null,
+                totalPayoutsSentToAffiliate: 0,
               },
             },
-          );
-        } catch (e: any) {
-          console.warn("[/api/register] async affiliate referral lookup failed:", e?.message || e);
-        }
-      })();
+          },
+        );
+      } catch (e: any) {
+        console.warn("[/api/register] affiliate referral lookup failed:", e?.message || e);
+      }
     }
 
     try {

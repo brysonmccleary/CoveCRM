@@ -1,5 +1,6 @@
 // models/Affiliate.ts
 import mongoose, { Schema, Document, models } from "mongoose";
+import { AFFILIATE_MONTHLY_CREDIT_USD } from "@/lib/affiliate/payoutPolicy";
 
 export interface IReferral {
   name?: string;
@@ -125,14 +126,14 @@ const AffiliateSchema = new Schema<IAffiliate>(
     teamSize: { type: String },
 
     // Payouts/metrics (USD)
-    flatPayoutAmount: { type: Number, default: 25.0 },
+    flatPayoutAmount: { type: Number, default: AFFILIATE_MONTHLY_CREDIT_USD },
     totalReferrals: { type: Number, default: 0 },
     totalRedemptions: { type: Number, default: 0 },  // <-- added
     totalRevenueGenerated: { type: Number, default: 0 },
     totalPayoutsSent: { type: Number, default: 0 },
     payoutDue: { type: Number, default: 0 },
     lastPayoutDate: { type: Date },
-    monthlyPayoutRate: { type: Number, default: 12.50 },
+    monthlyPayoutRate: { type: Number, default: AFFILIATE_MONTHLY_CREDIT_USD },
 
     // Relations
     referrals: { type: [ReferralSchema], default: [] },

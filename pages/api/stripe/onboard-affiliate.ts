@@ -7,6 +7,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import { AFFILIATE_MONTHLY_CREDIT_USD } from "@/lib/affiliate/payoutPolicy";
 
 const RETURN_PATH =
   process.env.AFFILIATE_RETURN_PATH || "/dashboard?tab=settings";
@@ -140,7 +141,8 @@ export default async function handler(
         name,
         email: user.email,
         promoCode: promo,
-        flatPayoutAmount: 25,
+        flatPayoutAmount: AFFILIATE_MONTHLY_CREDIT_USD,
+        monthlyPayoutRate: AFFILIATE_MONTHLY_CREDIT_USD,
         totalReferrals: 0,
         totalRevenueGenerated: 0,
         totalPayoutsSent: 0,

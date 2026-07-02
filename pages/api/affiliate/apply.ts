@@ -8,6 +8,7 @@ import User from "@/models/User";
 import Affiliate from "@/models/Affiliate";
 import { stripe } from "@/lib/stripe";
 import { sendAffiliateApplicationAdminEmail } from "@/lib/email";
+import { AFFILIATE_MONTHLY_CREDIT_USD } from "@/lib/affiliate/payoutPolicy";
 
 // Where to return after Stripe onboarding
 const BASE_URL =
@@ -127,8 +128,8 @@ export default async function handler(
         promoCode: referralCode,
         referralCode,
         stripeConnectId: accountId,
-        flatPayoutAmount: 12.50,
-        monthlyPayoutRate: 12.50,
+        flatPayoutAmount: AFFILIATE_MONTHLY_CREDIT_USD,
+        monthlyPayoutRate: AFFILIATE_MONTHLY_CREDIT_USD,
         totalReferrals: 0,
         totalRevenueGenerated: 0,
         totalPayoutsSent: 0,
