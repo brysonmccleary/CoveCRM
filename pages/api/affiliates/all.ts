@@ -1,15 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import User from "@/models/User";
 
-// House codes (e.g., "COVE50") never accrue commission dollars
 function getHouseSet() {
   return new Set(
     (process.env.HOUSE_CODES || process.env.AFFILIATE_HOUSE_CODE || "COVE50")
       .split(",")
       .map((s) => s.trim().toUpperCase())
-      .filter(Boolean)
+      .filter(Boolean),
   );
 }
 
@@ -18,10 +19,14 @@ function U(s?: string | null) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user || (session.user as any).role !== "admin") {
+    return res.status(403).json({ error: "Admin only" });
+  }
+
   try {
     await mongooseConnect();
 
-    // Pull from Affiliate as the single source of truth (webhook updates this)
     const affiliates = await Affiliate.find({})
       .select({
         name: 1,
@@ -35,8 +40,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const house = getHouseSet();
 
-    // For each affiliate, prefer its own name/email; if missing, try to resolve
-    // from a User who owns the same referralCode (case-insensitive).
     const results = await Promise.all(
       (affiliates || []).map(async (a: any) => {
         const code = U(a.promoCode);
@@ -59,12 +62,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           email: isHouse ? "N/A" : email || "N/A",
           promoCode: code,
           totalRedemptions: Number(a.totalRedemptions || 0),
-          // Real revenue accumulated from invoice events (not estimate)
           totalRevenueGenerated: Number(a.totalRevenueGenerated || 0),
-          // Payout due is live from Affiliate doc, but force 0 for house codes
           payoutDue: isHouse ? 0 : Number(a.payoutDue || 0),
         };
-      })
+      }),
     );
 
     results.sort((a, b) => b.totalRedemptions - a.totalRedemptions);

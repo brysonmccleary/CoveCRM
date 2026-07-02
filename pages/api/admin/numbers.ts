@@ -1,6 +1,8 @@
 // pages/api/admin/numbers.ts
 
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
@@ -27,6 +29,11 @@ export default async function handler(
 ) {
   if (req.method !== "GET") return res.status(405).end("Method Not Allowed");
 
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user || (session.user as any).role !== "admin") {
+    return res.status(403).json({ error: "Admin only" });
+  }
+
   try {
     await dbConnect();
     const users = await User.find().lean();
@@ -40,7 +47,6 @@ export default async function handler(
 
           if (num?.subscriptionId) {
             try {
-              // stripe-node v16 returns Stripe.Response<T> (with .data); older returns T
               const resp = await stripe.subscriptions.retrieve(
                 String(num.subscriptionId),
               );

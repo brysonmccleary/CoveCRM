@@ -1,14 +1,24 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import { stripe } from "@/lib/stripe";
 import { sendAffiliateApplicationAdminEmail } from "@/lib/email";
+
+function normalizeEmail(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
 
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
+
+  const session = await getServerSession(req, res, authOptions);
+  const sessionEmail = normalizeEmail(session?.user?.email);
+  const isAdmin = Boolean(session?.user && (session.user as any).role === "admin");
 
   await dbConnect();
 
@@ -19,27 +29,30 @@ export default async function handler(
     agents?: number | string;
     promoCode?: string;
   };
+  const targetEmail = normalizeEmail(email);
 
-  if (!name || !email || !company || !agents || !promoCode) {
+  if (!sessionEmail || (!isAdmin && sessionEmail !== targetEmail)) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  if (!name || !targetEmail || !company || !agents || !promoCode) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
   const upperCode = String(promoCode).toUpperCase();
   const SKIP = process.env.DEV_SKIP_BILLING === "1";
 
-  // Ensure promo code is unique
   const existing = await Affiliate.findOne({ promoCode: upperCode });
   if (existing) {
     return res.status(409).json({ error: "Promo code already taken" });
   }
 
-  // 1) Create Stripe Connect account (or mock in dev)
   let accountId = `acct_mock_${Date.now()}`;
   if (!SKIP) {
     try {
       const created = await stripe.accounts.create({
         type: "express",
-        email,
+        email: targetEmail,
         capabilities: { transfers: { requested: true } },
       });
       accountId = created.id;
@@ -56,12 +69,11 @@ export default async function handler(
     }
   }
 
-  // 2) Create Affiliate record
   let newAffiliate;
   try {
     newAffiliate = await Affiliate.create({
       name,
-      email,
+      email: targetEmail,
       company,
       agents,
       promoCode: upperCode,
@@ -71,8 +83,8 @@ export default async function handler(
       payoutDue: 0,
       onboardingCompleted: false,
       connectedAccountStatus: "pending",
-      stripeId: accountId, // if your schema uses `stripeId`
-      stripeConnectId: accountId, // if your schema uses `stripeConnectId`
+      stripeId: accountId,
+      stripeConnectId: accountId,
     });
   } catch (e: any) {
     if (e?.name === "ValidationError") {
@@ -86,7 +98,6 @@ export default async function handler(
     return res.status(500).json({ error: "Could not create affiliate" });
   }
 
-  // 3) Generate onboarding link (or mock in dev)
   let stripeLink =
     `${process.env.NEXTAUTH_URL}/dashboard/settings?stripe=mock` || "";
   if (!SKIP) {
@@ -111,11 +122,10 @@ export default async function handler(
     }
   }
 
-  // 4) Email Admin (non-fatal on failure)
   try {
     await sendAffiliateApplicationAdminEmail({
       name,
-      email,
+      email: targetEmail,
       company,
       agents,
       promoCode: upperCode,

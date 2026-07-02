@@ -15,25 +15,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await mongooseConnect();
 
-    // Grab subs; we’ll retrieve customers individually to keep types clean
     const subs = await stripe.subscriptions.list({ limit: 100 });
-
-    // Preload affiliates in memory
     const affiliates = await Affiliate.find({}).lean();
 
-    let updated = 0;
+    let matched = 0;
+    const matches: Array<{
+      subscriptionId: string;
+      customerId: string;
+      promoCode: string;
+      affiliateId: string;
+    }> = [];
 
     for (const sub of subs.data) {
-      const customerId = typeof sub.customer === "string" ? sub.customer : (sub.customer as Stripe.Customer).id;
+      const customerId =
+        typeof sub.customer === "string"
+          ? sub.customer
+          : (sub.customer as Stripe.Customer).id;
 
       const custResp = await stripe.customers.retrieve(customerId);
-      // Narrow DeletedCustomer
       if ((custResp as Stripe.DeletedCustomer).deleted) continue;
       const customer = custResp as Stripe.Customer;
 
       let usedCodeUpper: string | undefined;
-
-      // Prefer an active customer-level discount’s coupon name
       const discount = customer.discount;
       if (discount?.coupon) {
         const coupon =
@@ -47,22 +50,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const affiliate = affiliates.find((a) => a.promoCode === usedCodeUpper);
       if (!affiliate) continue;
 
-      // Minimal example update – adjust to your schema
-      await Affiliate.updateOne(
-        { _id: affiliate._id },
-        {
-          $inc: {
-            totalRedemptions: 1,
-            totalRevenueGenerated: 150, // example
-            payoutDue: (affiliate as any).flatPayoutAmount || 0,
-          },
-        },
-      );
-
-      updated++;
+      matched++;
+      matches.push({
+        subscriptionId: sub.id,
+        customerId,
+        promoCode: usedCodeUpper,
+        affiliateId: String(affiliate._id),
+      });
     }
 
-    return res.status(200).json({ success: true, updated });
+    return res.status(200).json({
+      success: true,
+      readOnly: true,
+      matched,
+      matches,
+      message:
+        "Read-only affiliate sync: payable credits are created only by verified Stripe payment webhooks.",
+    });
   } catch (error) {
     console.error("Affiliate sync error:", error);
     return res.status(500).json({ error: "Internal Server Error" });

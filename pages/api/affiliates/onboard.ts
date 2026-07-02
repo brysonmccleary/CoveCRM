@@ -1,8 +1,10 @@
 // pages/api/affiliates/onboard.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
-import { stripe } from "@/lib/stripe"; // ✅ use shared client (no apiVersion literal)
+import { stripe } from "@/lib/stripe";
 
 const BASE_URL =
   process.env.NEXTAUTH_URL ||
@@ -11,37 +13,46 @@ const BASE_URL =
 const RETURN_PATH =
   process.env.AFFILIATE_RETURN_PATH || "/dashboard?tab=settings";
 
+function normalizeEmail(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
-  // accept both GET ?email= and POST { email } to be backwards-friendly
   const email =
     (req.method === "POST"
       ? (req.body?.email as string | undefined)
       : undefined) ??
     (typeof req.query.email === "string" ? req.query.email : undefined);
+  const targetEmail = normalizeEmail(email);
 
-  if (!email) return res.status(400).json({ error: "Missing email" });
+  if (!targetEmail) return res.status(400).json({ error: "Missing email" });
+
+  const session = await getServerSession(req, res, authOptions);
+  const sessionEmail = normalizeEmail(session?.user?.email);
+  const isAdmin = Boolean(session?.user && (session.user as any).role === "admin");
+  if (!sessionEmail || (!isAdmin && sessionEmail !== targetEmail)) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
 
   await mongooseConnect();
 
-  const affiliate = await Affiliate.findOne({ email: email.toLowerCase() });
+  const affiliate = await Affiliate.findOne({ email: targetEmail });
   if (!affiliate) return res.status(404).json({ error: "Affiliate not found" });
 
-  // If they somehow don’t have a Connect account yet, create one now
   if (!affiliate.stripeConnectId) {
     const acct = await stripe.accounts.create({
       type: "express",
-      email: email.toLowerCase(),
+      email: targetEmail,
       capabilities: { transfers: { requested: true } },
-      metadata: { affiliateEmail: email.toLowerCase() },
+      metadata: { affiliateEmail: targetEmail },
     });
     affiliate.stripeConnectId = acct.id;
     await affiliate.save();
   }
 
-  // Create onboarding link
   try {
     const link = await stripe.accountLinks.create({
       account: String(affiliate.stripeConnectId),

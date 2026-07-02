@@ -1,15 +1,30 @@
 // /pages/api/affiliate-track.ts
-import { NextApiRequest, NextApiResponse } from "next";
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+
+function normalizeEmail(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
 
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
-  const { email, code } = req.body;
-
   if (req.method !== "POST") return res.status(405).end();
+
+  const session = await getServerSession(req, res, authOptions);
+  const sessionEmail = normalizeEmail(session?.user?.email);
+  const isAdmin = Boolean(session?.user && (session.user as any).role === "admin");
+
+  const { email, code } = req.body;
+  const targetEmail = normalizeEmail(email);
+
+  if (!sessionEmail || (!isAdmin && sessionEmail !== targetEmail)) {
+    return res.status(403).json({ success: false, message: "Unauthorized" });
+  }
 
   await dbConnect();
 
@@ -21,7 +36,7 @@ export default async function handler(
   }
 
   await User.findOneAndUpdate(
-    { email },
+    { email: targetEmail },
     {
       referredBy: code,
       referralDiscountApplied: true,
