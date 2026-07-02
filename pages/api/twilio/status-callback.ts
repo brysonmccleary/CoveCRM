@@ -10,6 +10,7 @@ import Message from "@/models/Message";
 import Call from "@/models/Call";
 import { sendEmail } from "@/lib/email";
 import { trackUsage } from "@/lib/billing/trackUsage";
+import { MANUAL_VOICE_COST_PER_MIN } from "@/lib/billing/voiceRates";
 
 export const config = { api: { bodyParser: false } };
 
@@ -21,11 +22,6 @@ const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && pro
 const TERMINAL_SMS_STATES = new Set(["delivered","failed","undelivered","canceled"]);
 const TERMINAL_VOICE_STATES = new Set(["completed","busy","failed","no-answer","canceled"]);
 const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
-const _rawManualRate = process.env.MANUAL_VOICE_COST_PER_MIN;
-if (!_rawManualRate) {
-  console.warn("[status-callback] MANUAL_VOICE_COST_PER_MIN env var not set — defaulting to $0.04/min. Set this in production.");
-}
-const MANUAL_VOICE_COST_PER_MIN = Number(_rawManualRate || "0.04");
 const NEVER_BILL_EMAILS = new Set(["bryson.mccleary1@gmail.com", "support@covecrm.com"]);
 const BILLING_IN_PROGRESS_SOURCES = ["manual_dial_billing_in_progress", "twilio_voice_billing_in_progress"];
 

@@ -129,6 +129,7 @@ const OUTCOME_URL = new URL(
   COVECRM_BASE_URL
 ).toString();
 const USAGE_URL = new URL("/api/ai-calls/usage", COVECRM_BASE_URL).toString();
+const TRANSCRIPT_URL = new URL("/api/ai-calls/transcript", COVECRM_BASE_URL).toString();
 const TRANSFER_TWIML_URL = new URL("/api/ai-calls/transfer-twiml", COVECRM_BASE_URL).toString();
 
 /**
@@ -227,6 +228,8 @@ type CallState = {
   pendingAudioFrames: string[];
 
   finalOutcomeSent?: boolean;
+  finalOutcome?: string;
+  transcriptSaveAttempted?: boolean;
 
   callStartedAtMs?: number;
   billedUsageSent?: boolean;
@@ -9489,6 +9492,104 @@ function pushExchange(
   }
 }
 
+function buildFinalTranscriptTurns(state: CallState) {
+  const turns: Array<{ role: "ai" | "lead"; text: string; timestamp: string }> = [];
+  const endedAt = new Date().toISOString();
+  const seen = new Set<string>();
+
+  const addTurn = (role: "ai" | "lead", rawText: unknown) => {
+    const text = String(rawText || "").replace(/\s+/g, " ").trim();
+    if (!text) return;
+    const key = `${role}:${text.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    turns.push({ role, text, timestamp: endedAt });
+  };
+
+  for (const exchange of state.recentExchanges || []) {
+    addTurn(exchange.role === "ai" ? "ai" : "lead", exchange.text);
+  }
+
+  for (const text of Object.values(state.lastUserTranscriptByItemId || {})) {
+    addTurn("lead", text);
+  }
+
+  for (const text of Object.values(state.lastUserTranscriptPartialByItemId || {})) {
+    addTurn("lead", text);
+  }
+
+  addTurn("lead", state.lastUserTranscript);
+
+  return turns;
+}
+
+async function saveFinalTranscriptQuietly(state: CallState, reason: string) {
+  if (state.transcriptSaveAttempted) return;
+  state.transcriptSaveAttempted = true;
+
+  try {
+    const ctx = state.context;
+    if (!ctx || !state.callSid || !AI_DIALER_AGENT_KEY) return;
+
+    const turns = buildFinalTranscriptTurns(state);
+    if (!turns.length) return;
+
+    const endedAt = new Date();
+    const startedAtMs = state.callStartedAtMs || endedAt.getTime();
+    const durationSeconds = Math.max(
+      0,
+      Math.round((endedAt.getTime() - startedAtMs) / 1000)
+    );
+
+    const resp = await fetch(TRANSCRIPT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-agent-key": AI_DIALER_AGENT_KEY,
+      },
+      body: JSON.stringify({
+        callSid: state.callSid,
+        leadId: ctx.leadId,
+        sessionId: ctx.sessionId,
+        userEmail: ctx.userEmail,
+        durationSeconds,
+        startedAt: new Date(startedAtMs).toISOString(),
+        endedAt: endedAt.toISOString(),
+        turns,
+        transcriptSource: "realtime_turns",
+        outcome: state.finalOutcome || "unknown",
+        leadName: [ctx.clientFirstName, ctx.clientLastName].filter(Boolean).join(" ").trim(),
+        agentName: ctx.agentName,
+      }),
+    });
+
+    const json: any = await resp.json().catch(() => ({}));
+    if (!resp.ok || !json?.ok) {
+      console.warn("[AI-VOICE][TRANSCRIPT] final save failed", {
+        callSid: state.callSid,
+        status: resp.status,
+        reason,
+        message: json?.message || resp.statusText,
+      });
+      return;
+    }
+
+    console.log("[AI-VOICE][TRANSCRIPT] final save completed", {
+      callSid: state.callSid,
+      reason,
+      skipped: !!json?.skipped,
+      skipReason: json?.reason,
+      turns: turns.length,
+    });
+  } catch (err: any) {
+    console.warn("[AI-VOICE][TRANSCRIPT] final save skipped after error", {
+      callSid: state.callSid,
+      reason,
+      message: err?.message || err,
+    });
+  }
+}
+
 function buildStepperTurnInstruction(ctx: any, arg2: any, opts?: {
   userText?: string;
   recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
@@ -10981,6 +11082,8 @@ wss.on("connection", (ws: WebSocket) => {
         }).catch(() => {});
         st.finalOutcomeSent = true;
       }
+
+      void saveFinalTranscriptQuietly(st, "twilio_ws_close");
     }
 
     if (st?.openAiWs) {
@@ -11889,6 +11992,8 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
     }).catch(() => {});
     state.finalOutcomeSent = true;
   }
+
+  void saveFinalTranscriptQuietly(state, "twilio_stop");
 
   calls.delete(ws);
 }
@@ -13698,6 +13803,7 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
     );
     return;
   }
+  state.finalOutcome = outcomeRaw;
 
   try {
     const body: any = {
@@ -13748,6 +13854,10 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
       "moved=",
       json.moved
     );
+
+    if (state.phase === "ended") {
+      void saveFinalTranscriptQuietly(state, `final_outcome:${outcomeRaw}`);
+    }
   } catch (err: any) {
     console.error(
       "[AI-VOICE] Error calling outcome endpoint:",

@@ -3,13 +3,14 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { trackUsage } from "@/lib/billing/trackUsage";
+import { MANUAL_VOICE_COST_PER_MIN } from "@/lib/billing/voiceRates";
+import { getPlatformTwilioClientScoped } from "@/lib/twilio/getPlatformClient";
 import Call from "@/models/Call";
 import InboundCall from "@/models/InboundCall";
 import Lead from "@/models/Lead";
 import { sendEmail } from "@/lib/email";
 
 const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
-const MANUAL_VOICE_COST_PER_MIN = Number(process.env.MANUAL_VOICE_COST_PER_MIN || "0.02");
 const MIN_MANUAL_BILLABLE_SECONDS = 5;
 const NEVER_BILL_EMAILS = new Set(["bryson.mccleary1@gmail.com", "support@covecrm.com"]);
 const BILLING_IN_PROGRESS_SOURCES = [
@@ -31,6 +32,10 @@ function toNumber(v: any): number | undefined {
   if (v === undefined || v === null || v === "") return undefined;
   const n = typeof v === "number" ? v : Number(String(v));
   return Number.isFinite(n) ? n : undefined;
+}
+function sanitizeTwilioSid(value?: string | null): string {
+  if (!value) return "";
+  return String(value).replace(/[^A-Za-z0-9]/g, "").trim();
 }
 function prune<T extends Record<string, any>>(obj: T): T {
   const out: Record<string, any> = {};
@@ -80,6 +85,32 @@ function isNeverBillEmail(email?: string | null) {
 function ceilMinutesFromSeconds(seconds: number) {
   if (!Number.isFinite(seconds) || seconds <= 0) return 0;
   return Math.ceil(seconds / 60);
+}
+
+async function fetchFinalTwilioCallDurationSeconds(opts: {
+  callSid: string;
+  user: any;
+}): Promise<number | undefined> {
+  const callSid = sanitizeTwilioSid(opts.callSid);
+  if (!callSid.startsWith("CA")) return undefined;
+
+  const accountSid =
+    sanitizeTwilioSid(opts.user?.twilio?.accountSid) ||
+    sanitizeTwilioSid(process.env.TWILIO_ACCOUNT_SID);
+  if (!accountSid.startsWith("AC")) return undefined;
+
+  try {
+    const client = getPlatformTwilioClientScoped(accountSid);
+    const call = await client.calls(callSid).fetch();
+    return toNumber((call as any)?.duration);
+  } catch (e: any) {
+    console.warn("[voice-status] final Twilio duration fetch failed; falling back", {
+      callSid,
+      accountSid: `${accountSid.slice(0, 4)}…${accountSid.slice(-4)}`,
+      message: e?.message || String(e),
+    });
+    return undefined;
+  }
 }
 
 function escapeHtml(s: string) {
@@ -436,45 +467,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             shouldUseManualBilling || updated.direction === "inbound" || updated.direction === "outbound";
           const ratePerMinute = shouldUseManualVoiceRate ? MANUAL_VOICE_COST_PER_MIN : VOICE_COST_PER_MIN;
 
-          let seconds = 0;
-          if (updated.billStartAt) {
+          const elapsedCallbackSeconds = (() => {
+            if (!updated.billStartAt) return 0;
             const start = new Date(updated.billStartAt).getTime();
             const stop = new Date(updated.billStopAt || now).getTime();
-            seconds = Math.max(0, (stop - start) / 1000);
-          } else if ((updated.durationSec || 0) > 0) {
-            seconds = updated.durationSec;
-          } else if ((updated.duration || 0) > 0) {
-            seconds = updated.duration;
-          }
-          const twilioDuration = Math.max(0, Number(updated.durationSec || updated.duration || duration || 0));
+            return Math.max(0, (stop - start) / 1000);
+          })();
+          const callbackDurationSeconds = Math.max(0, Number(duration || 0));
+          const storedDurationSeconds = Math.max(0, Number(updated.durationSec || updated.duration || 0));
 
-          if (shouldUseManualBilling && seconds < MIN_MANUAL_BILLABLE_SECONDS && twilioDuration <= 0) {
-            await (Call as any).updateOne(
-              {
-                callSid,
-                $or: [{ billedAt: { $exists: false } }, { billedAt: null }],
-              },
-              {
-                $set: {
-                  billedAt: now,
-                  billableSeconds: 0,
-                  billedMinutes: 0,
-                  billedAmount: 0,
-                  billingRatePerMinute: ratePerMinute,
-                  billedSource: "manual_dial_ring_elapsed",
-                },
-              },
-            );
-            throw new Error("__manual_zero_billed__");
-          }
+          const uEmail = String(updated.userEmail || "").toLowerCase();
+          if (uEmail) {
+            const user = await (User as any).findOne({ email: uEmail });
+            if (user) {
+              const fetchedDuration = shouldUseManualBilling
+                ? await fetchFinalTwilioCallDurationSeconds({ callSid, user })
+                : undefined;
+              const twilioDuration = Math.max(0, Number(fetchedDuration || callbackDurationSeconds || 0));
+              const seconds = shouldUseManualBilling
+                ? twilioDuration || elapsedCallbackSeconds
+                : elapsedCallbackSeconds || storedDurationSeconds || callbackDurationSeconds;
 
-          const mins = ceilMinutesFromSeconds(seconds);
+              if (shouldUseManualBilling && seconds < MIN_MANUAL_BILLABLE_SECONDS && twilioDuration <= 0) {
+                await (Call as any).updateOne(
+                  {
+                    callSid,
+                    $or: [{ billedAt: { $exists: false } }, { billedAt: null }],
+                  },
+                  {
+                    $set: {
+                      billedAt: now,
+                      billableSeconds: 0,
+                      billedMinutes: 0,
+                      billedAmount: 0,
+                      billingRatePerMinute: ratePerMinute,
+                      billedSource: "manual_dial_ring_elapsed",
+                    },
+                  },
+                );
+                throw new Error("__manual_zero_billed__");
+              }
 
-          if (mins > 0) {
-            const uEmail = String(updated.userEmail || "").toLowerCase();
-            if (uEmail) {
-              const user = await (User as any).findOne({ email: uEmail });
-              if (user) {
+              const mins = ceilMinutesFromSeconds(seconds);
+
+              if (mins > 0) {
                 // Check billingMode directly instead of calling getClientForUser.
                 // getClientForUser makes live Twilio API calls (credential validation,
                 // key rotation) that can throw and silently kill this entire billing block.
