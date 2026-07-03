@@ -1010,7 +1010,7 @@ function finalizeGreetingAdvance(state: CallState, reason: string) {
         : 0;
     const nextPhase = state.greetingAdvanceNextPhase || "in_call";
 
-    state.scriptStepIndex = nextIndex;
+    state.scriptStepIndex = resolveScriptStepIndexTransition(state, nextIndex, reason);
     state.phase = nextPhase;
     state.awaitingUserAnswer = true;
     state.awaitingAnswerForStepIndex = Math.max(0, nextIndex - 1);
@@ -1030,6 +1030,66 @@ function finalizeGreetingAdvance(state: CallState, reason: string) {
     state.greetingAdvanceNextIndex = undefined;
     state.greetingAdvanceNextPhase = undefined;
   }
+}
+
+function canAdvanceFromStep(state: CallState, toRaw: number, reason: string): boolean {
+  const from = typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
+  const to = Number.isFinite(toRaw) ? Math.max(0, Math.floor(toRaw)) : from;
+  const hasCoverageSubject = !!String((state as any).coverageSubject || "").trim() || state.coverageSubjectSetThisTurn === true;
+  const payload = {
+    callSid: state.callSid,
+    from,
+    to,
+    reason,
+  };
+
+  if (to > 1 && !hasCoverageSubject) {
+    console.warn("[AI-VOICE][STEPPER][ADVANCE-BLOCKED]", {
+      ...payload,
+      coverageSubject: false,
+      awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex,
+    });
+    return false;
+  }
+
+  if (to !== from) {
+    console.log("[AI-VOICE][STEPPER][ADVANCE]", payload);
+  }
+  return true;
+}
+
+function resolveScriptStepIndexTransition(state: CallState, toRaw: number, reason: string): number {
+  const from = typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
+  const to = Number.isFinite(toRaw) ? Math.max(0, Math.floor(toRaw)) : from;
+  return canAdvanceFromStep(state, to, reason) ? to : from;
+}
+
+function applyPolicyStateWrite(state: CallState, key: string, value: unknown, reason: string) {
+  if (key === "scriptStepIndex") {
+    const next = Number(value);
+    (state as any)[key] = resolveScriptStepIndexTransition(state, next, reason);
+    return;
+  }
+  (state as any)[key] = value;
+}
+
+function countExactAiStepLineOccurrences(
+  state: CallState,
+  stepLineRaw: string,
+): number {
+  const stepLine = normalizeTurnTextForKey(stepLineRaw);
+  if (!stepLine) return 0;
+  let count = 0;
+  try {
+    for (const exchange of state.recentExchanges || []) {
+      if (exchange?.role !== "ai") continue;
+      if (normalizeTurnTextForKey(exchange.text || "") === stepLine) count++;
+    }
+  } catch {}
+  try {
+    if (count === 0 && normalizeTurnTextForKey(state.lastPromptLine || "") === stepLine) count = 1;
+  } catch {}
+  return count;
 }
 
 function maybePerformPendingLiveTransfer(ws: WebSocket, state: CallState, reason: string) {
@@ -1291,10 +1351,10 @@ async function replayPendingCommittedTurn(
       try {
         const selectedScript = getSelectedScriptText(state.context!);
         state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript, state.context?.scriptKey);
-        state.scriptStepIndex = 0;
+        state.scriptStepIndex = resolveScriptStepIndexTransition(state, 0, "replay load script steps");
       } catch {
         state.scriptSteps = [];
-        state.scriptStepIndex = 0;
+        state.scriptStepIndex = resolveScriptStepIndexTransition(state, 0, "replay load script steps failed");
       }
     }
 
@@ -1472,7 +1532,9 @@ async function replayPendingCommittedTurn(
         objective: yesNow ? "transfer_now" : "schedule_time",
       });
       lineToSay = _guard_rplt.lineToSay;
-      for (const [k, v] of Object.entries(_guard_rplt.stateWrites)) { (state as any)[k] = v; }
+      for (const [k, v] of Object.entries(_guard_rplt.stateWrites)) {
+        applyPolicyStateWrite(state, k, v, `replay_live_transfer_guard:${_guard_rplt.routeKind}`);
+      }
       const instr = buildExactScriptLineInstruction(lineToSay, {
         userText: lastUserText || "",
         recentExchanges: state.recentExchanges,
@@ -1516,7 +1578,11 @@ async function replayPendingCommittedTurn(
         state.liveTransferIntroSpoken = true;
         state.pendingLiveTransferAfterLine = true;
       } else if (noLater || escapeAvailabilityLoop) {
-        state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+        state.scriptStepIndex = resolveScriptStepIndexTransition(
+          state,
+          Math.min(idx + 1, Math.max(0, steps.length - 1)),
+          "replay live-transfer availability scheduling"
+        );
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
         if (userAlreadySaidWhen) {
@@ -5589,19 +5655,24 @@ interface PolicyDecision {
 function isPostCoverageSchedulingState(state: CallState): boolean {
   const routeKind = String(state.lastRouteKind || "");
   const selectedDay = String(state.selectedDay || "").trim().toLowerCase();
+  const hasCoverageSubject = !!String((state as any).coverageSubject || "").trim() || state.coverageSubjectSetThisTurn === true;
+  if (!hasCoverageSubject && state.awaitingAnswerForStepIndex === 0) return false;
   return (
-    !!state.pendingLiveTransferAvailabilityConfirm ||
-    routeKind === "policy_step1_coverage" ||
-    routeKind.startsWith("policy_step1_coverage_") ||
-    routeKind === "policy_live_transfer_try" ||
-    routeKind === "policy_live_transfer_later" ||
-    routeKind === "policy_day_selected" ||
-    routeKind === "policy_time_window" ||
-    routeKind === "policy_none_work" ||
-    routeKind === "policy_exact_time" ||
-    routeKind === "policy_unknown" ||
-    routeKind.startsWith("post_coverage_") ||
-    ((selectedDay === "today" || selectedDay === "tomorrow") && Number(state.scriptStepIndex || 0) >= 1)
+    hasCoverageSubject &&
+    (
+      !!state.pendingLiveTransferAvailabilityConfirm ||
+      routeKind === "policy_step1_coverage" ||
+      routeKind.startsWith("policy_step1_coverage_") ||
+      routeKind === "policy_live_transfer_try" ||
+      routeKind === "policy_live_transfer_later" ||
+      routeKind === "policy_day_selected" ||
+      routeKind === "policy_time_window" ||
+      routeKind === "policy_none_work" ||
+      routeKind === "policy_exact_time" ||
+      routeKind === "policy_unknown" ||
+      routeKind.startsWith("post_coverage_") ||
+      ((selectedDay === "today" || selectedDay === "tomorrow") && Number(state.scriptStepIndex || 0) >= 1)
+    )
   );
 }
 
@@ -5956,8 +6027,20 @@ function classifyTurnIntent(
   // Priority 3.7: Step 1 coverage subject answer — BEFORE detectObjection/detectQuestion so
   // "just me", "myself", "spouse" etc. are never misclassified as objections or questions.
   try {
-    if (!isKaylaDemo && stepCtx.idx >= 1 && !(state as any).coverageSubject && isStepOneCoverageSubjectAnswer(t)) {
+    const awaitingStepOne =
+      state.awaitingAnswerForStepIndex === 0 &&
+      !(state as any).coverageSubject;
+    const coverageAnswer = isStepOneCoverageSubjectAnswer(t);
+    if (!isKaylaDemo && (stepCtx.idx >= 1 || awaitingStepOne) && !(state as any).coverageSubject && coverageAnswer) {
       return { kind: "coverage_subject_answer", raw };
+    }
+    if (!isKaylaDemo && awaitingStepOne && !coverageAnswer) {
+      console.warn("[AI-VOICE][STEPPER][STEP1-MISS]", {
+        callSid: state.callSid,
+        normalizedTranscript: normalizeTurnTextForKey(t),
+        scriptStepIndex: state.scriptStepIndex,
+        awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex,
+      });
     }
   } catch {}
 
@@ -6975,6 +7058,14 @@ function handlePostCoverageSchedulingTurn(
     extractClosingQuestionFromStepLine(stepCtx.steps[stepCtx.idx] || "") ||
     _unknownPivot.pivot ||
     getRequiredCurrentObjectiveLine(state, stepCtx);
+  const _unknownPreservePendingStep =
+    typeof state.awaitingAnswerForStepIndex === "number"
+      ? {
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex,
+          scriptStepIndex: typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0,
+        }
+      : {};
   return {
     handled: true,
     routeKind: "post_coverage_unknown_free",
@@ -6989,7 +7080,7 @@ function handlePostCoverageSchedulingTurn(
       "asking discovery questions",
       "opening a new topic",
     ],
-    stateWrites: { ..._unknownPivot.stateWrites, unknownTurnCount: unknownCountPC },
+    stateWrites: { ..._unknownPivot.stateWrites, ..._unknownPreservePendingStep, unknownTurnCount: unknownCountPC },
     shouldAdvanceStep: false,
   };
 }
@@ -8293,6 +8384,25 @@ function buildResponseFromPolicy(
     return buildGenericQuestionInstruction(state.context, decision.userText || "", pivot);
   }
   if (decision.responseMode === "free_response" && state.context) {
+    const pendingStepIdx =
+      typeof state.awaitingAnswerForStepIndex === "number"
+        ? state.awaitingAnswerForStepIndex
+        : undefined;
+    const pendingStepLine =
+      typeof pendingStepIdx === "number"
+        ? String((state.scriptSteps || [])[pendingStepIdx] || decision.requiredClosingPivot || "").trim()
+        : "";
+    if (pendingStepLine) {
+      const exactAskOccurrences = countExactAiStepLineOccurrences(state, pendingStepLine);
+      return buildStepAnchoredFreeResponseInstruction(state.context, {
+        userText: decision.userText || "",
+        recentExchanges: state.recentExchanges,
+        requiredStepLine: pendingStepLine,
+        exactRequired: exactAskOccurrences <= 1,
+        stepType: stepCtx?.stepType,
+        forbiddenTopics: decision.forbiddenTopics,
+      });
+    }
     return buildFreeResponseInstruction(state.context, {
       userText: decision.userText || "",
       recentExchanges: state.recentExchanges,
@@ -8440,7 +8550,11 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
         if (startDate.getTime() < Date.now()) {
           const timeSelectionStepIndex = Math.max(0, Math.min(2, Math.max(0, totalSteps - 1)));
           const clarificationLine = `I may have gotten the day mixed up there — did you mean tomorrow at ${timeTextForBooking} instead?`;
-          state.scriptStepIndex = timeSelectionStepIndex;
+          state.scriptStepIndex = resolveScriptStepIndexTransition(
+            state,
+            timeSelectionStepIndex,
+            "booking clarification past time"
+          );
           state.awaitingUserAnswer = true;
           state.awaitingAnswerForStepIndex = timeSelectionStepIndex;
           state.selectedDay = null as any;
@@ -8616,12 +8730,12 @@ async function handleConversationTurn(
   // Apply policy decision stateWrites FIRST before repeat guard can interfere
   const hadPendingHangup = !!state.pendingHangupAfterGoodbye;
   for (const [k, v] of Object.entries(decision.stateWrites)) {
-    (state as any)[k] = v;
+    applyPolicyStateWrite(state, k, v, `policy:${decision.routeKind}`);
   }
   // Apply repeat guard stateWrites but never let them clear coverageSubject or pendingLiveTransferAvailabilityConfirm
   for (const [k, v] of Object.entries(repeatGuardStateWrites)) {
     if (k === "coverageSubject" || k === "pendingLiveTransferAvailabilityConfirm") continue;
-    (state as any)[k] = v;
+    applyPolicyStateWrite(state, k, v, `repeat_guard:${routeKindForMemory}`);
   }
   // C3: arm 12-second force-hangup timer when pendingHangupAfterGoodbye first becomes true.
   // Safety net only — fires if the AI's goodbye audio never drains (model stall, audio error).
@@ -8726,11 +8840,6 @@ async function handleConversationTurn(
 
   pushExchange(state, "user", text, stepCtx.expectedAnswerIdx);
   pushExchange(state, "ai", lineToSay, stepCtx.expectedAnswerIdx);
-
-  if (!("awaitingUserAnswer" in decision.stateWrites)) {
-    state.awaitingUserAnswer = false;
-    state.awaitingAnswerForStepIndex = undefined;
-  }
 
   state.userAudioMsBuffered = 0;
   state.lastUserTranscript = "";
@@ -8987,6 +9096,95 @@ HARD RULES:
 
 KNOWLEDGE BASE:
 ${knowledgeBase}
+`.trim();
+}
+
+function buildStepAnchoredFreeResponseInstruction(
+  ctx: AICallContext,
+  opts: {
+    userText: string;
+    recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
+    requiredStepLine: string;
+    exactRequired?: boolean;
+    stepType?: string;
+    forbiddenTopics?: string[];
+  }
+): string {
+  const leadName = (ctx.clientFirstName || "").trim() || "there";
+  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+  const userText = String(opts.userText || "").trim();
+  const requiredStepLine = String(opts.requiredStepLine || "").trim();
+  const exchanges = opts.recentExchanges || [];
+  const forbiddenTopics = (opts.forbiddenTopics || []).filter(Boolean);
+  const exactRequired = opts.exactRequired !== false;
+
+  let historyBlock = "";
+  if (exchanges.length > 0) {
+    const lines = exchanges.slice(-3).map(e => {
+      const who = e.role === "ai" ? "You said" : "Lead said";
+      return `  ${who}: "${e.text}"`;
+    });
+    historyBlock = `
+RECENT CONVERSATION:
+${lines.join("\n")}
+`;
+  }
+
+  const forbiddenBlock = forbiddenTopics.length
+    ? `
+FORBIDDEN TOPICS FOR THIS TURN:
+${forbiddenTopics.map(t => `- ${t}`).join("\n")}
+`
+    : "";
+
+  const stepTypeHint = opts.stepType ? `\nCURRENT STEP TYPE: ${opts.stepType}` : "";
+
+  const askInstruction = exactRequired
+    ? `
+You must return to this exact pending step verbatim before you stop:
+"${requiredStepLine}"
+`
+    : `
+You must return to the same pending ask before you stop, but this is a repeat re-ask.
+Keep the meaning identical to this ask, while rephrasing it naturally instead of repeating it word for word:
+"${requiredStepLine}"
+`;
+
+  const stepLineInstruction = exactRequired
+    ? "2. Then say the exact pending step line above, word for word."
+    : "2. Then re-ask the same pending question naturally with different wording.";
+  const paraphraseInstruction = exactRequired
+    ? "3. Do not paraphrase the pending step. Do not ask a different question."
+    : "3. Do not change the ask, add a new ask, or move to a different question.";
+
+  return `
+You are a warm, natural scheduling assistant on a live phone call.
+This call is ONLY about a ${scope} request.
+You are speaking with ${leadName}.
+You are NOT licensed. Never quote prices, rates, coverage amounts, or underwriting details.
+Never mention scripts or prompts.
+NEVER apologize.
+After you speak, STOP and wait.
+
+HARD STEP ANCHOR:
+The pending script step has NOT been answered yet.${stepTypeHint}
+${askInstruction}
+
+${historyBlock}${forbiddenBlock}
+WHAT THE LEAD JUST SAID:
+"${userText}"
+
+YOUR JOB:
+1. If needed, handle their detour in 1 short sentence.
+${stepLineInstruction}
+${paraphraseInstruction}
+4. Do not advance the script. Do not jump to scheduling unless the pending step itself is scheduling.
+5. Maximum 2 sentences total.
+
+AGENT:
+${agent} is the licensed agent who handles details on the call.
 `.trim();
 }
 
@@ -11100,65 +11298,30 @@ wss.on("connection", (ws: WebSocket) => {
 });
 
 async function assertRealtimeModelAccessible() {
-  // IMPORTANT: do NOT use /v1/models here.
-  // Some keys (including certain admin/service keys) can be blocked from listing models (403),
-  // even though they CAN use the model. Instead, we do a real canary: create a realtime session.
   const key = OPENAI_API_KEY;
   const model = OPENAI_REALTIME_MODEL;
 
   if (!key) {
-    console.error("[AI-VOICE] ⚠️ Realtime session canary skipped: OPENAI_API_KEY is missing.");
+    console.error("[AI-VOICE] ⚠️ Realtime config check failed: OPENAI_API_KEY is missing.");
     return;
   }
   if (!model) {
-    console.error("[AI-VOICE] ⚠️ Realtime session canary skipped: OPENAI_REALTIME_MODEL is missing.");
+    console.error("[AI-VOICE] ⚠️ Realtime config check failed: OPENAI_REALTIME_MODEL is missing.");
     return;
   }
 
-  const url = "https://api.openai.com/v1/realtime/sessions";
-  let bodyText = "";
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        modalities: ["audio", "text"],
-        input_audio_format: OPENAI_REALTIME_AUDIO_FORMAT,
-        output_audio_format: OPENAI_REALTIME_AUDIO_FORMAT,
-        // Keep this minimal — we only want to validate access + model name.
-      }),
+    console.log("[AI-VOICE] Realtime config check OK:", {
+      model,
+      audioFormat: OPENAI_REALTIME_AUDIO_FORMAT,
     });
-
-    bodyText = await resp.text().catch(() => "");
-
-    if (!resp.ok) {
-      // Surface the body because OpenAI typically explains model/permission issues there.
-      console.error(
-        `[AI-VOICE] ⚠️ Realtime session canary failed for model='${model}' status=${resp.status} body=${bodyText.slice(0, 400)}`
-      );
-      return;
-    }
-
-    // Success: nothing else to do.
-    try {
-      console.log("[AI-VOICE] Startup guard OK: realtime session canary succeeded for model:", model);
-    } catch {}
   } catch (err: any) {
-    const msg = err?.message || String(err);
-    console.error(
-      `[AI-VOICE] ⚠️ Realtime session canary errored for model='${model}': ${msg}` +
-        (bodyText ? ` body=${bodyText.slice(0, 400)}` : "")
-    );
+    console.error("[AI-VOICE] ⚠️ Realtime config check errored:", err?.message || err);
   }
 }
 
 
 async function startServer() {
-  await assertRealtimeModelAccessible();
   server.listen(PORT, () => {
     console.log(`[AI-VOICE] HTTP + WebSocket server listening on port ${PORT}`);
   });
@@ -11219,7 +11382,11 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
       const steps = state.scriptSteps || [];
       const currentIdx = typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 1;
       if (steps.length > 0) {
-        state.scriptStepIndex = Math.min(currentIdx + 1, Math.max(0, steps.length - 1));
+        state.scriptStepIndex = resolveScriptStepIndexTransition(
+          state,
+          Math.min(currentIdx + 1, Math.max(0, steps.length - 1)),
+          "live-transfer failure fallback"
+        );
         state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
       } else {
         state.awaitingAnswerForStepIndex = undefined;
@@ -11447,7 +11614,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
 
   // script adherence reset
   state.scriptSteps = [];
-  state.scriptStepIndex = 0;
+  state.scriptStepIndex = resolveScriptStepIndexTransition(state, 0, "call start reset");
   state.lastUserTranscript = "";
   state.lastPromptSentAtMs = Date.now();
   state.lastPromptLine = "";
@@ -12081,7 +12248,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     try {
       const selectedScript = getSelectedScriptText(state.context!);
       state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript, state.context?.scriptKey);
-      state.scriptStepIndex = 0;
+      state.scriptStepIndex = resolveScriptStepIndexTransition(state, 0, "openai stepper init");
 
       console.log("[AI-VOICE][STEPPER-INIT]", {
         callSid: state.callSid,
@@ -12096,7 +12263,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         error: err?.message || err,
       });
       state.scriptSteps = [];
-      state.scriptStepIndex = 0;
+      state.scriptStepIndex = resolveScriptStepIndexTransition(state, 0, "openai stepper init failed");
     }
 
     const sessionUpdate = {
@@ -12650,7 +12817,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           greetingInstr = `Say exactly: "${rbOpenLine} Does later today or tomorrow work better for ${rbAgentFirst} to give you a call?" — say this warmly and naturally. After saying it, stop and wait for their response.`;
           // Put call into post-coverage scheduling state immediately
           (liveState as any).lastRouteKind        = "policy_step1_coverage";
-          (liveState as any).scriptStepIndex      = 1;
+          (liveState as any).coverageSubject      = "rebooking";
+          (liveState as any).coverageSubjectSetThisTurn = true;
+          (liveState as any).scriptStepIndex      = resolveScriptStepIndexTransition(liveState, 1, "rebooking greeting setup");
           (liveState as any).awaitingUserAnswer   = true;
           if (liveState.context) {
             (liveState.context as any).liveTransferEnabled = false;
@@ -13084,10 +13253,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       try {
         const selectedScript = getSelectedScriptText(state.context!);
         state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript, state.context?.scriptKey);
-        state.scriptStepIndex = 0;
+        state.scriptStepIndex = resolveScriptStepIndexTransition(state, 0, "main load script steps");
       } catch {
         state.scriptSteps = [];
-        state.scriptStepIndex = 0;
+        state.scriptStepIndex = resolveScriptStepIndexTransition(state, 0, "main load script steps failed");
       }
     }
 
@@ -13291,7 +13460,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         objective: yesNow ? "transfer_now" : "schedule_time",
       });
       lineToSay = _guard_mplt.lineToSay;
-      for (const [k, v] of Object.entries(_guard_mplt.stateWrites)) { (state as any)[k] = v; }
+      for (const [k, v] of Object.entries(_guard_mplt.stateWrites)) {
+        applyPolicyStateWrite(state, k, v, `main_live_transfer_guard:${_guard_mplt.routeKind}`);
+      }
       const instr = buildExactScriptLineInstruction(lineToSay, {
         userText: lastUserText || "",
         recentExchanges: state.recentExchanges,
@@ -13335,7 +13506,11 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.liveTransferIntroSpoken = true;
         state.pendingLiveTransferAfterLine = true;
       } else if (noLater || escapeAvailabilityLoop) {
-        state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+        state.scriptStepIndex = resolveScriptStepIndexTransition(
+          state,
+          Math.min(idx + 1, Math.max(0, steps.length - 1)),
+          "main live-transfer availability scheduling"
+        );
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = Math.max(0, state.scriptStepIndex - 1);
         if (userAlreadySaidWhen) {

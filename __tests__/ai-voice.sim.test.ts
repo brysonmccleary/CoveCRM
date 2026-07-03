@@ -183,6 +183,10 @@ interface MockState {
   rebookingMode?: boolean;
   rebookingAgentFirst?: string;
   rebookingBookingConfirmed?: boolean;
+  phase?: string;
+  coverageSubject?: string;
+  coverageSubjectSetThisTurn?: boolean;
+  lastRouteKind?: string;
   selectedDay?: string;
   selectedWindow?: string;
   selectedTimeText?: string;
@@ -400,6 +404,115 @@ function makeIntent(kind: string, raw: string): TurnIntent {
 // Apply stateWrites to state (mirrors what the main turn loop does at line 7819)
 function applyDecision(state: MockState, decision: PolicyDecision): MockState {
   return { ...state, ...decision.stateWrites };
+}
+
+function isStepOneCoverageSubjectAnswer(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!t) return false;
+  if ([
+    "me", "myself", "my self", "just me", "for me",
+    "this me", "that me", "yeah me", "its me", "it s me",
+    "just myself", "only me", "only myself",
+    "this myself", "this is myself",
+    "spouse", "both", "both of us", "the two of us", "us both",
+    "partner", "my partner",
+    "girlfriend", "my girlfriend",
+    "boyfriend", "my boyfriend",
+    "fiance", "my fiance", "fiancee", "my fiancee",
+    "significant other", "my significant other",
+    "family", "my family", "family member", "my family member",
+    "the whole family", "the family", "whole family",
+    "all of us", "all of our family", "everyone",
+    "my household", "the household",
+    "son", "my son", "daughter", "my daughter",
+    "child", "my child", "children", "my children", "kids", "my kids",
+    "parent", "my parent", "mom", "my mom", "dad", "my dad",
+  ].includes(t)) return true;
+  return /\b(myself|my self|just me|for me|this me|that me|yeah me|just myself|this myself|this is myself|only me|only myself|my spouse|spouse|wife|husband|both|both of us|me and my wife|me and my husband|my wife and i|my husband and i|me and her|me and him|the two of us|my partner|my family|us both|for my family|for both of us|for the both of us|her and i|him and i|me and my partner|girlfriend|my girlfriend|boyfriend|my boyfriend|fianc[eé]+|my fianc[eé]+|significant other|my significant other|family member|my family member|my kids|my children|my son|my daughter|my parent|my mom|my dad|my child|the whole family|whole family|all of us|all of our family|my household|the household)\b/.test(t);
+}
+
+function canAdvanceFromStepForTest(state: MockState, to: number): boolean {
+  const hasCoverageSubject = !!state.coverageSubject || state.coverageSubjectSetThisTurn === true;
+  return !(to > 1 && !hasCoverageSubject);
+}
+
+function applyRouterDecisionForTest(state: MockState, decision: PolicyDecision): MockState {
+  const next = { ...state };
+  for (const [key, value] of Object.entries(decision.stateWrites)) {
+    if (key === "scriptStepIndex") {
+      const to = Number(value);
+      next.scriptStepIndex = canAdvanceFromStepForTest(next, to) ? to : (next.scriptStepIndex ?? 0);
+    } else {
+      (next as any)[key] = value;
+    }
+  }
+  next.lastRouteKind = decision.routeKind;
+  return next;
+}
+
+function isPostCoverageSchedulingStateForTest(state: MockState): boolean {
+  const hasCoverageSubject = !!state.coverageSubject || state.coverageSubjectSetThisTurn === true;
+  if (!hasCoverageSubject && state.awaitingAnswerForStepIndex === 0) return false;
+  return hasCoverageSubject && (
+    state.lastRouteKind === "policy_step1_coverage" ||
+    String(state.lastRouteKind || "").startsWith("post_coverage_")
+  );
+}
+
+function stepAnchorAskForTest(pendingStepLine: string, previousAiLines: string[]): string {
+  const target = normalizeTurnTextForKey(pendingStepLine);
+  const occurrences = previousAiLines.filter((line) => normalizeTurnTextForKey(line) === target).length;
+  if (occurrences <= 1) return pendingStepLine;
+  return "Was this coverage just for you, or should we include your spouse too?";
+}
+
+function simulateNormalRouterTurn(state: MockState, raw: string): { state: MockState; routeKind: string } {
+  const stepCtx = { idx: state.scriptStepIndex ?? 0, steps: ["Was this for yourself, or a spouse as well?", "Does later today or tomorrow work better?"], stepType: "open_question" };
+  const awaitingStepOne = state.awaitingAnswerForStepIndex === 0 && !state.coverageSubject;
+  const isCoverageAnswer = isStepOneCoverageSubjectAnswer(raw);
+  let decision: PolicyDecision;
+
+  if ((stepCtx.idx >= 1 || awaitingStepOne) && !state.coverageSubject && isCoverageAnswer) {
+    decision = {
+      handled: true,
+      routeKind: "policy_step1_coverage",
+      lineToSay: "Got it — I just need to get you scheduled.",
+      stateWrites: {
+        coverageSubject: normalizeTurnTextForKey(raw),
+        coverageSubjectSetThisTurn: true,
+        scriptStepIndex: 1,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 0,
+      },
+      shouldAdvanceStep: false,
+    };
+  } else if (isPostCoverageSchedulingStateForTest(state)) {
+    decision = {
+      handled: true,
+      routeKind: "post_coverage_unknown_free",
+      lineToSay: "Was this for yourself, or a spouse as well?",
+      stateWrites: {
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex,
+        scriptStepIndex: state.scriptStepIndex ?? 0,
+      },
+      shouldAdvanceStep: false,
+    };
+  } else {
+    decision = {
+      handled: true,
+      routeKind: "policy_unknown",
+      lineToSay: "Was this for yourself, or a spouse as well?",
+      stateWrites: {
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex ?? 0,
+        scriptStepIndex: state.scriptStepIndex ?? 0,
+      },
+      shouldAdvanceStep: false,
+    };
+  }
+
+  return { state: applyRouterDecisionForTest(state, decision), routeKind: decision.routeKind };
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -1274,6 +1387,126 @@ describe("Booking trigger regression guards", () => {
     expect(source).toContain("/^(no|nah|nope|negative|nuh uh|uh uh|mm mm)[,.\\s!]/i.test(raw.trim())");
     expect(source).toContain("routeKind: \"post_coverage_closing_no_goodbye\"");
     expect(source).toContain("pendingHangupAfterGoodbye: true");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+describe("Normal AI dialer stepper/router invariants", () => {
+// ══════════════════════════════════════════════════════════════════════════════
+
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "ai-voice-server", "index.ts"),
+    "utf8"
+  );
+
+  test('greeting detour then "Just myself." advances step 0→1 without post_coverage before Step 1 answer', () => {
+    let state: MockState = {
+      rebookingMode: false,
+      phase: "in_call",
+      scriptStepIndex: 0,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      callSid: "CA_stepper_a",
+    };
+    const routeKinds: string[] = [];
+
+    const detour = simulateNormalRouterTurn(state, "Yo, what's going on?");
+    state = detour.state;
+    routeKinds.push(detour.routeKind);
+    expect(state.awaitingAnswerForStepIndex).toBe(0);
+    expect(state.scriptStepIndex).toBe(0);
+
+    const answer = simulateNormalRouterTurn(state, "Just myself.");
+    state = answer.state;
+    routeKinds.push(answer.routeKind);
+
+    expect(answer.routeKind).toBe("policy_step1_coverage");
+    expect(state.coverageSubject).toBe("just myself");
+    expect(state.scriptStepIndex).toBe(1);
+    expect(routeKinds.slice(0, -1).some((r) => r.startsWith("post_coverage_"))).toBe(false);
+  });
+
+  test("Step 1 classifier miss preserves awaitingAnswerForStepIndex through unknown route and does not advance", () => {
+    const state: MockState = {
+      rebookingMode: false,
+      phase: "in_call",
+      scriptStepIndex: 0,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      lastRouteKind: "post_coverage_unknown_free",
+      callSid: "CA_stepper_b",
+    };
+
+    const result = simulateNormalRouterTurn(state, "blue banana");
+
+    expect(isStepOneCoverageSubjectAnswer("blue banana")).toBe(false);
+    expect(result.routeKind).toBe("policy_unknown");
+    expect(result.state.awaitingAnswerForStepIndex).toBe(0);
+    expect(result.state.awaitingUserAnswer).toBe(true);
+    expect(result.state.scriptStepIndex).toBe(0);
+  });
+
+  test("centralized advancement gate allows covered paths and blocks past Step 1 without coverage", () => {
+    const noCoverage: MockState = { scriptStepIndex: 1, awaitingAnswerForStepIndex: 0 };
+    const withCoverage: MockState = { scriptStepIndex: 1, coverageSubject: "just myself" };
+
+    expect(canAdvanceFromStepForTest(noCoverage, 2)).toBe(false);
+    expect(canAdvanceFromStepForTest(noCoverage, 1)).toBe(true);
+    expect(canAdvanceFromStepForTest(withCoverage, 2)).toBe(true);
+    expect(canAdvanceFromStepForTest(withCoverage, 3)).toBe(true);
+  });
+
+  test("rebooking setup marks synthetic coverage so scheduling can advance past Step 1", () => {
+    const rebookingState: MockState = {
+      rebookingMode: true,
+      phase: "awaiting_greeting_reply",
+      lastRouteKind: "policy_step1_coverage",
+      coverageSubject: "rebooking",
+      coverageSubjectSetThisTurn: true,
+      scriptStepIndex: 1,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      callSid: "CA_stepper_rebooking",
+    };
+
+    expect(isPostCoverageSchedulingStateForTest(rebookingState)).toBe(true);
+    expect(canAdvanceFromStepForTest(rebookingState, 2)).toBe(true);
+
+    const advanced = applyRouterDecisionForTest(rebookingState, {
+      handled: true,
+      routeKind: "post_coverage_day_selected",
+      lineToSay: "Perfect — is there a specific time you're available?",
+      stateWrites: { scriptStepIndex: 2, awaitingUserAnswer: true, awaitingAnswerForStepIndex: 1 },
+      shouldAdvanceStep: false,
+    });
+
+    expect(advanced.scriptStepIndex).toBe(2);
+  });
+
+  test("second detour on the same pending step uses a rephrased non-identical re-ask", () => {
+    const pendingStep = "Was this for yourself, or a spouse as well?";
+    const firstReask = stepAnchorAskForTest(pendingStep, [pendingStep]);
+    const secondReask = stepAnchorAskForTest(pendingStep, [pendingStep, pendingStep]);
+
+    expect(firstReask).toBe(pendingStep);
+    expect(secondReask).not.toBe(pendingStep);
+    expect(normalizeTurnTextForKey(secondReask)).toContain("spouse");
+    expect(normalizeTurnTextForKey(secondReask)).toContain("you");
+  });
+
+  test("production router has centralized gate, Step 1 miss logging, and no stale canary startup call", () => {
+    expect(source).toContain("function canAdvanceFromStep");
+    expect(source).toContain("[AI-VOICE][STEPPER][ADVANCE]");
+    expect(source).toContain("[AI-VOICE][STEPPER][ADVANCE-BLOCKED]");
+    expect(source).toContain("[AI-VOICE][STEPPER][STEP1-MISS]");
+    expect(source).toContain("function buildStepAnchoredFreeResponseInstruction");
+    expect(source).toContain("HARD STEP ANCHOR:");
+    expect(source).toContain("coverageSubject      = \"rebooking\"");
+    expect(source).toContain("exactAskOccurrences <= 1");
+    expect(source).toContain("rephrasing it naturally instead of repeating it word for word");
+    expect(source).toContain("applyPolicyStateWrite(state, k, v, `policy:${decision.routeKind}`)");
+    expect(source).toContain("resolveScriptStepIndexTransition(");
+    expect(source).not.toContain("await assertRealtimeModelAccessible();");
   });
 });
 
