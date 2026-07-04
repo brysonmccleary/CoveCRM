@@ -7,11 +7,20 @@ import { useSession } from "next-auth/react";
 import Sidebar from "@/components/Sidebar";
 import { getNumberState } from "@/lib/twilio/localPresence";
 
+const ACTIVE_CALL_STALE_MS = 20 * 60 * 1000;
+
 function formatPhoneNumber(phone: string): string {
   const d = (phone || "").replace(/\D/g, "");
   if (d.length === 11 && d.startsWith("1")) return `(${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
   if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
   return phone || "";
+}
+
+function formatCallTimer(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 interface Folder {
@@ -60,6 +69,12 @@ interface AICallSession {
   createdAt?: string;
   updatedAt?: string;
   resumeFromSessionId?: string | null;
+  currentCall?: {
+    callSid: string;
+    leadId?: string | null;
+    leadName: string;
+    startedAt: string;
+  } | null;
 }
 
 interface AICallTranscriptTurn {
@@ -443,6 +458,7 @@ export default function AIDialSessionPage() {
   const [transcriptsLoading, setTranscriptsLoading] = useState(false);
   const [transcriptsError, setTranscriptsError] = useState<string | null>(null);
   const [expandedTranscriptCallSid, setExpandedTranscriptCallSid] = useState<string | null>(null);
+  const [activeCallNowMs, setActiveCallNowMs] = useState(() => Date.now());
 
   // 🔹 AI Dialer billing state (separate from SMS AI)
   const [aiBillingLoading, setAiBillingLoading] = useState(true);
@@ -481,6 +497,15 @@ export default function AIDialSessionPage() {
   useEffect(() => {
     setExpandedTranscriptCallSid(null);
   }, [lastSession?._id]);
+
+  useEffect(() => {
+    if (!activeSession?.currentCall?.startedAt) return;
+    setActiveCallNowMs(Date.now());
+    const intervalId = window.setInterval(() => {
+      setActiveCallNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [activeSession?.currentCall?.callSid, activeSession?.currentCall?.startedAt]);
 
   useEffect(() => {
     const loadActiveSession = async () => {
@@ -593,6 +618,19 @@ export default function AIDialSessionPage() {
   const resumeLeadNumber =
     totalLeads > 0 ? Math.min(totalLeads, lastSessionLastIndex + 2) : 0;
   const canResumeSession = !!lastSession && resumeRemainingLeads > 0;
+  const currentCallStartedAtMs = activeSession?.currentCall?.startedAt
+    ? new Date(activeSession.currentCall.startedAt).getTime()
+    : NaN;
+  const currentCallAgeMs = Number.isFinite(currentCallStartedAtMs)
+    ? activeCallNowMs - currentCallStartedAtMs
+    : Infinity;
+  const activeCurrentCall =
+    activeSession?.currentCall && currentCallAgeMs >= 0 && currentCallAgeMs <= ACTIVE_CALL_STALE_MS
+      ? activeSession.currentCall
+      : null;
+  const activeCurrentCallSeconds = activeCurrentCall
+    ? Math.floor(currentCallAgeMs / 1000)
+    : 0;
   const sessionResultRows = [
     {
       show: (stats.booked ?? 0) > 0,
@@ -1603,6 +1641,22 @@ export default function AIDialSessionPage() {
                   style={{ width: `${pct}%` }}
                 />
               </div>
+
+              {activeCurrentCall && (
+                <div className="mb-8 rounded-2xl border border-gray-700/70 bg-[#07101e] p-5">
+                  <p className="text-[10px] uppercase tracking-[0.25em] text-gray-500">
+                    Active Call
+                  </p>
+                  <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                    <h2 className="text-2xl font-bold text-white">
+                      {activeCurrentCall.leadName || "Lead"}
+                    </h2>
+                    <p className="font-mono text-4xl font-bold tabular-nums text-indigo-300">
+                      {formatCallTimer(activeCurrentCallSeconds)}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-5">
                 {[

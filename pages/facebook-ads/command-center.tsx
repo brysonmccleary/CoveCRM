@@ -1,6 +1,6 @@
 import { GetServerSideProps } from "next";
 import { getServerSession } from "next-auth/next";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 
@@ -16,6 +16,9 @@ type RollupRow = {
   metaAdsetId?: string;
   metaAdId?: string;
   metaCreativeId?: string;
+  metaEffectiveStatus?: string | null;
+  metaConfiguredStatus?: string | null;
+  metaObjectHealth?: string | null;
   visualVariantIndex?: number | null;
   creativeArchetype?: string;
   variationType?: string;
@@ -61,6 +64,14 @@ type MetaStatus = {
   pageName?: string;
   tokenExpiresAt?: string | null;
   lastInsightSyncAt?: string | null;
+};
+
+type SyncInsightsResponse = {
+  ok?: boolean;
+  syncedDays?: number;
+  totalSpend?: number;
+  totalLeads?: number;
+  error?: string;
 };
 
 const tabs: { id: TabKey; label: string }[] = [
@@ -110,6 +121,26 @@ function label(value?: string | number | null) {
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function formatSyncTime(value?: string | null) {
+  return value ? new Date(value).toLocaleString() : "Not synced yet";
+}
+
+function metaHealthLabel(value?: string | null) {
+  const text = raw(value).toLowerCase();
+  if (text === "paused_on_meta") return "Paused on Meta";
+  return label(text);
+}
+
+function metaHealthTone(value?: string | null) {
+  const text = raw(value).toLowerCase();
+  if (text === "paused_on_meta") return "border-amber-500/30 bg-amber-500/10 text-amber-100";
+  if (text === "healthy") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-100";
+  if (text === "token_expired" || text === "sync_failed" || text === "disconnected") {
+    return "border-rose-500/30 bg-rose-500/10 text-rose-100";
+  }
+  return "border-white/10 bg-white/5 text-slate-200";
 }
 
 function confidenceLabel(confidence?: Confidence) {
@@ -349,35 +380,62 @@ export default function AdCommandCenterPage() {
   const [metaStatus, setMetaStatus] = useState<MetaStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [syncingInsights, setSyncingInsights] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncError, setSyncError] = useState("");
+
+  const loadCommandCenterData = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
+    setError("");
+    try {
+      const [rollupRes, metaRes] = await Promise.all([
+        fetch("/api/facebook/attribution-rollups"),
+        fetch("/api/meta/status"),
+      ]);
+      const rollupJson = (await rollupRes.json()) as RollupResponse;
+      if (!rollupRes.ok) throw new Error((rollupJson as any)?.error || "Failed to load ad performance.");
+      const metaJson = metaRes.ok ? ((await metaRes.json()) as MetaStatus) : null;
+      setRollups(rollupJson.rollups || {});
+      setMetaStatus(metaJson);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load command center.");
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [rollupRes, metaRes] = await Promise.all([
-          fetch("/api/facebook/attribution-rollups"),
-          fetch("/api/meta/status"),
-        ]);
-        const rollupJson = (await rollupRes.json()) as RollupResponse;
-        if (!rollupRes.ok) throw new Error((rollupJson as any)?.error || "Failed to load ad performance.");
-        const metaJson = metaRes.ok ? ((await metaRes.json()) as MetaStatus) : null;
-        if (!cancelled) {
-          setRollups(rollupJson.rollups || {});
-          setMetaStatus(metaJson);
-        }
-      } catch (err: any) {
-        if (!cancelled) setError(err?.message || "Failed to load command center.");
-      } finally {
-        if (!cancelled) setLoading(false);
+    loadCommandCenterData();
+  }, [loadCommandCenterData]);
+
+  const syncMetaInsights = async () => {
+    setSyncingInsights(true);
+    setSyncMessage("");
+    setSyncError("");
+    try {
+      const response = await fetch("/api/meta/sync-insights", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: 30 }),
+      });
+      const data = (await response.json().catch(() => ({}))) as SyncInsightsResponse;
+      if (!response.ok || data?.ok === false) {
+        throw new Error(data?.error || "Meta insights sync failed.");
       }
+
+      const syncedDays = Number(data?.syncedDays ?? 0);
+      const totalSpend = Number(data?.totalSpend ?? 0);
+      const totalLeads = Number(data?.totalLeads ?? 0);
+      setSyncMessage(
+        `Meta Ads API sync completed successfully. If this campaign is paused or has no delivery, zero metrics are expected. Synced ${syncedDays} days — $${totalSpend.toFixed(2)} spend, ${totalLeads} leads.`
+      );
+      await loadCommandCenterData(false);
+    } catch (err: any) {
+      setSyncError(err?.message || "Meta insights sync failed.");
+    } finally {
+      setSyncingInsights(false);
     }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  };
 
   const prepared = useMemo(() => {
     const campaigns = rollups.byCampaign || [];
@@ -426,6 +484,18 @@ export default function AdCommandCenterPage() {
   const bookedRate = totals.leads ? totals.booked / totals.leads : 0;
   const soldRate = totals.leads ? totals.sold / totals.leads : 0;
   const noShowRate = totals.booked ? totals.noShows / totals.booked : 0;
+  const syncEndpoint = metaStatus?.adAccountId ? `/act_${metaStatus.adAccountId}/insights` : "/act_{adAccountId}/insights";
+  const statusCampaign =
+    prepared.selectedCampaign ||
+    prepared.campaigns.find((campaign) =>
+      Boolean(campaign.metaEffectiveStatus || campaign.metaConfiguredStatus || campaign.metaObjectHealth)
+    ) ||
+    null;
+  const hasCampaignMetaStatus = Boolean(
+    statusCampaign?.metaEffectiveStatus ||
+      statusCampaign?.metaConfiguredStatus ||
+      statusCampaign?.metaObjectHealth
+  );
 
   return (
     <DashboardLayout>
@@ -445,6 +515,86 @@ export default function AdCommandCenterPage() {
               {error}
             </div>
           )}
+
+          <section className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-4 sm:p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-white">Meta Insights Sync</h2>
+                <p className="mt-1 max-w-3xl text-sm text-blue-100/80">
+                  Uses ads_read to pull latest spend, impressions, clicks, CPC, CPM, CTR, and campaign performance from Meta.
+                </p>
+                <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-blue-100/75 sm:grid-cols-2 lg:grid-cols-4">
+                  <div>
+                    <span className="text-blue-100/45">Source:</span> Meta Ads API
+                  </div>
+                  <div>
+                    <span className="text-blue-100/45">Endpoint:</span> <span className="font-mono">{syncEndpoint}</span>
+                  </div>
+                  <div>
+                    <span className="text-blue-100/45">Permission used:</span> ads_read
+                  </div>
+                  <div>
+                    <span className="text-blue-100/45">Last insight sync:</span> {formatSyncTime(metaStatus?.lastInsightSyncAt)}
+                  </div>
+                </div>
+                <p className="mt-3 text-xs text-blue-100/65">
+                  Paused or test campaigns may return $0 spend, 0 clicks, and 0 leads.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={syncMetaInsights}
+                disabled={syncingInsights || !metaStatus?.connected}
+                className="w-full rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+              >
+                {syncingInsights ? "Syncing Meta insights..." : "Sync Meta Insights"}
+              </button>
+            </div>
+            {syncMessage && (
+              <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
+                {syncMessage}
+              </div>
+            )}
+            {syncError && (
+              <div className="mt-3 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
+                {syncError}
+              </div>
+            )}
+            {!metaStatus?.connected && (
+              <p className="mt-3 text-xs text-blue-100/60">Connect Meta before syncing ad insights.</p>
+            )}
+            {hasCampaignMetaStatus && statusCampaign && (
+              <div className="mt-4 rounded-md border border-white/10 bg-[#0b1220]/40 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-blue-100/60">
+                    Campaign Meta Status
+                  </span>
+                  {statusCampaign.metaObjectHealth && (
+                    <span className={`rounded-full border px-2.5 py-1 text-xs ${metaHealthTone(statusCampaign.metaObjectHealth)}`}>
+                      {metaHealthLabel(statusCampaign.metaObjectHealth)}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-slate-300 sm:grid-cols-2">
+                  {statusCampaign.metaEffectiveStatus && (
+                    <div>
+                      <span className="text-slate-500">metaEffectiveStatus:</span> {statusCampaign.metaEffectiveStatus}
+                    </div>
+                  )}
+                  {statusCampaign.metaConfiguredStatus && (
+                    <div>
+                      <span className="text-slate-500">metaConfiguredStatus:</span> {statusCampaign.metaConfiguredStatus}
+                    </div>
+                  )}
+                  {statusCampaign.metaObjectHealth && (
+                    <div>
+                      <span className="text-slate-500">metaObjectHealth:</span> {statusCampaign.metaObjectHealth}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
 
           <div className="flex flex-col gap-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 sm:p-5 md:flex-row md:items-center md:justify-between">
             <div>
@@ -577,7 +727,7 @@ export default function AdCommandCenterPage() {
                     </div>
                   </div>
                   <div className="text-xs text-slate-500">
-                    Last insight sync: {metaStatus?.lastInsightSyncAt ? new Date(metaStatus.lastInsightSyncAt).toLocaleString() : "Not available"}
+                    Last insight sync: {formatSyncTime(metaStatus?.lastInsightSyncAt)}
                   </div>
                 </div>
               </Section>

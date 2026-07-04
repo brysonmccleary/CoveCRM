@@ -256,6 +256,17 @@ function serializeSession(doc: any | null) {
     transferred: rawStats.transferred ?? 0,
   };
 
+  const rawCurrentCall = (json.currentCall || null) as any;
+  json.currentCall =
+    rawCurrentCall?.callSid && rawCurrentCall?.startedAt
+      ? {
+          callSid: String(rawCurrentCall.callSid),
+          leadId: rawCurrentCall.leadId ? String(rawCurrentCall.leadId) : null,
+          leadName: String(rawCurrentCall.leadName || "Lead"),
+          startedAt: rawCurrentCall.startedAt,
+        }
+      : null;
+
   return json;
 }
 
@@ -469,6 +480,7 @@ export default async function handler(
           startedAt: now,
           completedAt: null,
           errorMessage: null,
+          currentCall: null,
         });
       } else {
         // Re-use existing session for this folder/user
@@ -501,6 +513,7 @@ export default async function handler(
         aiSession.status = "queued";
         aiSession.startedAt = now;
         aiSession.completedAt = null;
+        (aiSession as any).currentCall = null;
       }
 
       await aiSession.save();
@@ -587,12 +600,14 @@ export default async function handler(
         (aiSession as any).stoppedAt = stopEndAt;
         (aiSession as any).activeCallSid = null;
         (aiSession as any).activeCallSidAt = null;
+        (aiSession as any).currentCall = null;
       } else if (action === "pause") {
         aiSession.status = "paused";
       } else if (action === "resume") {
         // Put it back in the worker queue
         aiSession.status = "queued";
         // Don't reset lastIndex; just resume from where it left off
+        (aiSession as any).currentCall = null;
       } else {
         return res
           .status(400)

@@ -57,6 +57,12 @@ export interface IAICallSession extends Document {
   lastWatchdogKickAt?: Date | null;
   activeCallSid?: string | null;
   activeCallSidAt?: Date | null;
+  currentCall?: {
+    callSid?: string | null;
+    leadId?: mongoose.Types.ObjectId | null;
+    leadName?: string | null;
+    startedAt?: Date | null;
+  } | null;
   stoppedAt?: Date | null;
 
   // ✅ Session-time billing checkpoint fields
@@ -66,6 +72,16 @@ export interface IAICallSession extends Document {
   createdAt: Date;
   updatedAt: Date;
 }
+
+const CurrentCallSchema = new Schema(
+  {
+    callSid: { type: String, default: null },
+    leadId: { type: Schema.Types.ObjectId, ref: "Lead", default: null },
+    leadName: { type: String, default: "" },
+    startedAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
 
 const AICallSessionSchema = new Schema<IAICallSession>(
   {
@@ -131,6 +147,7 @@ const AICallSessionSchema = new Schema<IAICallSession>(
     lastWatchdogKickAt: { type: Date, default: null },
     activeCallSid: { type: String, default: null },
     activeCallSidAt: { type: Date, default: null },
+    currentCall: { type: CurrentCallSchema, default: null },
     stoppedAt: { type: Date, default: null },
 
     // ✅ Session-time billing checkpoint fields

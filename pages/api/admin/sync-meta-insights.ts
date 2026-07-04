@@ -24,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const resp = await fetch(`${base}/api/cron/sync-meta-insights`, {
       method: "POST",
-      headers: { "x-cron-secret": CRON_SECRET },
+      headers: { "x-cron-key": CRON_SECRET },
     });
     const data = await resp.json();
     return res.status(resp.status).json(data);

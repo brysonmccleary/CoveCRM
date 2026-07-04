@@ -36,6 +36,52 @@ function parseIntSafe(n?: string | null): number | undefined {
   return Number.isFinite(v) ? v : undefined;
 }
 
+function formatLeadNameForCurrentCall(lead: any): string {
+  const firstName = String(
+    lead?.["First Name"] || lead?.firstName || lead?.FirstName || ""
+  ).trim();
+  const lastName = String(
+    lead?.["Last Name"] || lead?.lastName || lead?.LastName || ""
+  ).trim();
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  return fullName || String(lead?.name || lead?.Name || "Lead").trim() || "Lead";
+}
+
+async function resolveCurrentCallLead(
+  leadId: Types.ObjectId | string | null | undefined,
+  userEmail: string
+) {
+  if (!leadId || !Types.ObjectId.isValid(String(leadId))) {
+    return { leadObjectId: null, leadName: "Lead" };
+  }
+
+  const leadObjectId = new Types.ObjectId(String(leadId));
+  const lead = await Lead.findOne({
+    _id: leadObjectId,
+    $or: [
+      { userEmail: userEmail },
+      { ownerEmail: userEmail },
+      { user: userEmail },
+    ],
+  })
+    .select({
+      "First Name": 1,
+      "Last Name": 1,
+      firstName: 1,
+      lastName: 1,
+      FirstName: 1,
+      LastName: 1,
+      name: 1,
+      Name: 1,
+    })
+    .lean();
+
+  return {
+    leadObjectId,
+    leadName: formatLeadNameForCurrentCall(lead),
+  };
+}
+
 function runtimeBase(req: NextApiRequest) {
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const host =
@@ -741,15 +787,33 @@ export default async function handler(
 
         // ✅ Set lastCallbackAt on every callback; clear activeCallSid on terminal only if it matches this call
         try {
-          const sessionCallbackUpdate: any = { lastCallbackAt: new Date() };
+          const now = new Date();
+          const sessionCallbackUpdate: any = { lastCallbackAt: now };
+          if (CallStatus === "in-progress") {
+            const { leadObjectId, leadName } = await resolveCurrentCallLead(
+              recDoc.leadId || queryLeadId,
+              userEmail
+            );
+            sessionCallbackUpdate.currentCall = {
+              callSid: CallSid,
+              leadId: leadObjectId,
+              leadName,
+              startedAt: now,
+            };
+          }
           if (isTerminal) {
             // Only clear if this call is the one recorded as active — prevents clearing a
             // newer call's activeCallSid if a stale webhook fires after the next call starts.
-            const sessionForClear = await AICallSession.findById(aiCallSessionId).select("activeCallSid").lean();
+            const sessionForClear = await AICallSession.findById(aiCallSessionId)
+              .select("activeCallSid currentCall.callSid")
+              .lean();
             if ((sessionForClear as any)?.activeCallSid === CallSid) {
               sessionCallbackUpdate.activeCallSid = null;
               sessionCallbackUpdate.activeCallSidAt = null;
               clearedActiveCallForTerminal = true;
+            }
+            if ((sessionForClear as any)?.currentCall?.callSid === CallSid) {
+              sessionCallbackUpdate.currentCall = null;
             }
           }
           await AICallSession.updateOne(
