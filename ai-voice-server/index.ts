@@ -389,6 +389,8 @@ type CallState = {
   // Repeat-objection tracking
   lastObjectionKind?: string;
   objectionRepeatCount?: number;
+  objectionCount?: number;
+  stepAnchorAskCounts?: Record<number, number>;
   // Consecutive unrecognized-turn counter — resets on any named intent, exits at 4
   unknownTurnCount?: number;
   // Cumulative soft-decline counter across all subKinds; resets on scheduling advance only
@@ -1090,6 +1092,26 @@ function countExactAiStepLineOccurrences(
     if (count === 0 && normalizeTurnTextForKey(state.lastPromptLine || "") === stepLine) count = 1;
   } catch {}
   return count;
+}
+
+function isGoodWithThatSchedulingAcceptance(textRaw: string, state: CallState): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!/\b(i m|im|i'm)?\s*good\s+with\s+(that|it|this)\b/.test(t)) return false;
+  const pendingIdx =
+    typeof state.awaitingAnswerForStepIndex === "number"
+      ? state.awaitingAnswerForStepIndex
+      : typeof state.scriptStepIndex === "number"
+        ? state.scriptStepIndex
+        : 0;
+  const pendingStep = normalizeTurnTextForKey((state.scriptSteps || [])[pendingIdx] || "");
+  const schedulingAsk =
+    pendingIdx >= 1 ||
+    pendingStep.includes("later today") ||
+    pendingStep.includes("tomorrow") ||
+    pendingStep.includes("specific time") ||
+    pendingStep.includes("works best") ||
+    pendingStep.includes("available");
+  return schedulingAsk || !!state.selectedDay || !!state.pendingLiveTransferAvailabilityConfirm;
 }
 
 function maybePerformPendingLiveTransfer(ws: WebSocket, state: CallState, reason: string) {
@@ -5003,6 +5025,22 @@ function detectObjection(textRaw: string): string | null {
     t.includes("on a do not call")
   ) return "do_not_call";
 
+  const softRejection =
+    /(?:^|\b)(?:no|nah|nope)[,\s]*(?:thanks|thank you|i'?m good(?!\s+with\s+(?:it|this|that))|im good(?!\s+with\s+(?:it|this|that))|i m good(?!\s+with\s+(?:it|this|that))|all good|i'?m fine|im fine|i m fine)\b/.test(t) ||
+    /\b(?:i'?m|im|i m)\s+(?:good(?!\s+with\s+(?:it|this|that))|fine|all set)\b/.test(t) ||
+    /\b(?:i'?m|im|i m)\s+good\s+on\s+(?:it|this|that)\b/.test(t) ||
+    /\b(?:i'?m|im|i m)\s+all\s+set\b/.test(t) ||
+    /\ball\s+good\b/.test(t) ||
+    /\bno\s+(?:thanks|thank you)\b/.test(t) ||
+    /\b(?:i\s+said|i\s+already\s+said|i\s+just\s+said|yeah\s+i\s+said|like\s+i\s+said)\s+(?:i'?m|im|i m)\s+(?:good|fine|all set)\b/.test(t) ||
+    /\b(?:i\s+said|i\s+already\s+said|i\s+just\s+said|yeah\s+i\s+said|like\s+i\s+said)\s+(?:i'?m|im|i m)\s+good\s+on\s+(?:it|this|that)\b/.test(t);
+  if (softRejection) {
+    try {
+      if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t)) return null;
+    } catch {}
+    return "not_interested";
+  }
+
   // "I don't need it anymore" / "don't think I need this" -> treat as not interested (booking-only rebuttal)
   if (
     t.includes("dont need it") ||
@@ -5635,7 +5673,7 @@ interface TurnIntent {
   raw: string;
 }
 
-type ResponseMode = "exact_script" | "soft_script" | "guided_gpt" | "free_response" | "free_response_blocked" | "script_step";
+type ResponseMode = "exact_script" | "soft_script" | "guided_gpt" | "free_response" | "free_response_blocked" | "script_step" | "objection_arc";
 
 interface PolicyDecision {
   handled: boolean;
@@ -5650,6 +5688,7 @@ interface PolicyDecision {
   stateWrites: Record<string, unknown>;
   shouldAdvanceStep: boolean;
   repeatMode?: boolean;
+  objectionKind?: string;
 }
 
 function isPostCoverageSchedulingState(state: CallState): boolean {
@@ -5971,6 +6010,14 @@ function classifyTurnIntent(
     t.includes("afternoon") || t.includes("evening") || t.includes("time") ||
     t.includes("daytime");
   if (hasJustSaidSignal) {
+    try {
+      const objKind = detectObjection(t);
+      if (objKind) {
+        if (objKind === "not_interested") return { kind: "not_interested", subKind: objKind, raw };
+        if (objKind === "confused_identity") return { kind: "confusion", subKind: objKind, raw };
+        return { kind: "objection", subKind: objKind, raw };
+      }
+    } catch {}
     return { kind: "confusion", subKind: "i_just_said", raw };
   }
 
@@ -6023,6 +6070,31 @@ function classifyTurnIntent(
       }
     } catch {}
   }
+
+  try {
+    if (!isKaylaDemo && isGoodWithThatSchedulingAcceptance(t, state)) {
+      if (state.selectedTimeText) return { kind: "time_confirmation_yes", raw };
+      return { kind: "script_advance", raw };
+    }
+  } catch {}
+
+  // Priority 3.6: compliance/rejection/question before step answers.
+  // Exception: a Step 1 coverage payload that opens with "no" is still an answer
+  // ("No, just me" / "No, just for myself"), not a rejection.
+  try {
+    const awaitingStepOne =
+      state.awaitingAnswerForStepIndex === 0 &&
+      !(state as any).coverageSubject;
+    const coveragePayload = !isKaylaDemo && awaitingStepOne && isStepOneCoverageSubjectAnswer(t);
+    const objKind = detectObjection(t);
+    if (objKind && !coveragePayload) {
+      if (objKind === "not_interested") return { kind: "not_interested", subKind: objKind, raw };
+      if (objKind === "confused_identity") return { kind: "confusion", subKind: objKind, raw };
+      return { kind: "objection", subKind: objKind, raw };
+    }
+    const qKind = !coveragePayload ? detectQuestionKindForTurn(t) : null;
+    if (qKind) return { kind: "question", subKind: qKind, raw };
+  } catch {}
 
   // Priority 3.7: Step 1 coverage subject answer — BEFORE detectObjection/detectQuestion so
   // "just me", "myself", "spouse" etc. are never misclassified as objections or questions.
@@ -6918,23 +6990,111 @@ function handlePostCoverageSchedulingTurn(
         shouldAdvanceStep: false,
       };
     }
-    const lineToSay = getRebuttalLine(ctx, "not_interested");
+    const objectionCount = Number(state.objectionCount || 0) + 1;
+    const objectionStateWrites = {
+      lastObjectionKind: "not_interested",
+      objectionRepeatCount: state.lastObjectionKind === "not_interested"
+        ? Number(state.objectionRepeatCount || 0) + 1
+        : 1,
+      objectionCount,
+    };
+    if (objectionCount >= 4) {
+      return {
+        handled: true,
+        routeKind: "post_coverage_not_interested_exit",
+        responseMode: "exact_script",
+        objective: "end_call",
+        lineToSay: "Totally understood — I won't keep you. Have a great day!",
+        requiredClosingPivot: "",
+        forbiddenTopics: [],
+        stateWrites: {
+          ...objectionStateWrites,
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          awaitingUserAnswer: false,
+          awaitingAnswerForStepIndex: undefined,
+          pendingHangupAfterGoodbye: true,
+        },
+        shouldAdvanceStep: false,
+      };
+    }
     return {
       handled: true,
       routeKind: "post_coverage_not_interested",
-      responseMode: "exact_script",
+      responseMode: "objection_arc",
       objective: "soft_recover_to_scheduling",
-      lineToSay,
-      requiredClosingPivot: lineToSay,
+      lineToSay: closingPivot,
+      userText: intent.raw,
+      objectionKind: "not_interested",
+      requiredClosingPivot: closingPivot,
       forbiddenTopics: [],
-      stateWrites: {},
+      stateWrites: {
+        ...objectionStateWrites,
+        pendingLiveTransferAvailabilityConfirm: false,
+        pendingLiveTransferAvailabilityAttempts: 0,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || stepCtx.idx) - 1),
+      },
       shouldAdvanceStep: false,
+      repeatMode: objectionCount >= 3,
     };
   }
 
   if (intent.kind === "objection" || intent.kind === "question") {
     const sk = intent.subKind || "";
     const closingQ = getStateAwareClosingPivot(state);
+
+    if (intent.kind === "objection") {
+      const objKind = sk || "objection";
+      const objectionCount = Number(state.objectionCount || 0) + 1;
+      const objectionStateWrites = {
+        lastObjectionKind: objKind,
+        objectionRepeatCount: state.lastObjectionKind === objKind
+          ? Number(state.objectionRepeatCount || 0) + 1
+          : 1,
+        objectionCount,
+      };
+      if (objectionCount >= 4) {
+        return {
+          handled: true,
+          routeKind: "post_coverage_objection_exit",
+          responseMode: "exact_script",
+          objective: "end_call",
+          lineToSay: "Totally understood — I won't keep you. Have a great day!",
+          requiredClosingPivot: "",
+          forbiddenTopics: [],
+          stateWrites: {
+            ...objectionStateWrites,
+            pendingLiveTransferAvailabilityConfirm: false,
+            pendingLiveTransferAvailabilityAttempts: 0,
+            awaitingUserAnswer: false,
+            awaitingAnswerForStepIndex: undefined,
+            pendingHangupAfterGoodbye: true,
+          },
+          shouldAdvanceStep: false,
+        };
+      }
+      return {
+        handled: true,
+        routeKind: `post_coverage_${objKind}`,
+        responseMode: "objection_arc",
+        objective: "answer_then_return_to_scheduling",
+        lineToSay: closingQ,
+        userText: intent.raw,
+        objectionKind: objKind,
+        requiredClosingPivot: closingQ,
+        forbiddenTopics: [],
+        stateWrites: {
+          ...objectionStateWrites,
+          pendingLiveTransferAvailabilityConfirm: false,
+          pendingLiveTransferAvailabilityAttempts: 0,
+          awaitingUserAnswer: true,
+          awaitingAnswerForStepIndex: Math.max(0, Number(state.scriptStepIndex || stepCtx.idx) - 1),
+        },
+        shouldAdvanceStep: false,
+        repeatMode: objectionCount >= 3,
+      };
+    }
 
     // Scam: deterministic rebuttal
     if (sk === "scam") {
@@ -7775,14 +7935,16 @@ function buildConversationPolicyDecision(
   // ── Branch: not interested ────────────────────────────────────────────────
   if (intent.kind === "not_interested") {
     if (!ctx) return NOT_HANDLED;
-    const agentFirst = getAgentFirstName(ctx);
     const niKind = "not_interested";
     const niIsRepeat = !!state.lastObjectionKind && state.lastObjectionKind === niKind;
     const niRepeatCount = niIsRepeat ? (Number(state.objectionRepeatCount ?? 0) + 1) : 1;
-    const niRepeatMode = niIsRepeat && niRepeatCount >= 2;
-    const totalDeclineSignals = (state.totalDeclineSignals ?? 0) + 1;
-    const niStateWrites: Record<string, unknown> = { lastObjectionKind: niKind, objectionRepeatCount: niRepeatCount, totalDeclineSignals };
-    if (!isKaylaDemo && totalDeclineSignals >= 4) {
+    const objectionCount = Number(state.objectionCount || 0) + 1;
+    const niStateWrites: Record<string, unknown> = {
+      lastObjectionKind: niKind,
+      objectionRepeatCount: niRepeatCount,
+      objectionCount,
+    };
+    if (!isKaylaDemo && objectionCount >= 4) {
       return {
         handled: true,
         routeKind: "policy_not_interested_exit",
@@ -7793,7 +7955,6 @@ function buildConversationPolicyDecision(
         forbiddenTopics: [],
         stateWrites: {
           ...niStateWrites,
-          totalDeclineSignals: 0,
           pendingHangupAfterGoodbye: true,
           awaitingUserAnswer: false,
           awaitingAnswerForStepIndex: undefined,
@@ -7803,38 +7964,14 @@ function buildConversationPolicyDecision(
         shouldAdvanceStep: false,
       };
     }
-	    if (niRepeatMode) {
-	      // 2nd not_interested → graceful exit instead of infinite soft rebuttal (audit Fix 4)
-	      return {
-	        handled: true,
-	        routeKind: "policy_not_interested_exit",
-	        responseMode: "exact_script",
-	        objective: "end_call",
-	        lineToSay: "Totally understood — I won't keep you. Have a great day!",
-	        requiredClosingPivot: "",
-	        forbiddenTopics: [],
-	        stateWrites: {
-	          ...niStateWrites,
-	          pendingHangupAfterGoodbye: true,
-	          awaitingUserAnswer: false,
-	          awaitingAnswerForStepIndex: undefined,
-	          pendingLiveTransferAvailabilityConfirm: false,
-	          pendingLiveTransferAvailabilityAttempts: 0,
-	        },
-	        shouldAdvanceStep: false,
-	      };
-	    }
-	    const isKayla = normalizeScriptKey(ctx.scriptKey) === "kayla_signup";
-	    const lineToSay = isKayla
-	      ? `Yeah, fair. You typically don't request a demo if you're not at least a little curious — what was the main thing that made you want to look into it?`
-	      : `Totally fair — and I'm not here to pressure you. Most people who felt that way ended up really glad they took the 5 minutes. ${agentFirst} keeps it quick. ${requiredObjective}`;
 	    return {
-	      handled: true, routeKind: "policy_not_interested", responseMode: "exact_script",
-	      objective: "return_to_booking", lineToSay, requiredClosingPivot: requiredObjective,
+	      handled: true, routeKind: "policy_not_interested", responseMode: "objection_arc",
+	      objective: "return_to_booking", lineToSay: requiredObjective, userText: intent.raw,
+	      requiredClosingPivot: requiredObjective, objectionKind: niKind,
 	      forbiddenTopics: [], stateWrites: {
 	        ...niStateWrites,
 	        ...preserveCurrentStepState(),
-	      }, shouldAdvanceStep: false,
+	      }, shouldAdvanceStep: false, repeatMode: objectionCount >= 3,
 	    };
 	  }
 
@@ -7889,6 +8026,59 @@ function buildConversationPolicyDecision(
           pendingLiveTransferAvailabilityAttempts: 0,
         },
         shouldAdvanceStep: false,
+      };
+    }
+
+    if (intent.kind === "objection") {
+      const objKind = sk || "objection";
+      const objIsRepeat = !!state.lastObjectionKind && state.lastObjectionKind === objKind;
+      const objRepeatCount = objIsRepeat ? (Number(state.objectionRepeatCount ?? 0) + 1) : 1;
+      const objectionCount = Number(state.objectionCount || 0) + 1;
+      const dayHintFromTurn = !state.selectedDay ? extractExplicitDaySelection(intent.raw) : null;
+      const objStateWrites: Record<string, unknown> = {
+        lastObjectionKind: objKind,
+        objectionRepeatCount: objRepeatCount,
+        objectionCount,
+      };
+
+      if (!isKaylaDemo && objectionCount >= 4) {
+        return {
+          handled: true,
+          routeKind: "policy_objection_exit",
+          responseMode: "exact_script",
+          objective: "end_call",
+          lineToSay: "Totally understood — I won't keep you. Have a great day!",
+          requiredClosingPivot: "",
+          forbiddenTopics: [],
+          stateWrites: {
+            ...objStateWrites,
+            pendingHangupAfterGoodbye: true,
+            awaitingUserAnswer: false,
+            awaitingAnswerForStepIndex: undefined,
+            pendingLiveTransferAvailabilityConfirm: false,
+            pendingLiveTransferAvailabilityAttempts: 0,
+          },
+          shouldAdvanceStep: false,
+        };
+      }
+
+      return {
+        handled: true,
+        routeKind: `policy_${objKind}`,
+        responseMode: "objection_arc",
+        objective: "return_to_booking",
+        lineToSay: requiredObjective,
+        userText: intent.raw,
+        requiredClosingPivot: requiredObjective,
+        objectionKind: objKind,
+        forbiddenTopics: [],
+        stateWrites: {
+          ...objStateWrites,
+          ...preserveCurrentStepState(),
+          ...(dayHintFromTurn ? { selectedDay: dayHintFromTurn } : {}),
+        },
+        shouldAdvanceStep: false,
+        repeatMode: objectionCount >= 3,
       };
     }
 
@@ -8288,6 +8478,25 @@ function buildConversationPolicyDecision(
       greetingRaw.includes("driving");
     if (greetingNI || greetingBusy) {
       const agentFirst = getAgentFirstName(ctx);
+      const objectionCount = Number(state.objectionCount || 0) + 1;
+      if (!isKaylaDemo && objectionCount >= 4) {
+        return {
+          handled: true,
+          routeKind: "policy_greeting_objection_exit",
+          responseMode: "exact_script",
+          objective: "end_call",
+          lineToSay: "Totally understood — I won't keep you. Have a great day!",
+          requiredClosingPivot: "",
+          forbiddenTopics: [],
+          stateWrites: {
+            objectionCount,
+            pendingHangupAfterGoodbye: true,
+            awaitingUserAnswer: false,
+            awaitingAnswerForStepIndex: undefined,
+          },
+          shouldAdvanceStep: false,
+        };
+      }
       const lineToSay = isKaylaDemo
         ? "No problem — this call is the demo, so I can keep it quick. What do you want to know about CoveCRM?"
         : greetingBusy && !greetingNI
@@ -8305,6 +8514,7 @@ function buildConversationPolicyDecision(
           phase: "awaiting_greeting_reply",
           awaitingUserAnswer: true,
           awaitingAnswerForStepIndex: 0,
+          objectionCount,
         },
         shouldAdvanceStep: false,
       };
@@ -8350,6 +8560,18 @@ function buildResponseFromPolicy(
   state: CallState,
   stepCtx?: { idx: number; steps: string[]; stepType: StepType; expectedAnswerIdx?: number }
 ): string {
+  if (decision.responseMode === "objection_arc" && state.context) {
+    return buildObjectionARCInstruction(state.context, {
+      userText: decision.userText || "",
+      objectionKind: decision.objectionKind || "",
+      pendingStepLine: decision.requiredClosingPivot ||
+        (state.scriptSteps || [])[
+          state.awaitingAnswerForStepIndex ?? state.scriptStepIndex ?? 0
+        ] || "",
+      recentExchanges: state.recentExchanges,
+      softerTakeaway: !!decision.repeatMode,
+    });
+  }
   if (decision.responseMode === "script_step" && decision.lineToSay && state.context) {
     const line = decision.lineToSay;
     if (looksLikeGeneratedTimeOfferLine(line)) {
@@ -8393,12 +8615,22 @@ function buildResponseFromPolicy(
         ? String((state.scriptSteps || [])[pendingStepIdx] || decision.requiredClosingPivot || "").trim()
         : "";
     if (pendingStepLine) {
-      const exactAskOccurrences = countExactAiStepLineOccurrences(state, pendingStepLine);
+      const anchorCounts = state.stepAnchorAskCounts || {};
+      const priorAnchorCount =
+        typeof pendingStepIdx === "number"
+          ? Number(anchorCounts[pendingStepIdx] || 0)
+          : countExactAiStepLineOccurrences(state, pendingStepLine);
+      if (typeof pendingStepIdx === "number") {
+        state.stepAnchorAskCounts = {
+          ...anchorCounts,
+          [pendingStepIdx]: priorAnchorCount + 1,
+        };
+      }
       return buildStepAnchoredFreeResponseInstruction(state.context, {
         userText: decision.userText || "",
         recentExchanges: state.recentExchanges,
         requiredStepLine: pendingStepLine,
-        exactRequired: exactAskOccurrences <= 1,
+        exactRequired: priorAnchorCount === 0,
         stepType: stepCtx?.stepType,
         forbiddenTopics: decision.forbiddenTopics,
       });
@@ -8670,7 +8902,7 @@ async function handleConversationTurn(
     decision.responseMode === "free_response" &&
     (decision.routeKind === "policy_unknown" || decision.routeKind === "post_coverage_unknown_free");
   let repeatGuard: ReturnType<typeof applyAiOutputRepeatGuard> | null = null;
-  if (decision.responseMode !== "free_response" || isUnknownFreeResponse) {
+  if ((decision.responseMode !== "free_response" && decision.responseMode !== "objection_arc") || isUnknownFreeResponse) {
     repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
       userText: text,
       routeKind: decision.routeKind,
@@ -8795,7 +9027,10 @@ async function handleConversationTurn(
   if (
     !state.finalOutcomeSent &&
     (decision.routeKind === "policy_not_interested_exit" ||
-      decision.routeKind === "policy_objection_exit")
+      decision.routeKind === "policy_objection_exit" ||
+      decision.routeKind === "policy_greeting_objection_exit" ||
+      decision.routeKind === "post_coverage_not_interested_exit" ||
+      decision.routeKind === "post_coverage_objection_exit")
   ) {
     void handleFinalOutcomeIntent(state, {
       kind: "final_outcome",
@@ -9185,6 +9420,107 @@ ${paraphraseInstruction}
 
 AGENT:
 ${agent} is the licensed agent who handles details on the call.
+`.trim();
+}
+
+function buildObjectionARCInstruction(
+  ctx: AICallContext,
+  opts: {
+    userText: string;
+    objectionKind?: string;
+    pendingStepLine: string;
+    recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
+    softerTakeaway?: boolean;
+  }
+): string {
+  const leadName = (ctx.clientFirstName || "").trim() || "there";
+  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim() || agentRaw;
+  const scriptKey = normalizeScriptKey(ctx.scriptKey);
+  const userText = String(opts.userText || "").trim();
+  const objectionKind = String(opts.objectionKind || "objection").trim();
+  const pendingStepLine = String(opts.pendingStepLine || getScriptCloseQuestion(ctx)).replace(/\s+/g, " ").trim();
+  const exchanges = opts.recentExchanges || [];
+  const productKnowledgeLine = (() => {
+    if (scriptKey === "mortgage_protection" || scriptKey === "veteran_mortgage" || scriptKey === "trucker_mortgage") {
+      return "Mortgage protection pays off or pays down the house in the event of death or disability, so the family keeps the home.";
+    }
+    if (scriptKey === "final_expense") {
+      return "Final expense coverage helps protect the family from burial costs and end-of-life expenses.";
+    }
+    if (scriptKey === "iul_cash_value" || scriptKey === "veteran_iul" || scriptKey === "trucker_iul") {
+      return "Cash value life insurance can provide life insurance protection while also building cash value over time.";
+    }
+    if (scriptKey === "veteran_leads") {
+      return "The veteran life insurance programs are meant to help veterans review life insurance options and benefits.";
+    }
+    if (scriptKey === "trucker_leads") {
+      return "The trucker life insurance programs are built around helping drivers review life insurance options that fit their work and lifestyle.";
+    }
+    return `This is about the ${scope} request they submitted, and the goal is simply to help them get the information.`;
+  })();
+
+  let historyBlock = "";
+  if (exchanges.length > 0) {
+    const lines = exchanges.slice(-3).map(e => {
+      const who = e.role === "ai" ? "You said" : "Lead said";
+      return `  ${who}: "${String(e.text || "").replace(/\s+/g, " ").trim()}"`;
+    });
+    historyBlock = `
+RECENT CONVERSATION:
+${lines.join("\n")}
+`;
+  }
+
+  const takeaway = opts.softerTakeaway
+    ? `
+THIRD OBJECTION MODE:
+- This is the final ARC attempt. Keep the reclose softer and give them an easy out.
+- Still ask the current pending script question at the end, but phrase it as low-pressure and brief.
+`
+    : "";
+
+  return `
+You are a warm, natural scheduling assistant on a live phone call.
+This call is ONLY about a ${scope} request.
+You are speaking with ${leadName}.
+You are NOT licensed. Never quote prices, rates, coverage amounts, underwriting, or qualification details.
+Never mention scripts or prompts.
+NEVER apologize.
+After the reclose question, STOP and wait.
+
+ARC OBJECTION FRAMEWORK:
+AGREE — one short empathetic agreement with what they said. Never argue. Never apologize.
+RESPOND — 1-2 sentences that dissolve their specific objection using the knowledge below. Address what THEY said, not a generic line.
+RECLOSE — immediately ask the CURRENT pending script step question, phrased naturally. Do not require verbatim wording. Never ask permission like "is that okay?" or "do you have a minute?"
+
+KNOWLEDGE FOR RESPOND:
+- Most people fill these requests out online through a quick form, so they often forget.
+- ${productKnowledgeLine}
+- ${agent} is the licensed agent and covers pricing, options, and qualification.
+- There is no cost or obligation to get the information.
+- For rejection-type objections, preserve this substance from the previous exact-script rebuttal: Totally fair, this is not pressure; many people who felt that way were glad they took the 5 minutes; ${agent} keeps it quick.
+
+EXAMPLE SHAPE ONLY — adapt to the actual objection:
+"Yeah, I completely understand — most people fill these out online on a quick form, so they tend to forget. It's about the ${scope} request you submitted, just so you can get the information with no cost or obligation. Would this be just for yourself, or a spouse as well?"
+
+${historyBlock}${takeaway}
+WHAT THE LEAD JUST SAID:
+"${userText}"
+
+OBJECTION KIND:
+${objectionKind}
+
+CURRENT PENDING SCRIPT ASK:
+"${pendingStepLine}"
+
+RULES:
+- Max 3 sentences total.
+- Use the ARC structure: AGREE, RESPOND, RECLOSE.
+- The RECLOSE must be the current pending ask, naturally phrased.
+- Do not advance the script. Do not change to a different ask.
+- Assume the conversation continues.
 `.trim();
 }
 
@@ -10287,7 +10623,8 @@ Conversation rules:
   const HARD_LOCKS = `
 TONE & DELIVERY (CRITICAL — READ FIRST)
 - Sound like a warm, prepared assistant — not stiff or scripted.
-- Brief natural acknowledgments help the call feel conversational: “Sure”, “Of course”, “Got it”, “Yeah absolutely”, “No worries”.
+- Acknowledgments must directly fit what the prospect just said. When unsure, skip the acknowledgment and continue.
+- Never open with “What’s up?”, “What can I do for you?”, or similar counter-questions.
 - Mirror the lead: friendly → friendly, brief → brief, hesitant → slow down and stay warm.
 - Never ramble. One acknowledgment, then the next script line.
 - If confused: “No worries — real quick...” + one clear sentence. If annoyed/rushed: “I totally get that — this’ll be quick.”
@@ -10613,7 +10950,8 @@ You are ${aiName}, a virtual assistant making an outbound phone call on behalf o
 You are warm, calm, and naturally confident.
 
 TONE & DELIVERY (READ THIS FIRST)
-- Sound natural: use brief acknowledgments like "Sure", "Of course", "Absolutely", "Makes sense", "Yeah —", "Okay —" — naturally woven in, never forced.
+- Sound natural: acknowledgments must directly fit what the prospect just said. When unsure, skip the acknowledgment and continue.
+- Never open with "What's up?", "What can I do for you?", or similar counter-questions.
 - Mirror the lead’s energy. If they’re friendly, be friendly. If they’re brief, be brief. If they’re hesitant, slow down and stay warm.
 - Never sound scripted. Deliver each line as if you’re speaking it for the first time.
 - When the lead gives ANY response, acknowledge it genuinely before moving on. One natural word or phrase is enough.

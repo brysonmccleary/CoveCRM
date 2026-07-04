@@ -186,6 +186,8 @@ interface MockState {
   phase?: string;
   coverageSubject?: string;
   coverageSubjectSetThisTurn?: boolean;
+  objectionCount?: number;
+  stepAnchorAskCounts?: Record<number, number>;
   lastRouteKind?: string;
   selectedDay?: string;
   selectedWindow?: string;
@@ -466,13 +468,84 @@ function stepAnchorAskForTest(pendingStepLine: string, previousAiLines: string[]
   return "Was this coverage just for you, or should we include your spouse too?";
 }
 
+function isSoftRejectionForTest(textRaw: string): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  return (
+    /\b(i m|im|i'm)\s+(good(?!\s+with\s+(it|this|that))|fine|all set)\b/.test(t) ||
+    /\b(i m|im|i'm)\s+good\s+on\s+(it|this|that)\b/.test(t) ||
+    /\bno\s+(thanks|thank you)\b/.test(t) ||
+    /\b(i said|i already said|i just said|yeah i said|like i said)\s+(i m|im|i'm)\s+(good(?!\s+with\s+(it|this|that))|fine|all set)\b/.test(t) ||
+    /\b(i said|i already said|i just said|yeah i said|like i said)\s+(i m|im|i'm)\s+good\s+on\s+(it|this|that)\b/.test(t)
+  );
+}
+
+function isGoodWithThatSchedulingAcceptanceForTest(textRaw: string, state: MockState): boolean {
+  const t = normalizeTurnTextForKey(textRaw);
+  if (!/\b(i m|im|i'm)?\s*good\s+with\s+(that|it|this)\b/.test(t)) return false;
+  return Number(state.scriptStepIndex || 0) >= 1 || !!state.selectedDay || !!(state as any).pendingLiveTransferAvailabilityConfirm;
+}
+
+function arcProductKnowledgeForTest(scriptKey: string): string {
+  if (scriptKey === "mortgage_protection") return "Mortgage protection pays off or pays down the house in the event of death or disability, so the family keeps the home.";
+  if (scriptKey === "final_expense") return "Final expense coverage helps protect the family from burial costs and end-of-life expenses.";
+  return "This is about the life insurance request they submitted, and the goal is simply to help them get the information.";
+}
+
 function simulateNormalRouterTurn(state: MockState, raw: string): { state: MockState; routeKind: string } {
   const stepCtx = { idx: state.scriptStepIndex ?? 0, steps: ["Was this for yourself, or a spouse as well?", "Does later today or tomorrow work better?"], stepType: "open_question" };
   const awaitingStepOne = state.awaitingAnswerForStepIndex === 0 && !state.coverageSubject;
   const isCoverageAnswer = isStepOneCoverageSubjectAnswer(raw);
+  const softRejection = isSoftRejectionForTest(raw);
+  const schedulingAcceptance = isGoodWithThatSchedulingAcceptanceForTest(raw, state);
   let decision: PolicyDecision;
 
-  if ((stepCtx.idx >= 1 || awaitingStepOne) && !state.coverageSubject && isCoverageAnswer) {
+  if (/stop calling|take me off|do not call|don t call|dont call/.test(normalizeTurnTextForKey(raw))) {
+    decision = {
+      handled: true,
+      routeKind: "policy_do_not_call_exit",
+      lineToSay: "Of course — I'll make sure you're removed right away.",
+      stateWrites: {
+        pendingHangupAfterGoodbye: true,
+        awaitingUserAnswer: false,
+        awaitingAnswerForStepIndex: undefined,
+      },
+      shouldAdvanceStep: false,
+    };
+  } else if (schedulingAcceptance) {
+    decision = {
+      handled: true,
+      routeKind: "policy_script_step_2",
+      lineToSay: "Perfect — is there a specific time you're available?",
+      stateWrites: {
+        scriptStepIndex: 2,
+        awaitingUserAnswer: true,
+        awaitingAnswerForStepIndex: 2,
+        selectedDay: state.selectedDay || "today",
+      },
+      shouldAdvanceStep: true,
+    };
+  } else if (softRejection && !(awaitingStepOne && isCoverageAnswer)) {
+    const objectionCount = (state.objectionCount ?? 0) + 1;
+    decision = {
+      handled: true,
+      routeKind: objectionCount >= 4 ? "policy_not_interested_exit" : "policy_not_interested",
+      lineToSay: objectionCount >= 4 ? "Totally understood — I won't keep you. Have a great day!" : "ARC_OBJECTION_FRAMEWORK",
+      stateWrites: objectionCount >= 4
+        ? {
+            objectionCount,
+            pendingHangupAfterGoodbye: true,
+            awaitingUserAnswer: false,
+            awaitingAnswerForStepIndex: undefined,
+          }
+        : {
+            objectionCount,
+            awaitingUserAnswer: true,
+            awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex ?? 0,
+            scriptStepIndex: state.scriptStepIndex ?? 0,
+          },
+      shouldAdvanceStep: false,
+    };
+  } else if ((stepCtx.idx >= 1 || awaitingStepOne) && !state.coverageSubject && isCoverageAnswer) {
     decision = {
       handled: true,
       routeKind: "policy_step1_coverage",
@@ -1446,6 +1519,139 @@ describe("Normal AI dialer stepper/router invariants", () => {
     expect(result.state.scriptStepIndex).toBe(0);
   });
 
+  test('"No, just for myself" is a coverage answer, not an objection', () => {
+    const state: MockState = {
+      rebookingMode: false,
+      phase: "in_call",
+      scriptStepIndex: 0,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      objectionCount: 0,
+      callSid: "CA_stepper_coverage_no",
+    };
+
+    const result = simulateNormalRouterTurn(state, "No, just for myself");
+
+    expect(result.routeKind).toBe("policy_step1_coverage");
+    expect(result.state.coverageSubject).toBe("no just for myself");
+    expect(result.state.scriptStepIndex).toBe(1);
+    expect(result.state.objectionCount).toBe(0);
+  });
+
+  test('"I don\'t remember filling anything out" uses ARC objection instruction, not verbatim step anchor', () => {
+    expect(source).toContain("function buildObjectionARCInstruction");
+    expect(source).toContain("ARC OBJECTION FRAMEWORK:");
+    expect(source).toContain("AGREE — one short empathetic agreement");
+    expect(source).toContain("RESPOND — 1-2 sentences");
+    expect(source).toContain("RECLOSE — immediately ask the CURRENT pending script step question");
+    expect(source).toContain("Most people fill these requests out online through a quick form");
+    expect(source).toContain('routeKind: `policy_${objKind}`');
+    expect(source).toContain('responseMode: "objection_arc"');
+  });
+
+  test('"I\'m good" classifies as objection and increments objectionCount once', () => {
+    const state: MockState = {
+      rebookingMode: false,
+      phase: "in_call",
+      scriptStepIndex: 0,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      objectionCount: 0,
+      callSid: "CA_stepper_soft_reject",
+    };
+
+    const result = simulateNormalRouterTurn(state, "I'm good");
+
+    expect(result.routeKind).toBe("policy_not_interested");
+    expect(result.state.objectionCount).toBe(1);
+    expect(result.state.awaitingAnswerForStepIndex).toBe(0);
+    expect(result.state.scriptStepIndex).toBe(0);
+  });
+
+  test('scheduling context: "yeah I\'m good with that" accepts the scheduling ask without objectionCount', () => {
+    const state: MockState = {
+      rebookingMode: false,
+      phase: "in_call",
+      scriptStepIndex: 1,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 1,
+      coverageSubject: "just myself",
+      selectedDay: "today",
+      objectionCount: 0,
+      callSid: "CA_stepper_good_with_that",
+    };
+
+    const result = simulateNormalRouterTurn(state, "yeah I'm good with that");
+
+    expect(result.routeKind).toBe("policy_script_step_2");
+    expect(result.state.objectionCount).toBe(0);
+    expect(result.state.scriptStepIndex).toBe(2);
+    expect(result.state.selectedDay).toBe("today");
+  });
+
+  test('cold Step 0 "I\'m good" remains a rejection objection', () => {
+    const state: MockState = {
+      rebookingMode: false,
+      phase: "in_call",
+      scriptStepIndex: 0,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      objectionCount: 0,
+      callSid: "CA_stepper_cold_good",
+    };
+
+    const result = simulateNormalRouterTurn(state, "I'm good");
+
+    expect(result.routeKind).toBe("policy_not_interested");
+    expect(result.state.objectionCount).toBe(1);
+    expect(result.state.scriptStepIndex).toBe(0);
+  });
+
+  test("non-mortgage ARC product knowledge does not contain mortgage language", () => {
+    const knowledge = arcProductKnowledgeForTest("final_expense").toLowerCase();
+
+    expect(knowledge).toContain("final expense");
+    expect(knowledge).not.toContain("mortgage");
+  });
+
+  test("rejection after third ARC attempt exits politely for not_interested", () => {
+    const state: MockState = {
+      rebookingMode: false,
+      phase: "in_call",
+      scriptStepIndex: 0,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      objectionCount: 3,
+      callSid: "CA_stepper_fourth_reject",
+    };
+
+    const result = simulateNormalRouterTurn(state, "Yeah, I said I'm good on it");
+
+    expect(result.routeKind).toBe("policy_not_interested_exit");
+    expect(result.state.objectionCount).toBe(4);
+    expect(result.state.pendingHangupAfterGoodbye).toBe(true);
+    expect(result.state.awaitingUserAnswer).toBe(false);
+  });
+
+  test('"stop calling" exits immediately as DNC without ARC rebuttal', () => {
+    const state: MockState = {
+      rebookingMode: false,
+      phase: "in_call",
+      scriptStepIndex: 0,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      objectionCount: 0,
+      callSid: "CA_stepper_dnc",
+    };
+
+    const result = simulateNormalRouterTurn(state, "Stop calling me");
+
+    expect(result.routeKind).toBe("policy_do_not_call_exit");
+    expect(result.state.pendingHangupAfterGoodbye).toBe(true);
+    expect(result.state.objectionCount).toBe(0);
+    expect(result.state.awaitingUserAnswer).toBe(false);
+  });
+
   test("centralized advancement gate allows covered paths and blocks past Step 1 without coverage", () => {
     const noCoverage: MockState = { scriptStepIndex: 1, awaitingAnswerForStepIndex: 0 };
     const withCoverage: MockState = { scriptStepIndex: 1, coverageSubject: "just myself" };
@@ -1494,6 +1700,32 @@ describe("Normal AI dialer stepper/router invariants", () => {
     expect(normalizeTurnTextForKey(secondReask)).toContain("you");
   });
 
+  test("detours and questions still get the step anchor and return to the pending ask", () => {
+    expect(source).toContain("function buildStepAnchoredFreeResponseInstruction");
+    expect(source).toContain("HARD STEP ANCHOR:");
+    expect(source).toContain('responseMode: "free_response"');
+    expect(source).toContain("The pending script step has NOT been answered yet");
+  });
+
+  test('after ARC reclose, "just myself" still advances step 0→1 with coverageSubject set', () => {
+    const stateAfterArc: MockState = {
+      rebookingMode: false,
+      phase: "in_call",
+      scriptStepIndex: 0,
+      awaitingUserAnswer: true,
+      awaitingAnswerForStepIndex: 0,
+      objectionCount: 1,
+      callSid: "CA_stepper_after_arc",
+    };
+
+    const result = simulateNormalRouterTurn(stateAfterArc, "just myself");
+
+    expect(result.routeKind).toBe("policy_step1_coverage");
+    expect(result.state.coverageSubject).toBe("just myself");
+    expect(result.state.scriptStepIndex).toBe(1);
+    expect(result.state.objectionCount).toBe(1);
+  });
+
   test("production router has centralized gate, Step 1 miss logging, and no stale canary startup call", () => {
     expect(source).toContain("function canAdvanceFromStep");
     expect(source).toContain("[AI-VOICE][STEPPER][ADVANCE]");
@@ -1502,8 +1734,11 @@ describe("Normal AI dialer stepper/router invariants", () => {
     expect(source).toContain("function buildStepAnchoredFreeResponseInstruction");
     expect(source).toContain("HARD STEP ANCHOR:");
     expect(source).toContain("coverageSubject      = \"rebooking\"");
-    expect(source).toContain("exactAskOccurrences <= 1");
+    expect(source).toContain("priorAnchorCount === 0");
     expect(source).toContain("rephrasing it naturally instead of repeating it word for word");
+    expect(source).toContain("objectionCount?: number");
+    expect(source).toContain("stepAnchorAskCounts?: Record<number, number>");
+    expect(source).toContain("Never open with \"What's up?\"");
     expect(source).toContain("applyPolicyStateWrite(state, k, v, `policy:${decision.routeKind}`)");
     expect(source).toContain("resolveScriptStepIndexTransition(");
     expect(source).not.toContain("await assertRealtimeModelAccessible();");
