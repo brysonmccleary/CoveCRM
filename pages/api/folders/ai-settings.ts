@@ -15,7 +15,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
 
-  const { folderId, aiFirstCallEnabled, aiFirstCallDelayMinutes, aiRealTimeOnly, aiScriptKey, aiEnabledAt } = req.body || {};
+  const body = req.body || {};
+  const { folderId } = body;
 
   if (!folderId || !Types.ObjectId.isValid(folderId)) {
     return res.status(400).json({ message: "Invalid folderId" });
@@ -35,37 +36,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     "generic_life",
   ];
 
-  const update: any = { aiFirstCallEnabled: !!aiFirstCallEnabled };
+  const existingFolder = await Folder.findOne({ _id: new Types.ObjectId(folderId), userEmail: email });
+  if (!existingFolder) return res.status(404).json({ message: "Folder not found" });
 
-  // aiEnabledAt: set when enabling, clear when disabling
-  if (aiFirstCallEnabled && aiEnabledAt) {
-    update.aiEnabledAt = new Date(aiEnabledAt);
-  } else if (aiFirstCallEnabled && !aiEnabledAt) {
-    update.aiEnabledAt = new Date();
-  } else if (!aiFirstCallEnabled) {
-    update.aiEnabledAt = null;
+  const update: any = {};
+
+  if (Object.prototype.hasOwnProperty.call(body, "aiFirstCallEnabled")) {
+    if (typeof body.aiFirstCallEnabled !== "boolean") {
+      return res.status(400).json({ message: "aiFirstCallEnabled must be a boolean" });
+    }
+
+    const wasEnabled = !!(existingFolder as any).aiFirstCallEnabled;
+    const nextEnabled = body.aiFirstCallEnabled;
+    update.aiFirstCallEnabled = nextEnabled;
+
+    if (!wasEnabled && nextEnabled) {
+      update.aiEnabledAt = new Date();
+    } else if (wasEnabled && !nextEnabled) {
+      update.aiEnabledAt = null;
+    }
   }
 
-  // aiFirstCallDelayMinutes: clamp 0–60
-  if (typeof aiFirstCallDelayMinutes === "number") {
-    update.aiFirstCallDelayMinutes = Math.min(60, Math.max(0, Math.round(aiFirstCallDelayMinutes)));
+  if (Object.prototype.hasOwnProperty.call(body, "aiFirstCallDelayMinutes")) {
+    if (typeof body.aiFirstCallDelayMinutes !== "number" || !Number.isFinite(body.aiFirstCallDelayMinutes)) {
+      return res.status(400).json({ message: "aiFirstCallDelayMinutes must be a number" });
+    }
+    if (body.aiFirstCallDelayMinutes < 0 || body.aiFirstCallDelayMinutes > 60) {
+      return res.status(400).json({ message: "aiFirstCallDelayMinutes must be between 0 and 60" });
+    }
+    update.aiFirstCallDelayMinutes = Math.round(body.aiFirstCallDelayMinutes);
   }
 
-  // aiRealTimeOnly: boolean
-  if (typeof aiRealTimeOnly === "boolean") {
-    update.aiRealTimeOnly = aiRealTimeOnly;
+  if (Object.prototype.hasOwnProperty.call(body, "aiRealTimeOnly")) {
+    if (typeof body.aiRealTimeOnly !== "boolean") {
+      return res.status(400).json({ message: "aiRealTimeOnly must be a boolean" });
+    }
+    update.aiRealTimeOnly = body.aiRealTimeOnly;
   }
 
-  // aiScriptKey: validate against allowlist
-  if (typeof aiScriptKey === "string" && aiScriptKey) {
-    update.aiScriptKey = VALID_SCRIPT_KEYS.includes(aiScriptKey) ? aiScriptKey : "default";
+  if (Object.prototype.hasOwnProperty.call(body, "aiScriptKey")) {
+    if (typeof body.aiScriptKey !== "string" || !body.aiScriptKey.trim()) {
+      return res.status(400).json({ message: "aiScriptKey must be a non-empty string" });
+    }
+    const scriptKey = body.aiScriptKey.trim();
+    update.aiScriptKey = VALID_SCRIPT_KEYS.includes(scriptKey) ? scriptKey : "default";
   }
 
-  const folder = await Folder.findOneAndUpdate(
-    { _id: new Types.ObjectId(folderId), userEmail: email },
-    { $set: update },
-    { new: true }
-  );
+  const folder = Object.keys(update).length
+    ? await Folder.findOneAndUpdate(
+        { _id: new Types.ObjectId(folderId), userEmail: email },
+        { $set: update },
+        { new: true }
+      )
+    : existingFolder;
 
   if (!folder) return res.status(404).json({ message: "Folder not found" });
 

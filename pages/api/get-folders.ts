@@ -19,6 +19,7 @@ type LeanFolder = {
   aiRealTimeOnly?: boolean;
   aiScriptKey?: string;
   aiEnabledAt?: Date | null;
+  newLeadCount?: number;
 };
 
 type DBFolder = {
@@ -183,6 +184,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const byId = new Map<string, number>();
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
+    const newByIdAgg = await (Lead as any).aggregate([
+      {
+        $match: {
+          userEmail: email,
+          status: "New",
+          folderId: { $exists: true, $ne: null },
+        },
+      },
+      {
+        $addFields: {
+          fid: { $toString: "$folderId" },
+        },
+      },
+      {
+        $group: {
+          _id: "$fid",
+          n: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const newById = new Map<string, number>();
+    for (const r of newByIdAgg) newById.set(String(r._id), Number(r.n) || 0);
+
     // Optional legacy "Unsorted" handling (only for THIS user)
     const unsorted = all
       .filter((f) => normKey(f.name) === "unsorted")
@@ -197,6 +222,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       userEmail: email,
       $or: [{ folderId: { $exists: false } }, { folderId: null }],
     });
+    const unsortedNewCount = await Lead.countDocuments({
+      userEmail: email,
+      status: "New",
+      $or: [{ folderId: { $exists: false } }, { folderId: null }],
+    });
 
     // 5) Final list: custom first, then the 3 system folders in fixed order
     const systemOrdered = SYSTEM_FOLDERS.map((n) =>
@@ -209,10 +239,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const idStr = String(f._id);
       const base = byId.get(idStr) || 0;
       const extra = unsortedIdStr && idStr === unsortedIdStr ? unsortedCount : 0;
+      const newExtra = unsortedIdStr && idStr === unsortedIdStr ? unsortedNewCount : 0;
       return {
         ...f,
         _id: idStr,
         leadCount: base + extra,
+        newLeadCount: (newById.get(idStr) || 0) + newExtra,
       };
     });
 

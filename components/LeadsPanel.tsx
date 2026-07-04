@@ -1,12 +1,12 @@
 // components/LeadsPanel.tsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
 import SaleModal from "./SaleModal";
 import toast from "react-hot-toast";
 import FolderLeadsTable from "./FolderLeadsTable";
-import { useRouter } from "next/router";
 import { getNumberState } from "@/lib/twilio/localPresence";
+import { SYSTEM_FOLDERS, isSystemFolderName } from "@/lib/systemFolders";
 
 function formatPhoneNumber(phone: string): string {
   const d = (phone || "").replace(/\D/g, "");
@@ -15,13 +15,28 @@ function formatPhoneNumber(phone: string): string {
   return phone || "";
 }
 
+function formatLeadCount(count: number): string {
+  return `${count} ${count === 1 ? "lead" : "leads"}`;
+}
+
 interface NumberEntry {
   id: string;
   phoneNumber: string;
   sid: string;
 }
 
-const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number", "No Show", "Do Not Contact"];
+const SCRIPT_OPTIONS = [
+  { key: "mortgage_protection", label: "Mortgage Protection" },
+  { key: "final_expense", label: "Final Expense" },
+  { key: "iul_cash_value", label: "IUL / Cash Value Life" },
+  { key: "veteran_leads", label: "Veterans (Life Insurance)" },
+  { key: "veteran_iul", label: "Veterans IUL" },
+  { key: "veteran_mortgage", label: "Veterans Mortgage Protection" },
+  { key: "trucker_leads", label: "Truckers (Life Insurance)" },
+  { key: "trucker_iul", label: "Truckers IUL" },
+  { key: "trucker_mortgage", label: "Truckers Mortgage Protection" },
+  { key: "default", label: "Default (Generic)" },
+];
 
 /* =========================
    Google Sheets Wizard Utils
@@ -75,7 +90,6 @@ function LeadSearchInline() {
   >([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
-  const router = useRouter();
   useEffect(() => {
     const handler = setTimeout(async () => {
       const term = q.trim();
@@ -107,7 +121,7 @@ function LeadSearchInline() {
     setOpen(false);
     setResults([]);
     setActive(-1);
-    router.push(`/dial/${id}`);
+    window.location.href = `/dial/${id}`;
   };
 
   return (
@@ -216,6 +230,10 @@ export default function LeadsPanel() {
   const [showQuickDial, setShowQuickDial] = useState(false);
   const [quickDialPhone, setQuickDialPhone] = useState("");
   const [quickDialName, setQuickDialName] = useState("");
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<any | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [openFolderMenu, setOpenFolderMenu] = useState<string | null>(null);
+  const [aiToggleErrors, setAiToggleErrors] = useState<Record<string, boolean>>({});
 
   // ✅ NEW: Wizard state
   const [showSheetsWizard, setShowSheetsWizard] = useState(false);
@@ -240,8 +258,6 @@ export default function LeadsPanel() {
 
   const [folderScriptKey, setFolderScriptKey] = useState<string>("final_expense");
   const [savingScript, setSavingScript] = useState(false);
-
-  const router = useRouter();
 
   // ✅ NEW: modal refs for “click outside to close”
   const modalCardRef = useRef<HTMLDivElement | null>(null);
@@ -425,7 +441,7 @@ export default function LeadsPanel() {
       serverProgressKey: serverKey,
     }).toString();
 
-    router.push(`/dial-session?${q}`);
+    window.location.href = `/dial-session?${q}`;
   };
 
   const startQuickDial = () => {
@@ -445,7 +461,7 @@ export default function LeadsPanel() {
     setShowQuickDial(false);
     setQuickDialPhone("");
     setQuickDialName("");
-    router.push(`/dial-session?${q.toString()}`);
+    window.location.href = `/dial-session?${q.toString()}`;
   };
 
   const hasResume =
@@ -468,13 +484,11 @@ export default function LeadsPanel() {
       progressKey: buildProgressKey(),
       serverProgressKey: serverKey,
     });
-    router.push(`/dial-session?${params.toString()}`);
+    window.location.href = `/dial-session?${params.toString()}`;
   };
 
   const handleDeleteFolder = async (folderId: string) => {
-    const confirmed = confirm("Are you sure you want to delete this folder? This cannot be undone.");
-    if (!confirmed) return;
-
+    setDeleteLoading(true);
     try {
       const res = await fetch("/api/delete-folder", {
         method: "POST",
@@ -489,12 +503,15 @@ export default function LeadsPanel() {
           setExpandedFolder(null);
           setLeads([]);
         }
+        setDeleteFolderTarget(null);
       } else {
         alert(data.message || "Failed to delete folder.");
       }
     } catch (error) {
       console.error("Error deleting the folder:", error);
       alert("An error occurred while deleting the folder.");
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -543,7 +560,7 @@ export default function LeadsPanel() {
     // default folder selection to first non-system folder
     const nonSystem = folders
       .map((f) => f?.name)
-      .filter((n) => n && !SYSTEM_FOLDERS.includes(String(n)));
+      .filter((n) => n && !isSystemFolderName(String(n)));
     setWizardFolderName(nonSystem[0] || "");
 
     // ✅ CHANGE: default is "Create a new folder" (input shown first)
@@ -590,7 +607,7 @@ export default function LeadsPanel() {
       setConnectError("Please choose a folder (or type a new folder name).");
       return;
     }
-    if (SYSTEM_FOLDERS.includes(folderName)) {
+    if (isSystemFolderName(folderName)) {
       setConnectError("You can’t connect a sheet to a system folder.");
       return;
     }
@@ -690,7 +707,7 @@ export default function LeadsPanel() {
   };
 
   const goToAIDialSession = () => {
-    router.push("/ai-dial-session").catch(() => {});
+    window.location.href = "/ai-dial-session";
   };
 
   /* =========================
@@ -782,19 +799,145 @@ export default function LeadsPanel() {
     );
   };
 
-  const handleScriptKeyChange = async (nextKey: string) => {
-    setFolderScriptKey(nextKey);
+  const handleScriptKeyChange = async (nextKey: string, folderId = expandedFolder) => {
+    if (!folderId) return;
+    if (String(folderId) === String(expandedFolder)) {
+      setFolderScriptKey(nextKey);
+    }
     setSavingScript(true);
     try {
-      await fetch("/api/folders/ai-settings", {
+      const res = await fetch("/api/folders/ai-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ folderId: expandedFolder, aiScriptKey: nextKey }),
+        body: JSON.stringify({ folderId, aiScriptKey: nextKey }),
       });
+      if (!res.ok) throw new Error("Failed to save script");
+      const data = await res.json().catch(() => ({}));
+      setFolders((prev) =>
+        prev.map((f) =>
+          String(f._id) === String(folderId)
+            ? {
+                ...f,
+                aiScriptKey: data?.aiScriptKey || nextKey,
+                aiFirstCallEnabled: data?.aiFirstCallEnabled ?? f.aiFirstCallEnabled,
+                aiFirstCallDelayMinutes: data?.aiFirstCallDelayMinutes ?? f.aiFirstCallDelayMinutes,
+                aiRealTimeOnly: data?.aiRealTimeOnly ?? f.aiRealTimeOnly,
+                aiEnabledAt: data?.aiEnabledAt ?? f.aiEnabledAt,
+              }
+            : f
+        )
+      );
+    } catch {
+      alert("Failed to save script. Please try again.");
     } finally {
       setSavingScript(false);
     }
   };
+
+  const handleAIFirstCallToggle = async (folder: any) => {
+    const folderId = String(folder._id);
+    const nextEnabled = !folder.aiFirstCallEnabled;
+    const previousFolder = folder;
+
+    setAiToggleErrors((prev) => {
+      const next = { ...prev };
+      delete next[folderId];
+      return next;
+    });
+    setFolders((prev) =>
+      prev.map((f) =>
+        String(f._id) === folderId
+          ? {
+              ...f,
+              aiFirstCallEnabled: nextEnabled,
+              aiEnabledAt: nextEnabled ? f.aiEnabledAt || new Date().toISOString() : null,
+            }
+          : f
+      )
+    );
+
+    try {
+      const res = await fetch("/api/folders/ai-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderId, aiFirstCallEnabled: nextEnabled }),
+      });
+      if (!res.ok) throw new Error("Failed to save AI setting");
+      const data = await res.json().catch(() => ({}));
+      setFolders((prev) =>
+        prev.map((f) =>
+          String(f._id) === folderId
+            ? {
+                ...f,
+                aiFirstCallEnabled: data?.aiFirstCallEnabled ?? nextEnabled,
+                aiFirstCallDelayMinutes: data?.aiFirstCallDelayMinutes ?? f.aiFirstCallDelayMinutes,
+                aiRealTimeOnly: data?.aiRealTimeOnly ?? f.aiRealTimeOnly,
+                aiScriptKey: data?.aiScriptKey ?? f.aiScriptKey,
+                aiEnabledAt: data?.aiEnabledAt ?? f.aiEnabledAt,
+              }
+            : f
+        )
+      );
+    } catch {
+      setFolders((prev) =>
+        prev.map((f) =>
+          String(f._id) === folderId
+            ? {
+                ...f,
+                aiFirstCallEnabled: previousFolder.aiFirstCallEnabled,
+                aiEnabledAt: previousFolder.aiEnabledAt,
+              }
+            : f
+        )
+      );
+      setAiToggleErrors((prev) => ({ ...prev, [folderId]: true }));
+    }
+  };
+
+  const customFolders = useMemo(() => {
+    return folders
+      .filter((folder) => !isSystemFolderName(folder.name))
+      .sort((a, b) => {
+        const aEmpty = (a.leadCount ?? 0) === 0;
+        const bEmpty = (b.leadCount ?? 0) === 0;
+        if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+        return 0;
+      });
+  }, [folders]);
+
+  const systemFolders = useMemo(() => {
+    return SYSTEM_FOLDERS.map((name) =>
+      folders.find((folder) => String(folder.name || "").trim().toLowerCase() === name.toLowerCase())
+    ).filter(Boolean) as any[];
+  }, [folders]);
+
+  const renderExpandedFolderTable = (folder: any, isSystemFolder: boolean) => (
+    expandedFolder === folder._id && (
+      <FolderLeadsTable
+        folder={folder}
+        isSystemFolder={isSystemFolder}
+        leads={leads}
+        selectedLeads={selectedLeads}
+        toggleLeadSelection={toggleLeadSelection}
+        selectAll={selectAll}
+        onSelectAll={handleSelectAll}
+        agingFilter={agingFilter}
+        setAgingFilter={setAgingFilter}
+        numbers={numbers}
+        selectedNumber={selectedNumber}
+        setSelectedNumber={setSelectedNumber}
+        folderScriptKey={folderScriptKey}
+        onScriptKeyChange={handleScriptKeyChange}
+        savingScript={savingScript}
+        hideScriptSelector
+        hasResume={hasResume}
+        canResume={canResume}
+        onStartDialSession={startDialSession}
+        onResume={handleResumeQuickButton}
+        onPreviewLead={setPreviewLead}
+      />
+    )
+  );
 
   return (
     <div className="space-y-4 p-4">
@@ -902,132 +1045,179 @@ export default function LeadsPanel() {
 
       {showImport && <LeadImportPanel onImportSuccess={fetchFolders} />}
 
-      <h3 className="font-bold text-lg">Lead Folders</h3>
-      <div className="space-y-2">
-        {folders.filter((folder) => !SYSTEM_FOLDERS.includes(folder.name)).length === 0 && <p>No folders found.</p>}
-        {folders.filter((folder) => !SYSTEM_FOLDERS.includes(folder.name)).map((folder) => (
-          <div key={folder._id}>
-            <div className="flex items-center justify-between">
-              <button
-                onClick={() => toggleFolder(folder._id)}
-                className={`block text-left p-2 border rounded hover:bg-gray-200 dark:hover:bg-gray-700 cursor-pointer w-full ${
+      <section className="space-y-3">
+        <h3 className="font-bold text-lg">Lead Folders</h3>
+        {customFolders.length === 0 && <p>No folders found.</p>}
+        <div className="space-y-2">
+          {customFolders.map((folder) => {
+            const leadCount = folder.leadCount ?? 0;
+            const isEmpty = leadCount === 0;
+
+            return (
+              <div key={folder._id} className={isEmpty ? "opacity-60" : ""}>
+                <div
+                  className={`relative flex min-h-[56px] flex-col gap-3 rounded-xl border bg-[#1e293b] px-3 py-2 text-left transition hover:bg-slate-700/60 lg:flex-row lg:items-center ${
+                    expandedFolder === folder._id ? "bg-[#6b5b95] text-white" : ""
+                  }`}
+                  style={{ borderColor: "rgba(255,255,255,0.09)" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.14)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.09)"; }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleFolder(folder._id)}
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left"
+                  >
+                    <span className="truncate text-sm font-semibold text-white">{folder.name}</span>
+                    <span className="rounded-full border border-slate-600 bg-slate-900/60 px-2 py-0.5 text-xs font-semibold text-gray-300">
+                      {formatLeadCount(leadCount)}
+                    </span>
+                  </button>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={folder.aiScriptKey || "default"}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => handleScriptKeyChange(e.target.value, folder._id)}
+                      className="rounded-full border border-slate-600 bg-slate-900/60 px-2 py-1 text-xs font-semibold text-gray-200 outline-none transition focus:border-indigo-400"
+                      title="AI Script / Lead Type"
+                    >
+                      {SCRIPT_OPTIONS.map((script) => (
+                        <option key={script.key} value={script.key}>
+                          Script: {script.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <span className="inline-flex items-center gap-2 rounded-full border border-slate-600 bg-slate-900/60 px-2 py-0.5 text-xs font-semibold text-gray-300">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!folder.aiFirstCallEnabled}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAIFirstCallToggle(folder);
+                        }}
+                        className={`relative h-5 w-9 rounded-full transition ${
+                          folder.aiFirstCallEnabled ? "bg-green-600" : "bg-gray-600"
+                        }`}
+                        title={folder.aiFirstCallEnabled ? "Disable AI first-call" : "Enable AI first-call"}
+                      >
+                        <span
+                          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
+                            folder.aiFirstCallEnabled ? "left-4" : "left-0.5"
+                          }`}
+                        />
+                      </button>
+                      <span
+                        className="cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAIFirstCallToggle(folder);
+                        }}
+                      >
+                        {folder.aiFirstCallEnabled ? "AI on" : "AI off"}
+                      </span>
+                    </span>
+                    {aiToggleErrors[folder._id] && (
+                      <span className="text-xs font-semibold text-red-400">Save failed</span>
+                    )}
+
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenFolderMenu(openFolderMenu === folder._id ? null : folder._id);
+                        }}
+                        className="rounded px-2 py-1 text-sm font-semibold text-gray-300 hover:bg-slate-900/70"
+                        title="Folder actions"
+                      >
+                        ...
+                      </button>
+                      {openFolderMenu === folder._id && (
+                        <div
+                          className="absolute right-0 z-10 mt-2 w-36 rounded-xl border border-slate-700 bg-slate-900 p-1 shadow"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenFolderMenu(null);
+                              handleExportCSV(folder._id, folder.name);
+                            }}
+                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-semibold text-gray-200 hover:bg-slate-800"
+                          >
+                            Export CSV
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenFolderMenu(null);
+                              setDeleteFolderTarget(folder);
+                            }}
+                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-semibold text-red-400 hover:bg-slate-800"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {renderExpandedFolderTable(folder, false)}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <div className="flex flex-wrap gap-2">
+          {systemFolders.map((folder) => (
+            <div key={folder._id} className="w-[150px]">
+              <div
+                className={`flex h-[72px] items-start justify-between gap-1.5 rounded-xl border bg-[#1e293b] px-2.5 py-2 transition hover:bg-slate-700/60 ${
                   expandedFolder === folder._id ? "bg-[#6b5b95] text-white" : ""
                 }`}
+                style={{ borderColor: "rgba(255,255,255,0.09)" }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.14)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.09)"; }}
               >
-                <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, background: "#1a2f5a", color: "#60a5fa" }}>
-                    📁
+                <button
+                  type="button"
+                  onClick={() => toggleFolder(folder._id)}
+                  className="flex h-full min-w-0 flex-1 flex-col justify-between text-left"
+                >
+                  <span className="min-h-[32px] overflow-hidden text-xs font-semibold leading-4 text-gray-400">
+                    {folder.name === "Booked Appointment" ? "Booked" : folder.name}
                   </span>
-                  <span style={{ flex: 1 }}>{folder.name}</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 7px", borderRadius: 10, opacity: (folder.leadCount ?? 0) > 0 ? 1 : 0.55, border: "1px solid currentColor" }}>
-                    {folder.leadCount ?? 0} Leads
+                  <span className="w-fit rounded-full border border-slate-600 bg-slate-900/60 px-2 py-0.5 text-xs font-semibold text-gray-300">
+                    {formatLeadCount(folder.leadCount ?? 0)}
                   </span>
-                </span>
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleExportCSV(folder._id, folder.name); }}
-                style={{ background: "none", border: "none", cursor: "pointer", padding: "0 6px", fontSize: 16, color: "#22c55e" }}
-                title="Export leads to CSV"
-              >
-                ⬇️
-              </button>
-              <button
-                onClick={() => handleDeleteFolder(folder._id)}
-                className="text-red-600 hover:text-red-800 px-2 cursor-pointer"
-                title="Delete Folder"
-              >
-                🗑️
-              </button>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleExportCSV(folder._id, folder.name);
+                  }}
+                  className="rounded px-2 py-0.5 text-sm font-semibold text-gray-300 hover:bg-slate-900/70"
+                  title="Export CSV"
+                >
+                  ...
+                </button>
+              </div>
             </div>
-
-            {expandedFolder === folder._id && leads.length > 0 && (
-              <FolderLeadsTable
-                folder={folder}
-                isSystemFolder={false}
-                leads={leads}
-                selectedLeads={selectedLeads}
-                toggleLeadSelection={toggleLeadSelection}
-                selectAll={selectAll}
-                onSelectAll={handleSelectAll}
-                agingFilter={agingFilter}
-                setAgingFilter={setAgingFilter}
-                numbers={numbers}
-                selectedNumber={selectedNumber}
-                setSelectedNumber={setSelectedNumber}
-                folderScriptKey={folderScriptKey}
-                onScriptKeyChange={handleScriptKeyChange}
-                savingScript={savingScript}
-                hasResume={hasResume}
-                canResume={canResume}
-                onStartDialSession={startDialSession}
-                onResume={handleResumeQuickButton}
-                onPreviewLead={setPreviewLead}
-              />
-            )}
+          ))}
+        </div>
+        {systemFolders.map((folder) => (
+          <div key={`${folder._id}-expanded`}>
+            {renderExpandedFolderTable(folder, true)}
           </div>
         ))}
-      </div>
-
-      <h3 className="font-bold text-lg" style={{ marginTop: 14 }}>System Folders</h3>
-      <div className="space-y-2">
-        {folders.filter((folder) => SYSTEM_FOLDERS.includes(folder.name)).map((folder) => (
-          <div key={folder._id}>
-            <div className="flex items-center justify-between">
-              <button
-                onClick={() => toggleFolder(folder._id)}
-                className={`block text-left p-2 border rounded hover:bg-gray-200 dark:hover:bg-gray-700 cursor-pointer w-full ${
-                  expandedFolder === folder._id ? "bg-[#6b5b95] text-white" : ""
-                }`}
-              >
-                <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={folder.name === "Booked Appointment" ? { width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, background: "#0f2d1a", color: "#34d399" } : folder.name === "Not Interested" ? { width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, background: "#2d1010", color: "#f87171" } : folder.name === "Sold" ? { width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, background: "#0f2d1a", color: "#34d399" } : { width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, background: "#1e2438", color: "#6b7280" }}>
-                    📁
-                  </span>
-                  <span style={{ flex: 1 }}>{folder.name}</span>
-                  <span style={{ fontSize: 10, border: "1px solid currentColor", padding: "1px 6px", borderRadius: 10 }}>
-                    SYSTEM
-                  </span>
-                  <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 7px", borderRadius: 10, opacity: (folder.leadCount ?? 0) > 0 ? 1 : 0.55, border: "1px solid currentColor" }}>
-                    {folder.leadCount ?? 0} Leads
-                  </span>
-                </span>
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleExportCSV(folder._id, folder.name); }}
-                style={{ background: "none", border: "none", cursor: "pointer", padding: "0 6px", fontSize: 16, color: "#22c55e" }}
-                title="Export leads to CSV"
-              >
-                ⬇️
-              </button>
-            </div>
-
-            {expandedFolder === folder._id && leads.length > 0 && (
-              <FolderLeadsTable
-                folder={folder}
-                isSystemFolder={true}
-                leads={leads}
-                selectedLeads={selectedLeads}
-                toggleLeadSelection={toggleLeadSelection}
-                selectAll={selectAll}
-                onSelectAll={handleSelectAll}
-                agingFilter={agingFilter}
-                setAgingFilter={setAgingFilter}
-                numbers={numbers}
-                selectedNumber={selectedNumber}
-                setSelectedNumber={setSelectedNumber}
-                folderScriptKey={folderScriptKey}
-                onScriptKeyChange={handleScriptKeyChange}
-                savingScript={savingScript}
-                hasResume={hasResume}
-                canResume={canResume}
-                onStartDialSession={startDialSession}
-                onResume={handleResumeQuickButton}
-                onPreviewLead={setPreviewLead}
-              />
-            )}
-          </div>
-        ))}
-      </div>
+      </section>
 
       {previewLead && (
         <div className="bg-white dark:bg-gray-900 rounded shadow p-4">
@@ -1043,6 +1233,35 @@ export default function LeadsPanel() {
             }}
             onDispositionChange={(disposition) => handleDisposition(previewLead._id, disposition)}
           />
+        </div>
+      )}
+
+      {deleteFolderTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-5 shadow">
+            <h3 className="text-lg font-semibold text-white">Delete Folder</h3>
+            <p className="mt-2 text-sm text-gray-300">
+              Delete &quot;{deleteFolderTarget.name}&quot; and its {formatLeadCount(deleteFolderTarget.leadCount ?? 0)} permanently? This cannot be undone.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteFolderTarget(null)}
+                disabled={deleteLoading}
+                className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold text-gray-200 transition hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteFolder(deleteFolderTarget._id)}
+                disabled={deleteLoading}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-600"
+              >
+                {deleteLoading ? "Deleting..." : "Delete Folder"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1177,7 +1396,7 @@ export default function LeadsPanel() {
                           <option value="">-- Choose a folder --</option>
                           {folders
                             .map((f) => String(f?.name || ""))
-                            .filter((n) => n && !SYSTEM_FOLDERS.includes(n))
+                            .filter((n) => n && !isSystemFolderName(n))
                             .map((name) => (
                               <option key={name} value={name}>
                                 {name}

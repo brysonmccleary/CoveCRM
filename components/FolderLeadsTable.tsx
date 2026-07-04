@@ -15,6 +15,10 @@ function formatPhoneNumber(phone: string): string {
   return phone || "";
 }
 
+function formatLeadCount(count: number): string {
+  return `${count} ${count === 1 ? "lead" : "leads"}`;
+}
+
 interface NumberEntry {
   id: string;
   phoneNumber: string;
@@ -40,6 +44,7 @@ interface Props {
   folderScriptKey: string;
   onScriptKeyChange: (key: string) => void;
   savingScript: boolean;
+  hideScriptSelector?: boolean;
   hasResume: boolean;
   canResume: boolean;
   onStartDialSession: () => void;
@@ -99,6 +104,7 @@ export default function FolderLeadsTable({
   folderScriptKey,
   onScriptKeyChange,
   savingScript,
+  hideScriptSelector = false,
   hasResume,
   canResume,
   onStartDialSession,
@@ -233,7 +239,7 @@ export default function FolderLeadsTable({
             lineHeight: "22px",
           }}
         >
-          {leads.length} Leads
+          {formatLeadCount(leads.length)}
         </span>
 
         <input
@@ -307,26 +313,28 @@ export default function FolderLeadsTable({
           ))}
         </select>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <select
-            value={folderScriptKey}
-            onChange={(e) => onScriptKeyChange(e.target.value)}
-            style={selectStyle}
-            title="AI Script / Lead Type"
-          >
-            <option value="mortgage_protection">Mortgage Protection</option>
-            <option value="final_expense">Final Expense</option>
-            <option value="iul_cash_value">IUL / Cash Value Life</option>
-            <option value="veteran_leads">Veterans (Life Insurance)</option>
-            <option value="veteran_iul">Veterans IUL</option>
-            <option value="veteran_mortgage">Veterans Mortgage Protection</option>
-            <option value="trucker_leads">Truckers (Life Insurance)</option>
-            <option value="trucker_iul">Truckers IUL</option>
-            <option value="trucker_mortgage">Truckers Mortgage Protection</option>
-            <option value="default">Default (Generic)</option>
-          </select>
-          {savingScript && <span style={{ fontSize: 12, color: "#64748b" }}>Saving...</span>}
-        </div>
+        {!hideScriptSelector && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <select
+              value={folderScriptKey}
+              onChange={(e) => onScriptKeyChange(e.target.value)}
+              style={selectStyle}
+              title="AI Script / Lead Type"
+            >
+              <option value="mortgage_protection">Mortgage Protection</option>
+              <option value="final_expense">Final Expense</option>
+              <option value="iul_cash_value">IUL / Cash Value Life</option>
+              <option value="veteran_leads">Veterans (Life Insurance)</option>
+              <option value="veteran_iul">Veterans IUL</option>
+              <option value="veteran_mortgage">Veterans Mortgage Protection</option>
+              <option value="trucker_leads">Truckers (Life Insurance)</option>
+              <option value="trucker_iul">Truckers IUL</option>
+              <option value="trucker_mortgage">Truckers Mortgage Protection</option>
+              <option value="default">Default (Generic)</option>
+            </select>
+            {savingScript && <span style={{ fontSize: 12, color: "#64748b" }}>Saving...</span>}
+          </div>
+        )}
 
         <button
           onClick={onStartDialSession}
