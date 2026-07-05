@@ -3,6 +3,7 @@ import mongoose, { Schema, Document } from "mongoose";
 
 export type BillingEventSource =
   | "ai_voice_session"
+  | "ai_voice_call"
   | "ai_transcript"
   | "regular_usage"
   | "a2p_fee"
@@ -47,6 +48,7 @@ const BillingEventSchema = new Schema<IBillingEvent>(
       required: true,
       enum: [
         "ai_voice_session",
+        "ai_voice_call",
         "ai_transcript",
         "regular_usage",
         "a2p_fee",

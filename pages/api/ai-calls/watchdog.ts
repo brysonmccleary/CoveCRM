@@ -4,8 +4,9 @@
 //
 // DESIGN CONSTRAINTS (enforced here — do not relax):
 //   - Never places calls directly.
-//   - Only processes status="running" sessions.
-//   - Never touches queued/paused/stopped/completed/error sessions.
+//   - Only kicks status="running" sessions.
+//   - Auto-stops running sessions with no activity for 2+ hours.
+//   - Final-bills stopped/completed sessions exactly once.
 //   - Never kicks a session with stoppedAt set.
 //   - Never kicks a session with activeCallSidAt newer than 5 minutes.
 //   - Never kicks the same session more than once within 8 minutes.
@@ -15,6 +16,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallSession from "@/models/AICallSession";
+import User from "@/models/User";
 import { trackAiDialerSessionUsage } from "@/lib/billing/trackAiDialerSessionUsage";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
@@ -37,6 +39,8 @@ const ACTIVE_CALL_GRACE_MS = 5 * 60 * 1000;
 const MAX_KICKS_PER_RUN = 5;
 // Hard cap on sessions billed per watchdog run (billing is lightweight).
 const MAX_BILLING_PER_RUN = 20;
+// Any running session with no callback/call activity for 2h is closed before billing.
+const STALE_RUNNING_SESSION_MS = 2 * 60 * 60 * 1000;
 
 function isAuthorized(req: NextApiRequest): boolean {
   const bearer = (String(req.headers["authorization"] || "").match(/^Bearer\s+(.+)$/i)?.[1] || "").trim();
@@ -68,6 +72,40 @@ async function kickSession(sessionId: string): Promise<boolean> {
   }
 }
 
+async function logSharedStripeCustomers(): Promise<void> {
+  try {
+    const shared = await User.aggregate([
+      {
+        $match: {
+          stripeCustomerId: { $exists: true, $nin: [null, ""] },
+        },
+      },
+      {
+        $group: {
+          _id: "$stripeCustomerId",
+          count: { $sum: 1 },
+          users: { $push: { email: "$email", userId: "$_id" } },
+        },
+      },
+      { $match: { count: { $gt: 1 } } },
+      { $limit: 25 },
+    ]).exec();
+
+    for (const row of shared) {
+      console.error("[BILLING][SHARED-CUSTOMER]", {
+        stripeCustomerId: row._id,
+        count: row.count,
+        users: (row.users || []).map((user: any) => ({
+          email: user.email,
+          userId: String(user.userId || ""),
+        })),
+      });
+    }
+  } catch (err: any) {
+    console.error("[BILLING][SHARED-CUSTOMER] check failed", { error: err?.message || String(err) });
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ ok: false, message: "Method Not Allowed" });
@@ -82,8 +120,95 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   await mongooseConnect();
+  await logSharedStripeCustomers();
 
   const now = Date.now();
+  const staleSessionCutoff = new Date(now - STALE_RUNNING_SESSION_MS);
+
+  // ── Staleness closure ─────────────────────────────────────────────────────────
+  // Prevents old running sessions from staying logically open for days/months.
+  const staleRunningSessions = await AICallSession.find({
+    status: "running",
+    callDirection: { $ne: "inbound" },
+    scriptKey: { $ne: "kayla_signup" },
+    stoppedAt: null,
+    startedAt: { $ne: null, $lt: staleSessionCutoff },
+    $and: [
+      {
+        $or: [
+          { lastCallbackAt: null },
+          { lastCallbackAt: { $exists: false } },
+          { lastCallbackAt: { $lt: staleSessionCutoff } },
+        ],
+      },
+      {
+        $or: [
+          { lastPlacedCallAt: null },
+          { lastPlacedCallAt: { $exists: false } },
+          { lastPlacedCallAt: { $lt: staleSessionCutoff } },
+        ],
+      },
+      {
+        $or: [
+          { activeCallSidAt: null },
+          { activeCallSidAt: { $exists: false } },
+          { activeCallSidAt: { $lt: staleSessionCutoff } },
+        ],
+      },
+    ],
+  })
+    .select("_id userEmail startedAt lastCallbackAt lastPlacedCallAt activeCallSidAt")
+    .limit(MAX_BILLING_PER_RUN)
+    .lean();
+
+  const autoStopped: string[] = [];
+  for (const sess of staleRunningSessions) {
+    const sessId = String((sess as any)._id);
+    const sessEmail = String((sess as any).userEmail || "");
+    if (!sessId || !sessEmail) continue;
+
+    const stopAt = new Date();
+    const stopped = await AICallSession.updateOne(
+      { _id: (sess as any)._id, status: "running", stoppedAt: null },
+      {
+        $set: {
+          status: "stopped",
+          stoppedAt: stopAt,
+          completedAt: stopAt,
+          errorMessage: "AI session auto-stopped after 2 hours without call activity.",
+          activeCallSid: null,
+          activeCallSidAt: null,
+          currentCall: null,
+        },
+      }
+    ).exec();
+
+    if (((stopped as any)?.modifiedCount ?? 0) === 0) continue;
+
+    console.warn("[AI WATCHDOG] Auto-stopped stale running session", {
+      sessionId: sessId,
+      userEmail: sessEmail,
+      startedAt: (sess as any).startedAt,
+      lastCallbackAt: (sess as any).lastCallbackAt,
+      lastPlacedCallAt: (sess as any).lastPlacedCallAt,
+      activeCallSidAt: (sess as any).activeCallSidAt,
+    });
+
+    try {
+      await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail, endAt: stopAt });
+      await AICallSession.updateOne(
+        { _id: (sess as any)._id, finalBilledAt: null },
+        { $set: { finalBilledAt: new Date() } }
+      ).exec();
+    } catch (err: any) {
+      console.warn("[AI WATCHDOG] auto-stop final billing failed (non-blocking)", {
+        sessionId: sessId,
+        error: err?.message || err,
+      });
+    }
+
+    autoStopped.push(sessId);
+  }
 
   // ── Session-time billing sweep ───────────────────────────────────────────────
   // Runs for ALL status="running" sessions every 2 minutes.
@@ -96,6 +221,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     scriptKey: { $ne: "kayla_signup" },
     stoppedAt: null,
     startedAt: { $ne: null },
+    finalBilledAt: null,
   })
     .select("_id userEmail")
     .limit(MAX_BILLING_PER_RUN)
@@ -123,6 +249,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     callDirection: { $ne: "inbound" },
     scriptKey: { $ne: "kayla_signup" },
     startedAt: { $ne: null },
+    finalBilledAt: null,
     updatedAt: { $gte: recentlyEndedCutoff },
   })
     .select("_id userEmail completedAt stoppedAt")
@@ -136,6 +263,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!sessId || !sessEmail) continue;
     try {
       await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail, endAt });
+      await AICallSession.updateOne(
+        { _id: (sess as any)._id, finalBilledAt: null },
+        { $set: { finalBilledAt: new Date() } }
+      ).exec();
     } catch (err: any) {
       console.warn("[AI WATCHDOG] final session billing failed (non-blocking)", {
         sessionId: sessId,
@@ -189,6 +320,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: "no_stuck_sessions",
       kicked: [],
       billedSessions: billingSessions.length,
+      autoStopped,
     });
   }
 
@@ -227,5 +359,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     kicked.push(sessionId);
   }
 
-  return res.status(200).json({ ok: true, kicked, total: kicked.length, billedSessions: billingSessions.length });
+  return res.status(200).json({
+    ok: true,
+    kicked,
+    total: kicked.length,
+    billedSessions: billingSessions.length,
+    autoStopped,
+  });
 }

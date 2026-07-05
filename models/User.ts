@@ -203,14 +203,22 @@ export interface IUser {
   aiDialerLastInvoicedAt?: Date;
 
   /**
-   * ✅ AI Dialer SESSION-TIME billing ($5/hr, charged every $20):
+   * ✅ AI Dialer SESSION-TIME billing (1¢/min wall-clock, charged every $20):
    * - aiDialerSessionSeconds: lifetime total seconds billed (analytics)
    * - aiDialerAccruedSessionCents: unbilled running cents from session wall-clock time
    * - aiDialerLastChargedAt: timestamp of most recent successful Stripe charge
+   * - aiDialerBillingHold*: account-level charge hold for anomalous AI session billing
    */
   aiDialerSessionSeconds?: number;
   aiDialerAccruedSessionCents?: number;
   aiDialerLastChargedAt?: Date | null;
+  aiDialerSessionDailyWindowStartedAt?: Date | null;
+  aiDialerSessionDailyAccruedCents?: number;
+  aiDialerBillingHold?: boolean;
+  aiDialerBillingHoldReason?: string | null;
+  aiDialerBillingHoldAt?: Date | null;
+  aiDialerBillingHoldClearedAt?: Date | null;
+  aiDialerBillingHoldAccruedCents?: number;
 
   aiInsightMinutesUsed?: number;
   aiInsightCostCents?: number;
@@ -548,10 +556,17 @@ const UserSchema = new Schema<IUser>({
   aiDialerBilledTotalCents: { type: Number, default: 0 },
   aiDialerLastInvoicedAt: { type: Date, default: null },
 
-  // ✅ AI Dialer SESSION-TIME billing ($5/hr wall-clock, $20 threshold)
+  // ✅ AI Dialer SESSION-TIME billing (1¢/min wall-clock, $20 threshold)
   aiDialerSessionSeconds: { type: Number, default: 0 },
   aiDialerAccruedSessionCents: { type: Number, default: 0 },
   aiDialerLastChargedAt: { type: Date, default: null },
+  aiDialerSessionDailyWindowStartedAt: { type: Date, default: null },
+  aiDialerSessionDailyAccruedCents: { type: Number, default: 0 },
+  aiDialerBillingHold: { type: Boolean, default: false, index: true },
+  aiDialerBillingHoldReason: { type: String, default: null },
+  aiDialerBillingHoldAt: { type: Date, default: null },
+  aiDialerBillingHoldClearedAt: { type: Date, default: null },
+  aiDialerBillingHoldAccruedCents: { type: Number, default: 0 },
 
   aiInsightMinutesUsed: { type: Number, default: 0 },
   aiInsightCostCents: { type: Number, default: 0 },

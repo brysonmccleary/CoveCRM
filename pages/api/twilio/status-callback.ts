@@ -10,7 +10,7 @@ import Message from "@/models/Message";
 import Call from "@/models/Call";
 import { sendEmail } from "@/lib/email";
 import { trackUsage } from "@/lib/billing/trackUsage";
-import { MANUAL_VOICE_COST_PER_MIN } from "@/lib/billing/voiceRates";
+import { MANUAL_TALK_RATE_PER_MIN } from "@/lib/billing/dialerRates";
 
 export const config = { api: { bodyParser: false } };
 
@@ -416,7 +416,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   const usingPersonal = String((userForBilling as any).billingMode || "").toLowerCase() === "self";
                   const isAdminRole = String((userForBilling as any).role || "").toLowerCase() === "admin";
                   const isExempt = usingPersonal || isAdminRole || NEVER_BILL_EMAILS.has(uEmail);
-                  const billedAmount = isExempt ? 0 : billMinutes * MANUAL_VOICE_COST_PER_MIN;
+                  const billedAmount = isExempt ? 0 : billMinutes * MANUAL_TALK_RATE_PER_MIN;
                   const inProgressSource = "twilio_voice_billing_in_progress";
 
                   const lock = await Call.updateOne(
@@ -439,7 +439,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                         billedMinutes: billMinutes,
                         billedAmount,
                         billableSeconds: billSeconds,
-                        billingRatePerMinute: MANUAL_VOICE_COST_PER_MIN,
+                        billingRatePerMinute: MANUAL_TALK_RATE_PER_MIN,
                       },
                     },
                   );

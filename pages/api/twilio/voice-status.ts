@@ -3,7 +3,11 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { trackUsage } from "@/lib/billing/trackUsage";
-import { MANUAL_VOICE_COST_PER_MIN } from "@/lib/billing/voiceRates";
+import {
+  MANUAL_TALK_RATE_PER_MIN,
+  amountDollarsForBillableSeconds,
+  billableConnectedSeconds,
+} from "@/lib/billing/dialerRates";
 import { getPlatformTwilioClientScoped } from "@/lib/twilio/getPlatformClient";
 import Call from "@/models/Call";
 import InboundCall from "@/models/InboundCall";
@@ -465,7 +469,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             Boolean(updated.userEmail);
           const shouldUseManualVoiceRate =
             shouldUseManualBilling || updated.direction === "inbound" || updated.direction === "outbound";
-          const ratePerMinute = shouldUseManualVoiceRate ? MANUAL_VOICE_COST_PER_MIN : VOICE_COST_PER_MIN;
+          const ratePerMinute = shouldUseManualVoiceRate ? MANUAL_TALK_RATE_PER_MIN : VOICE_COST_PER_MIN;
 
           const elapsedCallbackSeconds = (() => {
             if (!updated.billStartAt) return 0;
@@ -485,30 +489,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 : undefined;
               const twilioDuration = Math.max(0, Number(fetchedDuration || callbackDurationSeconds || 0));
               const seconds = shouldUseManualBilling
-                ? twilioDuration || elapsedCallbackSeconds
+                ? twilioDuration
                 : elapsedCallbackSeconds || storedDurationSeconds || callbackDurationSeconds;
 
-              if (shouldUseManualBilling && seconds < MIN_MANUAL_BILLABLE_SECONDS && twilioDuration <= 0) {
-                await (Call as any).updateOne(
-                  {
-                    callSid,
-                    $or: [{ billedAt: { $exists: false } }, { billedAt: null }],
-                  },
-                  {
-                    $set: {
-                      billedAt: now,
-                      billableSeconds: 0,
-                      billedMinutes: 0,
-                      billedAmount: 0,
-                      billingRatePerMinute: ratePerMinute,
-                      billedSource: "manual_dial_ring_elapsed",
-                    },
-                  },
-                );
+              if (shouldUseManualBilling && twilioDuration <= 0) {
+                console.log("[voice-status] manual PSTN billing deferred until Twilio connected duration is available", {
+                  callSid,
+                  callbackDurationSeconds,
+                  elapsedCallbackSeconds,
+                });
                 throw new Error("__manual_zero_billed__");
               }
 
-              const mins = ceilMinutesFromSeconds(seconds);
+              const billableSeconds = shouldUseManualBilling
+                ? billableConnectedSeconds(seconds)
+                : seconds;
+              const mins = shouldUseManualBilling
+                ? billableSeconds / 60
+                : ceilMinutesFromSeconds(seconds);
 
               if (mins > 0) {
                 // Check billingMode directly instead of calling getClientForUser.
@@ -519,11 +517,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 const usingPersonal = String(user.billingMode || "").toLowerCase() === "self";
                 const isAdminRole = String((user as any).role || "").toLowerCase() === "admin";
                 const isExempt = usingPersonal || isAdminRole || isNeverBillEmail(uEmail);
-                const finalBilledSource = shouldUseManualBilling ? "manual_dial_ring_elapsed" : "twilio-voice";
+                const finalBilledSource = shouldUseManualBilling ? "manual_dial_connected_duration" : "twilio-voice";
                 const inProgressSource = shouldUseManualBilling
                   ? "manual_dial_billing_in_progress"
                   : "twilio_voice_billing_in_progress";
-                const billedAmount = isExempt ? 0 : mins * ratePerMinute;
+                const billedAmount = isExempt
+                  ? 0
+                  : shouldUseManualBilling
+                  ? amountDollarsForBillableSeconds(billableSeconds, ratePerMinute)
+                  : mins * ratePerMinute;
 
                 const lock = await (Call as any).updateOne(
                   {
@@ -544,7 +546,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                       billedSource: inProgressSource,
                       billedMinutes: mins,
                       billedAmount,
-                      billableSeconds: seconds,
+                      billableSeconds,
                       billingRatePerMinute: ratePerMinute,
                     },
                   },

@@ -216,7 +216,7 @@ export default function FolderLeadsTable({
 
   return (
     <div className="rounded-lg border border-zinc-700/60 mt-2 overflow-hidden bg-gray-900">
-      {/* Row 1: Lead count badge · search · aging filter */}
+      {/* Toolbar: Lead count badge · search · aging filter · dial controls */}
       <div
         style={{
           display: "flex",
@@ -279,20 +279,7 @@ export default function FolderLeadsTable({
           <option value="stale">Stale (3–7 days)</option>
           <option value="cold">Cold (&gt; 7 days)</option>
         </select>
-      </div>
 
-      {/* Row 2: Selected count · number selector · script selector · Start · Resume — always visible */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "10px 16px",
-          borderBottom: COL_BORDER,
-          flexWrap: "wrap",
-          background: "rgba(107,91,149,0.08)",
-        }}
-      >
         <span style={{ fontSize: 14, color: "#c4b5fd", whiteSpace: "nowrap", minWidth: 88 }}>
           {selectedLeads.length} selected
         </span>

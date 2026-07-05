@@ -232,6 +232,7 @@ type CallState = {
   transcriptSaveAttempted?: boolean;
 
   callStartedAtMs?: number;
+  meterStoppedAtMs?: number;
   billedUsageSent?: boolean;
 
   debugLoggedFirstMedia?: boolean;
@@ -11878,6 +11879,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
         callSid: state.callSid,
         agentPhone: ctx.liveTransferPhone,
       });
+      state.meterStoppedAtMs = Date.now();
       state.transferStarting = false;
       state.phase = "ended";
       safelyCloseOpenAi(state, "live transfer redirect");
@@ -14393,7 +14395,7 @@ async function billAiDialerUsageForCall(state: CallState) {
   }
 
   const startedAtMs = state.callStartedAtMs ?? Date.now();
-  const endedAtMs = Date.now();
+  const endedAtMs = state.meterStoppedAtMs ?? Date.now();
   const diffMs = Math.max(0, endedAtMs - startedAtMs);
 
   const rawMinutes = diffMs / 60000;

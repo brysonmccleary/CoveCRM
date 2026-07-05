@@ -1,7 +1,7 @@
 // lib/billing/trackAiDialerSessionUsage.ts
 //
-// Bills AI dialer session wall-clock time at $5/hr ($500 cents/hr).
-// Charges in $20 increments (every 4 hours of session time).
+// Bills AI dialer session wall-clock time at 1¢/min.
+// Charges in $20 increments through the AI voice session bucket.
 // Completely isolated from all other billing buckets (regular CRM usage, per-call-minute).
 //
 // Call sites:
@@ -12,14 +12,19 @@ import User from "@/models/User";
 import AICallSession from "@/models/AICallSession";
 import { createFinalizePayInvoice } from "@/lib/billing/trackUsage";
 import type { BillingEventSource } from "@/models/BillingEvent";
+import { AI_SESSION_RATE_PER_MIN } from "@/lib/billing/dialerRates";
 
 const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
 
-// $5/hr = 500 cents/hr. Charge every $20 = every 4 hours.
-const SESSION_RATE_CENTS_PER_HOUR = 500;
+// AI session time is 1¢/min. Charge every $20 of accrued session time.
+const SESSION_RATE_CENTS_PER_MIN = Math.round(AI_SESSION_RATE_PER_MIN * 100);
 const SESSION_THRESHOLD_CENTS = 2000;
 const BILLING_LOCK_TTL_MS = 10 * 60 * 1000; // 10 min lock TTL
+const MAX_SINGLE_CHECKPOINT_SECONDS = 6 * 60 * 60;
+const STALE_BILLING_CHECKPOINT_MS = 24 * 60 * 60 * 1000;
+const AI_SESSION_DAILY_ALERT_CENTS = 5000;
+const AI_SESSION_DAILY_ALERT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 type AiDialerSessionUsageResult = {
   billedSeconds: number;
@@ -28,6 +33,8 @@ type AiDialerSessionUsageResult = {
   charged?: boolean;
   addCents?: number;
   newSeconds?: number;
+  computedSeconds?: number;
+  capped?: boolean;
 };
 
 type AiDialerCentsUsageResult = {
@@ -84,7 +91,7 @@ export async function trackAiDialerSessionUsage({
 
   // Read current session billing state
   const session = await AICallSession.findOne({ _id: sessionObjId, userEmail: email })
-    .select("startedAt billedSeconds status")
+    .select("startedAt billedSeconds lastBilledAt status")
     .lean();
 
   if (!session || !session.startedAt) {
@@ -92,10 +99,38 @@ export async function trackAiDialerSessionUsage({
   }
 
   const alreadyBilledSeconds = Number((session as any).billedSeconds ?? 0);
+  const startedAt = new Date((session as any).startedAt);
+  const lastBilledAt = (session as any).lastBilledAt
+    ? new Date((session as any).lastBilledAt)
+    : null;
   const totalElapsedSeconds = Math.floor(
-    (endAt.getTime() - new Date(session.startedAt).getTime()) / 1000
+    (endAt.getTime() - startedAt.getTime()) / 1000
   );
   const newSeconds = Math.max(0, totalElapsedSeconds - alreadyBilledSeconds);
+  const windowStartedAt = new Date(startedAt.getTime() + alreadyBilledSeconds * 1000);
+  const staleOverlappingWindow =
+    !!lastBilledAt &&
+    endAt.getTime() - lastBilledAt.getTime() > STALE_BILLING_CHECKPOINT_MS &&
+    windowStartedAt.getTime() < lastBilledAt.getTime();
+  const shouldCapCheckpoint =
+    newSeconds > MAX_SINGLE_CHECKPOINT_SECONDS || staleOverlappingWindow;
+  const billableSeconds = shouldCapCheckpoint
+    ? staleOverlappingWindow
+      ? 0
+      : Math.min(newSeconds, MAX_SINGLE_CHECKPOINT_SECONDS)
+    : newSeconds;
+  const nextBilledSeconds = alreadyBilledSeconds + newSeconds;
+
+  if (shouldCapCheckpoint) {
+    console.warn("[BILLING][RUNAWAY-SESSION]", {
+      sessionId,
+      userEmail: email,
+      computedSeconds: newSeconds,
+      cappedSeconds: billableSeconds,
+      startedAt,
+      lastBilledAt,
+    });
+  }
 
   if (newSeconds <= 0) {
     await AICallSession.updateOne(
@@ -117,8 +152,17 @@ export async function trackAiDialerSessionUsage({
       ],
     },
     {
-      $inc: { billedSeconds: newSeconds },
-      $set: { lastBilledAt: new Date() },
+      $set: {
+        billedSeconds: nextBilledSeconds,
+        lastBilledAt: new Date(),
+        ...(shouldCapCheckpoint
+          ? {
+              runawayBillingCappedAt: new Date(),
+              runawayBillingComputedSeconds: newSeconds,
+              runawayBillingCappedSeconds: billableSeconds,
+            }
+          : {}),
+      },
     },
     { new: false } // return pre-update doc; null means another process won
   );
@@ -128,26 +172,55 @@ export async function trackAiDialerSessionUsage({
     return null;
   }
 
-  const addCents = Math.round((newSeconds / 3600) * SESSION_RATE_CENTS_PER_HOUR);
+  const addCents = Math.round((billableSeconds / 60) * SESSION_RATE_CENTS_PER_MIN);
 
   if (addCents <= 0) {
     await AICallSession.updateOne(
-      { _id: sessionObjId, userEmail: email, billedSeconds: alreadyBilledSeconds + newSeconds },
+      { _id: sessionObjId, userEmail: email, billedSeconds: nextBilledSeconds },
       { $set: { lastBilledAt: new Date() } }
     );
-    await User.updateOne({ email }, { $inc: { aiDialerSessionSeconds: newSeconds } });
-    return { billedSeconds: newSeconds, accrued: 0, ok: true, charged: false, addCents: 0 };
+    await User.updateOne({ email }, { $inc: { aiDialerSessionSeconds: billableSeconds } });
+    return {
+      billedSeconds: billableSeconds,
+      accrued: 0,
+      ok: true,
+      charged: false,
+      addCents: 0,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+    };
   }
 
   // Admin: track analytics only, never charge
   if (isAdminEmail(email)) {
-    await User.updateOne({ email }, { $inc: { aiDialerSessionSeconds: newSeconds } });
-    return { billedSeconds: newSeconds, accrued: 0 };
+    await User.updateOne({ email }, { $inc: { aiDialerSessionSeconds: billableSeconds } });
+    return {
+      billedSeconds: billableSeconds,
+      accrued: 0,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+    };
   }
 
   // Fetch user for eligibility + Stripe ID
   const userDoc = await User.findOne({ email })
-    .select("hasAI stripeCustomerId aiDialerAccruedSessionCents hasEverPaid billingBlocked billingMode")
+    .select(
+      [
+        "hasAI",
+        "stripeCustomerId",
+        "aiDialerAccruedSessionCents",
+        "aiDialerSessionDailyWindowStartedAt",
+        "aiDialerSessionDailyAccruedCents",
+        "aiDialerBillingHold",
+        "aiDialerBillingHoldReason",
+        "aiDialerBillingHoldClearedAt",
+        "hasEverPaid",
+        "billingBlocked",
+        "billingMode",
+      ].join(" ")
+    )
     .lean();
 
   if (
@@ -157,34 +230,138 @@ export async function trackAiDialerSessionUsage({
     (userDoc as any).billingBlocked === true
   ) {
     // Still track seconds for analytics
-    await User.updateOne({ email }, { $inc: { aiDialerSessionSeconds: newSeconds } });
-    return { billedSeconds: newSeconds, accrued: 0 };
+    await User.updateOne({ email }, { $inc: { aiDialerSessionSeconds: billableSeconds } });
+    return {
+      billedSeconds: billableSeconds,
+      accrued: 0,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+    };
   }
+
+  const nowForAccrual = new Date();
+  const priorDailyWindowStartedAt = (userDoc as any).aiDialerSessionDailyWindowStartedAt
+    ? new Date((userDoc as any).aiDialerSessionDailyWindowStartedAt)
+    : null;
+  const holdClearedAt = (userDoc as any).aiDialerBillingHoldClearedAt
+    ? new Date((userDoc as any).aiDialerBillingHoldClearedAt)
+    : null;
+  const resetDailyWindow =
+    !priorDailyWindowStartedAt ||
+    nowForAccrual.getTime() - priorDailyWindowStartedAt.getTime() >= AI_SESSION_DAILY_ALERT_WINDOW_MS;
+  const priorDailyAccruedCents = resetDailyWindow
+    ? 0
+    : Number((userDoc as any).aiDialerSessionDailyAccruedCents || 0);
+  const nextDailyAccruedCents = priorDailyAccruedCents + addCents;
 
   // Atomically increment lifetime seconds + session accrual bucket
   const updated = await User.findOneAndUpdate(
     { email },
     {
       $inc: {
-        aiDialerSessionSeconds: newSeconds,
+        aiDialerSessionSeconds: billableSeconds,
         aiDialerAccruedSessionCents: addCents,
+        ...(resetDailyWindow ? {} : { aiDialerSessionDailyAccruedCents: addCents }),
       },
+      ...(resetDailyWindow
+        ? {
+            $set: {
+              aiDialerSessionDailyWindowStartedAt: nowForAccrual,
+              aiDialerSessionDailyAccruedCents: addCents,
+            },
+          }
+        : {}),
     },
-    { new: true, projection: { aiDialerAccruedSessionCents: 1, stripeCustomerId: 1 } }
+    {
+      new: true,
+      projection: {
+        aiDialerAccruedSessionCents: 1,
+        aiDialerSessionDailyWindowStartedAt: 1,
+        aiDialerSessionDailyAccruedCents: 1,
+        aiDialerBillingHold: 1,
+        stripeCustomerId: 1,
+      },
+    }
   );
 
-  if (!updated) return { billedSeconds: newSeconds, accrued: addCents };
+  if (!updated) {
+    return {
+      billedSeconds: billableSeconds,
+      accrued: addCents,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+    };
+  }
 
   const newAccrued = Number((updated as any).aiDialerAccruedSessionCents || 0);
+  const activeDailyWindowStartedAt = (updated as any).aiDialerSessionDailyWindowStartedAt
+    ? new Date((updated as any).aiDialerSessionDailyWindowStartedAt)
+    : priorDailyWindowStartedAt || nowForAccrual;
+  const clearedAfterWindowStart =
+    !!holdClearedAt &&
+    !!activeDailyWindowStartedAt &&
+    holdClearedAt.getTime() >= activeDailyWindowStartedAt.getTime();
+  const dailyAlertExceeded =
+    nextDailyAccruedCents > AI_SESSION_DAILY_ALERT_CENTS && !clearedAfterWindowStart;
+  const existingHold = (userDoc as any).aiDialerBillingHold === true || (updated as any).aiDialerBillingHold === true;
+  const holdReason = shouldCapCheckpoint
+    ? "runaway_session"
+    : dailyAlertExceeded
+    ? "daily_ai_session_accrual_exceeded"
+    : existingHold
+    ? String((userDoc as any).aiDialerBillingHoldReason || "existing_hold")
+    : "";
+
+  if (holdReason) {
+    await User.updateOne(
+      { email },
+      {
+        $set: {
+          aiDialerBillingHold: true,
+          aiDialerBillingHoldReason: holdReason,
+          aiDialerBillingHoldAt: new Date(),
+          aiDialerBillingHoldAccruedCents: newAccrued,
+        },
+      }
+    );
+    console.error("[BILLING][CHARGE-HOLD]", {
+      userEmail: email,
+      reason: holdReason,
+      accruedCents: newAccrued,
+    });
+    return {
+      billedSeconds: billableSeconds,
+      accrued: addCents,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+      charged: false,
+    };
+  }
+
   const canBill = !!(userDoc as any).stripeCustomerId && !(DEV_SKIP_BILLING && isProd);
 
   if (!canBill && !isProd && newAccrued >= SESSION_THRESHOLD_CENTS) {
     console.warn("[DEV billing] AI session threshold reached but billing unavailable; accrual remains.");
-    return { billedSeconds: newSeconds, accrued: addCents };
+    return {
+      billedSeconds: billableSeconds,
+      accrued: addCents,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+    };
   }
 
   if (!canBill || newAccrued < SESSION_THRESHOLD_CENTS) {
-    return { billedSeconds: newSeconds, accrued: addCents };
+    return {
+      billedSeconds: billableSeconds,
+      accrued: addCents,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+    };
   }
 
   // ── Acquire exclusive billing lock ──────────────────────────────────────────
@@ -210,7 +387,15 @@ export async function trackAiDialerSessionUsage({
     { new: true, projection: { aiDialerAccruedSessionCents: 1, aiDialerBilledTotalCents: 1 } }
   );
 
-  if (!locked) return { billedSeconds: newSeconds, accrued: addCents };
+  if (!locked) {
+    return {
+      billedSeconds: billableSeconds,
+      accrued: addCents,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+    };
+  }
 
   const accrued = Number((locked as any).aiDialerAccruedSessionCents || 0);
   // Bill exactly one threshold increment per event ($20 max single charge).
@@ -228,7 +413,13 @@ export async function trackAiDialerSessionUsage({
         },
       }
     );
-    return { billedSeconds: newSeconds, accrued: addCents };
+    return {
+      billedSeconds: billableSeconds,
+      accrued: addCents,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+    };
   }
 
   // sourceId derives from the billed-total counter, which only advances on a
@@ -245,6 +436,7 @@ export async function trackAiDialerSessionUsage({
       source: "ai_voice_session",
       sourceId: `${email}:ai_session_total:${currentAiBilledTotal + billCents}`,
       userEmail: email,
+      metadata: { userEmail: email, sessionId },
     });
 
     await User.findOneAndUpdate(
@@ -279,7 +471,13 @@ export async function trackAiDialerSessionUsage({
     // Do NOT throw — must not crash callers
   }
 
-  return { billedSeconds: newSeconds, accrued: addCents };
+  return {
+    billedSeconds: billableSeconds,
+    accrued: addCents,
+    newSeconds: billableSeconds,
+    computedSeconds: newSeconds,
+    capped: shouldCapCheckpoint,
+  };
 }
 
 export async function trackAiDialerCentsUsage({
@@ -396,6 +594,7 @@ export async function trackAiDialerCentsUsage({
       source,
       sourceId,
       userEmail: email,
+      metadata: { userEmail: email },
     });
 
     await User.findOneAndUpdate(

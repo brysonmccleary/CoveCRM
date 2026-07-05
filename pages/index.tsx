@@ -1118,7 +1118,7 @@ export default function Home() {
           </div>
 
           <p className="mt-6 text-xs text-slate-500">
-            Compare to competitors charging $300–500/month for less features. Standard Twilio usage charges apply for calls and SMS.
+            Compare to competitors charging $300–500/month for less features. Standard usage charges apply for calls and SMS, with dialer calls billed on connected talk time.
           </p>
         </section>
 

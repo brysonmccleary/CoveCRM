@@ -68,6 +68,10 @@ export interface IAICallSession extends Document {
   // ✅ Session-time billing checkpoint fields
   billedSeconds?: number;
   lastBilledAt?: Date | null;
+  finalBilledAt?: Date | null;
+  runawayBillingCappedAt?: Date | null;
+  runawayBillingComputedSeconds?: number;
+  runawayBillingCappedSeconds?: number;
 
   createdAt: Date;
   updatedAt: Date;
@@ -153,6 +157,10 @@ const AICallSessionSchema = new Schema<IAICallSession>(
     // ✅ Session-time billing checkpoint fields
     billedSeconds: { type: Number, default: 0 },
     lastBilledAt: { type: Date, default: null },
+    finalBilledAt: { type: Date, default: null, index: true },
+    runawayBillingCappedAt: { type: Date, default: null },
+    runawayBillingComputedSeconds: { type: Number, default: 0 },
+    runawayBillingCappedSeconds: { type: Number, default: 0 },
 
     // AI dialer stats (per session)
     stats: {

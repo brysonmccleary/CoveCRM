@@ -225,7 +225,7 @@ export default function AISettingsPanel() {
 
           <SettingRow
             label="AI Dialer Transcripts"
-            description="Save Kayla call transcripts for calls over 1:30. Transcript minutes are billed in your AI Dialer bucket at $0.01/min, rounded up."
+            description="Save Kayla call transcripts for calls over 1:30. AI Dialer usage is billed at 1¢/min of session time plus 8¢/min of connected talk time."
             locked={aiLocked}
           >
             <Toggle

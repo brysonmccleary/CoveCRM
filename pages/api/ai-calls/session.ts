@@ -479,6 +479,9 @@ export default async function handler(
           status: "queued",
           startedAt: now,
           completedAt: null,
+          billedSeconds: 0,
+          lastBilledAt: null,
+          finalBilledAt: null,
           errorMessage: null,
           currentCall: null,
         });
@@ -513,6 +516,13 @@ export default async function handler(
         aiSession.status = "queued";
         aiSession.startedAt = now;
         aiSession.completedAt = null;
+        (aiSession as any).stoppedAt = null;
+        (aiSession as any).billedSeconds = 0;
+        (aiSession as any).lastBilledAt = null;
+        (aiSession as any).finalBilledAt = null;
+        (aiSession as any).runawayBillingCappedAt = null;
+        (aiSession as any).runawayBillingComputedSeconds = 0;
+        (aiSession as any).runawayBillingCappedSeconds = 0;
         (aiSession as any).currentCall = null;
       }
 
@@ -625,6 +635,10 @@ export default async function handler(
             userEmail: email,
             endAt: stopEndAt,
           });
+          await AICallSession.updateOne(
+            { _id: (aiSession as any)._id, finalBilledAt: null },
+            { $set: { finalBilledAt: new Date() } }
+          ).exec();
         } catch (billingErr: any) {
           // Non-blocking — session is already saved as stopped
           console.warn("[AI SESSION] Terminal billing failed (non-blocking):", billingErr?.message || billingErr);

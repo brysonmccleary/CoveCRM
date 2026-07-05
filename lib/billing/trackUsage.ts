@@ -22,6 +22,7 @@ const BILLING_LOCK_TTL_MS = 10 * 60 * 1000;
 // Sources that require account eligibility verification before charging.
 const USAGE_SOURCES: BillingEventSource[] = [
   "ai_voice_session",
+  "ai_voice_call",
   "ai_transcript",
   "regular_usage",
 ];
@@ -60,6 +61,15 @@ async function ensureDb() {
   }
 }
 
+function stripeMetadata(input?: Record<string, unknown>, base?: Record<string, unknown>) {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries({ ...(base || {}), ...(input || {}) })) {
+    if (value === undefined || value === null) continue;
+    out[key] = String(value).slice(0, 500);
+  }
+  return out;
+}
+
 /**
  * Create a BillingEvent ledger entry, then create an invoice item, draft an
  * invoice, finalize it, and pay immediately — all idempotent.
@@ -82,11 +92,41 @@ export async function createFinalizePayInvoice(params: {
   userId?: string;
   metadata?: Record<string, unknown>;
 }): Promise<void> {
+  const { customerId, amountCents, description, source, sourceId, userEmail, userId, metadata } =
+    params;
+  const normalizedUserEmail = String(userEmail || "").trim().toLowerCase();
+
+  await ensureDb();
+
+  if (normalizedUserEmail) {
+    const identityUser = await User.findOne({ email: normalizedUserEmail })
+      .select("stripeCustomerId")
+      .lean();
+    const expectedCustomerId = String((identityUser as any)?.stripeCustomerId || "").trim();
+    if (!identityUser || !expectedCustomerId || expectedCustomerId !== String(customerId || "").trim()) {
+      console.error("[BILLING][IDENTITY-MISMATCH]", {
+        userEmail: normalizedUserEmail,
+        customerId: customerId || null,
+        expectedCustomerId: expectedCustomerId || null,
+        source,
+        sourceId,
+        amountCents,
+      });
+      throw new Error("Billing identity mismatch");
+    }
+  }
+
   // ── Outermost kill switch ─────────────────────────────────────────────────────
   assertStripeWritesEnabled();
 
-  const { customerId, amountCents, description, source, sourceId, userEmail, userId, metadata } =
-    params;
+  const eventMetadata = {
+    userEmail: normalizedUserEmail || userEmail || "",
+    userId: userId || "",
+    source,
+    sourceId,
+    ...(metadata || {}),
+  };
+  const stripeMeta = stripeMetadata(eventMetadata);
 
   // ── Idempotency key (stable, derived from billing facts) ─────────────────────
   const idempotencyKey = `billing_${source}_${sourceId}_${amountCents}`;
@@ -102,7 +142,7 @@ export async function createFinalizePayInvoice(params: {
         $set: { status: "blocked", blockedReason: "DISABLE_ALL_STRIPE_BILLING", updatedAt: new Date() },
         $setOnInsert: {
           userEmail: userEmail || "", userId: userId || "", stripeCustomerId: customerId,
-          description, idempotencyKey, metadata: metadata || {}, createdAt: new Date(),
+          description, idempotencyKey, metadata: eventMetadata, createdAt: new Date(),
         },
       },
       { upsert: true },
@@ -118,9 +158,9 @@ export async function createFinalizePayInvoice(params: {
     throw new Error("Invalid BILLING_SINGLE_CHARGE_CAP_CENTS");
   }
 
-  // Per-source cap: AI voice session capped at $20 by default
+  // Per-source cap: AI voice usage capped at $20 by default
   let effectiveCapCents = BILLING_SINGLE_CHARGE_CAP_CENTS;
-  if (source === "ai_voice_session") {
+  if (source === "ai_voice_session" || source === "ai_voice_call") {
     const aiVoiceCap = Number(process.env.AI_VOICE_SINGLE_CHARGE_CAP_CENTS || "2000");
     if (Number.isFinite(aiVoiceCap) && aiVoiceCap > 0) {
       effectiveCapCents = Math.min(effectiveCapCents, aiVoiceCap);
@@ -138,7 +178,7 @@ export async function createFinalizePayInvoice(params: {
         $set: { status: "blocked", blockedReason, updatedAt: new Date() },
         $setOnInsert: {
           userEmail: userEmail || "", userId: userId || "", stripeCustomerId: customerId,
-          description, idempotencyKey, metadata: metadata || {}, createdAt: new Date(),
+          description, idempotencyKey, metadata: eventMetadata, createdAt: new Date(),
         },
       },
       { upsert: true },
@@ -175,7 +215,7 @@ export async function createFinalizePayInvoice(params: {
           $set: { status: "blocked", blockedReason, updatedAt: new Date() },
           $setOnInsert: {
             userEmail: userEmail || "", userId: userId || "", stripeCustomerId: customerId,
-            description, idempotencyKey, metadata: metadata || {}, createdAt: new Date(),
+            description, idempotencyKey, metadata: eventMetadata, createdAt: new Date(),
           },
         },
         { upsert: true },
@@ -199,7 +239,7 @@ export async function createFinalizePayInvoice(params: {
         description,
         status: "pending",
         idempotencyKey,
-        metadata: metadata || {},
+        metadata: eventMetadata,
         createdAt: new Date(),
       },
       $set: { updatedAt: new Date() },
@@ -273,7 +313,7 @@ export async function createFinalizePayInvoice(params: {
 
   try {
     const item = await stripe.invoiceItems.create(
-      { customer: customerId, amount: amountCents, currency: "usd", description },
+      { customer: customerId, amount: amountCents, currency: "usd", description, metadata: stripeMeta },
       { idempotencyKey: `item_${idempotencyKey}` },
     );
     invoiceItemId = item.id;
@@ -283,6 +323,7 @@ export async function createFinalizePayInvoice(params: {
         customer: customerId,
         collection_method: "charge_automatically",
         auto_advance: false,
+        metadata: stripeMeta,
       },
       { idempotencyKey: `inv_${idempotencyKey}` },
     );
