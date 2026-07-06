@@ -1532,7 +1532,9 @@ export default async function handler(
 
     const normalizedUseCase = "LOW_VOLUME";
     if (flowSelection.flow === "lead_generation") {
-      samples = personalizeA2PSampleMessages(buildLeadGenerationSampleMessages(), {
+      samples = personalizeA2PSampleMessages(buildLeadGenerationSampleMessages({
+        campaignType: flowSelection.campaignType,
+      }), {
         contactFirstName,
         contactLastName,
         businessName,

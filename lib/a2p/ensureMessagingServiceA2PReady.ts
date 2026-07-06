@@ -158,7 +158,7 @@ function getMessageSamples(profile: any) {
   const samples = raw.map((sample: any) => String(sample || "").trim()).filter((sample: string) => sample.length >= 20);
   if (samples.length >= 2) return samples.slice(0, 5);
 
-  return personalizeA2PSampleMessages(buildLeadGenerationSampleMessages(), profile).slice(0, 2);
+  return personalizeA2PSampleMessages(buildLeadGenerationSampleMessages(profile), profile).slice(0, 2);
 }
 
 function hasEmbeddedLinks(flow: string, samples: string[]) {

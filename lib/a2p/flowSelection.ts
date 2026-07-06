@@ -66,7 +66,7 @@ export function buildLeadGenerationSenderName(args: LeadGenerationTextArgs = {})
 export function buildLeadGenerationConsentText(args: LeadGenerationTextArgs = {}): string {
   const senderName = buildLeadGenerationSenderName(args);
   const coverageType = humanizeCoverageType(args.campaignType);
-  return `By checking this box, you agree to receive SMS messages from ${senderName} about your ${coverageType} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to your request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.`;
+  return `By checking this box, you agree to receive SMS messages from ${senderName} about your ${coverageType} request. Messages may include appointment scheduling, quote or policy information, requested insurance information, application follow-up, reminders, customer support, and responses to your request. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`;
 }
 
 function normalizeBaseUrl(baseUrl?: string): string {
@@ -154,13 +154,13 @@ export function buildLeadGenerationOptInDetails(optInUrl = "{{LANDING_OPTIN_URL}
   const url = clean(optInUrl) || "{{LANDING_OPTIN_URL}}";
   const senderName = buildLeadGenerationSenderName(args);
   const coverageType = humanizeCoverageType(args.campaignType);
-  return `This campaign sends SMS messages from ${senderName} to consumers who request information about ${coverageType} coverage. Consumers see an advertisement, click through to the CoveCRM-hosted opt-in page at ${url}, submit a request for information, and provide optional consent through a separate unchecked SMS consent checkbox. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to consumer inquiries. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance. Consent is not a condition of purchase.
+  return `This campaign sends SMS messages from ${senderName} to consumers who request information about ${coverageType} coverage. Consumers submit a CoveCRM-hosted insurance request form at ${url}. The form collects name, phone number, optional email if provided, and insurance or request details. The page displays the agent and business identity before the consent step. Consumers provide optional SMS consent through a separate unchecked checkbox that is not required to submit the request or purchase any product. The form includes accessible SMS Terms and SMS Privacy links. Messages may include appointment scheduling, quote or policy information, requested insurance information, application follow-up, reminders, customer support, and responses to the consumer inquiry. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for assistance.
 
 Before submission, users see a disclosure similar to:
 
 "${buildLeadGenerationConsentText(args)}"
 
-The opt-in page displays SMS Terms and SMS Privacy links on the same page as the form submission. Consent records may be retained as needed for compliance and audit purposes.`;
+Consent records may be retained as needed for compliance and audit purposes.`;
 }
 
 export function buildServicingMessageFlow(urls: {
@@ -203,9 +203,12 @@ export function personalizeA2PSampleMessage(sample: any, args: {
   businessName?: any;
 }): string {
   const agent = resolveA2PSampleAgentName(args);
+  const businessName = clean(args.businessName) || "the insurance agency";
   const personalized = clean(sample)
     .replace(/\{\{\s*agentName\s*\}\}/gi, agent)
-    .replace(/\{\{\s*agent_name\s*\}\}/gi, agent);
+    .replace(/\{\{\s*agent_name\s*\}\}/gi, agent)
+    .replace(/\{\{\s*businessName\s*\}\}/gi, businessName)
+    .replace(/\{\{\s*business_name\s*\}\}/gi, businessName);
 
   if (agent === "your insurance agent") return personalized;
   return personalized.replace(/\bthis is your insurance agent\b/gi, `this is ${agent}`);
@@ -219,10 +222,11 @@ export function personalizeA2PSampleMessages(samples: any[], args: {
   return samples.map((sample) => personalizeA2PSampleMessage(sample, args)).filter(Boolean);
 }
 
-export function buildLeadGenerationSampleMessages(): string[] {
+export function buildLeadGenerationSampleMessages(args: LeadGenerationTextArgs = {}): string[] {
+  const coverageType = humanizeCoverageType(args.campaignType);
   return [
-    `Hi {{first_name}}, this is {{agent_name}}. I received the Final Expense request you submitted and wanted to help you review your options. When would be a good time for a quick call? Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is {{agent_name}} following up on the Final Expense request you recently submitted. Do you have a few minutes later today or tomorrow to connect? Reply STOP to opt out.`,
-    `Hi {{first_name}}, this is {{agent_name}}. I didn't want to miss you regarding your Final Expense request. If you're still interested in reviewing your options, let me know a good time to reach you. Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is {{agent_name}} with {{business_name}}. I received the ${coverageType} insurance information request you submitted and wanted to help you review your options. When would be a good time for a quick call? Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is {{agent_name}} following up on your ${coverageType} insurance request. Do you have a few minutes later today or tomorrow to schedule a quick review? Reply STOP to opt out.`,
+    `Hi {{first_name}}, this is {{agent_name}}. I didn't want to miss you regarding the ${coverageType} insurance information you requested. If you're still interested, let me know a good time to connect. Reply STOP to opt out.`,
   ];
 }

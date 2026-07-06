@@ -259,7 +259,7 @@ function normalizeSamples(args: BuildA2PCampaignPayloadArgs): string[] {
     .slice(0, 3);
 
   if (isLeadGenerationProfile(profile) && (!list.length || looksLikeLegacyServicingSamples(list))) {
-    return personalizeA2PSampleMessages(buildLeadGenerationSampleMessages(), profile);
+    return personalizeA2PSampleMessages(buildLeadGenerationSampleMessages(profile), profile);
   }
 
   if (list.length) return personalizeA2PSampleMessages(list, profile);
@@ -307,13 +307,9 @@ function shouldRegenerateDescription(profile: any, optInUrl: string): boolean {
   );
 }
 
-function clampDescriptionPreservingUrl(prefix: string, suffix: string): string {
+function clampDescription(text: string): string {
   const maxLength = 1024;
-  const full = `${prefix}${suffix}`;
-  if (full.length <= maxLength) return full;
-
-  const availablePrefixLength = Math.max(0, maxLength - suffix.length);
-  return `${prefix.slice(0, availablePrefixLength).trimEnd()}${suffix}`;
+  return text.length <= maxLength ? text : text.slice(0, maxLength).trimEnd();
 }
 
 export function buildCampaignDescription(args: BuildCampaignDescriptionArgs): string {
@@ -330,17 +326,13 @@ export function buildCampaignDescription(args: BuildCampaignDescriptionArgs): st
   const agentName = buildAgentName(args);
   const senderName = buildLeadGenerationSenderName({ agentName, businessName });
   const coverageType = humanizeCampaignType(args.campaignType ?? profile.campaignType);
-  const fallbackOptInUrl = optInUrl || "the CoveCRM-hosted opt-in page";
 
-  const prefix =
-    `Consumers see an advertisement for ${coverageType} coverage from ${businessName} and click through to the opt-in page. ` +
-    `Consumers submit a request for information and provide optional consent to receive SMS communications from ${senderName}. ` +
-    `Messages are sent only to consumers who submitted the form and requested information about ${coverageType} coverage. ` +
-    "Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to consumer inquiries.";
-  const suffix =
-    ` Opt-in page: ${fallbackOptInUrl}. Recipients may opt out by replying STOP and may request help by replying HELP.`;
-
-  return clampDescriptionPreservingUrl(prefix, suffix);
+  return clampDescription(
+    `This campaign sends follow-up SMS messages from ${senderName} to consumers who submit ${coverageType} insurance information requests through CoveCRM-hosted lead forms for ${businessName}. ` +
+    `Messages are sent only to consumers who submitted a request and provided optional SMS consent. ` +
+    "Messages may include appointment scheduling, quote or policy information, requested insurance information, application follow-up, reminders, customer support, and responses to consumer inquiries. " +
+    "Recipients may opt out by replying STOP and may request help by replying HELP.",
+  );
 }
 
 function hasEmbeddedPhone(text: string): boolean {
