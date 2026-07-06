@@ -534,28 +534,33 @@ async function createHeldAffiliateCreditForPaidInvoice(args: {
   const month = currentMonthKey();
   const idempotencyKey = `${affiliateId}:${invoiceId}`;
 
-  const existing = await AffiliatePayoutLedger.findOne({ idempotencyKey });
-  if (existing) return false;
-
   const earnedAt = new Date();
   const payableAt = affiliateCreditPayableAt(earnedAt);
 
   try {
-    await AffiliatePayoutLedger.create({
-      affiliateId: (affiliate as any)._id,
-      userId: user._id,
-      month,
-      amount: AFFILIATE_MONTHLY_CREDIT_USD,
-      amountCents: AFFILIATE_MONTHLY_CREDIT_CENTS,
-      stripeInvoiceId: invoiceId,
-      stripeSubscriptionId: subscriptionId || null,
-      stripeCustomerId: customerId || null,
-      referredUserEmail: userEmail || null,
-      earnedAt,
-      payableAt,
-      status: "held",
-      idempotencyKey,
-    });
+    const existing = await AffiliatePayoutLedger.findOneAndUpdate(
+      { idempotencyKey },
+      {
+        $setOnInsert: {
+          affiliateId: (affiliate as any)._id,
+          userId: user._id,
+          month,
+          amount: AFFILIATE_MONTHLY_CREDIT_USD,
+          amountCents: AFFILIATE_MONTHLY_CREDIT_CENTS,
+          stripeInvoiceId: invoiceId,
+          stripeSubscriptionId: subscriptionId || null,
+          stripeCustomerId: customerId || null,
+          referredUserEmail: userEmail || null,
+          earnedAt,
+          payableAt,
+          status: "held",
+          idempotencyKey,
+        },
+      },
+      { upsert: true, new: false },
+    );
+
+    if (existing) return false;
 
     await Affiliate.updateOne(
       { _id: (affiliate as any)._id },

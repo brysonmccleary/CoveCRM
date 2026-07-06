@@ -21,33 +21,27 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
-  const email =
-    (req.method === "POST"
-      ? (req.body?.email as string | undefined)
-      : undefined) ??
-    (typeof req.query.email === "string" ? req.query.email : undefined);
-  const targetEmail = normalizeEmail(email);
-
-  if (!targetEmail) return res.status(400).json({ error: "Missing email" });
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
   const session = await getServerSession(req, res, authOptions);
   const sessionEmail = normalizeEmail(session?.user?.email);
-  const isAdmin = Boolean(session?.user && (session.user as any).role === "admin");
-  if (!sessionEmail || (!isAdmin && sessionEmail !== targetEmail)) {
-    return res.status(403).json({ error: "Unauthorized" });
+  if (!sessionEmail) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
   await mongooseConnect();
 
-  const affiliate = await Affiliate.findOne({ email: targetEmail });
+  const affiliate = await Affiliate.findOne({ email: sessionEmail });
   if (!affiliate) return res.status(404).json({ error: "Affiliate not found" });
 
   if (!affiliate.stripeConnectId) {
     const acct = await stripe.accounts.create({
       type: "express",
-      email: targetEmail,
+      email: sessionEmail,
       capabilities: { transfers: { requested: true } },
-      metadata: { affiliateEmail: targetEmail },
+      metadata: { affiliateEmail: sessionEmail },
     });
     affiliate.stripeConnectId = acct.id;
     await affiliate.save();

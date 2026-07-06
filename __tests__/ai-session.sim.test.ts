@@ -1036,6 +1036,62 @@ describe("Sim 13: Schema and source validation", () => {
     expect(src).toContain("lastCallbackAt");
   });
 
+  test("call-status-webhook.ts force-closes open session meters on terminal callbacks", () => {
+    const src = fs.readFileSync("pages/api/ai-calls/call-status-webhook.ts", "utf8");
+    expect(src).toContain("forceCloseAiSessionMeterFromTerminalStatus");
+    expect(src).toContain("AICallUsageLedger.findOne({ callSid })");
+    expect(src).toContain('ledgerStatus === "pending" || ledgerStatus === "failed"');
+    expect(src).toContain('sessionStatus === "queued" || sessionStatus === "running"');
+    expect(src).toContain("trackAiDialerSessionUsage({");
+    expect(src).toContain("endAt: webhookReceivedAt");
+    expect(src.indexOf("await forceCloseAiSessionMeterFromTerminalStatus({")).toBeLessThan(
+      src.indexOf("const sessionForClear = await AICallSession.findById(aiCallSessionId)"),
+    );
+  });
+
+  test("terminal webhook replay does not force-close the same call twice", () => {
+    const shouldForceClose = ({
+      isTerminal = true,
+      ledgerStatus = "",
+      sessionStatus = "running",
+      startedAt = new Date(),
+      finalBilledAt = null,
+      activeCallSid = "CA_REPLAY",
+      currentCallSid = "CA_REPLAY",
+    }: {
+      isTerminal?: boolean;
+      ledgerStatus?: string;
+      sessionStatus?: string;
+      startedAt?: Date | null;
+      finalBilledAt?: Date | null;
+      activeCallSid?: string | null;
+      currentCallSid?: string | null;
+    }) => {
+      const hasOpenOrUnbilledLedger =
+        !ledgerStatus || ledgerStatus === "pending" || ledgerStatus === "failed";
+      const sessionIsStillOpen = sessionStatus === "queued" || sessionStatus === "running";
+      const callIsStillOpen = activeCallSid === "CA_REPLAY" || currentCallSid === "CA_REPLAY";
+      return (
+        isTerminal &&
+        hasOpenOrUnbilledLedger &&
+        !!startedAt &&
+        !finalBilledAt &&
+        sessionIsStillOpen &&
+        callIsStillOpen
+      );
+    };
+
+    expect(shouldForceClose({})).toBe(true);
+    expect(
+      shouldForceClose({
+        activeCallSid: null,
+        currentCallSid: null,
+      }),
+    ).toBe(false);
+    expect(shouldForceClose({ ledgerStatus: "charging" })).toBe(false);
+    expect(shouldForceClose({ ledgerStatus: "paid" })).toBe(false);
+  });
+
   test("watchdog.ts exists and has correct safety constraints", () => {
     const src = fs.readFileSync("pages/api/ai-calls/watchdog.ts", "utf8");
     expect(src).toContain('status: "running"');

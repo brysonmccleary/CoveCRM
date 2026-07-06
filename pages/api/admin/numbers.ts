@@ -23,6 +23,15 @@ type Row = {
   usage: Usage;
 };
 
+function adminEmailSet() {
+  return new Set(
+    (process.env.ADMIN_EMAILS || "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -30,8 +39,12 @@ export default async function handler(
   if (req.method !== "GET") return res.status(405).end("Method Not Allowed");
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user || (session.user as any).role !== "admin") {
-    return res.status(403).json({ error: "Admin only" });
+  const email = String(session?.user?.email || "").trim().toLowerCase();
+  if (!email) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  if (!adminEmailSet().has(email)) {
+    return res.status(403).json({ error: "Forbidden" });
   }
 
   try {

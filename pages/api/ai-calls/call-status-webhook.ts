@@ -4,11 +4,13 @@ import { buffer } from "micro";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
 import AICallSession from "@/models/AICallSession";
+import AICallUsageLedger from "@/models/AICallUsageLedger";
 import User from "@/models/User";
 import Call from "@/models/Call";
 import Lead from "@/models/Lead";
 import { Types } from "mongoose";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { trackAiDialerSessionUsage } from "@/lib/billing/trackAiDialerSessionUsage";
 import {
   maybeMarkAICallSessionCompleted,
   transitionAICallRecordingOutcome,
@@ -215,6 +217,83 @@ async function hangupCallIfPossible(userEmail: string, callSid: string) {
   }
 }
 
+async function forceCloseAiSessionMeterFromTerminalStatus({
+  callSid,
+  recDoc,
+  userEmail,
+  endAt,
+  isTerminal,
+}: {
+  callSid: string;
+  recDoc: any;
+  userEmail: string;
+  endAt: Date;
+  isTerminal: boolean;
+}) {
+  if (!isTerminal || !callSid || !recDoc?.aiCallSessionId || !userEmail) {
+    return;
+  }
+
+  const ledger = await AICallUsageLedger.findOne({ callSid })
+    .select("status")
+    .lean();
+  const ledgerStatus = String((ledger as any)?.status || "");
+  const hasOpenOrUnbilledLedger =
+    !ledger || ledgerStatus === "pending" || ledgerStatus === "failed";
+
+  if (!hasOpenOrUnbilledLedger) {
+    console.log("[AI Dialer] Skipping terminal meter force-close: call usage ledger already claimed", {
+      callSid,
+      ledgerStatus,
+    });
+    return;
+  }
+
+  const session = await AICallSession.findById(recDoc.aiCallSessionId)
+    .select("status startedAt finalBilledAt activeCallSid currentCall.callSid")
+    .lean();
+  const sessionStatus = String((session as any)?.status || "");
+  const sessionIsStillOpen = sessionStatus === "queued" || sessionStatus === "running";
+  const callIsStillOpen =
+    (session as any)?.activeCallSid === callSid ||
+    (session as any)?.currentCall?.callSid === callSid;
+
+  if (!session || !(session as any).startedAt || (session as any).finalBilledAt) {
+    console.log("[AI Dialer] Skipping terminal meter force-close: no open billable session", {
+      callSid,
+      sessionId: String(recDoc.aiCallSessionId),
+      hasSession: !!session,
+      hasStartedAt: !!(session as any)?.startedAt,
+      finalBilledAt: (session as any)?.finalBilledAt || null,
+    });
+    return;
+  }
+
+  if (!sessionIsStillOpen || !callIsStillOpen) {
+    console.log("[AI Dialer] Skipping terminal meter force-close: call is no longer active on session", {
+      callSid,
+      sessionId: String(recDoc.aiCallSessionId),
+      sessionStatus,
+      activeCallSid: (session as any)?.activeCallSid || null,
+      currentCallSid: (session as any)?.currentCall?.callSid || null,
+    });
+    return;
+  }
+
+  await trackAiDialerSessionUsage({
+    sessionId: String(recDoc.aiCallSessionId),
+    userEmail: String(userEmail).toLowerCase(),
+    endAt,
+  });
+  console.log("[AI Dialer] Force-closed AI session meter from terminal call-status webhook", {
+    callSid,
+    sessionId: String(recDoc.aiCallSessionId),
+    userEmail: String(userEmail).toLowerCase(),
+    endAt,
+    ledgerStatus: ledgerStatus || null,
+  });
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -234,6 +313,7 @@ export default async function handler(
   try {
     const CallSid = params.get("CallSid") || "";
     const CallStatus = (params.get("CallStatus") || "").toLowerCase();
+    const webhookReceivedAt = new Date();
 
     // Twilio sends Duration or CallDuration in seconds on completed calls
     const DurationStr =
@@ -780,6 +860,22 @@ export default async function handler(
     // --- SESSION COMPLETION + CHAIN NEXT LEAD ---
     // Now includes CallSid-level dedupe so answered/completed callbacks can't double-kick.
     // ─────────────────────────────────────────────────────────────────────────────
+    try {
+      await forceCloseAiSessionMeterFromTerminalStatus({
+        callSid: CallSid,
+        recDoc,
+        userEmail,
+        endAt: webhookReceivedAt,
+        isTerminal,
+      });
+    } catch (meterErr: any) {
+      console.warn("[AI Dialer] Terminal meter force-close failed (non-blocking)", {
+        callSid: CallSid,
+        callStatus: CallStatus,
+        error: meterErr?.message || meterErr,
+      });
+    }
+
     try {
       if (CallSid && recDoc && recDoc.aiCallSessionId) {
         const aiCallSessionId = recDoc.aiCallSessionId as Types.ObjectId;

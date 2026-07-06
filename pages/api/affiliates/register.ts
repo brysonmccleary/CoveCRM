@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
+import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 import { sendAffiliateApplicationAdminEmail } from "@/lib/email";
 
@@ -18,25 +19,26 @@ export default async function handler(
 
   const session = await getServerSession(req, res, authOptions);
   const sessionEmail = normalizeEmail(session?.user?.email);
-  const isAdmin = Boolean(session?.user && (session.user as any).role === "admin");
+  if (!sessionEmail) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
   await dbConnect();
 
-  const { name, email, company, agents, promoCode } = req.body as {
+  const { name, company, agents, promoCode } = req.body as {
     name?: string;
-    email?: string;
     company?: string;
     agents?: number | string;
     promoCode?: string;
   };
-  const targetEmail = normalizeEmail(email);
 
-  if (!sessionEmail || (!isAdmin && sessionEmail !== targetEmail)) {
-    return res.status(403).json({ error: "Unauthorized" });
+  if (!name || !company || !agents || !promoCode) {
+    return res.status(400).json({ error: "Missing required fields" });
   }
 
-  if (!name || !targetEmail || !company || !agents || !promoCode) {
-    return res.status(400).json({ error: "Missing required fields" });
+  const user = await User.findOne({ email: sessionEmail }).select("_id").lean();
+  if (!user?._id) {
+    return res.status(404).json({ error: "User not found" });
   }
 
   const upperCode = String(promoCode).toUpperCase();
@@ -52,7 +54,7 @@ export default async function handler(
     try {
       const created = await stripe.accounts.create({
         type: "express",
-        email: targetEmail,
+        email: sessionEmail,
         capabilities: { transfers: { requested: true } },
       });
       accountId = created.id;
@@ -72,8 +74,9 @@ export default async function handler(
   let newAffiliate;
   try {
     newAffiliate = await Affiliate.create({
+      userId: user._id,
       name,
-      email: targetEmail,
+      email: sessionEmail,
       company,
       agents,
       promoCode: upperCode,
@@ -125,7 +128,7 @@ export default async function handler(
   try {
     await sendAffiliateApplicationAdminEmail({
       name,
-      email: targetEmail,
+      email: sessionEmail,
       company,
       agents,
       promoCode: upperCode,

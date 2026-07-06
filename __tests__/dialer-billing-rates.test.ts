@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { computeAiVoiceUsageMinutes } = require("../lib/billing/aiVoiceUsage");
 
 const root = path.resolve(__dirname, "..");
 const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
@@ -46,10 +47,18 @@ describe("dialer connected-duration billing rules", () => {
     expect(source).toContain('source: "ai_voice_call"');
   });
 
-  test("live-transfer usage duration stops at meterStoppedAtMs", () => {
-    const source = read("ai-voice-server/index.ts");
-    expect(source).toContain("state.meterStoppedAtMs = Date.now()");
-    expect(source).toContain("const endedAtMs = state.meterStoppedAtMs ?? Date.now()");
+  test("live-transfer usage duration stops at meterStoppedAtMs behaviorally", () => {
+    const t0 = Date.UTC(2026, 6, 6, 12, 0, 0);
+    const wallClockNowMs = t0 + 10 * 60 * 1000;
+    const meterStoppedAtMs = t0 + 90 * 1000;
+
+    expect(
+      computeAiVoiceUsageMinutes(
+        { callStartedAtMs: t0, meterStoppedAtMs },
+        wallClockNowMs,
+      ),
+    ).toBe(1.5);
+    expect(computeAiVoiceUsageMinutes({ callStartedAtMs: t0 }, meterStoppedAtMs)).toBe(1.5);
   });
 
   test("manual PSTN billing does not fall back to ring elapsed when Twilio duration is missing", () => {

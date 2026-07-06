@@ -21,10 +21,6 @@
       "schedule": "*/15 * * * *"
     },
     {
-      "path": "/api/affiliates/cron/autopayouts?token=@CRON_SECRET",
-      "schedule": "0 16 * * 5"
-    },
-    {
       "path": "/api/cron",
       "schedule": "0 17 * * *"
     },

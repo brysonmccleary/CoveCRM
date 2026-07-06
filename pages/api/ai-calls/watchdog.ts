@@ -16,8 +16,11 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallSession from "@/models/AICallSession";
+import AICallUsageLedger from "@/models/AICallUsageLedger";
+import BillingEvent from "@/models/BillingEvent";
 import User from "@/models/User";
 import { trackAiDialerSessionUsage } from "@/lib/billing/trackAiDialerSessionUsage";
+import { stripe } from "@/lib/stripe";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
@@ -41,6 +44,16 @@ const MAX_KICKS_PER_RUN = 5;
 const MAX_BILLING_PER_RUN = 20;
 // Any running session with no callback/call activity for 2h is closed before billing.
 const STALE_RUNNING_SESSION_MS = 2 * 60 * 60 * 1000;
+const STALE_CHARGING_BILLING_MS = 30 * 60 * 1000;
+const MAX_STALE_CHARGING_RECOVERY_PER_RUN = 25;
+
+function currentAiDialerCronKey() {
+  return AI_DIALER_CRON_KEY || (process.env.AI_DIALER_CRON_KEY || "").trim();
+}
+
+function currentCronSecret() {
+  return CRON_SECRET || (process.env.CRON_SECRET || "").trim();
+}
 
 function isAuthorized(req: NextApiRequest): boolean {
   const bearer = (String(req.headers["authorization"] || "").match(/^Bearer\s+(.+)$/i)?.[1] || "").trim();
@@ -48,12 +61,14 @@ function isAuthorized(req: NextApiRequest): boolean {
   const qs = (String((req.query.key as string) || (req.query.token as string) || "")).trim();
   const provided = bearer || hdr || qs;
   if (!provided) return false;
-  return (!!AI_DIALER_CRON_KEY && provided === AI_DIALER_CRON_KEY) ||
-         (!!CRON_SECRET && provided === CRON_SECRET);
+  const aiDialerCronKey = currentAiDialerCronKey();
+  const cronSecret = currentCronSecret();
+  return (!!aiDialerCronKey && provided === aiDialerCronKey) ||
+         (!!cronSecret && provided === cronSecret);
 }
 
 async function kickSession(sessionId: string): Promise<boolean> {
-  const secret = CRON_SECRET || AI_DIALER_CRON_KEY;
+  const secret = currentCronSecret() || currentAiDialerCronKey();
   if (!secret) return false;
   const url = `${BASE}/api/ai-calls/worker?sessionId=${encodeURIComponent(sessionId)}`;
   try {
@@ -106,12 +121,128 @@ async function logSharedStripeCustomers(): Promise<void> {
   }
 }
 
+function billingStatusFromInvoice(invoice: any): "paid" | "stripe_created" | "pending" {
+  const status = String(invoice?.status || "").toLowerCase();
+  if (status === "paid") return "paid";
+  if (status === "open" || status === "draft" || status === "uncollectible") return "stripe_created";
+  return "pending";
+}
+
+async function recoverStaleChargingBillingEvents(now: number): Promise<number> {
+  const cutoff = new Date(now - STALE_CHARGING_BILLING_MS);
+  const staleEvents = await BillingEvent.find({
+    status: "charging",
+    updatedAt: { $lt: cutoff },
+  })
+    .select("_id idempotencyKey stripeInvoiceId")
+    .limit(MAX_STALE_CHARGING_RECOVERY_PER_RUN)
+    .lean();
+
+  let recovered = 0;
+  for (const event of staleEvents as any[]) {
+    const invoiceId = String(event?.stripeInvoiceId || "").trim();
+    const idempotencyKey = String(event?.idempotencyKey || "").trim();
+    try {
+      if (invoiceId) {
+        const invoice = await stripe.invoices.retrieve(invoiceId);
+        await BillingEvent.updateOne(
+          { _id: event._id, status: "charging" },
+          {
+            $set: {
+              status: billingStatusFromInvoice(invoice),
+              stripePaymentIntentId:
+                typeof (invoice as any)?.payment_intent === "string"
+                  ? (invoice as any).payment_intent
+                  : ((invoice as any)?.payment_intent?.id || undefined),
+              updatedAt: new Date(),
+            },
+          },
+        );
+      } else {
+        await BillingEvent.updateOne(
+          { _id: event._id, status: "charging" },
+          {
+            $set: {
+              status: "pending",
+              updatedAt: new Date(),
+              blockedReason: idempotencyKey
+                ? `stale_charging_reset_no_stripe_invoice:${idempotencyKey}`
+                : "stale_charging_reset_no_stripe_invoice",
+            },
+          },
+        );
+      }
+      recovered += 1;
+    } catch (err: any) {
+      console.warn("[AI WATCHDOG] stale BillingEvent recovery failed (non-blocking)", {
+        billingEventId: String(event?._id || ""),
+        idempotencyKey,
+        invoiceId,
+        error: err?.message || err,
+      });
+    }
+  }
+  return recovered;
+}
+
+async function recoverStaleChargingAiCallUsageLedgers(now: number): Promise<number> {
+  const cutoff = new Date(now - STALE_CHARGING_BILLING_MS);
+  const staleLedgers = await AICallUsageLedger.find({
+    status: "charging",
+    updatedAt: { $lt: cutoff },
+  })
+    .select("_id idempotencyKey stripeInvoiceId")
+    .limit(MAX_STALE_CHARGING_RECOVERY_PER_RUN)
+    .lean();
+
+  let recovered = 0;
+  for (const ledger of staleLedgers as any[]) {
+    const invoiceId = String(ledger?.stripeInvoiceId || "").trim();
+    const idempotencyKey = String(ledger?.idempotencyKey || "").trim();
+    try {
+      if (invoiceId) {
+        const invoice = await stripe.invoices.retrieve(invoiceId);
+        await AICallUsageLedger.updateOne(
+          { _id: ledger._id, status: "charging" },
+          {
+            $set: {
+              status: billingStatusFromInvoice(invoice),
+              paidAt: String((invoice as any)?.status || "").toLowerCase() === "paid" ? new Date() : null,
+            },
+          },
+        );
+      } else {
+        await AICallUsageLedger.updateOne(
+          { _id: ledger._id, status: "charging" },
+          {
+            $set: {
+              status: "pending",
+              skippedReason: idempotencyKey
+                ? `stale_charging_reset_no_stripe_invoice:${idempotencyKey}`
+                : "stale_charging_reset_no_stripe_invoice",
+            },
+          },
+        );
+      }
+      recovered += 1;
+    } catch (err: any) {
+      console.warn("[AI WATCHDOG] stale AICallUsageLedger recovery failed (non-blocking)", {
+        ledgerId: String(ledger?._id || ""),
+        idempotencyKey,
+        invoiceId,
+        error: err?.message || err,
+      });
+    }
+  }
+  return recovered;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ ok: false, message: "Method Not Allowed" });
   }
 
-  if (!AI_DIALER_CRON_KEY && !CRON_SECRET) {
+  if (!currentAiDialerCronKey() && !currentCronSecret()) {
     return res.status(500).json({ ok: false, message: "Cron auth not configured" });
   }
 
@@ -123,6 +254,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await logSharedStripeCustomers();
 
   const now = Date.now();
+  const [recoveredBillingEvents, recoveredAiCallUsageLedgers] = await Promise.all([
+    recoverStaleChargingBillingEvents(now),
+    recoverStaleChargingAiCallUsageLedgers(now),
+  ]);
   const staleSessionCutoff = new Date(now - STALE_RUNNING_SESSION_MS);
 
   // ── Staleness closure ─────────────────────────────────────────────────────────
@@ -321,6 +456,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       kicked: [],
       billedSessions: billingSessions.length,
       autoStopped,
+      recoveredBillingEvents,
+      recoveredAiCallUsageLedgers,
     });
   }
 
@@ -365,5 +502,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     total: kicked.length,
     billedSessions: billingSessions.length,
     autoStopped,
+    recoveredBillingEvents,
+    recoveredAiCallUsageLedgers,
   });
 }

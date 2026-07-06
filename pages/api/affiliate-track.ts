@@ -17,14 +17,12 @@ export default async function handler(
 
   const session = await getServerSession(req, res, authOptions);
   const sessionEmail = normalizeEmail(session?.user?.email);
-  const isAdmin = Boolean(session?.user && (session.user as any).role === "admin");
 
-  const { email, code } = req.body;
-  const targetEmail = normalizeEmail(email);
-
-  if (!sessionEmail || (!isAdmin && sessionEmail !== targetEmail)) {
-    return res.status(403).json({ success: false, message: "Unauthorized" });
+  if (!sessionEmail) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
   }
+
+  const { code } = req.body;
 
   await dbConnect();
 
@@ -35,13 +33,28 @@ export default async function handler(
       .json({ success: false, message: "Invalid referral code." });
   }
 
-  await User.findOneAndUpdate(
-    { email: targetEmail },
+  const updated = await User.findOneAndUpdate(
+    {
+      email: sessionEmail,
+      $or: [
+        { referredBy: { $exists: false } },
+        { referredBy: null },
+        { referredBy: "" },
+      ],
+    },
     {
       referredBy: code,
       referralDiscountApplied: true,
     },
+    { new: true },
   );
+
+  if (!updated) {
+    return res.status(409).json({
+      success: false,
+      message: "Referral already set or user not found.",
+    });
+  }
 
   res.status(200).json({ success: true });
 }

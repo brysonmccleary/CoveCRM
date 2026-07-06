@@ -13,6 +13,10 @@ function envBool(name: string, def = false) {
   return value === "1" || value.toLowerCase() === "true";
 }
 
+export function affiliatePayoutsEnabled() {
+  return envBool("AFFILIATE_PAYOUTS_ENABLED", false);
+}
+
 function dollarsEnvToCents(name: string) {
   const raw = String(process.env[name] || "").trim();
   if (!raw) return 0;
@@ -120,18 +124,7 @@ function cronSecretMatches(req: NextApiRequest) {
   return allowed.length > 0 && allowed.includes(direct || bearer);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST" && req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
-  if (!cronSecretMatches(req)) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  if (!envBool("AFFILIATE_PAYOUTS_ENABLED", false)) {
-    return res.status(423).json({
-      error: "Affiliate payouts disabled",
-      enabledBy: "AFFILIATE_PAYOUTS_ENABLED",
-    });
-  }
-
+export async function processAffiliatePayoutsNow() {
   await dbConnect();
 
   let processed = 0;
@@ -205,7 +198,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  return res.status(200).json({
+  return {
     processed,
     succeeded,
     failed,
@@ -214,5 +207,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     skippedNotReady,
     claimMisses,
     minimumCents,
-  });
+  };
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST" && req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+  if (!cronSecretMatches(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  if (!affiliatePayoutsEnabled()) {
+    return res.status(423).json({
+      error: "Affiliate payouts disabled",
+      enabledBy: "AFFILIATE_PAYOUTS_ENABLED",
+    });
+  }
+
+  return res.status(200).json(await processAffiliatePayoutsNow());
 }

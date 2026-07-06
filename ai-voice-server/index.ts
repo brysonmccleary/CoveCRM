@@ -44,6 +44,7 @@ import http, { IncomingMessage, ServerResponse } from "http";
 import WebSocket, { WebSocketServer } from "ws";
 import fetch from "node-fetch";
 import { Buffer } from "buffer";
+import { computeAiVoiceUsageMinutes } from "../lib/billing/aiVoiceUsage";
 import { getKaylaSignupScript } from "./scripts/kaylaSignupScript";
 import {
   buildInboundGreetingInstructions,
@@ -14394,12 +14395,10 @@ async function billAiDialerUsageForCall(state: CallState) {
     return;
   }
 
-  const startedAtMs = state.callStartedAtMs ?? Date.now();
-  const endedAtMs = state.meterStoppedAtMs ?? Date.now();
-  const diffMs = Math.max(0, endedAtMs - startedAtMs);
-
-  const rawMinutes = diffMs / 60000;
-  const minutes = rawMinutes <= 0 ? 0.01 : Math.round(rawMinutes * 100) / 100;
+  const minutes = computeAiVoiceUsageMinutes({
+    callStartedAtMs: state.callStartedAtMs,
+    meterStoppedAtMs: state.meterStoppedAtMs,
+  });
 
   const vendorCostUsd = minutes * AI_DIALER_VENDOR_COST_PER_MIN_USD;
 
