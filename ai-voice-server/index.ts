@@ -44,7 +44,7 @@ import http, { IncomingMessage, ServerResponse } from "http";
 import WebSocket, { WebSocketServer } from "ws";
 import fetch from "node-fetch";
 import { Buffer } from "buffer";
-import { computeAiVoiceUsageMinutes } from "../lib/billing/aiVoiceUsage";
+import { computeAiVoiceUsageMinutes } from "./lib/aiVoiceUsage";
 import { getKaylaSignupScript } from "./scripts/kaylaSignupScript";
 import {
   buildInboundGreetingInstructions,

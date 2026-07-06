@@ -30,6 +30,7 @@ coverage
 
 # TypeScript build output
 dist
+lib/billing/*.js
 
 # Lock files (optional)
 package-lock.json
