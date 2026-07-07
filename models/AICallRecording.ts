@@ -17,6 +17,7 @@ export interface IAICallRecording extends Document {
   leadId: mongoose.Types.ObjectId;
   aiCallSessionId?: mongoose.Types.ObjectId | null;
   callSid: string;
+  fromNumber?: string;
   recordingSid?: string | null;
   recordingUrl?: string | null;
   durationSec?: number | null;
@@ -56,6 +57,7 @@ const AICallRecordingSchema = new Schema<IAICallRecording>(
       index: true,
     },
     callSid: { type: String, required: true, index: true },
+    fromNumber: { type: String, default: "", index: true },
     recordingSid: { type: String, default: null },
     recordingUrl: { type: String, default: null },
     durationSec: { type: Number, default: null },

@@ -1022,6 +1022,27 @@ describe("Sim 13: Schema and source validation", () => {
     expect(src).toContain("lastPlacedCallAt");
   });
 
+  test("worker-created AICallRecording stores resolved dialed fromNumber", () => {
+    const src = fs.readFileSync("pages/api/ai-calls/worker.ts", "utf8");
+    const localPresencePos = src.indexOf("resolvedFromNumber = result.fromNumber");
+    const normalizedFromPos = src.indexOf("const from = normalizeE164(resolvedFromNumber)");
+    const callCreateFromPos = src.indexOf("from,");
+    const callPlacedPos = src.indexOf("client.calls.create(callCreate)");
+    const recordingFromPos = src.indexOf("const recordingFromNumber = recordingFromNumberFor(callCreate.from)");
+    const recordingInsertPos = src.indexOf("fromNumber: recordingFromNumber");
+
+    expect(localPresencePos).toBeGreaterThan(-1);
+    expect(normalizedFromPos).toBeGreaterThan(localPresencePos);
+    expect(callCreateFromPos).toBeGreaterThan(normalizedFromPos);
+    expect(callPlacedPos).toBeGreaterThan(callCreateFromPos);
+    expect(recordingFromPos).toBeGreaterThan(callPlacedPos);
+    expect(recordingInsertPos).toBeGreaterThan(recordingFromPos);
+    expect(src).toContain('const LOCAL_PRESENCE_FROM_SENTINEL = "LOCAL_PRESENCE"');
+    expect(src).toContain("return from && from !== LOCAL_PRESENCE_FROM_SENTINEL ? from : \"\"");
+    expect(src).not.toContain("fromNumber: fromNumber");
+    expect(src).not.toContain('fromNumber: "LOCAL_PRESENCE"');
+  });
+
   test("worker.ts has DNC guard before phone resolution", () => {
     const src = fs.readFileSync("pages/api/ai-calls/worker.ts", "utf8");
     const dncPos = src.indexOf("isDNC");

@@ -60,6 +60,8 @@ const isBypassAmdEmail = (email?: string | null) => {
   return AI_DIALER_BYPASS_AMD_EMAILS.includes(e);
 };
 
+const LOCAL_PRESENCE_FROM_SENTINEL = "LOCAL_PRESENCE";
+
 function normalizeE164(p?: string) {
   const raw = String(p || "");
   const d = raw.replace(/\D/g, "");
@@ -67,6 +69,11 @@ function normalizeE164(p?: string) {
   if (d.length === 11 && d.startsWith("1")) return `+${d}`;
   if (d.length === 10) return `+1${d}`;
   return raw.startsWith("+") ? raw : `+${d}`;
+}
+
+function recordingFromNumberFor(callFrom: unknown): string {
+  const from = normalizeE164(String(callFrom || ""));
+  return from && from !== LOCAL_PRESENCE_FROM_SENTINEL ? from : "";
 }
 
 function mapTwilioTerminalOutcome(callStatus: string) {
@@ -855,7 +862,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let resolvedFromNumber = fromNumber;
 
-    if (fromNumber === "LOCAL_PRESENCE") {
+    if (fromNumber === LOCAL_PRESENCE_FROM_SENTINEL) {
       const fallback = normalizeE164(
         ((userDoc as any)?.numbers || [])[0]?.phoneNumber || ""
       );
@@ -950,6 +957,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const call = await client.calls.create(callCreate);
+      const recordingFromNumber = recordingFromNumberFor(callCreate.from);
 
       await AICallRecording.findOneAndUpdate(
         { callSid: call.sid },
@@ -959,6 +967,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             leadId,
             aiCallSessionId: aiSession._id,
             callSid: call.sid,
+            fromNumber: recordingFromNumber,
             outcome: "unknown",
             createdAt: new Date(),
           },
