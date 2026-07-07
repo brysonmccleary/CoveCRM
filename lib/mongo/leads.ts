@@ -1,6 +1,12 @@
 // lib/mongo/leads.ts
 import mongoose, { Schema, model, models, Types } from "mongoose";
 import { extractPhoneFromRow } from "@/lib/leads/phoneMapping";
+import {
+  applyTimezoneToUpdate,
+  deriveLeadTimezone,
+  isSoldStatus,
+  withDerivedTimezone,
+} from "@/lib/leads/foundationFields";
 
 const normalizeExternalId = (value: any): string | undefined => {
   if (value == null) return undefined;
@@ -62,6 +68,11 @@ const LeadSchema = new Schema(
     // Status / automation
     assignedDrips: { type: [String], default: [] },
     status: { type: String, default: "New" },
+    soldAt: { type: Date, default: null, index: true },
+    soldAtApproximate: { type: Boolean, default: false },
+    contactAttempts: { type: Number, default: 0 },
+    lastContactedAt: { type: Date, default: null },
+    timezone: { type: String, default: "" },
 
     // Engagement / transcripts
     interactionHistory: { type: [InteractionSchema], default: [] },
@@ -185,6 +196,9 @@ LeadSchema.index(
 LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy reads OK
 LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" });
 LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
+LeadSchema.index({ userEmail: 1, soldAt: -1 }, { name: "lead_user_sold_at_desc" });
+LeadSchema.index({ userEmail: 1, lastContactedAt: 1 }, { name: "lead_user_last_contacted_asc" });
+LeadSchema.index({ userEmail: 1, timezone: 1 }, { name: "lead_user_timezone_idx" });
 LeadSchema.index({ userEmail: 1, isAIEngaged: 1, updatedAt: -1 }, { name: "lead_ai_engaged_idx" });
 LeadSchema.index({ aiFirstCallStatus: 1, aiFirstCallDueAt: 1 }, { name: "lead_ai_first_call_due_idx", sparse: true });
 LeadSchema.index(
@@ -203,6 +217,31 @@ LeadSchema.index(
   { metaLeadgenId: 1 },
   { name: "lead_meta_leadgen_id_unique", unique: true, sparse: true }
 );
+
+LeadSchema.pre("validate", function (next) {
+  const doc = this as any;
+  const timezone = deriveLeadTimezone(doc);
+  if (timezone && (!doc.timezone || doc.isModified("State") || doc.isModified("state"))) {
+    doc.timezone = timezone;
+  }
+  if (doc.isNew && isSoldStatus(doc.status) && !doc.soldAt) {
+    doc.soldAt = new Date();
+    doc.soldAtApproximate = false;
+  }
+  next();
+});
+
+function applyLeadFoundationUpdateFields(this: any, next: (err?: any) => void) {
+  const update = this.getUpdate?.();
+  if (update && !Array.isArray(update)) {
+    this.setUpdate(applyTimezoneToUpdate(update));
+  }
+  next();
+}
+
+LeadSchema.pre("updateOne", applyLeadFoundationUpdateFields);
+LeadSchema.pre("findOneAndUpdate", applyLeadFoundationUpdateFields);
+LeadSchema.pre("updateMany", applyLeadFoundationUpdateFields);
 
 // -------- Utilities --------
 export const sanitizeLeadType = (input: string): string => {
@@ -254,7 +293,7 @@ export const createLeadsFromCSV = async (
     // never write ownerEmail in new docs
     const { ownerEmail, ...rest } = lead;
 
-    return omitBlankExternalId({
+    return omitBlankExternalId(withDerivedTimezone({
       ...rest,
       userEmail,
       folderId: fid,
@@ -264,7 +303,7 @@ export const createLeadsFromCSV = async (
       Email: emailLower,
       email: emailLower2 ?? emailLower, // ✅ ensure lowercase mirror exists
       leadType: sanitizeLeadType(lead.leadType || ""),
-    });
+    }));
   });
 
   // ordered:false lets Mongo insert what it can and skip dup key rows
@@ -290,7 +329,7 @@ export const createLeadsFromGoogleSheet = async (
 
     const { ownerEmail, ...rest } = lead;
 
-    return omitBlankExternalId({
+    return omitBlankExternalId(withDerivedTimezone({
       ...rest,
       userEmail,
       folderId: fid,
@@ -301,7 +340,7 @@ export const createLeadsFromGoogleSheet = async (
       Email: emailLower,
       email: emailLower2 ?? emailLower, // ✅ ensure lowercase mirror exists
       leadType: sanitizeLeadType(lead.leadType || ""),
-    });
+    }));
   });
 
   // ordered:false lets Mongo insert what it can and skip dup key rows

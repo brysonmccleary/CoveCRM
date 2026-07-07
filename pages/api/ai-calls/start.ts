@@ -13,6 +13,7 @@ import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 import { isAdmin } from "@/lib/featureFlags";
+import { recordOutboundTouch } from "@/lib/leads/foundationFields";
 
 type StartAiSessionBody = {
   // New AI dial session fields
@@ -302,6 +303,9 @@ async function startSingleAiCall(
       },
       { upsert: true }
     );
+    if (leadIdForCall) {
+      void recordOutboundTouch({ leadId: leadIdForCall, userEmail });
+    }
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({

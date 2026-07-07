@@ -10,6 +10,7 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
+import { recordOutboundTouch } from "@/lib/leads/foundationFields";
 
 /** Build callback base from the actual request so Twilio always hits the right host */
 function runtimeBase(req: NextApiRequest) {
@@ -115,6 +116,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       { upsert: true }
     );
+    if (body.leadId) {
+      void recordOutboundTouch({ leadId: body.leadId, userEmail });
+    }
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({

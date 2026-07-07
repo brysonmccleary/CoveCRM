@@ -4,6 +4,7 @@ import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import LeadModel from "@/models/Lead"; // ✅ Make sure this exists
 import mongoose from "mongoose";
+import { buildSoldAtTransitionSet } from "@/lib/leads/foundationFields";
 
 export default async function handler(
   req: NextApiRequest,
@@ -19,7 +20,7 @@ export default async function handler(
   }
 
   const { leadId, status } = req.body;
-  const userEmail = session.user.email;
+  const userEmail = session.user.email.toLowerCase();
 
   if (!leadId || !status) {
     return res.status(400).json({ message: "Missing 'leadId' or 'status'" });
@@ -28,9 +29,37 @@ export default async function handler(
   try {
     await dbConnect();
 
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+    const tenantFilter = {
+      _id: leadObjectId,
+      $or: [{ userEmail }, { ownerEmail: userEmail }, { user: userEmail }],
+    };
+
+    const existing = await LeadModel.findOne(tenantFilter)
+      .select({ _id: 1, status: 1, soldAt: 1 })
+      .lean<{ _id: any; status?: string; soldAt?: Date | null } | null>();
+
+    if (!existing) {
+      return res
+        .status(404)
+        .json({ message: "Lead not found or access denied" });
+    }
+
+    const now = new Date();
+    const setFields = {
+      status,
+      updatedAt: now,
+      ...buildSoldAtTransitionSet({
+        nextStatus: status,
+        previousStatus: existing.status,
+        existingSoldAt: existing.soldAt,
+        now,
+      }),
+    };
+
     const result = await LeadModel.updateOne(
-      { _id: new mongoose.Types.ObjectId(leadId), user: userEmail },
-      { $set: { status } },
+      tenantFilter,
+      { $set: setFields },
     );
 
     if (result.matchedCount === 0) {

@@ -15,6 +15,12 @@ import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { extractPhoneFromRow, normalizePhoneDigitsToE164 } from "@/lib/leads/phoneMapping";
 import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+import {
+  buildSoldAtTransitionSet,
+  isSoldStatus,
+  withDerivedTimezone,
+} from "@/lib/leads/foundationFields";
+import { timezoneForState } from "@/lib/leads/stateTimezone";
 
 // ✅ Extract inserted IDs from bulkWrite result (supports multiple driver shapes)
 function getUpsertedIdsFromBulkWrite(result: any): string[] {
@@ -348,6 +354,7 @@ function mapRow(
       : notes;
 
   const normalizedState = normalizeState(stateRaw);
+  const timezone = timezoneForState(normalizedState || stateRaw || "");
   const emailLc = lcEmail(email);
   const rowPhone = extractPhoneFromRow(row);
   const phoneDigits = rowPhone.phone || (phone ? String(phone).replace(/\D+/g, "") : "");
@@ -365,6 +372,7 @@ function mapRow(
     phoneLast10: phoneKey,
     normalizedPhone,
     State: normalizedState,
+    timezone,
     Notes: mergedNotes,
     leadType: sanitizeLeadType(leadTypeRaw || ""),
     status,
@@ -475,7 +483,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const existing = ors.length
         ? await Lead.find({ userEmail, folderId: safeFolderId, $or: ors }).select(
-            "_id phone phoneLast10 normalizedPhone Email email folderId"
+            "_id phone phoneLast10 normalizedPhone Email email folderId status soldAt"
           )
         : [];
 
@@ -540,19 +548,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
         if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
         if (m.State !== undefined) base["State"] = m.State;
+        if ((m as any).timezone) base.timezone = (m as any).timezone;
         if (m.Notes !== undefined) base["Notes"] = m.Notes;
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m.status) base.status = m.status; // EXISTING → status only in $set
+          if (m.status) {
+            const now = base.updatedAt as Date;
+            base.status = m.status; // EXISTING → status only in $set
+            Object.assign(
+              base,
+              buildSoldAtTransitionSet({
+                nextStatus: m.status,
+                previousStatus: exists.status,
+                existingSoldAt: exists.soldAt,
+                now,
+              }),
+            );
+          }
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
+          const createdAt = new Date();
           const setOnInsert: any = {
             userEmail,
             status: (m as any).status || "New", // NEW → status only in $setOnInsert
-            createdAt: new Date(),
+            createdAt,
           };
+          if (isSoldStatus(setOnInsert.status)) {
+            setOnInsert.soldAt = createdAt;
+            setOnInsert.soldAtApproximate = false;
+          }
           if ("status" in base) delete base.status;
           ops.push({
             updateOne: {
@@ -598,7 +624,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const orFilters = processedFilters.flatMap((f) =>
             (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
           );
-          const affected = await Lead.find({ $or: orFilters }).select("_id");
+          const affected = await Lead.find({ userEmail, folderId: safeFolderId, $or: orFilters }).select("_id");
           const ids = affected.map((d) => String(d._id));
           if (ids.length) {
             await Folder.updateOne(
@@ -721,7 +747,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const phoneDigits = rowPhone.phone || String(lead["Phone"] || lead["phone"] || "").replace(/\D+/g, "");
           const phoneKey = phoneDigits ? phoneDigits.slice(-10) : undefined;
           const emailKey = lcEmail(lead["Email"] || lead["email"]);
-          return {
+          return withDerivedTimezone({
             ...lead,
             rawRow: lead,
             userEmail,
@@ -736,7 +762,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             Email: emailKey,
             email: emailKey,
             leadType: sanitizeLeadType(lead["Lead Type"] || ""),
-          };
+          });
         });
 
         await createLeadsFromCSV(leadsToInsert, userEmail, String(safeFolderId));
@@ -806,7 +832,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const existing = ors.length
         ? await Lead.find({ userEmail, folderId: safeFolderId, $or: ors }).select(
-            "_id phone phoneLast10 normalizedPhone Email email folderId"
+            "_id phone phoneLast10 normalizedPhone Email email folderId status soldAt"
           )
         : [];
 
@@ -867,19 +893,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
         if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
         if (m.State !== undefined) base["State"] = m.State;
+        if ((m as any).timezone) base.timezone = (m as any).timezone;
         if (m.Notes !== undefined) base["Notes"] = m.Notes;
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m.status) base.status = m.status;
+          if (m.status) {
+            const now = base.updatedAt as Date;
+            base.status = m.status;
+            Object.assign(
+              base,
+              buildSoldAtTransitionSet({
+                nextStatus: m.status,
+                previousStatus: exists.status,
+                existingSoldAt: exists.soldAt,
+                now,
+              }),
+            );
+          }
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
+          const createdAt = new Date();
           const setOnInsert: any = {
             userEmail,
             status: (m as any).status || "New",
-            createdAt: new Date(),
+            createdAt,
           };
+          if (isSoldStatus(setOnInsert.status)) {
+            setOnInsert.soldAt = createdAt;
+            setOnInsert.soldAtApproximate = false;
+          }
           if ((m as any).rawRow !== undefined) setOnInsert.rawRow = (m as any).rawRow;
 
           if ("status" in base) delete base.status;
@@ -926,7 +970,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const orFilters = processedFilters.flatMap((f) =>
           (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
         );
-        const affected = await Lead.find({ $or: orFilters }).select("_id");
+        const affected = await Lead.find({ userEmail, folderId: safeFolderId, $or: orFilters }).select("_id");
         const ids = affected.map((d) => String(d._id));
         if (ids.length) {
           await Folder.updateOne(

@@ -15,6 +15,7 @@ import {
   maybeMarkAICallSessionCompleted,
   transitionAICallRecordingOutcome,
 } from "@/lib/ai-calls/outcomeTransitions";
+import { recordOutboundTouch } from "@/lib/leads/foundationFields";
 
 const BASE = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -958,6 +959,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const call = await client.calls.create(callCreate);
       const recordingFromNumber = recordingFromNumberFor(callCreate.from);
+      const callPlacedAt = new Date();
 
       await AICallRecording.findOneAndUpdate(
         { callSid: call.sid },
@@ -969,17 +971,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             callSid: call.sid,
             fromNumber: recordingFromNumber,
             outcome: "unknown",
-            createdAt: new Date(),
+            createdAt: callPlacedAt,
           },
           $set: {
-            updatedAt: new Date(),
+            updatedAt: callPlacedAt,
           },
         },
         { upsert: true, new: true }
       );
 
       // ✅ Success: advance lastIndex, record active call state, clear cooldown
-      const callPlacedAt = new Date();
+      void recordOutboundTouch({ leadId, userEmail });
+
       await AICallSession.updateOne(
         { _id: sessionId },
         {

@@ -19,6 +19,8 @@ const config: Config = {
   testMatch: [
     "**/__tests__/ai-session.sim.test.ts",
     "**/__tests__/ai-voice.sim.test.ts",
+    "**/__tests__/lead-foundations.test.ts",
+    "**/__tests__/number-reputation.test.ts",
     "**/__tests__/p0-security-remediation.test.ts",
     "**/__tests__/payout-double-pay-remediation.test.ts",
     "**/__tests__/dialer-billing-rates.test.ts",

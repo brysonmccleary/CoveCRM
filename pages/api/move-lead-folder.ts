@@ -6,6 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import mongoose from "mongoose";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
+import { buildSoldAtTransitionSet } from "@/lib/leads/foundationFields";
 
 const SYSTEM = new Set(["not interested", "booked appointment", "sold", "resolved"]);
 
@@ -31,9 +32,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await sessionMongo.withTransaction(async () => {
       // 1) Verify lead belongs to this user
       const lead = await Lead.findOne({ _id: leadId, userEmail })
-        .select({ _id: 1, status: 1 })
+        .select({ _id: 1, status: 1, soldAt: 1 })
         .session(sessionMongo)
-        .lean<{ _id: any; status?: string } | null>();
+        .lean<{ _id: any; status?: string; soldAt?: Date | null } | null>();
       if (!lead) throw new Error("Lead not found or not owned by user");
 
       // 2) Resolve or create destination folder (case-insensitive exact)
@@ -47,12 +48,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       toFolderId = folder!._id as any;
 
       // 3) Move lead; only set status if system folder
+      const now = new Date();
       const setFields: any = {
         folderId: toFolderId,
-        updatedAt: new Date(),
+        updatedAt: now,
       };
       if (SYSTEM.has(nameRaw.toLowerCase())) {
         setFields.status = nameRaw;
+        Object.assign(
+          setFields,
+          buildSoldAtTransitionSet({
+            nextStatus: nameRaw,
+            previousStatus: lead.status,
+            existingSoldAt: lead.soldAt,
+            now,
+          }),
+        );
       }
 
       const result = await Lead.updateOne(

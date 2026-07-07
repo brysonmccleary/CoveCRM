@@ -11,6 +11,7 @@ import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
+import { recordOutboundTouch } from "@/lib/leads/foundationFields";
 
 const MOBILE_JWT_SECRET =
   process.env.MOBILE_JWT_SECRET ||
@@ -239,6 +240,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       { upsert: true, new: true }
     );
+    if (leadId) {
+      void recordOutboundTouch({ leadId, userEmail: email });
+    }
 
     return res.status(200).json({
       ok: true,

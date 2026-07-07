@@ -11,6 +11,7 @@ import { folderNameForDisposition } from "@/lib/dispositionToFolder";
 import { isSystemFolderName } from "@/lib/systemFolders";
 import jwt from "jsonwebtoken";
 import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
+import { buildSoldAtTransitionSet } from "@/lib/leads/foundationFields";
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -122,9 +123,9 @@ export default async function handler(
 
     await mongoSession.withTransaction(async () => {
       const existing = await Lead.findOne({ _id: leadId, userEmail })
-        .select({ _id: 1, folderId: 1, status: 1 })
+        .select({ _id: 1, folderId: 1, status: 1, soldAt: 1 })
         .session(mongoSession)
-        .lean<{ _id: any; folderId?: any; status?: string } | null>();
+        .lean<{ _id: any; folderId?: any; status?: string; soldAt?: Date | null } | null>();
 
       if (!existing) throw new Error("Lead not found.");
 
@@ -198,15 +199,25 @@ export default async function handler(
         }
       }
 
+      const now = new Date();
       const setFields: Record<string, any> = {
         folderId: targetFolderId,
         folderName: toFolderName,
         ["Folder Name"]: toFolderName,
         folder: toFolderName,
-        updatedAt: new Date(),
+        updatedAt: now,
       };
       if (ALLOW_STATUS_SET.has(desiredLower)) {
         setFields.status = desiredFolderName;
+        Object.assign(
+          setFields,
+          buildSoldAtTransitionSet({
+            nextStatus: desiredFolderName,
+            previousStatus: existing.status,
+            existingSoldAt: existing.soldAt,
+            now,
+          }),
+        );
       }
 
       const write = await Lead.updateOne(

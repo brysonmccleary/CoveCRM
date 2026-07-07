@@ -9,6 +9,7 @@ import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { trackLeadSourceStat } from "@/lib/leads/trackLeadSourceStat";
 import AISettings from "@/models/AISettings";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
+import { timezoneForState } from "@/lib/leads/stateTimezone";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -98,6 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         Age,
         Beneficiary,
         "Coverage Amount": CoverageAmount,
+        timezone: timezoneForState(State),
         userEmail: email,
         ownerEmail: email,
         user: email, // legacy field for older code paths

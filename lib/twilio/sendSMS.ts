@@ -14,6 +14,7 @@ import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import { reconcileUserNumbers } from "@/lib/twilio/reconcileUserNumbers";
 import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefault";
 import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
+import { recordOutboundTouch } from "@/lib/leads/foundationFields";
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
 const BASE_URL = (
@@ -733,14 +734,18 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
       const seg = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
       await trackUsage({ user, amount: SMS_COST * seg, source: "twilio" });
     }
+    const sentAt = new Date();
     const newStatus = (tw.status as string) || "accepted";
     await Message.findByIdAndUpdate(preRow._id, {
       $set: {
         sid: tw.sid,
         status: newStatus,
-        sentAt: new Date(),
+        sentAt,
       },
     }).exec();
+    if (lead?._id) {
+      void recordOutboundTouch({ leadId: lead._id, userEmail: user.email });
+    }
     return { sid: tw.sid, serviceSid, messageId };
   } catch (err: any) {
     const code = err?.code;
