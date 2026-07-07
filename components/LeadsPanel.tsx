@@ -234,6 +234,10 @@ export default function LeadsPanel() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [openFolderMenu, setOpenFolderMenu] = useState<string | null>(null);
   const [aiToggleErrors, setAiToggleErrors] = useState<Record<string, boolean>>({});
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
+  const [renameFolderName, setRenameFolderName] = useState("");
+  const [renameFolderErrors, setRenameFolderErrors] = useState<Record<string, string>>({});
+  const [savingRenameFolderId, setSavingRenameFolderId] = useState<string | null>(null);
 
   // ✅ NEW: Wizard state
   const [showSheetsWizard, setShowSheetsWizard] = useState(false);
@@ -512,6 +516,82 @@ export default function LeadsPanel() {
       alert("An error occurred while deleting the folder.");
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  const startRenameFolder = (folder: any) => {
+    const folderId = String(folder?._id || "");
+    if (!folderId || isSystemFolderName(folder?.name)) return;
+    setOpenFolderMenu(null);
+    setRenameFolderErrors((prev) => {
+      const next = { ...prev };
+      delete next[folderId];
+      return next;
+    });
+    setRenamingFolderId(folderId);
+    setRenameFolderName(String(folder?.name || ""));
+  };
+
+  const cancelRenameFolder = () => {
+    setRenamingFolderId(null);
+    setRenameFolderName("");
+  };
+
+  const saveRenameFolder = async (folder: any) => {
+    const folderId = String(folder?._id || "");
+    const previousName = String(folder?.name || "");
+    const nextName = renameFolderName.trim();
+    if (!folderId || !nextName || nextName === previousName) {
+      cancelRenameFolder();
+      return;
+    }
+    const duplicate = folders.some(
+      (f) =>
+        String(f?._id) !== folderId &&
+        String(f?.name || "").trim().toLowerCase() === nextName.toLowerCase()
+    );
+    if (duplicate) {
+      setRenameFolderErrors((prev) => ({ ...prev, [folderId]: "A folder with that name already exists." }));
+      return;
+    }
+
+    setSavingRenameFolderId(folderId);
+    setRenameFolderErrors((prev) => {
+      const next = { ...prev };
+      delete next[folderId];
+      return next;
+    });
+    setFolders((prev) =>
+      prev.map((f) => (String(f._id) === folderId ? { ...f, name: nextName } : f))
+    );
+    setRenamingFolderId(null);
+    setRenameFolderName("");
+
+    try {
+      const res = await fetch(`/api/folders/${encodeURIComponent(folderId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: nextName }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.message || data?.error || "Failed to rename folder.");
+      }
+      if (data?.name) {
+        setFolders((prev) =>
+          prev.map((f) => (String(f._id) === folderId ? { ...f, name: data.name } : f))
+        );
+      }
+    } catch (err: any) {
+      setFolders((prev) =>
+        prev.map((f) => (String(f._id) === folderId ? { ...f, name: previousName } : f))
+      );
+      setRenameFolderErrors((prev) => ({
+        ...prev,
+        [folderId]: err?.message || "Failed to rename folder.",
+      }));
+    } finally {
+      setSavingRenameFolderId(null);
     }
   };
 
@@ -1063,16 +1143,99 @@ export default function LeadsPanel() {
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.14)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.09)"; }}
                 >
-                  <button
-                    type="button"
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => toggleFolder(folder._id)}
+                    onKeyDown={(e) => {
+                      if (renamingFolderId === String(folder._id)) return;
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        toggleFolder(folder._id);
+                      }
+                    }}
                     className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left"
                   >
-                    <span className="truncate text-sm font-semibold text-white">{folder.name}</span>
+                    {renamingFolderId === String(folder._id) ? (
+                      <input
+                        value={renameFolderName}
+                        autoFocus
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameFolderName(e.target.value)}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            saveRenameFolder(folder);
+                          }
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            cancelRenameFolder();
+                          }
+                        }}
+                        onBlur={() => cancelRenameFolder()}
+                        style={{
+                          minWidth: "160px",
+                          maxWidth: "260px",
+                          width: "min(260px, 100%)",
+                          borderRadius: "6px",
+                          border: "1px solid rgba(255,255,255,0.18)",
+                          background: "rgba(15,23,42,0.65)",
+                          color: "inherit",
+                          fontSize: "14px",
+                          fontWeight: 600,
+                          padding: "2px 6px",
+                          outline: "none",
+                        }}
+                      />
+                    ) : (
+                      <span className="truncate text-sm font-semibold text-white">{folder.name}</span>
+                    )}
+                    {renamingFolderId !== String(folder._id) && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        title="Rename folder"
+                        aria-label={`Rename ${folder.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startRenameFolder(folder);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            startRenameFolder(folder);
+                          }
+                        }}
+                        style={{
+                          border: "1px solid rgba(255,255,255,0.12)",
+                          borderRadius: "6px",
+                          background: "rgba(15,23,42,0.45)",
+                          color: "inherit",
+                          cursor: "pointer",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: "12px",
+                          lineHeight: 1,
+                          minHeight: "24px",
+                          minWidth: "24px",
+                        }}
+                      >
+                        ✎
+                      </span>
+                    )}
                     <span className="rounded-full border border-slate-600 bg-slate-900/60 px-2 py-0.5 text-xs font-semibold text-gray-300">
                       {formatLeadCount(leadCount)}
                     </span>
-                  </button>
+                    {savingRenameFolderId === String(folder._id) && (
+                      <span className="text-xs font-semibold text-gray-300">Saving...</span>
+                    )}
+                    {renameFolderErrors[folder._id] && (
+                      <span className="text-xs font-semibold text-red-400">{renameFolderErrors[folder._id]}</span>
+                    )}
+                  </div>
 
                   <div className="flex flex-wrap items-center gap-2">
                     <select
