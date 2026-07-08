@@ -8,6 +8,10 @@ import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
+import {
+  ensureA2PCampaignWithoutDuplicateCreate,
+  resolveExistingCampaignSid,
+} from "@/lib/a2p/campaignCreateGuard";
 
 const baseUrl =
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -120,33 +124,6 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
   const client = resolved.client;
   const twilioAccountSidUsed = resolved.accountSid;
 
-  // If we already have a campaign SID, verify it exists, else unset it.
-  if (a2p.usa2pSid && a2p.messagingServiceSid) {
-    try {
-      const svc: any = client.messaging.v1.services(a2p.messagingServiceSid);
-      const sub =
-        svc?.usAppToPerson && typeof svc.usAppToPerson === "function"
-          ? svc.usAppToPerson(a2p.usa2pSid)
-          : null;
-
-      if (sub?.fetch) {
-        await sub.fetch();
-        return {
-          ok: true,
-          didCreate: false,
-          usa2pSid: a2p.usa2pSid,
-          twilioAccountSidUsed,
-        };
-      }
-    } catch (err: any) {
-      if (!isTwilioNotFound(err)) throw err;
-      await A2PProfile.updateOne(
-        { _id: a2pId },
-        { $unset: { usa2pSid: 1, campaignSid: 1 } },
-      );
-    }
-  }
-
   if (!a2p.brandSid) return { ok: false, reason: "missing_brandSid" as const };
   if (!a2p.profileSid) return { ok: false, reason: "missing_profileSid" as const };
   if (!a2p.trustProductSid) return { ok: false, reason: "missing_trustProductSid" as const };
@@ -234,14 +211,19 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
     hasEmbeddedPhone: createPayload.hasEmbeddedPhone,
   });
 
-  const usa2p = await client.messaging.v1
-    .services(messagingServiceSid)
-    .usAppToPerson.create(createPayload);
+  const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+    client,
+    messagingServiceSid,
+    brandSid: a2p.brandSid,
+    existingCampaignSid: resolveExistingCampaignSid(a2p.campaignSid, a2p.usa2pSid),
+    createPayload,
+    log,
+  });
 
-  const usa2pSid = (usa2p as any)?.sid;
+  const usa2pSid = guarded.campaignSid;
   if (!isSidLike(usa2pSid, "QE")) {
     throw new Error(
-      `usAppToPerson.create did not return a QE sid. Body: ${JSON.stringify(usa2p)}`,
+      `A2P campaign guard did not return a QE sid. Body: ${JSON.stringify(guarded.campaign)}`,
     );
   }
 
@@ -255,9 +237,10 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
         usa2pSid,
         campaignSid: usa2pSid,
         messagingServiceSid,
-        registrationStatus: "campaign_submitted",
+        registrationStatus: guarded.didUpdate ? "campaign_submitted" : "campaign_submitted",
         applicationStatus: "pending",
         messagingReady: false,
+        ...(guarded.campaignStatus ? { campaignStatus: guarded.campaignStatus } : {}),
         lastSyncedAt: new Date(),
         twilioAccountSidLastUsed: twilioAccountSidUsed,
       } as any,
@@ -265,7 +248,11 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
         approvalHistory: {
           stage: "campaign_submitted",
           at: new Date(),
-          note: "Campaign auto-submitted after brand approval",
+          note: guarded.didUpdate
+            ? "Existing failed/rejected A2P campaign updated/resubmitted in place after brand approval"
+            : guarded.didCreate
+              ? "Campaign auto-submitted after brand approval"
+              : "Existing A2P campaign preserved/recovered after brand approval",
         },
       },
       $unset: {
@@ -277,7 +264,10 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
 
   return {
     ok: true,
-    didCreate: true,
+    didCreate: guarded.didCreate,
+    didUpdate: guarded.didUpdate,
+    recovered: guarded.recovered,
+    reason: guarded.reason,
     usa2pSid,
     messagingServiceSid,
     brandStatus,

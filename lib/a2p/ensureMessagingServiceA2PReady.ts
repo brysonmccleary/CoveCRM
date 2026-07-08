@@ -7,6 +7,10 @@ import {
   buildLeadGenerationSampleMessages,
   personalizeA2PSampleMessages,
 } from "@/lib/a2p/flowSelection";
+import {
+  ensureA2PCampaignWithoutDuplicateCreate,
+  resolveExistingCampaignSid,
+} from "@/lib/a2p/campaignCreateGuard";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -202,55 +206,6 @@ async function fetchServiceCampaign(client: any, auths: BasicAuth[], messagingSe
   return campaigns.find((campaign: any) => campaignSidOf(campaign) === campaignSid) || null;
 }
 
-async function createServiceCampaign(args: {
-  client: any;
-  auths: BasicAuth[];
-  messagingServiceSid: string;
-  brandSid: string;
-  profile: any;
-  dryRun: boolean;
-}) {
-  const { client, auths, messagingServiceSid, brandSid, profile, dryRun } = args;
-  if (dryRun) return null;
-
-  const messageFlow = getMessageFlow(profile);
-  const messageSamples = getMessageSamples(profile);
-  const payload = buildA2PCampaignPayload({
-    profile,
-    brandRegistrationSid: brandSid,
-    baseUrl: BASE_URL,
-    userId: String(profile?.userId || ""),
-    messageFlow,
-    messageSamples,
-    usecase: getUsecase(profile),
-  });
-
-  try {
-    return await client.messaging.v1.services(messagingServiceSid).usAppToPerson.create(payload);
-  } catch (sdkErr: any) {
-    const body = new URLSearchParams();
-    body.set("BrandRegistrationSid", payload.brandRegistrationSid);
-    body.set("Description", payload.description);
-    body.set("MessageFlow", payload.messageFlow);
-    body.set("UsAppToPersonUsecase", payload.usAppToPersonUsecase);
-    body.set("HasEmbeddedLinks", String(payload.hasEmbeddedLinks));
-    body.set("HasEmbeddedPhone", String(payload.hasEmbeddedPhone));
-    body.set("SubscriberOptIn", String(payload.subscriberOptIn));
-    body.set("AgeGated", String(payload.ageGated));
-    body.set("DirectLending", String(payload.directLending));
-    if (payload.privacyPolicyUrl) body.set("PrivacyPolicyUrl", payload.privacyPolicyUrl);
-    if (payload.termsAndConditionsUrl) body.set("TermsAndConditionsUrl", payload.termsAndConditionsUrl);
-    for (const sample of payload.messageSamples) body.append("MessageSamples", sample);
-
-    const { data } = await fetchTwilioJson(
-      `https://messaging.twilio.com/v1/Services/${encodeURIComponent(messagingServiceSid)}/Compliance/Usa2p`,
-      auths,
-      { method: "POST", body },
-    );
-    return data;
-  }
-}
-
 async function resolveCampaign(args: {
   client: any;
   auths: BasicAuth[];
@@ -261,7 +216,12 @@ async function resolveCampaign(args: {
   dryRun: boolean;
 }) {
   const { client, auths, messagingServiceSid, profile, userA2P, repair, dryRun } = args;
-  const dbCampaignSid = String(profile?.usa2pSid || profile?.campaignSid || userA2P?.usa2pSid || userA2P?.campaignSid || "").trim();
+  const dbCampaignSid = resolveExistingCampaignSid(
+    profile?.campaignSid,
+    profile?.usa2pSid,
+    userA2P?.campaignSid,
+    userA2P?.usa2pSid,
+  );
   const brandSid = String(profile?.brandSid || userA2P?.brandSid || "").trim();
   const brandStatus = String(profile?.brandStatus || userA2P?.brandStatus || "").toLowerCase();
 
@@ -270,7 +230,38 @@ async function resolveCampaign(args: {
     campaigns = await listServiceCampaigns(client, auths, messagingServiceSid);
   } catch {}
 
-  if (dbCampaignSid) {
+  const messageFlow = getMessageFlow(profile);
+  const messageSamples = getMessageSamples(profile);
+  const canBuildPayload = Boolean(brandSid && messageSamples.length >= 2 && messageFlow);
+
+  if (dbCampaignSid && canBuildPayload) {
+    const payload = buildA2PCampaignPayload({
+      profile,
+      brandRegistrationSid: brandSid,
+      baseUrl: BASE_URL,
+      userId: String(profile?.userId || ""),
+      messageFlow,
+      messageSamples,
+      usecase: getUsecase(profile),
+    });
+    const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+      client,
+      messagingServiceSid,
+      brandSid,
+      existingCampaignSid: dbCampaignSid,
+      createPayload: payload,
+      allowCreate: false,
+      log: (...args: any[]) => console.log("[ensureMessagingServiceA2PReady]", ...args),
+    });
+    if (guarded.campaignSid) {
+      return {
+        campaign: guarded.campaign,
+        campaignSid: guarded.campaignSid,
+        created: guarded.didCreate,
+        reason: guarded.reason,
+      };
+    }
+  } else if (dbCampaignSid) {
     const fetched = await fetchServiceCampaign(client, auths, messagingServiceSid, dbCampaignSid);
     if (fetched) return { campaign: fetched, campaignSid: campaignSidOf(fetched) || dbCampaignSid, created: false, reason: "db_campaign_on_service" };
   }
@@ -300,12 +291,29 @@ async function resolveCampaign(args: {
     return { campaign: null, campaignSid: "", created: false, reason: `brand_not_approved:${brandStatus}` };
   }
 
-  const created = await createServiceCampaign({ client, auths, messagingServiceSid, brandSid, profile, dryRun });
-  if (!created) {
+  if (dryRun) {
     return { campaign: null, campaignSid: "", created: false, reason: "would_create_service_campaign" };
   }
 
-  return { campaign: created, campaignSid: campaignSidOf(created), created: true, reason: "created_service_campaign" };
+  const payload = buildA2PCampaignPayload({
+    profile,
+    brandRegistrationSid: brandSid,
+    baseUrl: BASE_URL,
+    userId: String(profile?.userId || ""),
+    messageFlow,
+    messageSamples,
+    usecase: getUsecase(profile),
+  });
+  const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+    client,
+    messagingServiceSid,
+    brandSid,
+    existingCampaignSid: dbCampaignSid,
+    createPayload: payload,
+    log: (...args: any[]) => console.log("[ensureMessagingServiceA2PReady]", ...args),
+  });
+
+  return { campaign: guarded.campaign, campaignSid: guarded.campaignSid, created: guarded.didCreate, reason: guarded.reason };
 }
 
 async function attachNumberIfMissing(client: any, messagingServiceSid: string, phoneNumberSid: string, dryRun: boolean) {

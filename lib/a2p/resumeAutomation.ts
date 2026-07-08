@@ -7,6 +7,10 @@ import { Buffer } from "buffer";
 import twilio from "twilio";
 import { buildA2PFailureObject } from "@/lib/a2p/failureTranslator";
 import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
+import {
+  ensureA2PCampaignWithoutDuplicateCreate,
+  resolveExistingCampaignSid,
+} from "@/lib/a2p/campaignCreateGuard";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -1394,10 +1398,10 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
       }
     }
 
-    let campaignSid = String(profile.campaignSid || profile.usa2pSid || "").trim();
+    let campaignSid = resolveExistingCampaignSid(profile.campaignSid, profile.usa2pSid);
     let campaignStatus = normalizeUpper((profile as any).campaignStatus);
 
-    if (!campaignSid && brandSid && BRAND_OK_FOR_CAMPAIGN.has(brandStatus)) {
+    if (brandSid && BRAND_OK_FOR_CAMPAIGN.has(brandStatus)) {
       if (!messagingServiceSid) {
         messagingServiceSid = await ensureMessagingService({
           client,
@@ -1409,6 +1413,48 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         update.messagingServiceSid = messagingServiceSid;
       }
 
+      const samples = parseSamples(profile);
+      const messageFlow = String(
+        profile.lastSubmittedOptInDetails || profile.optInDetails || "",
+      ).trim();
+
+      if (campaignSid && samples.length >= 2 && messageFlow) {
+        const createPayload = buildA2PCampaignPayload({
+          profile,
+          brandRegistrationSid: brandSid,
+          baseUrl: BASE_URL,
+          userId: String(profile.userId || ""),
+          usecase: "LOW_VOLUME",
+          messageSamples: samples,
+          messageFlow,
+        });
+        const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+          client,
+          messagingServiceSid,
+          brandSid,
+          existingCampaignSid: campaignSid,
+          createPayload,
+          allowCreate: false,
+          log,
+        });
+        if (guarded.campaignSid) {
+          campaignSid = guarded.campaignSid;
+          campaignStatus = normalizeUpper(guarded.campaignStatus || campaignStatus);
+          update.campaignSid = campaignSid;
+          update.usa2pSid = campaignSid;
+          update.campaignStatus = campaignStatus || undefined;
+          if (guarded.didUpdate) {
+            update.registrationStatus = "campaign_submitted";
+            update.applicationStatus = "pending";
+            update.messagingReady = false;
+            update.lastAdvancedAt = now;
+            advanced = true;
+          }
+        }
+      }
+    }
+
+    if (!campaignSid && brandSid && BRAND_OK_FOR_CAMPAIGN.has(brandStatus)) {
       const recoveredCampaign = await recoverExistingCampaignDetailsForBrand({
         client,
         messagingServiceSid,
@@ -1474,20 +1520,20 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
               messageFlow,
             });
 
-            const created: any = await client.messaging.v1
-              .services(messagingServiceSid)
-              .usAppToPerson.create(createPayload);
+            const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+              client,
+              messagingServiceSid,
+              brandSid,
+              existingCampaignSid: resolveExistingCampaignSid(
+                (lockedProfile as any).campaignSid,
+                (lockedProfile as any).usa2pSid,
+              ),
+              createPayload,
+              log,
+            });
 
-            campaignSid = String(
-              created?.sid ||
-                created?.campaignSid ||
-                created?.campaign_id ||
-                created?.campaignId ||
-                "",
-            ).trim();
-            campaignStatus = normalizeUpper(
-              created?.campaignStatus || created?.campaign_status || created?.status,
-            );
+            campaignSid = guarded.campaignSid;
+            campaignStatus = normalizeUpper(guarded.campaignStatus);
 
             if (campaignSid) {
               update.campaignSid = campaignSid;
@@ -1495,8 +1541,8 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
               update.campaignStatus = campaignStatus || "PENDING";
               update.registrationStatus = "campaign_submitted";
               update.lastAdvancedAt = now;
-              advanced = true;
-              log("A2P][CAMPAIGN_CREATED", { userEmail: normalizedEmail, campaignSid, campaignStatus });
+              advanced = guarded.didCreate || guarded.didUpdate;
+              log(guarded.didUpdate ? "A2P][CAMPAIGN_UPDATED" : guarded.didCreate ? "A2P][CAMPAIGN_CREATED" : "A2P][CAMPAIGN_RECOVERED", { userEmail: normalizedEmail, campaignSid, campaignStatus });
               log("A2P ADVANCE", {
                 userEmail: normalizedEmail,
                 step: "campaign",

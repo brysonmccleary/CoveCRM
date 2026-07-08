@@ -9,6 +9,10 @@ import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
 import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
 import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
 import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
+import {
+  ensureA2PCampaignWithoutDuplicateCreate,
+  resolveExistingCampaignSid,
+} from "@/lib/a2p/campaignCreateGuard";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
 const CRON_SECRET = process.env.CRON_SECRET || "";
@@ -293,8 +297,45 @@ async function ensureCampaignForApprovedBrandTenant(args: {
     return { created: false, campaignSid: doc.campaignSid || doc.usa2pSid || null };
   }
 
-  const existingCampaignSid = doc.campaignSid || doc.usa2pSid;
-  if (existingCampaignSid) return { created: false, campaignSid: existingCampaignSid };
+  const existingCampaignSid = resolveExistingCampaignSid(doc.campaignSid, doc.usa2pSid);
+  if (existingCampaignSid) {
+    const messageSamples = deriveMessageSamples(doc);
+    const flow = deriveMessageFlow(doc);
+    if (!messageSamples.length || !flow) return { created: false, campaignSid: existingCampaignSid };
+
+    const createPayload = buildA2PCampaignPayload({
+      profile: doc,
+      brandRegistrationSid: brandSid,
+      baseUrl: BASE_URL,
+      userId: String(doc.userId || ""),
+      usecase: "LOW_VOLUME",
+      messageSamples,
+      messageFlow: flow,
+    });
+    const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+      client,
+      messagingServiceSid,
+      brandSid,
+      existingCampaignSid,
+      createPayload,
+      allowCreate: false,
+      log: (...args: any[]) => console.log("[A2P sync]", ...args),
+    });
+    if (guarded.campaignSid) {
+      await A2PProfile.updateOne(
+        { _id: doc._id },
+        {
+          $set: {
+            campaignSid: guarded.campaignSid,
+            usa2pSid: guarded.campaignSid,
+            ...(guarded.campaignStatus ? { campaignStatus: guarded.campaignStatus } : {}),
+            lastSyncedAt: new Date(),
+          },
+        },
+      );
+    }
+    return { created: false, campaignSid: guarded.campaignSid || existingCampaignSid, campaignStatus: guarded.campaignStatus };
+  }
 
   const lowerBrand = (brandStatus || "").toLowerCase();
   if (!lowerBrand || !BRAND_APPROVED.has(lowerBrand)) return { created: false, campaignSid: null };
@@ -356,12 +397,17 @@ async function ensureCampaignForApprovedBrandTenant(args: {
       messageFlow: flow,
     });
 
-    const usA2p = await client.messaging.v1.services(messagingServiceSid).usAppToPerson.create(createPayload);
+    const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+      client,
+      messagingServiceSid,
+      brandSid,
+      existingCampaignSid: resolveExistingCampaignSid(lockedDoc.campaignSid, lockedDoc.usa2pSid),
+      createPayload,
+      log: (...args: any[]) => console.log("[A2P sync]", ...args),
+    });
 
-    const campaignSid =
-      usA2p?.sid || usA2p?.campaignSid || usA2p?.campaign_id || usA2p?.campaignId || null;
-
-    const status = usA2p?.status || "pending";
+    const campaignSid = guarded.campaignSid || null;
+    const status = guarded.campaignStatus || "pending";
 
     if (campaignSid) {
       // IMPORTANT:
@@ -392,7 +438,7 @@ async function ensureCampaignForApprovedBrandTenant(args: {
       );
     }
 
-    return { created: true, campaignSid, campaignStatus: status };
+    return { created: guarded.didCreate, campaignSid, campaignStatus: status };
   } catch (e: any) {
     await A2PProfile.updateOne(
       { _id: doc._id },

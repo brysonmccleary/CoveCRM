@@ -11,6 +11,10 @@ import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
 import { buildA2PFailureObject } from "@/lib/a2p/failureTranslator";
 import { maybeHandleA2PFailure } from "@/lib/a2p/a2pFailureAutomation";
 import { buildA2PCampaignPayload } from "@/lib/a2p/campaignPayload";
+import {
+  ensureA2PCampaignWithoutDuplicateCreate,
+  resolveExistingCampaignSid,
+} from "@/lib/a2p/campaignCreateGuard";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -210,24 +214,7 @@ async function ensureCampaignForProfile(args: {
 
   if (!brandSid) return;
 
-  // Do NOT trust a stored usa2pSid blindly.
-  // Resubmits/recreated brands can leave a stale campaign SID in Mongo.
-  // Only skip creation if the stored campaign is still fetchable on the current Messaging Service.
-  if (a2p.usa2pSid) {
-    try {
-      const existing = await client.messaging.v1
-        .services(messagingServiceSid)
-        .usAppToPerson(a2p.usa2pSid)
-        .fetch();
-
-      if (existing) return;
-    } catch {
-      await A2PProfile.updateOne(
-        { _id: a2p._id },
-        { $unset: { usa2pSid: 1, campaignSid: 1 } }
-      );
-    }
-  }
+  const existingCampaignSid = resolveExistingCampaignSid(a2p.campaignSid, a2p.usa2pSid);
 
   const useCaseCode = getUseCaseFromProfile(a2p);
   const messageFlowText = getMessageFlowFromProfile(a2p);
@@ -243,6 +230,53 @@ async function ensureCampaignForProfile(args: {
         },
       },
     );
+    return;
+  }
+
+  if (existingCampaignSid) {
+    const createPayload = buildA2PCampaignPayload({
+      profile: a2p,
+      brandRegistrationSid: brandSid,
+      baseUrl: BASE_URL,
+      userId: String(a2p.userId || ""),
+      usecase: useCaseCode,
+      messageSamples: samples,
+      messageFlow: messageFlowText,
+    });
+
+    const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+      client,
+      messagingServiceSid,
+      brandSid,
+      existingCampaignSid,
+      createPayload,
+      allowCreate: false,
+      log: (...args: any[]) => console.log("[A2P status-callback]", ...args),
+    });
+
+    if (guarded.campaignSid) {
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            usa2pSid: guarded.campaignSid,
+            campaignSid: guarded.campaignSid,
+            registrationStatus: "campaign_submitted",
+            ...(guarded.campaignStatus ? { campaignStatus: guarded.campaignStatus } : {}),
+            lastError: undefined,
+          },
+          $push: {
+            approvalHistory: {
+              stage: "campaign_submitted",
+              at: new Date(),
+              note: guarded.didUpdate
+                ? "Existing failed/rejected A2P campaign updated/resubmitted in place from status callback"
+                : "Existing A2P campaign preserved from status callback",
+            },
+          },
+        },
+      );
+    }
     return;
   }
 
@@ -283,24 +317,36 @@ async function ensureCampaignForProfile(args: {
       messageFlow: messageFlowText,
     });
 
-    const usa2p = await client.messaging.v1.services(messagingServiceSid).usAppToPerson.create(createPayload);
+    const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+      client,
+      messagingServiceSid,
+      brandSid,
+      existingCampaignSid,
+      createPayload,
+      log: (...args: any[]) => console.log("[A2P status-callback]", ...args),
+    });
 
-    const usa2pSid =
-      (usa2p as any).sid || (usa2p as any).campaignId || (usa2p as any).campaign_id;
+    const usa2pSid = guarded.campaignSid;
 
     await A2PProfile.updateOne(
       { _id: a2p._id },
       {
         $set: {
           usa2pSid,
+          campaignSid: usa2pSid,
           registrationStatus: "campaign_submitted",
+          ...(guarded.campaignStatus ? { campaignStatus: guarded.campaignStatus } : {}),
           lastError: undefined,
         },
         $push: {
           approvalHistory: {
             stage: "campaign_submitted",
             at: new Date(),
-            note: "A2P campaign auto-created from status callback",
+            note: guarded.didUpdate
+              ? "Existing failed/rejected A2P campaign updated/resubmitted in place from status callback"
+              : guarded.didCreate
+                ? "A2P campaign auto-created from status callback"
+                : "Existing A2P campaign preserved/recovered from status callback",
           },
         },
       },

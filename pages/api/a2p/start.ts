@@ -17,6 +17,10 @@ import {
   buildCampaignDescription,
 } from "@/lib/a2p/campaignPayload";
 import {
+  ensureA2PCampaignWithoutDuplicateCreate,
+  resolveExistingCampaignSid,
+} from "@/lib/a2p/campaignCreateGuard";
+import {
   buildA2PMessageFlowForFlow,
   buildLeadGenerationOptInDetails,
   buildLeadGenerationSampleMessages,
@@ -2470,7 +2474,56 @@ export default async function handler(
 
     // ---------------- 5) Campaign (Usa2p QE...) ----------------
     live = await A2PProfile.findOne({ userId }).lean<any>();
-    let usa2pSid: string | undefined = live?.usa2pSid;
+    let usa2pSid: string | undefined = resolveExistingCampaignSid(live?.campaignSid, live?.usa2pSid) || undefined;
+
+    if (usa2pSid && canCreateCampaign) {
+      const createPayload = buildA2PCampaignPayload({
+        profile: setPayload,
+        brandRegistrationSid: brandSid!,
+        baseUrl,
+        userId,
+        usecase: "LOW_VOLUME",
+        messageSamples: samples,
+        messageFlow: messageFlowText,
+      });
+      const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+        client,
+        messagingServiceSid,
+        brandSid: brandSid!,
+        existingCampaignSid: usa2pSid,
+        createPayload,
+        allowCreate: false,
+        log,
+      });
+      if (guarded.campaignSid) {
+        usa2pSid = guarded.campaignSid;
+        await A2PProfile.updateOne(
+          { _id: a2pId },
+          {
+            $set: {
+              usa2pSid,
+              campaignSid: usa2pSid,
+              messagingServiceSid,
+              registrationStatus: "campaign_submitted",
+              applicationStatus: "pending",
+              messagingReady: false,
+              ...(guarded.campaignStatus ? { campaignStatus: guarded.campaignStatus } : {}),
+              lastSyncedAt: new Date(),
+              twilioAccountSidLastUsed: twilioAccountSidUsed,
+            } as any,
+            $push: {
+              approvalHistory: {
+                stage: "campaign_submitted",
+                at: new Date(),
+                note: guarded.didUpdate
+                  ? "Existing failed/rejected A2P campaign updated/resubmitted in place from start.ts"
+                  : "Existing A2P campaign preserved from start.ts",
+              },
+            },
+          },
+        );
+      }
+    }
 
     if (!usa2pSid && canCreateCampaign) {
       const code = useCaseCodeFinal;
@@ -2495,29 +2548,40 @@ export default async function handler(
         twilioAccountSidUsed,
       });
 
-      const usa2p = await client.messaging.v1
-        .services(messagingServiceSid)
-        .usAppToPerson.create(createPayload);
+      const guarded = await ensureA2PCampaignWithoutDuplicateCreate({
+        client,
+        messagingServiceSid,
+        brandSid: brandSid!,
+        existingCampaignSid: resolveExistingCampaignSid(live?.campaignSid, live?.usa2pSid),
+        createPayload,
+        log,
+      });
 
-      usa2pSid = (usa2p as any).sid;
+      usa2pSid = guarded.campaignSid;
 
       await A2PProfile.updateOne(
         { _id: a2pId },
         {
           $set: {
             usa2pSid,
+            campaignSid: usa2pSid,
             messagingServiceSid,
             usecaseCode: code,
             registrationStatus: "campaign_submitted",
             applicationStatus: "pending",
             messagingReady: false,
+            ...(guarded.campaignStatus ? { campaignStatus: guarded.campaignStatus } : {}),
             twilioAccountSidLastUsed: twilioAccountSidUsed,
           } as any,
           $push: {
             approvalHistory: {
               stage: "campaign_submitted",
               at: new Date(),
-              note: "Initial A2P campaign created (submitted/pending)",
+              note: guarded.didUpdate
+                ? "Existing failed/rejected A2P campaign updated/resubmitted in place"
+                : guarded.didCreate
+                  ? "Initial A2P campaign created (submitted/pending)"
+                  : "Existing A2P campaign preserved/recovered (submitted/pending)",
             },
           },
         },
