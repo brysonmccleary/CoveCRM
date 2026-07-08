@@ -49,6 +49,25 @@ const googleColorMap: Record<string, string> = {
 };
 
 const toISO = (d: Date) => new Date(d.getTime()).toISOString();
+const POST_CONNECT_EVENT_RETRIES = 3;
+const POST_CONNECT_RETRY_DELAY_MS = 1500;
+
+function isPostConnectFlow() {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("connected") === "1";
+}
+
+function stripConnectedParam() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("connected")) return;
+  url.searchParams.delete("connected");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function localDateKey(date: Date) {
   const y = date.getFullYear();
@@ -172,6 +191,7 @@ export default function CalendarView() {
   const [modalOpen, setModalOpen] = useState(false);
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [finalizingConnection, setFinalizingConnection] = useState(false);
   const [lead, setLead] = useState<LeadType | null>(null);
 
   // Persistent view/date
@@ -219,36 +239,51 @@ export default function CalendarView() {
   // 2) Fetch events for visible range
   const fetchRange = async (start?: Date, end?: Date) => {
     if (!start || !end) return;
-    try {
-      const url = `/api/calendar/events?start=${encodeURIComponent(toISO(start))}&end=${encodeURIComponent(
-        toISO(end)
-      )}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Failed to load events");
+    const postConnect = isPostConnectFlow();
+    const maxAttempts = postConnect ? POST_CONNECT_EVENT_RETRIES + 1 : 1;
+    setFinalizingConnection(postConnect);
 
-      const parsed: EventType[] = (data.events || []).map((e: any) => ({
-        id: e.id,
-        title: e.summary || "",
-        start: parseCalendarDate(e.start),
-        end: parseCalendarDate(e.end),
-        description: e.description,
-        location: e.location,
-        colorId: e.colorId || undefined,
-      }));
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const url = `/api/calendar/events?start=${encodeURIComponent(toISO(start))}&end=${encodeURIComponent(
+          toISO(end)
+        )}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "Failed to load events");
 
-      // Tag CRM events by eventId
-      const ids = parsed.map((e) => e.id);
-      const matchRes = await fetch("/api/leads/by-event-ids", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventIds: ids }),
-      });
-      const { matchedIds = [] } = await matchRes.json();
+        const parsed: EventType[] = (data.events || []).map((e: any) => ({
+          id: e.id,
+          title: e.summary || "",
+          start: parseCalendarDate(e.start),
+          end: parseCalendarDate(e.end),
+          description: e.description,
+          location: e.location,
+          colorId: e.colorId || undefined,
+        }));
 
-      setEvents(parsed.map((e) => ({ ...e, source: matchedIds.includes(e.id) ? "crm" : "manual" })));
-    } catch (err) {
-      console.error("❌ Failed to load events", err);
+        // Tag CRM events by eventId
+        const ids = parsed.map((e) => e.id);
+        const matchRes = await fetch("/api/leads/by-event-ids", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ eventIds: ids }),
+        });
+        const { matchedIds = [] } = await matchRes.json();
+
+        setEvents(parsed.map((e) => ({ ...e, source: matchedIds.includes(e.id) ? "crm" : "manual" })));
+        setFinalizingConnection(false);
+        if (postConnect) stripConnectedParam();
+        return;
+      } catch (err) {
+        if (postConnect && attempt < maxAttempts) {
+          await wait(POST_CONNECT_RETRY_DELAY_MS);
+          continue;
+        }
+
+        setFinalizingConnection(false);
+        console.error("❌ Failed to load events", err);
+      }
     }
   };
 
@@ -375,6 +410,12 @@ export default function CalendarView() {
         <div className="mb-4">
           <ConnectGoogleCalendarButton />
         </div>
+      )}
+
+      {finalizingConnection && (
+        <p className="text-gray-300 text-sm mb-3">
+          Finalizing Google Calendar connection...
+        </p>
       )}
 
       {calendarConnected && (

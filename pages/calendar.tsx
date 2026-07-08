@@ -40,6 +40,26 @@ function shouldReconnect(status?: number, data?: any) {
   return false;
 }
 
+const POST_CONNECT_EVENT_RETRIES = 3;
+const POST_CONNECT_RETRY_DELAY_MS = 1500;
+
+function isPostConnectFlow() {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("connected") === "1";
+}
+
+function stripConnectedParam() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("connected")) return;
+  url.searchParams.delete("connected");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export default function CalendarPage() {
   const { data: session, status: sessionStatus } = useSession();
   const [calendarId, setCalendarId] = useState<string | null>(null);
@@ -57,6 +77,11 @@ export default function CalendarPage() {
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchCalendarStatus = async () => {
+    const postConnect = isPostConnectFlow();
+    if (postConnect) {
+      setStatusMessage("Finalizing Google Calendar connection...");
+    }
+
     try {
       const res = await axios.get("/api/calendar-status");
       console.log("✅ calendar-status:", res.data);
@@ -78,29 +103,47 @@ export default function CalendarPage() {
 
       // If connected, fetch events count
       if (connected) {
-        try {
-          // NOTE: leaving your existing call shape intact; only improving reconnect detection
-          const eventsRes = await axios.get("/api/calendar/events");
-          const count = eventsRes.data?.events?.length || 0;
-          console.log("📆 Events fetched:", count);
-          setEventCount(count);
-        } catch (err: any) {
-          const data = err?.response?.data;
-          const status = err?.response?.status;
+        const maxAttempts = postConnect ? POST_CONNECT_EVENT_RETRIES + 1 : 1;
 
-          // ✅ Critical: honor needsReconnect even on 500
-          if (shouldReconnect(status, data)) {
-            console.warn("Calendar requires reconnect:", data);
-            setNeedsReconnect(true);
-            setCalendarConnected(false);
-            setStatusMessage(
-              "⚠️ Google Calendar connection expired. Please reconnect."
-            );
-            return;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          try {
+            if (postConnect) {
+              setStatusMessage("Finalizing Google Calendar connection...");
+            }
+
+            // NOTE: leaving your existing call shape intact; only improving reconnect detection
+            const eventsRes = await axios.get("/api/calendar/events");
+            const count = eventsRes.data?.events?.length || 0;
+            console.log("📆 Events fetched:", count);
+            setEventCount(count);
+            if (postConnect) {
+              setStatusMessage("✅ Google Calendar Connected");
+              stripConnectedParam();
+            }
+            break;
+          } catch (err: any) {
+            const data = err?.response?.data;
+            const status = err?.response?.status;
+
+            // ✅ Critical: honor needsReconnect even on 500
+            if (shouldReconnect(status, data)) {
+              console.warn("Calendar requires reconnect:", data);
+              setNeedsReconnect(true);
+              setCalendarConnected(false);
+              setStatusMessage(
+                "⚠️ Google Calendar connection expired. Please reconnect."
+              );
+              return;
+            }
+
+            if (postConnect && attempt < maxAttempts) {
+              await wait(POST_CONNECT_RETRY_DELAY_MS);
+              continue;
+            }
+
+            console.error("❌ Error loading calendar events:", err);
+            setStatusMessage("❌ Error loading calendar events");
           }
-
-          console.error("❌ Error loading calendar events:", err);
-          setStatusMessage("❌ Error loading calendar events");
         }
       }
     } catch (error) {

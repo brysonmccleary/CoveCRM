@@ -125,7 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     // ✅ Send them back to the Calendar tab
-    const dashboardUrl = `${base.replace(/\/$/, "")}/dashboard?tab=calendar`;
+    const dashboardUrl = `${base.replace(/\/$/, "")}/dashboard?tab=calendar&connected=1`;
     return res.redirect(dashboardUrl);
   } catch (err: any) {
     console.error(

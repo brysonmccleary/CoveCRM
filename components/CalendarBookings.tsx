@@ -56,6 +56,25 @@ type LeadType = {
 Modal.setAppElement("#__next");
 
 const toISO = (d: Date) => new Date(d.getTime()).toISOString();
+const POST_CONNECT_EVENT_RETRIES = 3;
+const POST_CONNECT_RETRY_DELAY_MS = 1500;
+
+function isPostConnectFlow() {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("connected") === "1";
+}
+
+function stripConnectedParam() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("connected")) return;
+  url.searchParams.delete("connected");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function localDateKey(date: Date) {
   const y = date.getFullYear();
@@ -174,6 +193,7 @@ export default function CalendarBookings() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [needsReconnect, setNeedsReconnect] = useState(false);
+  const [finalizingConnection, setFinalizingConnection] = useState(false);
 
   // View/date persistence
   const [view, setView] = useState<View>(() => {
@@ -219,67 +239,83 @@ export default function CalendarBookings() {
   const fetchRange = async (start?: Date, end?: Date) => {
     if (!start || !end) return;
 
+    const postConnect = isPostConnectFlow();
     setErrorMsg(null);
     setNeedsReconnect(false);
+    setFinalizingConnection(postConnect);
 
-    try {
-      const url = `/api/calendar/events?start=${encodeURIComponent(
-        toISO(start)
-      )}&end=${encodeURIComponent(toISO(end))}`;
+    const maxAttempts = postConnect ? POST_CONNECT_EVENT_RETRIES + 1 : 1;
 
-      const res = await fetch(url);
-      const data = await safeReadJson(res);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const url = `/api/calendar/events?start=${encodeURIComponent(
+          toISO(start)
+        )}&end=${encodeURIComponent(toISO(end))}`;
 
-      // ✅ Critical: reconnect detection must use JSON flags even on non-200
-      if (!res.ok) {
-        if (shouldReconnect(res.status, data)) {
-          setNeedsReconnect(true);
-          setCalendarConnected(false);
-          setErrorMsg(
-            "Your Google Calendar authorization expired or changed. Please reconnect."
-          );
-          return;
+        const res = await fetch(url);
+        const data = await safeReadJson(res);
+
+        // ✅ Critical: reconnect detection must use JSON flags even on non-200
+        if (!res.ok) {
+          if (shouldReconnect(res.status, data)) {
+            setNeedsReconnect(true);
+            setCalendarConnected(false);
+            setFinalizingConnection(false);
+            setErrorMsg(
+              "Your Google Calendar authorization expired or changed. Please reconnect."
+            );
+            return;
+          }
+
+          const msg =
+            (data && (data.error || data.message)) || "Failed to load events";
+          throw new Error(String(msg));
         }
 
-        const msg =
-          (data && (data.error || data.message)) || "Failed to load events";
-        throw new Error(String(msg));
+        const parsed: EventType[] = ((data && data.events) || []).map((e: any) => ({
+          id: e.id,
+          title: e.summary || "",
+          start: parseCalendarDate(e.start),
+          end: parseCalendarDate(e.end),
+          description: e.description,
+          location: e.location,
+          colorId: e.colorId ?? null,
+          attendeesEmails: Array.isArray(e.attendees)
+            ? e.attendees.filter(Boolean)
+            : [],
+          source: "unknown",
+        }));
+
+        // Tag CRM events by IDs
+        const ids = parsed.map((e) => e.id);
+        const matchRes = await fetch("/api/leads/by-event-ids", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ eventIds: ids }),
+        });
+        const match = await matchRes.json();
+        const matchedIds: string[] = match?.matchedIds || [];
+
+        setEvents(
+          parsed.map((e) => ({
+            ...e,
+            source: matchedIds.includes(e.id) ? "crm" : "manual",
+          }))
+        );
+        setFinalizingConnection(false);
+        if (postConnect) stripConnectedParam();
+        return;
+      } catch (err: any) {
+        if (postConnect && attempt < maxAttempts) {
+          await wait(POST_CONNECT_RETRY_DELAY_MS);
+          continue;
+        }
+
+        const message = err?.message || "Failed to load events";
+        console.error("❌ Calendar fetch error:", message);
+        setFinalizingConnection(false);
+        setErrorMsg(message);
       }
-
-      const parsed: EventType[] = ((data && data.events) || []).map((e: any) => ({
-        id: e.id,
-        title: e.summary || "",
-        start: parseCalendarDate(e.start),
-        end: parseCalendarDate(e.end),
-        description: e.description,
-        location: e.location,
-        colorId: e.colorId ?? null,
-        attendeesEmails: Array.isArray(e.attendees)
-          ? e.attendees.filter(Boolean)
-          : [],
-        source: "unknown",
-      }));
-
-      // Tag CRM events by IDs
-      const ids = parsed.map((e) => e.id);
-      const matchRes = await fetch("/api/leads/by-event-ids", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventIds: ids }),
-      });
-      const match = await matchRes.json();
-      const matchedIds: string[] = match?.matchedIds || [];
-
-      setEvents(
-        parsed.map((e) => ({
-          ...e,
-          source: matchedIds.includes(e.id) ? "crm" : "manual",
-        }))
-      );
-    } catch (err: any) {
-      const message = err?.message || "Failed to load events";
-      console.error("❌ Calendar fetch error:", message);
-      setErrorMsg(message);
     }
   };
 
@@ -561,6 +597,12 @@ export default function CalendarBookings() {
         </div>
       )}
 
+      {finalizingConnection && !needsReconnect && (
+        <p className="text-gray-300 text-sm mb-3">
+          Finalizing Google Calendar connection...
+        </p>
+      )}
+
       {!needsReconnect && calendarConnected && (
         <div
           style={{ height: "calc(100vh - 12rem)" }}
@@ -634,7 +676,7 @@ export default function CalendarBookings() {
       )}
 
       {/* Non-reconnect error still shows normally */}
-      {errorMsg && !needsReconnect && (
+      {errorMsg && !needsReconnect && !finalizingConnection && (
         <p className="text-red-500 mt-3 text-sm">{errorMsg}</p>
       )}
 
