@@ -40,6 +40,11 @@ const systemFields = [
   "Add Custom Field",
 ];
 
+const surfaceStyle: React.CSSProperties = {
+  background: "#1e293b",
+  border: "1px solid rgba(255,255,255,0.09)",
+};
+
 function lc(s?: string) {
   return (s || "").toLowerCase();
 }
@@ -81,7 +86,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
 
   // Folders
   const [folders, setFolders] = useState<Folder[]>([]);
-  const [useExisting, setUseExisting] = useState(true);
+  const [useExisting, setUseExisting] = useState(false);
   const [targetFolderId, setTargetFolderId] = useState<string>("");
   const [newFolderName, setNewFolderName] = useState("");
 
@@ -90,6 +95,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
 
   // UI
   const [isUploading, setIsUploading] = useState(false);
+  const [expandedAutoMatches, setExpandedAutoMatches] = useState<Record<string, boolean>>({});
   const [resultCounts, setResultCounts] = useState<{
     inserted?: number;
     updated?: number;
@@ -211,6 +217,82 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
     const chosen = new Set(Object.values(mapping));
     return chosen.has("Phone") || chosen.has("Email");
   }, [mapping]);
+
+  useEffect(() => {
+    setCustomFieldNames((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      csvHeaders.forEach((header) => {
+        if (mapping[header] === "Add Custom Field" && next[header] === undefined) {
+          next[header] = header;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [csvHeaders, mapping]);
+
+  const autoMatchedHeaders = useMemo(
+    () =>
+      csvHeaders.filter((header) => {
+        const guess = bestGuessField(header);
+        return !!guess && mapping[header] === guess;
+      }),
+    [csvHeaders, mapping]
+  );
+
+  const unmatchedHeaders = useMemo(
+    () => csvHeaders.filter((header) => !autoMatchedHeaders.includes(header)),
+    [autoMatchedHeaders, csvHeaders]
+  );
+
+  const needsMappingCount = useMemo(
+    () =>
+      unmatchedHeaders.filter((header) => {
+        if (skipHeader[header]) return false;
+        if (!mapping[header]) return true;
+        return mapping[header] === "Add Custom Field" && !customFieldNames[header]?.trim();
+      }).length,
+    [customFieldNames, mapping, skipHeader, unmatchedHeaders]
+  );
+
+  const toggleSkipHeader = (header: string) => {
+    setSkipHeader((prev) => ({ ...prev, [header]: !prev[header] }));
+  };
+
+  const importPreview = useMemo(() => {
+    const rows = csvData.slice(0, 2);
+    const activeHeaders = csvHeaders.filter((header) => {
+      const fieldLabel = mapping[header];
+      return (
+        !!fieldLabel &&
+        !skipHeader[header] &&
+        (CANONICAL_FIELDS as readonly string[]).includes(fieldLabel)
+      );
+    });
+
+    return rows.map((row) =>
+      activeHeaders.reduce((acc, header) => {
+        const fieldLabel = mapping[header];
+        const target =
+          fieldLabel === "Add Custom Field"
+            ? customFieldNames[header] || header
+            : fieldLabel;
+        acc[target] = row?.[header] ?? "";
+        return acc;
+      }, {} as Record<string, any>)
+    );
+  }, [csvData, csvHeaders, customFieldNames, mapping, skipHeader]);
+
+  const previewFields = useMemo(() => {
+    const fields: string[] = [];
+    importPreview.forEach((row) => {
+      Object.keys(row).forEach((field) => {
+        if (!fields.includes(field)) fields.push(field);
+      });
+    });
+    return fields;
+  }, [importPreview]);
 
   const buildApiMappingObject = () => {
     const result: Record<string, string> = {};
@@ -401,7 +483,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
   };
 
   return (
-    <div className="border border-black dark:border-white p-4 mt-4 rounded space-y-4">
+    <div className="p-4 mt-4 rounded space-y-4 text-slate-100" style={surfaceStyle}>
       <h2 className="text-xl font-bold">Import Leads</h2>
 
       {/* Folder selection */}
@@ -500,8 +582,129 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       {/* Mapping UI */}
       {csvHeaders.length > 0 && (
         <div className="space-y-2">
-          <div className="text-sm text-gray-600">
+          <div className="text-sm text-slate-400">
             Map your CSV columns to fields. We’ll remember your choices.
+          </div>
+          <div className="rounded p-3" style={surfaceStyle}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-slate-400">
+                {autoMatchedHeaders.length} of {csvHeaders.length} columns matched automatically.
+              </div>
+              {autoMatchedHeaders.length > 0 && (
+                <div className="text-xs text-slate-500">
+                  Click Change to review any confirmed match.
+                </div>
+              )}
+            </div>
+
+            {autoMatchedHeaders.length > 0 && (
+              <div className="mt-2 divide-y divide-white/[0.09]">
+                {autoMatchedHeaders.map((header) => {
+                  const isSkipped = !!skipHeader[header];
+                  const isExpanded = !!expandedAutoMatches[header];
+                  const sampleValue = csvData[0]?.[header] ?? "No sample";
+
+                  return (
+                    <div
+                      key={header}
+                      className={`py-2 ${isSkipped ? "opacity-45" : ""}`}
+                    >
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div
+                          className={`min-w-0 text-sm ${
+                            isSkipped ? "line-through text-slate-500" : "text-slate-200"
+                          }`}
+                        >
+                          <span className="text-emerald-300">✓</span>{" "}
+                          <span className="font-medium">{header}</span>
+                          <span className="text-slate-500"> → </span>
+                          <span>{mapping[header]}</span>
+                          <span className="text-slate-500"> · </span>
+                          <span className="text-slate-500">&quot;{String(sampleValue)}&quot;</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedAutoMatches((prev) => ({
+                                ...prev,
+                                [header]: !prev[header],
+                              }))
+                            }
+                            className="rounded px-2 py-1 text-xs text-slate-300 hover:text-white"
+                            style={{ border: "1px solid rgba(255,255,255,0.09)" }}
+                          >
+                            {isExpanded ? "Done" : "Change"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleSkipHeader(header)}
+                            className="rounded px-2 py-1 text-xs text-slate-300 hover:text-white"
+                            style={{ border: "1px solid rgba(255,255,255,0.09)" }}
+                          >
+                            {isSkipped ? "Unskip" : "Skip"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {isExpanded && !isSkipped && (
+                        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                          <select
+                            value={mapping[header] || ""}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSkipHeader((prev) => ({ ...prev, [header]: false }));
+                              setMapping((prev) => ({ ...prev, [header]: val }));
+                              if (val === "Add Custom Field") {
+                                setCustomFieldNames((prev) => ({
+                                  ...prev,
+                                  [header]: prev[header] || header,
+                                }));
+                              } else {
+                                setCustomFieldNames((prev) => ({ ...prev, [header]: "" }));
+                              }
+                            }}
+                            className="rounded flex-1 text-slate-100"
+                            style={{
+                              background: "#1e293b",
+                              border: "1px solid rgba(255,255,255,0.09)",
+                              padding: "8px 10px",
+                            }}
+                          >
+                            <option value="">Select Field</option>
+                            {systemFields.map((field) => (
+                              <option key={field} value={field}>
+                                {field}
+                              </option>
+                            ))}
+                          </select>
+
+                          {mapping[header] === "Add Custom Field" && (
+                            <input
+                              type="text"
+                              value={customFieldNames[header] || ""}
+                              onChange={(e) =>
+                                setCustomFieldNames((prev) => ({
+                                  ...prev,
+                                  [header]: e.target.value,
+                                }))
+                              }
+                              placeholder="Custom field name"
+                              className="rounded flex-1 text-slate-100"
+                              style={{
+                                background: "#1e293b",
+                                border: "1px solid rgba(255,255,255,0.09)",
+                                padding: "8px 10px",
+                              }}
+                            />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col md:flex-row gap-2 md:items-center">
@@ -540,68 +743,143 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
             </select>
           </div>
 
-          {csvHeaders.map((header) => (
-            <div
-              key={header}
-              className="flex flex-col md:flex-row md:items-center md:space-x-4 border border-black dark:border-white p-2 rounded"
-            >
-              <div className="font-semibold w-56">
-                {header}
-                <div className="text-gray-500 text-xs mt-1">
-                  ({csvData[0]?.[header] ?? "No sample"})
-                </div>
-              </div>
-
-              <select
-                value={mapping[header] || ""}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setMapping((prev) => ({ ...prev, [header]: val }));
-                  if (val !== "Add Custom Field") {
-                    setCustomFieldNames((prev) => ({ ...prev, [header]: "" }));
-                  }
-                }}
-                className="border p-2 rounded flex-1"
-                disabled={!!skipHeader[header]}
-              >
-                <option value="">Select Field</option>
-                {systemFields.map((field) => (
-                  <option key={field} value={field}>
-                    {field}
-                  </option>
-                ))}
-              </select>
-
-              {mapping[header] === "Add Custom Field" && (
-                <input
-                  type="text"
-                  value={customFieldNames[header] || ""}
-                  onChange={(e) =>
-                    setCustomFieldNames((prev) => ({
-                      ...prev,
-                      [header]: e.target.value,
-                    }))
-                  }
-                  placeholder="Custom field name"
-                  className="border p-2 rounded flex-1 mt-2 md:mt-0"
-                />
-              )}
-
-              <label className="flex items-center gap-2 mt-2 md:mt-0">
-                <input
-                  type="checkbox"
-                  checked={!!skipHeader[header]}
-                  onChange={(e) =>
-                    setSkipHeader((prev) => ({
-                      ...prev,
-                      [header]: e.target.checked,
-                    }))
-                  }
-                />
-                <span>Do Not Import</span>
-              </label>
+          <div className="pt-2">
+            <div className="text-sm font-semibold text-white">
+              Needs mapping ({needsMappingCount})
             </div>
-          ))}
+            <div className="text-xs text-slate-400">
+              These columns did not match automatically. Choose a field or skip them.
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+            {unmatchedHeaders.map((header) => {
+              const isSkipped = !!skipHeader[header];
+
+              return (
+                <div
+                  key={header}
+                  className={`rounded transition-colors hover:border-[rgba(255,255,255,0.14)] ${
+                    isSkipped ? "opacity-45" : ""
+                  }`}
+                  style={{
+                    background: "#1e293b",
+                    border: "1px solid rgba(255,255,255,0.09)",
+                    padding: "12px",
+                  }}
+                >
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div
+                        className={
+                          isSkipped
+                            ? "font-semibold text-slate-500 line-through"
+                            : "font-semibold text-white"
+                        }
+                      >
+                        <span className="break-words">{header}</span>
+                        <div className="text-slate-400 text-xs mt-1">
+                          ({csvData[0]?.[header] ?? "No sample"})
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => toggleSkipHeader(header)}
+                        className="shrink-0 rounded px-2 py-1 text-xs text-slate-300 hover:text-white"
+                        style={{ border: "1px solid rgba(255,255,255,0.09)" }}
+                      >
+                        {isSkipped ? "Unskip" : "Skip"}
+                      </button>
+                    </div>
+
+                    {!isSkipped && (
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <select
+                        value={mapping[header] || ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSkipHeader((prev) => ({ ...prev, [header]: false }));
+                          setMapping((prev) => ({ ...prev, [header]: val }));
+                          if (val === "Add Custom Field") {
+                            setCustomFieldNames((prev) => ({
+                              ...prev,
+                              [header]: prev[header] || header,
+                            }));
+                          } else {
+                            setCustomFieldNames((prev) => ({ ...prev, [header]: "" }));
+                          }
+                        }}
+                        className="rounded flex-1 text-slate-100"
+                        style={{
+                          background: "#1e293b",
+                          border: "1px solid rgba(255,255,255,0.09)",
+                          padding: "8px 10px",
+                        }}
+                      >
+                        <option value="">Select Field</option>
+                        {systemFields.map((field) => (
+                          <option key={field} value={field}>
+                            {field}
+                          </option>
+                        ))}
+                      </select>
+
+                      {mapping[header] === "Add Custom Field" && !skipHeader[header] && (
+                        <input
+                          type="text"
+                          value={customFieldNames[header] || ""}
+                          onChange={(e) =>
+                            setCustomFieldNames((prev) => ({
+                              ...prev,
+                              [header]: e.target.value,
+                            }))
+                          }
+                          placeholder="Custom field name"
+                          className="rounded flex-1 text-slate-100"
+                          style={{
+                            background: "#1e293b",
+                            border: "1px solid rgba(255,255,255,0.09)",
+                            padding: "8px 10px",
+                          }}
+                        />
+                      )}
+                    </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {previewFields.length > 0 && (
+            <div className="rounded p-3" style={surfaceStyle}>
+              <div className="text-sm font-semibold text-white mb-2">Here&apos;s how your first 2 leads will import</div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs text-left">
+                  <thead className="text-slate-400">
+                    <tr>
+                      {previewFields.map((field) => (
+                        <th key={field} className="px-2 py-1 font-medium">
+                          {field}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="text-slate-200">
+                    {importPreview.map((row, index) => (
+                      <tr key={index} className="border-t border-white/[0.09]">
+                        {previewFields.map((field) => (
+                          <td key={field} className="px-2 py-1 align-top">
+                            {String(row[field] ?? "")}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div className="pt-2">
             <button
