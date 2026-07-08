@@ -32,6 +32,8 @@ const VALID_LEAD_TYPES = [
   "veteran",
   "trucker",
 ];
+const EXPECTED_CREATIVE_WIDTH = 1080;
+const EXPECTED_CREATIVE_HEIGHT = 1350;
 
 function getBase64FromDataImageUrl(imageAsset: string) {
   const match = String(imageAsset || "")
@@ -83,6 +85,25 @@ async function uploadMetaAdImageFromDataUrl(
   const imageBase64 = getBase64FromDataImageUrl(imageAsset);
   if (!imageBase64) {
     throw new Error("No usable generated image asset was available for Meta creative upload");
+  }
+
+  const imageBuffer = Buffer.from(imageBase64, "base64");
+  const isPng =
+    imageBuffer.length >= 24 &&
+    imageBuffer[0] === 0x89 &&
+    imageBuffer[1] === 0x50 &&
+    imageBuffer[2] === 0x4e &&
+    imageBuffer[3] === 0x47 &&
+    imageBuffer[4] === 0x0d &&
+    imageBuffer[5] === 0x0a &&
+    imageBuffer[6] === 0x1a &&
+    imageBuffer[7] === 0x0a;
+  const width = isPng ? imageBuffer.readUInt32BE(16) : 0;
+  const height = isPng ? imageBuffer.readUInt32BE(20) : 0;
+  if (!isPng || width !== EXPECTED_CREATIVE_WIDTH || height !== EXPECTED_CREATIVE_HEIGHT) {
+    throw new Error(
+      `Creative image invalid: expected ${EXPECTED_CREATIVE_WIDTH}x${EXPECTED_CREATIVE_HEIGHT} PNG, got ${width}x${height}`
+    );
   }
 
   const imageParams = new URLSearchParams();
