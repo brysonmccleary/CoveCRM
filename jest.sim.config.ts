@@ -19,6 +19,7 @@ const config: Config = {
   testMatch: [
     "**/__tests__/ai-session.sim.test.ts",
     "**/__tests__/ai-voice.sim.test.ts",
+    "**/__tests__/import-field-registry.test.ts",
     "**/__tests__/lead-foundations.test.ts",
     "**/__tests__/number-reputation.test.ts",
     "**/__tests__/p0-security-remediation.test.ts",

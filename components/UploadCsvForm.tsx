@@ -46,7 +46,8 @@ export default function UploadCsvForm({ ownerId }: { ownerId: string }) {
     try {
       const { mapping, targetFolderId, folderName, skipExisting } = payload;
 
-      if (!mapping.phone && !mapping.email) {
+      const mappedTargets = new Set(Object.values(mapping));
+      if (!mappedTargets.has("Phone") && !mappedTargets.has("Email")) {
         toast.error("❌ Map at least Phone or Email so we can de-dupe.");
         return;
       }
@@ -58,7 +59,7 @@ export default function UploadCsvForm({ ownerId }: { ownerId: string }) {
         body: JSON.stringify({
           targetFolderId,
           folderName,
-          mapping,            // { firstName, lastName, phone, email, state, notes, source } -> CSV header names
+          mapping,            // CSV header -> canonical/custom target
           rows: csvData,      // raw rows from CSV; server will map & normalize
           skipExisting,       // default true on the UI
         }),

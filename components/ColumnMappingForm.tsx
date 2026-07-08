@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import {
+  buildAutoMapping,
+  CANONICAL_FIELDS,
+  customFieldTarget,
+  DONT_IMPORT,
+  isCanonicalField,
+  parseCustomFieldTarget,
+  type ImportTarget,
+} from "@/lib/leads/importFieldRegistry";
 
 export type MappingSubmitPayload = {
-  mapping: {
-    firstName?: string;
-    lastName?: string;
-    phone?: string;
-    email?: string;
-    state?: string;
-    notes?: string;
-    source?: string;
-  };
+  mapping: Record<string, string>;
   targetFolderId?: string;
   folderName?: string;
   skipExisting: boolean;
@@ -22,44 +23,6 @@ type Folder = { _id: string; name: string };
 const LOCAL_KEY_MAPPING = "leadImport:mapping:v1";
 const LOCAL_KEY_FOLDER = "leadImport:lastFolderId";
 const LOCAL_KEY_SKIP = "leadImport:skipExisting";
-
-const CANONICAL_FIELDS = [
-  "First Name",
-  "Last Name",
-  "Phone",
-  "Email",
-  "State",
-  "Notes",
-  "Source",
-] as const;
-
-type Canonical = (typeof CANONICAL_FIELDS)[number];
-
-const apiKey: Record<Canonical, keyof MappingSubmitPayload["mapping"]> = {
-  "First Name": "firstName",
-  "Last Name": "lastName",
-  Phone: "phone",
-  Email: "email",
-  State: "state",
-  Notes: "notes",
-  Source: "source",
-};
-
-function lc(s?: string) {
-  return (s || "").toLowerCase();
-}
-
-function bestGuess(header: string): Canonical | "" {
-  const h = lc(header).replace(/\s|_|-/g, "");
-  if (/^first$|^firstname$|^fname$|^givenname$/.test(h)) return "First Name";
-  if (/^last$|^lastname$|^lname$|^surname$|^familyname$/.test(h)) return "Last Name";
-  if (/^phone$|^mobile$|^cell$|^telephone$|^tel$|^phonenumber$/.test(h)) return "Phone";
-  if (/^email$|^e?mailaddress$|^emailid$/.test(h)) return "Email";
-  if (/^state$|^st$|^region$/.test(h)) return "State";
-  if (/^notes?$|^comments?$|^memo$/.test(h)) return "Notes";
-  if (/^source$|^leadsource$|^utm(source)?$/.test(h)) return "Source";
-  return "";
-}
 
 export default function ColumnMappingForm({
   headers,
@@ -78,16 +41,7 @@ export default function ColumnMappingForm({
   const [folderName, setFolderName] = useState("");
   const [skipExisting, setSkipExisting] = useState(true);
 
-  // canonicalKey -> selected CSV header
-  const [mapSel, setMapSel] = useState<Record<keyof MappingSubmitPayload["mapping"], string>>({
-    firstName: "",
-    lastName: "",
-    phone: "",
-    email: "",
-    state: "",
-    notes: "",
-    source: "",
-  });
+  const [mapSel, setMapSel] = useState<Record<string, string>>({});
 
   // Load folders + prior prefs
   useEffect(() => {
@@ -106,7 +60,12 @@ export default function ColumnMappingForm({
       }
       try {
         const savedMap = localStorage.getItem(LOCAL_KEY_MAPPING);
-        if (savedMap) setMapSel(JSON.parse(savedMap));
+        if (savedMap) {
+          const parsed = JSON.parse(savedMap);
+          if (parsed && typeof parsed === "object") {
+            setMapSel((prev) => ({ ...prev, ...parsed }));
+          }
+        }
         const lastFolder = localStorage.getItem(LOCAL_KEY_FOLDER);
         if (lastFolder) {
           setTargetFolderId(lastFolder);
@@ -120,27 +79,40 @@ export default function ColumnMappingForm({
     })();
   }, []);
 
-  // Set best-guess defaults for any unmapped fields
+  // Set best-guess/custom defaults for every CSV column.
   useEffect(() => {
     setMapSel((prev) => {
-      const next = { ...prev };
-      const chosen = new Set(Object.values(prev).filter(Boolean));
+      const auto = buildAutoMapping(headers);
+      const next: Record<string, string> = {};
       for (const h of headers) {
-        const guess = bestGuess(h);
-        if (guess) {
-          const key = apiKey[guess];
-          if (!next[key] && !chosen.has(h)) next[key] = h;
-        }
+        next[h] = prev[h] || String(auto[h] || customFieldTarget(h));
       }
       return next;
     });
   }, [headers]);
 
-  const options = useMemo(() => ["", ...headers], [headers]);
-  const atLeastOneId = useMemo(
-    () => Boolean(mapSel.phone || mapSel.email),
-    [mapSel.phone, mapSel.email]
+  const targetOptions = useMemo(
+    () => [DONT_IMPORT, ...CANONICAL_FIELDS],
+    []
   );
+  const atLeastOneId = useMemo(
+    () => Object.values(mapSel).some((target) => target === "Phone" || target === "Email"),
+    [mapSel]
+  );
+
+  const updateTarget = (header: string, target: ImportTarget) => {
+    setMapSel((prev) => ({
+      ...prev,
+      [header]: String(target),
+    }));
+  };
+
+  const updateCustomName = (header: string, value: string) => {
+    setMapSel((prev) => ({
+      ...prev,
+      [header]: customFieldTarget(value || header),
+    }));
+  };
 
   const submit = () => {
     if (useExisting && !targetFolderId) {
@@ -163,13 +135,18 @@ export default function ColumnMappingForm({
       toast("“System” folder name detected — using: " + finalFolderName, { icon: "🛡️" });
     }
 
+    const normalizedMapping: Record<string, string> = {};
+    for (const header of headers) {
+      normalizedMapping[header] = mapSel[header] || customFieldTarget(header);
+    }
+
     // persist prefs
     localStorage.setItem(LOCAL_KEY_MAPPING, JSON.stringify(mapSel));
     localStorage.setItem(LOCAL_KEY_SKIP, String(skipExisting));
     if (useExisting && targetFolderId) localStorage.setItem(LOCAL_KEY_FOLDER, targetFolderId);
 
     onSubmit({
-      mapping: mapSel,
+      mapping: normalizedMapping,
       targetFolderId: useExisting ? targetFolderId : undefined,
       folderName: useExisting ? undefined : finalFolderName,
       skipExisting,
@@ -255,27 +232,56 @@ export default function ColumnMappingForm({
 
       {/* Mapping */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {CANONICAL_FIELDS.map((label) => {
-          const key = apiKey[label];
+        {headers.map((header) => {
+          const currentTarget = mapSel[header] || customFieldTarget(header);
+          const isSystemMapped = isCanonicalField(currentTarget);
+          const isSkipped = currentTarget === DONT_IMPORT;
+          const customName = parseCustomFieldTarget(currentTarget, header);
           return (
-            <div key={label} className="border border-black dark:border-white p-2 rounded">
-              <div className="font-semibold mb-1">{label}</div>
-              <select
-                className="border p-2 rounded w-full"
-                value={mapSel[key] || ""}
-                onChange={(e) =>
-                  setMapSel((prev) => ({ ...prev, [key]: e.target.value }))
-                }
-              >
-                {options.map((h) => (
-                  <option key={h} value={h}>
-                    {h || "— Not Mapped —"}
-                  </option>
-                ))}
-              </select>
-              {mapSel[key] && sampleRow && (
+            <div key={header} className="border border-black dark:border-white p-2 rounded">
+              <div className="font-semibold mb-1">{header}</div>
+              {isSystemMapped ? (
+                <select
+                  className="border p-2 rounded w-full"
+                  value={currentTarget}
+                  onChange={(e) => updateTarget(header, e.target.value)}
+                >
+                  {targetOptions.map((target) => (
+                    <option key={target} value={target}>
+                      {target}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={isSkipped}
+                      onChange={(e) =>
+                        updateTarget(
+                          header,
+                          e.target.checked ? DONT_IMPORT : customFieldTarget(header)
+                        )
+                      }
+                    />
+                    <span>Don't import</span>
+                  </label>
+                  {!isSkipped && (
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Imports as:</div>
+                      <input
+                        className="border p-2 rounded w-full"
+                        value={customName}
+                        onChange={(e) => updateCustomName(header, e.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+              {sampleRow && !isSkipped && (
                 <div className="text-xs text-gray-500 mt-1">
-                  Sample: <span className="font-mono">{String(sampleRow[mapSel[key]]) || "—"}</span>
+                  Sample: <span className="font-mono">{String(sampleRow[header]) || "—"}</span>
                 </div>
               )}
             </div>

@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
+import LeadCustomField from "@/models/LeadCustomField";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
@@ -21,6 +22,17 @@ import {
   withDerivedTimezone,
 } from "@/lib/leads/foundationFields";
 import { timezoneForState } from "@/lib/leads/stateTimezone";
+import {
+  buildInsertCreatedAt,
+  CANONICAL_TO_LEAD_FIELD,
+  DONT_IMPORT,
+  isDateAddedHeader,
+  isCanonicalField,
+  normalizeImportMapping,
+  parseCustomFieldTarget,
+  trimImportValue,
+  type NormalizedImportMapping,
+} from "@/lib/leads/importFieldRegistry";
 
 // ✅ Extract inserted IDs from bulkWrite result (supports multiple driver shapes)
 function getUpsertedIdsFromBulkWrite(result: any): string[] {
@@ -307,44 +319,94 @@ function buildSkippedHeaderSet(skipHeaders?: string[]) {
   );
 }
 
+function collectHeaders(rows: Record<string, any>[]): string[] {
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows || []) {
+    for (const header of Object.keys(row || {})) {
+      if (seen.has(header)) continue;
+      seen.add(header);
+      headers.push(header);
+    }
+  }
+  return headers;
+}
+
+function mergeSkippedHeaders(mapping: NormalizedImportMapping, skipHeaders: string[]) {
+  return Array.from(new Set([...(mapping.skipped || []), ...(skipHeaders || [])]));
+}
+
+async function upsertCustomFieldRegistry(userEmail: string, customFields: string[]) {
+  const names = Array.from(new Set((customFields || []).map((name) => name.trim()).filter(Boolean)));
+  if (!names.length) return;
+  const firstSeenAt = new Date();
+  await (LeadCustomField as any).bulkWrite(
+    names.map((fieldName) => ({
+      updateOne: {
+        filter: { userEmail, fieldName },
+        update: {
+          $setOnInsert: {
+            userEmail,
+            fieldName,
+            firstSeenAt,
+            source: "csv_import",
+          },
+        },
+        upsert: true,
+      },
+    })),
+    { ordered: false },
+  );
+}
+
 function mapRow(
   row: Record<string, any>,
-  mapping: Record<string, string>,
-  skippedHeaders?: Set<string>
+  mapping: NormalizedImportMapping,
+  skippedHeaders?: Set<string>,
+  warnings: string[] = [],
+  rowNumber = 0
 ) {
   const isSkipped = (header?: string | null) =>
     !!header && !!skippedHeaders?.has(normalizeHeaderKey(header));
 
-  const pick = (k: string) => {
-    const col = mapping[k];
-    if (!col || isSkipped(col)) return undefined;
-    const v = row[col];
-    return typeof v === "string" ? v.trim() : v;
-  };
+  const lead: Record<string, any> = {};
+  let dateAddedRaw: any;
 
-  const pickRaw = (...headers: string[]) => {
-    for (const header of headers) {
-      if (isSkipped(header)) continue;
-      const v = row[header];
-      if (typeof v === "string") {
-        const trimmed = v.trim();
-        if (trimmed) return trimmed;
-      } else if (v !== undefined && v !== null && v !== "") {
-        return v;
+  for (const [header, rawTarget] of Object.entries(mapping.headerToTarget || {})) {
+    if (isSkipped(header)) continue;
+    const target = String(rawTarget || "").trim();
+    if (!target || target === DONT_IMPORT) continue;
+
+    const rawValue = trimImportValue(row[header]);
+    if (rawValue === undefined || rawValue === null || rawValue === "") continue;
+
+    if (isCanonicalField(target)) {
+      const fieldName = CANONICAL_TO_LEAD_FIELD[target];
+      if (target === "Email") {
+        const email = lcEmail(rawValue);
+        if (email) {
+          lead.Email = email;
+          lead.email = email;
+        }
+      } else if (target === "Lead Type") {
+        lead.leadType = sanitizeLeadType(String(rawValue || ""));
+      } else if (target === "Status") {
+        lead.status = sanitizeStatus(String(rawValue || ""));
+      } else if (target === "State") {
+        lead.State = normalizeState(String(rawValue || ""));
+      } else {
+        lead[fieldName] = rawValue;
       }
+      continue;
     }
-    return undefined;
-  };
 
-  const first = pick("firstName");
-  const last = pick("lastName");
-  const email = pick("email");
-  const phone = pick("phone");
-  const stateRaw = pick("state");
-  const notes = pick("notes");
-  const source = pick("source");
-  const leadTypeRaw = pickRaw("Lead Type", "leadType", "LeadType");
-  const statusRaw = pick("status") ?? pick("disposition");
+    const customFieldName = parseCustomFieldTarget(target, header);
+    if (isDateAddedHeader(customFieldName)) dateAddedRaw = rawValue;
+    lead[customFieldName] = rawValue;
+  }
+
+  const source = lead.source;
+  const notes = lead.Notes;
 
   const mergedNotes =
     source && notes
@@ -353,29 +415,35 @@ function mapRow(
       ? `Source: ${source}`
       : notes;
 
-  const normalizedState = normalizeState(stateRaw);
-  const timezone = timezoneForState(normalizedState || stateRaw || "");
-  const emailLc = lcEmail(email);
-  const rowPhone = extractPhoneFromRow(row);
-  const phoneDigits = rowPhone.phone || (phone ? String(phone).replace(/\D+/g, "") : "");
+  const normalizedState = lead.State;
+  const timezone = timezoneForState(normalizedState || "");
+  const phone = lead.Phone;
+  const phoneDigits = phone ? String(phone).replace(/\D+/g, "") : "";
   const phoneKey = phoneDigits ? phoneDigits.slice(-10) : undefined;
-  const normalizedPhone = rowPhone.normalizedPhone || normalizePhoneDigitsToE164(phoneDigits) || undefined;
-  const status = sanitizeStatus(statusRaw) || "New";
+  const normalizedPhone = normalizePhoneDigitsToE164(phoneDigits) || undefined;
+  const status = lead.status || "New";
+  const createdAtWarnings: string[] = [];
+  const createdAtFallback = new Date();
+  const createdAtOverride = dateAddedRaw
+    ? buildInsertCreatedAt(
+        dateAddedRaw,
+        createdAtFallback,
+        createdAtWarnings,
+        `Row ${rowNumber + 1} Date Added`,
+      )
+    : undefined;
+  warnings.push(...createdAtWarnings);
 
   return {
-    "First Name": first,
-    "Last Name": last,
-    Email: emailLc,
-    email: emailLc,
-    Phone: phone,
+    ...lead,
     phone: phoneDigits || undefined,
     phoneLast10: phoneKey,
     normalizedPhone,
     State: normalizedState,
     timezone,
     Notes: mergedNotes,
-    leadType: sanitizeLeadType(leadTypeRaw || ""),
     status,
+    __createdAtOverride: createdAtOverride,
   };
 }
 /* ---- dedupe helpers ---- */
@@ -408,6 +476,29 @@ function applyIdentityFields(
   }
 }
 
+const INTERNAL_MAPPED_KEYS = new Set([
+  "__createdAtOverride",
+  "userEmail",
+  "ownerEmail",
+  "folderId",
+  "rawRow",
+  "phone",
+  "phoneLast10",
+  "normalizedPhone",
+  "Email",
+  "email",
+  "Phone",
+  "status",
+]);
+
+function applyMappedLeadFields(base: Record<string, any>, mapped: Record<string, any>) {
+  for (const [key, value] of Object.entries(mapped)) {
+    if (INTERNAL_MAPPED_KEYS.has(key)) continue;
+    if (value === undefined) continue;
+    base[key] = value;
+  }
+}
+
 /* ========================= ROUTE HANDLER ========================= */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
@@ -424,6 +515,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const { targetFolderId, mapping, rows, skipExisting = false, skipHeaders = [] } = json;
       const skippedHeaderSet = buildSkippedHeaderSet(skipHeaders);
+      const importRows = rows || [];
+      const headers = collectHeaders(importRows);
+      const normalizedMapping = normalizeImportMapping(mapping || {}, headers);
+      const warnings: string[] = [];
+      const responseSummary = {
+        mapped: normalizedMapping.mapped,
+        customFields: normalizedMapping.customFields,
+        skipped: mergeSkippedHeaders(normalizedMapping, skipHeaders),
+        warnings,
+      };
 
       const preferredName = (json.newFolderName || json.newFolder || json.name || "")
         .toString()
@@ -453,12 +554,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           (folder as any).name
         );
 
-      const mapped = rows.map((r) => ({
-        ...mapRow(r, mapping!, skippedHeaderSet),
+      const mapped: any[] = importRows.map((r, index) => ({
+        ...mapRow(r, normalizedMapping, skippedHeaderSet, warnings, index),
         userEmail,
         folderId: safeFolderId,
         rawRow: r,
       }));
+      await upsertCustomFieldRegistry(userEmail, normalizedMapping.customFields);
 
       const phoneKeys = Array.from(
         new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[])
@@ -545,12 +647,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           delete base.phoneLast10;
         }
         if (exists?.normalizedPhone) delete base.normalizedPhone;
-        if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-        if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-        if (m.State !== undefined) base["State"] = m.State;
-        if ((m as any).timezone) base.timezone = (m as any).timezone;
-        if (m.Notes !== undefined) base["Notes"] = m.Notes;
-        if (m.leadType) base["leadType"] = m.leadType;
+        applyMappedLeadFields(base, m);
 
         if (exists) {
           if (m.status) {
@@ -569,7 +666,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
-          const createdAt = new Date();
+          const createdAt = (m as any).__createdAtOverride || new Date();
           const setOnInsert: any = {
             userEmail,
             status: (m as any).status || "New", // NEW → status only in $setOnInsert
@@ -642,6 +739,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         counts: { inserted, updated, skipped },
         mode: "json",
         skipExisting,
+        ...responseSummary,
       });
     } catch (e: any) {
       const code = e?.status === 400 ? 400 : 500;
@@ -802,12 +900,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
-      const rowsMapped = rawRows.map((r) => ({
-        ...mapRow(r, mapping, skippedHeaderSet),
+      const headers = collectHeaders(rawRows);
+      const normalizedMapping = normalizeImportMapping(mapping, headers);
+      const warnings: string[] = [];
+      const responseSummary = {
+        mapped: normalizedMapping.mapped,
+        customFields: normalizedMapping.customFields,
+        skipped: mergeSkippedHeaders(normalizedMapping, skipHeaders),
+        warnings,
+      };
+
+      const rowsMapped: any[] = rawRows.map((r, index) => ({
+        ...mapRow(r, normalizedMapping, skippedHeaderSet, warnings, index),
         userEmail,
         folderId: safeFolderId,
         rawRow: r,
       }));
+      await upsertCustomFieldRegistry(userEmail, normalizedMapping.customFields);
 
       const phoneKeys = Array.from(
         new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[])
@@ -890,12 +999,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           delete base.phoneLast10;
         }
         if (exists?.normalizedPhone) delete base.normalizedPhone;
-        if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-        if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-        if (m.State !== undefined) base["State"] = m.State;
-        if ((m as any).timezone) base.timezone = (m as any).timezone;
-        if (m.Notes !== undefined) base["Notes"] = m.Notes;
-        if (m.leadType) base["leadType"] = m.leadType;
+        applyMappedLeadFields(base, m);
 
         if (exists) {
           if (m.status) {
@@ -914,7 +1018,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
-          const createdAt = new Date();
+          const createdAt = (m as any).__createdAtOverride || new Date();
           const setOnInsert: any = {
             userEmail,
             status: (m as any).status || "New",
@@ -987,6 +1091,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         counts: { inserted, updated, skipped },
         mode: "multipart+mapping",
         skipExisting,
+        ...responseSummary,
       });
     } catch (e: any) {
       const status = e?.status === 400 ? 400 : 500;

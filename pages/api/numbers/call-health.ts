@@ -4,8 +4,15 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Call from "@/models/Call";
+import {
+  computeAnswerRate,
+  computeShortCallRate,
+  classifyNumber,
+  median,
+  type ReputationTier,
+} from "@/lib/reputation/numberReputation";
 
-type HealthLabel = "Healthy" | "Watch" | "Unknown";
+type HealthLabel = "Healthy" | "Watch" | "Spam Risk" | "Unknown";
 
 type CallHealthRow = {
   phoneNumber: string;
@@ -30,11 +37,6 @@ function normalizePhone(value: unknown): string {
   return digits;
 }
 
-function roundPct(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
 function toDateMs(value: unknown): number {
   if (!value) return 0;
   const time = new Date(value as any).getTime();
@@ -54,8 +56,10 @@ function buildHealthForNumber(args: {
   phoneNumber: string;
   calls: any[];
   now: number;
+  peerMedian: number | null;
+  fleetSize: number;
 }): CallHealthRow {
-  const { phoneNumber, calls, now } = args;
+  const { phoneNumber, calls, now, peerMedian, fleetSize } = args;
   const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
   const oneDayAgo = now - 24 * 60 * 60 * 1000;
 
@@ -75,44 +79,52 @@ function buildHealthForNumber(args: {
   const outboundVolume7d = outbound7d.length;
   const inboundVolume7d = inbound7d.length;
   const outbound24h = outbound7d.filter((call) => callTime(call) >= oneDayAgo).length;
-  const completedTalkCalls = outbound7d.filter((call) => callDuration(call) >= 20).length;
-  const veryShortCalls = outbound7d.filter((call) => {
-    const duration = callDuration(call);
-    return duration > 0 && duration < 15;
+  const voicemailCalls = outbound7d.filter((call) => call.isVoicemail === true).length;
+  const completedTalkCalls = outbound7d.filter((call) => {
+    if (call.isVoicemail === true) return false;
+    return Boolean(call.completedAt) && callDuration(call) > 0;
   }).length;
-  const zeroDurationCalls = outbound7d.filter((call) => callDuration(call) === 0).length;
+  const veryShortCalls = outbound7d.filter((call) => {
+    if (call.isVoicemail === true) return false;
+    const duration = callDuration(call);
+    return Boolean(call.completedAt) && duration > 0 && duration < 5;
+  }).length;
 
-  const answerRate = outboundVolume7d > 0 ? roundPct((completedTalkCalls / outboundVolume7d) * 100) : null;
-  const shortCallRate =
-    outboundVolume7d > 0 ? roundPct(((veryShortCalls + zeroDurationCalls) / outboundVolume7d) * 100) : null;
+  const answerRate = computeAnswerRate({
+    completed: completedTalkCalls,
+    voicemail: voicemailCalls,
+    total: outboundVolume7d,
+  });
+  const shortCallRate = computeShortCallRate({
+    answeredUnder5s: veryShortCalls,
+    answered: completedTalkCalls,
+  });
+  const classification = classifyNumber({
+    answerRate,
+    shortCallRate,
+    peerMedian,
+    dials: outboundVolume7d,
+    fleetSize,
+  });
 
   const flags: string[] = [];
   const recommendations: string[] = [];
-  let score = 0;
+  let score = scoreForTier(classification.tier);
 
-  if (outboundVolume7d < 5) {
+  if (classification.tier === "insufficient_data") {
     flags.push("Insufficient recent outbound call data");
     recommendations.push("Call health is based on limited data until this number has more completed call history.");
-  }
-
-  if (outboundVolume7d >= 10 && answerRate !== null && answerRate < 20) {
+  } else if (classification.tier === "spam_risk") {
     flags.push("High unanswered call pattern");
     recommendations.push("Slow down volume and review lead quality or call timing before increasing usage.");
-    score = Math.max(score, 70);
-  } else if (outboundVolume7d >= 10 && answerRate !== null && answerRate < 35) {
+  } else if (classification.tier === "watch") {
     flags.push("Elevated unanswered call pattern");
     recommendations.push("Watch this number closely and keep call volume steady.");
-    score = Math.max(score, 50);
   }
 
-  if (outboundVolume7d >= 10 && shortCallRate !== null && shortCallRate >= 70) {
-    flags.push("Severe short-call pattern");
-    recommendations.push("Review call opening, lead source quality, and call timing before scaling volume.");
-    score = Math.max(score, 75);
-  } else if (outboundVolume7d >= 10 && shortCallRate !== null && shortCallRate >= 45) {
+  if (classification.reasons.some((reason) => reason.startsWith("high_short_call_rate"))) {
     flags.push("Elevated short-call pattern");
     recommendations.push("Monitor for quick hangups and avoid sudden volume increases.");
-    score = Math.max(score, 50);
   }
 
   if (outbound24h >= 30 && outbound24h >= Math.max(12, Math.ceil(outboundVolume7d * 0.6))) {
@@ -125,10 +137,7 @@ function buildHealthForNumber(args: {
     recommendations.push("Keep call volume consistent and monitor answer quality over time.");
   }
 
-  let label: HealthLabel = "Healthy";
-  if (score >= 75) label = "Watch";
-  else if (outboundVolume7d < 5) label = "Unknown";
-  else if (score >= 40 || flags.length > 0) label = "Watch";
+  const label = labelForTier(classification.tier);
 
   return {
     phoneNumber,
@@ -143,6 +152,19 @@ function buildHealthForNumber(args: {
     flags,
     recommendations,
   };
+}
+
+function labelForTier(tier: ReputationTier): HealthLabel {
+  if (tier === "spam_risk") return "Spam Risk";
+  if (tier === "watch") return "Watch";
+  if (tier === "insufficient_data") return "Unknown";
+  return "Healthy";
+}
+
+function scoreForTier(tier: ReputationTier): number {
+  if (tier === "spam_risk") return 80;
+  if (tier === "watch") return 55;
+  return 0;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -185,11 +207,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
 
   const now = Date.now();
+  const answerRates = numbers.map((phoneNumber) => {
+    const normalized = normalizePhone(phoneNumber);
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const outbound7d = relevantCalls.filter((call) => {
+      const owner = normalizePhone(call.ownerNumber || call.from);
+      return callTime(call) >= sevenDaysAgo && String(call.direction || "outbound") === "outbound" && owner === normalized;
+    });
+    const completed = outbound7d.filter((call) => call.isVoicemail !== true && Boolean(call.completedAt) && callDuration(call) > 0).length;
+    const voicemail = outbound7d.filter((call) => call.isVoicemail === true).length;
+    return computeAnswerRate({ completed, voicemail, total: outbound7d.length });
+  });
+  const fleetMedian = median(answerRates);
   const health = numbers.map((phoneNumber) =>
     buildHealthForNumber({
       phoneNumber,
       calls: relevantCalls,
       now,
+      peerMedian: fleetMedian,
+      fleetSize: numbers.length,
     }),
   );
 
