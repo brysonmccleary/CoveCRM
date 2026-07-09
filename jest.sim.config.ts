@@ -25,6 +25,7 @@ const config: Config = {
     "**/__tests__/p0-security-remediation.test.ts",
     "**/__tests__/payout-double-pay-remediation.test.ts",
     "**/__tests__/dialer-billing-rates.test.ts",
+    "**/__tests__/billing-ledger-safety.test.ts",
   ],
   testTimeout: 15000,
   verbose: true,

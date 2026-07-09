@@ -13,6 +13,11 @@ import AICallSession from "@/models/AICallSession";
 import { createFinalizePayInvoice } from "@/lib/billing/trackUsage";
 import type { BillingEventSource } from "@/models/BillingEvent";
 import { AI_SESSION_RATE_PER_MIN } from "@/lib/billing/dialerRates";
+import {
+  consumeAccrualLedgerCents,
+  getPendingAccrualLedgerCents,
+  recordUsageAccrualOnce,
+} from "@/lib/billing/usageAccrualLedger";
 
 const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
@@ -172,7 +177,8 @@ export async function trackAiDialerSessionUsage({
     return null;
   }
 
-  const addCents = Math.round((billableSeconds / 60) * SESSION_RATE_CENTS_PER_MIN);
+  const billableMinutes = billableSeconds > 0 ? Math.ceil(billableSeconds / 60) : 0;
+  const addCents = billableMinutes * SESSION_RATE_CENTS_PER_MIN;
 
   if (addCents <= 0) {
     await AICallSession.updateOne(
@@ -237,6 +243,36 @@ export async function trackAiDialerSessionUsage({
       newSeconds: billableSeconds,
       computedSeconds: newSeconds,
       capped: shouldCapCheckpoint,
+    };
+  }
+
+  const eventKey = `ai_voice:session:${sessionId}:${alreadyBilledSeconds}:${nextBilledSeconds}`;
+  const accrualEvent = await recordUsageAccrualOnce({
+    bucket: "ai_voice",
+    userEmail: email,
+    eventKey,
+    source: "ai_voice_session",
+    amountCents: addCents,
+    origin: "dialer",
+    metadata: {
+      sessionId,
+      alreadyBilledSeconds,
+      nextBilledSeconds,
+      billableSeconds,
+      billableMinutes,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+    },
+  });
+  if (!accrualEvent.accrued) {
+    await User.updateOne({ email }, { $inc: { aiDialerSessionSeconds: billableSeconds } });
+    return {
+      billedSeconds: billableSeconds,
+      accrued: 0,
+      newSeconds: billableSeconds,
+      computedSeconds: newSeconds,
+      capped: shouldCapCheckpoint,
+      charged: false,
     };
   }
 
@@ -398,9 +434,22 @@ export async function trackAiDialerSessionUsage({
   }
 
   const accrued = Number((locked as any).aiDialerAccruedSessionCents || 0);
-  // Bill exactly one threshold increment per event ($20 max single charge).
-  // Any remainder drains on subsequent billing events — never lump-sum.
-  const billCents = accrued >= SESSION_THRESHOLD_CENTS ? SESSION_THRESHOLD_CENTS : 0;
+  const ledgerPendingCents = await getPendingAccrualLedgerCents({
+    bucket: "ai_voice",
+    userEmail: email,
+  });
+  if (accrued > ledgerPendingCents) {
+    console.error("[BILLING][PRE-LEDGER-BALANCE-DRIFT]", {
+      userEmail: email,
+      bucket: "ai_voice",
+      storedCents: accrued,
+      ledgerBackedCents: ledgerPendingCents,
+      unledgeredCents: accrued - ledgerPendingCents,
+    });
+  }
+  // Bill exactly one ledger-backed threshold increment per event ($20 max).
+  // Stored pre-ledger balance is never included unless backed by ledger rows.
+  const billCents = ledgerPendingCents >= SESSION_THRESHOLD_CENTS ? SESSION_THRESHOLD_CENTS : 0;
 
   if (billCents <= 0) {
     await User.updateOne(
@@ -454,6 +503,30 @@ export async function trackAiDialerSessionUsage({
         },
       }
     );
+    const consumedCents = await consumeAccrualLedgerCents({
+      bucket: "ai_voice",
+      userEmail: email,
+      amountCents: billCents,
+    });
+    if (consumedCents !== billCents) {
+      await User.updateOne(
+        { email },
+        {
+          $set: {
+            aiDialerBillingHold: true,
+            aiDialerBillingHoldReason: "ledger_consumption_shortfall",
+            aiDialerBillingHoldAt: new Date(),
+            aiDialerBillingHoldAccruedCents: Math.max(0, accrued - billCents),
+          },
+        },
+      );
+      console.error("[BILLING][CRITICAL][LEDGER-CONSUMPTION-SHORTFALL]", {
+        userEmail: email,
+        bucket: "ai_voice",
+        invoiceCents: billCents,
+        consumedCents,
+      });
+    }
     console.log(`💳 AI Voice session invoice: $${(billCents / 100).toFixed(2)} charged to ${email}`);
   } catch (err) {
     console.error("❌ Stripe AI Voice session charge failed:", err);
@@ -485,11 +558,15 @@ export async function trackAiDialerCentsUsage({
   addCents,
   description,
   source,
+  eventKey,
+  metadata,
 }: {
   userEmail: string;
   addCents: number;
   description: string;
   source: BillingEventSource;
+  eventKey: string;
+  metadata?: Record<string, unknown>;
 }): Promise<AiDialerCentsUsageResult | null> {
   await ensureDb();
 
@@ -504,7 +581,21 @@ export async function trackAiDialerCentsUsage({
   }
 
   const userDoc = await User.findOne({ email })
-    .select("hasAI stripeCustomerId aiDialerAccruedSessionCents hasEverPaid billingBlocked billingMode")
+    .select(
+      [
+        "hasAI",
+        "stripeCustomerId",
+        "aiDialerAccruedSessionCents",
+        "aiDialerSessionDailyWindowStartedAt",
+        "aiDialerSessionDailyAccruedCents",
+        "aiDialerBillingHold",
+        "aiDialerBillingHoldReason",
+        "aiDialerBillingHoldClearedAt",
+        "hasEverPaid",
+        "billingBlocked",
+        "billingMode",
+      ].join(" "),
+    )
     .lean();
 
   if (
@@ -516,20 +607,106 @@ export async function trackAiDialerCentsUsage({
     return { ok: true, accrued: 0, charged: false };
   }
 
+  const accrualEvent = await recordUsageAccrualOnce({
+    bucket: "ai_voice",
+    userEmail: email,
+    eventKey: `ai_voice:${eventKey}`,
+    source,
+    amountCents: cents,
+    origin: "dialer",
+    metadata: {
+      ...(metadata || {}),
+      description,
+      source,
+    },
+  });
+  if (!accrualEvent.accrued) {
+    return { ok: true, accrued: 0, charged: false };
+  }
+
+  const nowForAccrual = new Date();
+  const priorDailyWindowStartedAt = (userDoc as any).aiDialerSessionDailyWindowStartedAt
+    ? new Date((userDoc as any).aiDialerSessionDailyWindowStartedAt)
+    : null;
+  const holdClearedAt = (userDoc as any).aiDialerBillingHoldClearedAt
+    ? new Date((userDoc as any).aiDialerBillingHoldClearedAt)
+    : null;
+  const resetDailyWindow =
+    !priorDailyWindowStartedAt ||
+    nowForAccrual.getTime() - priorDailyWindowStartedAt.getTime() >= AI_SESSION_DAILY_ALERT_WINDOW_MS;
+  const priorDailyAccruedCents = resetDailyWindow
+    ? 0
+    : Number((userDoc as any).aiDialerSessionDailyAccruedCents || 0);
+  const nextDailyAccruedCents = priorDailyAccruedCents + cents;
+
   const updated = await User.findOneAndUpdate(
     { email },
     {
       $inc: {
         aiDialerAccruedSessionCents: cents,
         "aiDialerUsage.billedAmount": cents / 100,
+        ...(resetDailyWindow ? {} : { aiDialerSessionDailyAccruedCents: cents }),
       },
+      ...(resetDailyWindow
+        ? {
+            $set: {
+              aiDialerSessionDailyWindowStartedAt: nowForAccrual,
+              aiDialerSessionDailyAccruedCents: cents,
+            },
+          }
+        : {}),
     },
-    { new: true, projection: { aiDialerAccruedSessionCents: 1, stripeCustomerId: 1 } }
+    {
+      new: true,
+      projection: {
+        aiDialerAccruedSessionCents: 1,
+        aiDialerSessionDailyWindowStartedAt: 1,
+        aiDialerSessionDailyAccruedCents: 1,
+        aiDialerBillingHold: 1,
+        stripeCustomerId: 1,
+      },
+    }
   );
 
   if (!updated) return { ok: true, accrued: cents, charged: false };
 
   const newAccrued = Number((updated as any).aiDialerAccruedSessionCents || 0);
+  const activeDailyWindowStartedAt = (updated as any).aiDialerSessionDailyWindowStartedAt
+    ? new Date((updated as any).aiDialerSessionDailyWindowStartedAt)
+    : priorDailyWindowStartedAt || nowForAccrual;
+  const clearedAfterWindowStart =
+    !!holdClearedAt &&
+    !!activeDailyWindowStartedAt &&
+    holdClearedAt.getTime() >= activeDailyWindowStartedAt.getTime();
+  const dailyAlertExceeded =
+    nextDailyAccruedCents > AI_SESSION_DAILY_ALERT_CENTS && !clearedAfterWindowStart;
+  const existingHold = (userDoc as any).aiDialerBillingHold === true || (updated as any).aiDialerBillingHold === true;
+  const holdReason = dailyAlertExceeded
+    ? "daily_ai_voice_accrual_exceeded"
+    : existingHold
+    ? String((userDoc as any).aiDialerBillingHoldReason || "existing_hold")
+    : "";
+
+  if (holdReason) {
+    await User.updateOne(
+      { email },
+      {
+        $set: {
+          aiDialerBillingHold: true,
+          aiDialerBillingHoldReason: holdReason,
+          aiDialerBillingHoldAt: new Date(),
+          aiDialerBillingHoldAccruedCents: newAccrued,
+        },
+      }
+    );
+    console.error("[BILLING][CHARGE-HOLD]", {
+      userEmail: email,
+      bucket: "ai_voice",
+      reason: holdReason,
+      accruedCents: newAccrued,
+    });
+    return { ok: true, accrued: cents, charged: false };
+  }
   const canBill = !!(userDoc as any).stripeCustomerId && !(DEV_SKIP_BILLING && isProd);
 
   if (!canBill && !isProd && newAccrued >= SESSION_THRESHOLD_CENTS) {
@@ -566,8 +743,21 @@ export async function trackAiDialerCentsUsage({
   if (!locked) return { ok: true, accrued: cents, charged: false };
 
   const accrued = Number((locked as any).aiDialerAccruedSessionCents || 0);
-  // Bill exactly one threshold increment per event ($20 max single charge).
-  const billCents = accrued >= SESSION_THRESHOLD_CENTS ? SESSION_THRESHOLD_CENTS : 0;
+  const ledgerPendingCents = await getPendingAccrualLedgerCents({
+    bucket: "ai_voice",
+    userEmail: email,
+  });
+  if (accrued > ledgerPendingCents) {
+    console.error("[BILLING][PRE-LEDGER-BALANCE-DRIFT]", {
+      userEmail: email,
+      bucket: "ai_voice",
+      storedCents: accrued,
+      ledgerBackedCents: ledgerPendingCents,
+      unledgeredCents: accrued - ledgerPendingCents,
+    });
+  }
+  // Bill exactly one ledger-backed threshold increment per event ($20 max).
+  const billCents = ledgerPendingCents >= SESSION_THRESHOLD_CENTS ? SESSION_THRESHOLD_CENTS : 0;
 
   if (billCents <= 0) {
     await User.updateOne(
@@ -612,6 +802,30 @@ export async function trackAiDialerCentsUsage({
         },
       }
     );
+    const consumedCents = await consumeAccrualLedgerCents({
+      bucket: "ai_voice",
+      userEmail: email,
+      amountCents: billCents,
+    });
+    if (consumedCents !== billCents) {
+      await User.updateOne(
+        { email },
+        {
+          $set: {
+            aiDialerBillingHold: true,
+            aiDialerBillingHoldReason: "ledger_consumption_shortfall",
+            aiDialerBillingHoldAt: new Date(),
+            aiDialerBillingHoldAccruedCents: Math.max(0, accrued - billCents),
+          },
+        },
+      );
+      console.error("[BILLING][CRITICAL][LEDGER-CONSUMPTION-SHORTFALL]", {
+        userEmail: email,
+        bucket: "ai_voice",
+        invoiceCents: billCents,
+        consumedCents,
+      });
+    }
 
     return { ok: true, accrued: cents, charged: true, billCents };
   } catch (err) {

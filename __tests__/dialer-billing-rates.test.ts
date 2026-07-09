@@ -45,6 +45,19 @@ describe("dialer connected-duration billing rules", () => {
     expect(source).toContain("AICallUsageLedger.findOne({ callSid: sid })");
     expect(model).toContain("callSid: { type: String, required: true, unique: true");
     expect(source).toContain('source: "ai_voice_call"');
+    expect(source).toContain("alreadyBilled: true");
+    expect(source.indexOf("AICallUsageLedger.findOne({ callSid: sid })")).toBeLessThan(
+      source.indexOf("AICallRecording.findOne({ callSid: sid })"),
+    );
+  });
+
+  test("duplicate AI usage POST returns alreadyBilled before any Stripe-capable accrual", () => {
+    const source = read("pages/api/ai-calls/usage.ts");
+    expect(source).toContain("alreadyBilled: true");
+    expect(source).toContain('reason: `ledger_${String((existingLedger as any).status || "exists")}`');
+    expect(source.indexOf("if (existingLedger)")).toBeLessThan(
+      source.indexOf("trackAiDialerCentsUsage({"),
+    );
   });
 
   test("live-transfer usage duration stops at meterStoppedAtMs behaviorally", () => {
@@ -110,10 +123,7 @@ describe("dialer connected-duration billing rules", () => {
     expect(source).toContain("postedEmail && postedEmail !== resolvedEmail");
     expect(source).toContain('return res.status(409).json({ ok: false, error: "Call ownership mismatch" })');
     expect(source.indexOf("[BILLING][OWNERSHIP-MISMATCH]")).toBeLessThan(
-      source.indexOf("AICallUsageLedger.findOne({ callSid: sid })"),
-    );
-    expect(source.indexOf("[BILLING][OWNERSHIP-MISMATCH]")).toBeLessThan(
-      source.indexOf("createFinalizePayInvoice({"),
+      source.indexOf("trackAiDialerCentsUsage({"),
     );
   });
 
@@ -150,6 +160,85 @@ describe("dialer connected-duration billing rules", () => {
     expect(trackUsage).toContain("metadata: stripeMeta");
     expect(trackUsage).toContain("stripe.invoiceItems.create");
     expect(sessionBilling).toContain("metadata: { userEmail: email, sessionId }");
+  });
+
+  test("AI talk charges accrue to the threshold bucket instead of per-call invoicing", () => {
+    const usage = read("pages/api/ai-calls/usage.ts");
+    const ledger = read("models/AICallUsageLedger.ts");
+    const sessionBilling = read("lib/billing/trackAiDialerSessionUsage.ts");
+    expect(usage).toContain("trackAiDialerCentsUsage({");
+    expect(usage).toContain('status: "accrued"');
+    expect(usage).not.toContain("createFinalizePayInvoice({");
+    expect(ledger).toContain('"accrued"');
+    expect(sessionBilling).toContain("aiDialerAccruedSessionCents: cents");
+    expect(sessionBilling).toContain("newAccrued < SESSION_THRESHOLD_CENTS");
+    expect(sessionBilling).toContain("getPendingAccrualLedgerCents({");
+    expect(sessionBilling).toContain("ledgerPendingCents >= SESSION_THRESHOLD_CENTS ? SESSION_THRESHOLD_CENTS : 0");
+    expect(sessionBilling).toContain("[BILLING][PRE-LEDGER-BALANCE-DRIFT]");
+    expect(sessionBilling).toContain("[BILLING][CRITICAL][LEDGER-CONSUMPTION-SHORTFALL]");
+    expect(sessionBilling).toContain("charged: true");
+  });
+
+  test("AI voice bucket has per-event ledgers and ceils session minutes", () => {
+    const sessionBilling = read("lib/billing/trackAiDialerSessionUsage.ts");
+    const ledger = read("models/UsageAccrualLedger.ts");
+    expect(sessionBilling).toContain("const billableMinutes = billableSeconds > 0 ? Math.ceil(billableSeconds / 60) : 0");
+    expect(sessionBilling).toContain("recordUsageAccrualOnce({");
+    expect(sessionBilling).toContain("getPendingAccrualLedgerCents({");
+    expect(sessionBilling).toContain('bucket: "ai_voice"');
+    expect(sessionBilling).toContain('eventKey: `ai_voice:${eventKey}`');
+    expect(sessionBilling).toContain("consumeAccrualLedgerCents({");
+    expect(ledger).toContain('export type UsageAccrualBucket = "regular" | "ai_voice"');
+    expect(ledger).toContain("eventKey: { type: String, required: true, unique: true");
+  });
+
+  test("AI dialer transcripts route to AI voice bucket and regular transcripts stay regular", () => {
+    const aiTranscript = read("pages/api/ai-calls/transcribe-recording.ts");
+    const regularTranscript = read("pages/api/calls/transcribe-recording.ts");
+    const aiTurnsTranscript = read("pages/api/ai-calls/transcript.ts");
+    expect(aiTranscript).toContain("trackAiDialerCentsUsage({");
+    expect(aiTranscript).toContain('source: "ai_transcript"');
+    expect(aiTranscript).toContain('eventKey: `recording-transcript:${String(rec.callSid || rec._id)}`');
+    expect(aiTranscript).not.toContain("trackUsage({");
+    expect(aiTurnsTranscript).toContain('billingOrigin: "dialer"');
+    expect(regularTranscript).toContain('aiInsightsBillingOrigin: "regular"');
+    expect(regularTranscript).toContain('eventKey: `call-transcript:${String(args.callId)}`');
+  });
+
+  test("regular usage has per-event idempotency and inbound SMS transport billing", () => {
+    const trackUsage = read("lib/billing/trackUsage.ts");
+    const inbound = read("pages/api/twilio/inbound-sms.ts");
+    const legacy = read("pages/api/twilio/receive-sms.ts");
+    expect(trackUsage).toContain("Missing usage eventKey");
+    expect(trackUsage).toContain("ledgerPendingCents >= TOPUP_AMOUNT_CENTS ? TOPUP_AMOUNT_CENTS : 0");
+    expect(trackUsage).toContain("[BILLING][PRE-LEDGER-BALANCE-DRIFT]");
+    expect(trackUsage).toContain("[BILLING][CRITICAL][LEDGER-CONSUMPTION-SHORTFALL]");
+    expect(trackUsage).toContain('bucket: "regular"');
+    expect(inbound).toContain('eventKey: `sms-in:${messageSid || String(savedMessage._id)}`');
+    expect(inbound).toContain("amount: 0.02 * numSegments");
+    expect(legacy).toContain("legacy endpoint forwarded to /api/twilio/inbound-sms");
+    expect(legacy).not.toContain("usageBalance");
+  });
+
+  test("bucket drift canary compares ledger balances and sets holds", () => {
+    const watchdog = read("pages/api/ai-calls/watchdog.ts");
+    expect(watchdog).toContain("runBucketDriftCanary");
+    expect(watchdog).toContain("[BILLING][BUCKET-DRIFT]");
+    expect(watchdog).toContain("BUCKET_DRIFT_TOLERANCE_CENTS = 50");
+    expect(watchdog).toContain("usageBillingHold: true");
+    expect(watchdog).toContain("aiDialerBillingHold: true");
+  });
+
+  test("AI voice prompt contains ARC depth and agent-name guard", () => {
+    const source = read("ai-voice-server/index.ts");
+    expect(source).toContain("HARD AGENT NAME LOCK (NON-NEGOTIABLE)");
+    expect(source).toContain("NEVER substitute any other agent name, company, carrier, or brand");
+    expect(source).toContain("If unsure, say exactly: \"the agent\"");
+    expect(source).toContain("I'm ${aiName}, ${agentFirst}'s scheduling assistant — this is about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in.");
+    expect(source).toContain("they requested this information and others were glad they took a few minutes to receive it");
+    expect(source).toContain("${agent} will make it extremely short");
+    expect(source).toContain("For busy or no-time objections, preserve all three beats");
+    expect(source).toContain("Max 4 sentences total");
   });
 
   test("watchdog logs shared Stripe customer canaries", () => {

@@ -5,12 +5,19 @@ import A2PProfile from "@/models/A2PProfile";
 import { stripe } from "@/lib/stripe";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import BillingEvent, { type BillingEventSource } from "@/models/BillingEvent";
+import {
+  consumeAccrualLedgerCents,
+  getPendingAccrualLedgerCents,
+  recordUsageAccrualOnce,
+} from "@/lib/billing/usageAccrualLedger";
 
 /** ========= Env / Flags ========= */
 const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
 const TOPUP_AMOUNT_USD = 10;
 const TOPUP_AMOUNT_CENTS = TOPUP_AMOUNT_USD * 100;
+const REGULAR_DAILY_ALERT_CENTS = 5000;
+const REGULAR_DAILY_ALERT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const A2P_APPROVAL_FEE_USD = 15;
 const A2P_APPROVAL_FEE_CENTS = A2P_APPROVAL_FEE_USD * 100;
@@ -441,10 +448,14 @@ export async function trackUsage({
   user,
   amount,
   source = "twilio",
+  eventKey,
+  metadata,
 }: {
   user: any;
   amount: number;
   source?: UsageSource;
+  eventKey?: string;
+  metadata?: Record<string, unknown>;
 }) {
   await ensureDb();
   const userDoc = await ensureMongooseDoc(user);
@@ -482,6 +493,10 @@ export async function trackUsage({
   const addCents =
     platformBilled && amount > 0 ? Math.max(0, Math.round(amount * 100)) : 0;
 
+  if (addCents > 0 && !String(eventKey || "").trim()) {
+    throw new Error(`Missing usage eventKey for ${source} accrual`);
+  }
+
   if (!userDoc.stripeCustomerId && isProd && platformBilled && amount > 0) {
     if (Object.keys(analyticsInc).length > 0) {
       await User.updateOne({ email: userDoc.email }, { $inc: analyticsInc });
@@ -491,19 +506,111 @@ export async function trackUsage({
 
   const canBill = !!userDoc.stripeCustomerId && !(DEV_SKIP_BILLING && isProd);
 
+  const accrualEvent =
+    addCents > 0
+      ? await recordUsageAccrualOnce({
+          bucket: "regular",
+          userEmail: userDoc.email as string,
+          eventKey: `regular:${eventKey}`,
+          source,
+          amountCents: addCents,
+          origin: "regular",
+          metadata: {
+            ...(metadata || {}),
+            amount,
+            source,
+          },
+        })
+      : { accrued: false, duplicate: false, amountCents: 0 };
+
+  if (addCents > 0 && !accrualEvent.accrued) {
+    return;
+  }
+
+  const nowForAccrual = new Date();
+  const priorDailyWindowStartedAt = (userDoc as any).usageDailyWindowStartedAt
+    ? new Date((userDoc as any).usageDailyWindowStartedAt)
+    : null;
+  const holdClearedAt = (userDoc as any).usageBillingHoldClearedAt
+    ? new Date((userDoc as any).usageBillingHoldClearedAt)
+    : null;
+  const resetDailyWindow =
+    !priorDailyWindowStartedAt ||
+    nowForAccrual.getTime() - priorDailyWindowStartedAt.getTime() >= REGULAR_DAILY_ALERT_WINDOW_MS;
+  const priorDailyAccruedCents = resetDailyWindow
+    ? 0
+    : Number((userDoc as any).usageDailyAccruedCents || 0);
+  const nextDailyAccruedCents = priorDailyAccruedCents + addCents;
+
   // One atomic round trip: update analytics + accrue usage
   const incFields: Record<string, number> = { ...analyticsInc };
   if (addCents > 0) incFields["usageAccruedCents"] = addCents;
+  if (addCents > 0 && !resetDailyWindow) incFields["usageDailyAccruedCents"] = addCents;
 
   const updated = await User.findOneAndUpdate(
     { email: userDoc.email },
-    { $inc: incFields },
-    { new: true, projection: { usageAccruedCents: 1, stripeCustomerId: 1 } },
+    {
+      $inc: incFields,
+      ...(addCents > 0 && resetDailyWindow
+        ? {
+            $set: {
+              usageDailyWindowStartedAt: nowForAccrual,
+              usageDailyAccruedCents: addCents,
+            },
+          }
+        : {}),
+    },
+    {
+      new: true,
+      projection: {
+        usageAccruedCents: 1,
+        stripeCustomerId: 1,
+        usageBillingHold: 1,
+        usageDailyWindowStartedAt: 1,
+        usageDailyAccruedCents: 1,
+      },
+    },
   );
 
   if (!updated) return;
 
   const newAccrued = Number((updated as any).usageAccruedCents || 0);
+  const activeDailyWindowStartedAt = (updated as any).usageDailyWindowStartedAt
+    ? new Date((updated as any).usageDailyWindowStartedAt)
+    : priorDailyWindowStartedAt || nowForAccrual;
+  const clearedAfterWindowStart =
+    !!holdClearedAt &&
+    !!activeDailyWindowStartedAt &&
+    holdClearedAt.getTime() >= activeDailyWindowStartedAt.getTime();
+  const dailyAlertExceeded =
+    nextDailyAccruedCents > REGULAR_DAILY_ALERT_CENTS && !clearedAfterWindowStart;
+  const existingHold = (userDoc as any).usageBillingHold === true || (updated as any).usageBillingHold === true;
+  const holdReason = dailyAlertExceeded
+    ? "daily_regular_usage_accrual_exceeded"
+    : existingHold
+    ? String((userDoc as any).usageBillingHoldReason || "existing_hold")
+    : "";
+
+  if (holdReason) {
+    await User.updateOne(
+      { email: userDoc.email },
+      {
+        $set: {
+          usageBillingHold: true,
+          usageBillingHoldReason: holdReason,
+          usageBillingHoldAt: new Date(),
+          usageBillingHoldAccruedCents: newAccrued,
+        },
+      },
+    );
+    console.error("[BILLING][CHARGE-HOLD]", {
+      userEmail: userDoc.email,
+      bucket: "regular",
+      reason: holdReason,
+      accruedCents: newAccrued,
+    });
+    return;
+  }
 
   if (!canBill && !isProd && platformBilled && newAccrued >= TOPUP_AMOUNT_CENTS) {
     console.warn(
@@ -541,9 +648,22 @@ export async function trackUsage({
   if (!locked) return; // another process holds the lock; accrual is safely stored
 
   const accrued = Number((locked as any).usageAccruedCents || 0);
-  // Bill exactly one threshold increment per event ($10 max single charge).
-  // Any remainder drains on subsequent usage events — never lump-sum.
-  const billCents = accrued >= TOPUP_AMOUNT_CENTS ? TOPUP_AMOUNT_CENTS : 0;
+  const ledgerPendingCents = await getPendingAccrualLedgerCents({
+    bucket: "regular",
+    userEmail: userDoc.email as string,
+  });
+  if (accrued > ledgerPendingCents) {
+    console.error("[BILLING][PRE-LEDGER-BALANCE-DRIFT]", {
+      userEmail: userDoc.email,
+      bucket: "regular",
+      storedCents: accrued,
+      ledgerBackedCents: ledgerPendingCents,
+      unledgeredCents: accrued - ledgerPendingCents,
+    });
+  }
+  // Bill exactly one ledger-backed threshold increment per event ($10 max).
+  // Stored pre-ledger balance is never included unless backed by ledger rows.
+  const billCents = ledgerPendingCents >= TOPUP_AMOUNT_CENTS ? TOPUP_AMOUNT_CENTS : 0;
 
   if (billCents <= 0) {
     await User.updateOne(
@@ -584,6 +704,30 @@ export async function trackUsage({
         },
       },
     );
+    const consumedCents = await consumeAccrualLedgerCents({
+      bucket: "regular",
+      userEmail: userDoc.email as string,
+      amountCents: billCents,
+    });
+    if (consumedCents !== billCents) {
+      await User.updateOne(
+        { email: userDoc.email },
+        {
+          $set: {
+            usageBillingHold: true,
+            usageBillingHoldReason: "ledger_consumption_shortfall",
+            usageBillingHoldAt: new Date(),
+            usageBillingHoldAccruedCents: Math.max(0, accrued - billCents),
+          },
+        },
+      );
+      console.error("[BILLING][CRITICAL][LEDGER-CONSUMPTION-SHORTFALL]", {
+        userEmail: userDoc.email,
+        bucket: "regular",
+        invoiceCents: billCents,
+        consumedCents,
+      });
+    }
     console.log(
       `💳 Usage invoice: $${(billCents / 100).toFixed(2)} charged to ${userDoc.email}`,
     );
