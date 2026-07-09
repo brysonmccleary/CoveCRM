@@ -145,7 +145,7 @@ export default function BuyNumberPanel() {
       alert(`Successfully purchased ${numberToBuy.phoneNumber}`);
     } catch (err: any) {
       console.error("Error purchasing number", err);
-      setError(err?.response?.data?.message || "Error purchasing number");
+      setError(purchaseBlockMessage(err?.response?.data));
       // Optional: you could reopen the modal here if you wanted, but it's safer to leave it closed.
     } finally {
       setLoading(false);
@@ -405,3 +405,15 @@ export default function BuyNumberPanel() {
     </div>
   );
 }
+const purchaseBlockMessage = (data: any) => {
+  switch (data?.reason) {
+    case "no_card_on_file":
+      return "Add a payment method before purchasing a number.";
+    case "no_stripe_customer":
+      return "Finish billing setup before purchasing a number.";
+    case "no_active_subscription":
+      return "Activate or restore your CoveCRM subscription before purchasing a number.";
+    default:
+      return data?.message || data?.error || "Error purchasing number";
+  }
+};

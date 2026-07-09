@@ -122,6 +122,7 @@ async function validatePlatformNumberPurchaseBilling(args: {
     console.warn(
       JSON.stringify({
         msg: "buy-number: blocking purchase due to missing Stripe customer",
+        reason: "no_stripe_customer",
         email,
         userId: String(user._id),
         requestedNumber: requestedNumber || null,
@@ -132,6 +133,8 @@ async function validatePlatformNumberPurchaseBilling(args: {
       ok: false as const,
       status: 403,
       body: {
+        error: "Complete billing setup before purchasing a phone number.",
+        reason: "no_stripe_customer",
         code: "billing_incomplete",
         message:
           "Complete signup billing with an active or trialing subscription before purchasing a phone number.",
@@ -169,6 +172,7 @@ async function validatePlatformNumberPurchaseBilling(args: {
     console.warn(
       JSON.stringify({
         msg: "buy-number: blocking purchase due to missing active or trialing signup subscription",
+        reason: "no_active_subscription",
         email,
         userId: String(user._id),
         stripeCustomerId: user.stripeCustomerId,
@@ -178,6 +182,8 @@ async function validatePlatformNumberPurchaseBilling(args: {
       ok: false as const,
       status: 403,
       body: {
+        error: "Activate or restore your CoveCRM subscription before purchasing a phone number.",
+        reason: "no_active_subscription",
         code: "no_active_subscription",
         message:
           "An active or trialing CoveCRM subscription is required before purchasing a phone number.",
@@ -353,7 +359,18 @@ export default async function handler(
     if (!user) return res.status(404).json({ message: "User not found" });
     const allowCardBypass = (user as any).role === "admin" || isAdmin(email) || canBypassNumberPurchaseBilling(user, email);
     if ((user as any).cardOnFile !== true && !allowCardBypass) {
-      return res.status(403).json({ error: "Please add a payment method before purchasing a number" });
+      console.warn(
+        JSON.stringify({
+          msg: "buy-number: blocking purchase due to missing card on file",
+          reason: "no_card_on_file",
+          email,
+          userId: String(user._id),
+        }),
+      );
+      return res.status(403).json({
+        error: "Please add a payment method before purchasing a number.",
+        reason: "no_card_on_file",
+      });
     }
 
     const {

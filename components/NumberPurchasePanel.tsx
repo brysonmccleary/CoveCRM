@@ -1,6 +1,19 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
 
+const purchaseBlockMessage = (data: any) => {
+  switch (data?.reason) {
+    case "no_card_on_file":
+      return "Add a payment method before purchasing a number.";
+    case "no_stripe_customer":
+      return "Finish billing setup before purchasing a number.";
+    case "no_active_subscription":
+      return "Activate or restore your CoveCRM subscription before purchasing a number.";
+    default:
+      return data?.message || data?.error || "Failed to purchase number";
+  }
+};
+
 export default function NumberPurchasePanel() {
   const [areaCode, setAreaCode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -26,7 +39,7 @@ export default function NumberPurchasePanel() {
         toast.success(`✅ Number purchased: ${data.phoneNumber}`);
         setAreaCode("");
       } else {
-        toast.error(`❌ ${data.message || "Failed to purchase number"}`);
+        toast.error(`❌ ${purchaseBlockMessage(data)}`);
       }
     } catch (error) {
       console.error("Purchase error:", error);
