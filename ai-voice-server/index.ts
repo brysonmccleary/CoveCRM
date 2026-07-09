@@ -235,6 +235,7 @@ type CallState = {
   callStartedAtMs?: number;
   meterStoppedAtMs?: number;
   billedUsageSent?: boolean;
+  billedUsageInFlight?: boolean;
 
   debugLoggedFirstMedia?: boolean;
   debugLoggedFirstOutputAudio?: boolean;
@@ -7904,7 +7905,7 @@ function buildConversationPolicyDecision(
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
 	    const lineToSay = isKaylaDemo
 	      ? `Sure — I'm ${aiName}, the CoveCRM AI. This call is the demo, and I'm here to answer your questions about the CRM and how the AI works. What do you want to know first?`
-	      : `Sure — I'm ${aiName}, a scheduling assistant calling for ${agentFirst} about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${requiredObjective}`;
+	      : `I'm ${aiName}, ${agentFirst}'s scheduling assistant — this is about the ${getScopeLabelForScriptKey(ctx.scriptKey)} request that came in. ${requiredObjective}`;
 	    return {
 	      handled: true, routeKind: "policy_confused_identity", responseMode: "exact_script",
 	      objective: isKaylaDemo ? "kayla_demo_identity_reset" : "return_to_booking", lineToSay, requiredClosingPivot: isKaylaDemo ? lineToSay : requiredObjective,
@@ -9502,7 +9503,9 @@ KNOWLEDGE FOR RESPOND:
 - ${productKnowledgeLine}
 - ${agent} is the licensed agent and covers pricing, options, and qualification.
 - There is no cost or obligation to get the information.
-- For rejection-type objections, preserve this substance from the previous exact-script rebuttal: Totally fair, this is not pressure; many people who felt that way were glad they took the 5 minutes; ${agent} keeps it quick.
+- For rejection-type objections, preserve all three beats: empathize and normalize; remind them they requested this information and others were glad they took a few minutes to receive it; ${agent} keeps it extremely short.
+- Rejection substance to adapt, not recite robotically: "Yeah, completely understand — most people felt the same way, but at the end of the day they were glad they took the extra five minutes just to receive the information they requested. ${agent} will make it extremely short."
+- For busy or no-time objections, preserve all three beats: acknowledge they are busy; say that is exactly why ${agent} keeps it to a few minutes; reclose with the current day/time choice.
 
 EXAMPLE SHAPE ONLY — adapt to the actual objection:
 "Yeah, I completely understand — most people fill these out online on a quick form, so they tend to forget. It's about the ${scope} request you submitted, just so you can get the information with no cost or obligation. Would this be just for yourself, or a spouse as well?"
@@ -9518,8 +9521,9 @@ CURRENT PENDING SCRIPT ASK:
 "${pendingStepLine}"
 
 RULES:
-- Max 3 sentences total.
+- Max 4 sentences total.
 - Use the ARC structure: AGREE, RESPOND, RECLOSE.
+- RESPOND may be 2 sentences when needed to carry all required beats.
 - The RECLOSE must be the current pending ask, naturally phrased.
 - Do not advance the script. Do not change to a different ask.
 - Assume the conversation continues.
@@ -10970,6 +10974,11 @@ HARD NAME LOCK (NON-NEGOTIABLE)
 - The ONLY name you may use for the lead is exactly: "${leadName}"
 - If missing, use exactly: "there"
 - NEVER invent or guess a name.
+
+HARD AGENT NAME LOCK (NON-NEGOTIABLE)
+- The agent's name is exactly: "${agent}".
+- NEVER substitute any other agent name, company, carrier, or brand for "${agent}".
+- If unsure, say exactly: "the agent".
 
 HARD SCOPE LOCK (NON-NEGOTIABLE)
 - This call is ONLY about the lead’s ${scope} request that the lead submitted.
@@ -14386,7 +14395,7 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
  * Vendor usage analytics
  */
 async function billAiDialerUsageForCall(state: CallState) {
-  if (state.billedUsageSent) return;
+  if (state.billedUsageSent || state.billedUsageInFlight) return;
   if (!state.context) return;
   if (!AI_DIALER_AGENT_KEY) {
     console.error(
@@ -14409,6 +14418,9 @@ async function billAiDialerUsageForCall(state: CallState) {
     callSid: state.callSid,
     sessionId: state.context.sessionId,
   };
+
+  state.billedUsageInFlight = true;
+  state.billedUsageSent = true;
 
   try {
     const resp = await fetch(USAGE_URL, {
@@ -14436,6 +14448,8 @@ async function billAiDialerUsageForCall(state: CallState) {
         "[AI-VOICE] usage endpoint failed:",
         json?.error || resp.statusText
       );
+      state.billedUsageSent = false;
+      state.billedUsageInFlight = false;
       return;
     }
 
@@ -14447,8 +14461,10 @@ async function billAiDialerUsageForCall(state: CallState) {
       sessionId: state.context.sessionId,
     });
 
-    state.billedUsageSent = true;
+    state.billedUsageInFlight = false;
   } catch (err: any) {
+    state.billedUsageSent = false;
+    state.billedUsageInFlight = false;
     console.error(
       "[AI-VOICE] Error calling usage endpoint:",
       err?.message || err
