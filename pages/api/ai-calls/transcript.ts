@@ -293,6 +293,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         turns,
         fullText,
         transcriptSource,
+        billingOrigin: "dialer",
         ...billing,
         updatedAt: new Date(),
       },
@@ -331,6 +332,13 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         addCents: deltaCents,
         description: `Cove CRM AI Dialer transcript usage ($${(deltaCents / 100).toFixed(2)})`,
         source: "ai_transcript",
+        eventKey: `transcript:${callSid}`,
+        metadata: {
+          callSid,
+          sessionId,
+          transcriptSource,
+          origin: "dialer",
+        },
       });
     }
   }
