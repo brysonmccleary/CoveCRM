@@ -8,8 +8,7 @@ import User from "@/models/User";
 import AICallRecording from "@/models/AICallRecording";
 import AICallSession from "@/models/AICallSession";
 import AICallUsageLedger from "@/models/AICallUsageLedger";
-import BillingEvent from "@/models/BillingEvent";
-import { createFinalizePayInvoice } from "@/lib/billing/trackUsage";
+import { trackAiDialerCentsUsage } from "@/lib/billing/trackAiDialerSessionUsage";
 import {
   AI_TALK_RATE_PER_MIN,
   amountCentsForBillableSeconds,
@@ -27,7 +26,15 @@ type UsageBody = {
 };
 
 type UsageResponse =
-  | { ok: true; skipped?: boolean; reason?: string; amountCents?: number; billableSeconds?: number }
+  | {
+      ok: true;
+      skipped?: boolean;
+      alreadyBilled?: boolean;
+      charged?: boolean;
+      reason?: string;
+      amountCents?: number;
+      billableSeconds?: number;
+    }
   | { ok: false; error: string };
 
 function cleanEmail(value?: string) {
@@ -77,6 +84,20 @@ export default async function handler(
 
   await dbConnect();
 
+  const existingLedger = await AICallUsageLedger.findOne({ callSid: sid })
+    .select("status amountCents billableSeconds")
+    .lean();
+  if (existingLedger) {
+    return res.status(200).json({
+      ok: true,
+      skipped: true,
+      alreadyBilled: true,
+      reason: `ledger_${String((existingLedger as any).status || "exists")}`,
+      amountCents: Number((existingLedger as any).amountCents || 0),
+      billableSeconds: Number((existingLedger as any).billableSeconds || 0),
+    });
+  }
+
   const recording = await AICallRecording.findOne({ callSid: sid })
     .select("_id userEmail aiCallSessionId durationSec outcome answeredBy")
     .lean();
@@ -109,20 +130,6 @@ export default async function handler(
   }
 
   const email = resolvedEmail;
-
-  const existingLedger = await AICallUsageLedger.findOne({ callSid: sid }).lean();
-  if (
-    existingLedger &&
-    ["paid", "charging", "stripe_created", "skipped"].includes(String((existingLedger as any).status || ""))
-  ) {
-    return res.status(200).json({
-      ok: true,
-      skipped: true,
-      reason: `ledger_${String((existingLedger as any).status || "exists")}`,
-      amountCents: Number((existingLedger as any).amountCents || 0),
-      billableSeconds: Number((existingLedger as any).billableSeconds || 0),
-    });
-  }
 
   const recordingDuration =
     typeof (recording as any)?.durationSec === "number"
@@ -235,19 +242,15 @@ export default async function handler(
   }
 
   try {
-    await createFinalizePayInvoice({
-      customerId: stripeCustomerId,
-      amountCents,
+    const accrual = await trackAiDialerCentsUsage({
+      userEmail: email,
+      addCents: amountCents,
       description: `Cove CRM AI Dialer talk time (${(billableSeconds / 60).toFixed(2)} min)`,
       source: "ai_voice_call",
-      sourceId: sid,
-      userEmail: email,
-      userId: String((user as any)._id),
+      eventKey: `call:${sid}`,
       metadata: {
-        userEmail: email,
         callSid: sid,
         sessionId: resolvedSessionId ? String(resolvedSessionId) : null,
-        postedSessionId: sessionId || null,
         durationSec,
         billableSeconds,
         ratePerMinute: AI_TALK_RATE_PER_MIN,
@@ -255,22 +258,18 @@ export default async function handler(
       },
     });
 
-    const billingEvent = await BillingEvent.findOne({
-      source: "ai_voice_call",
-      sourceId: sid,
-      amountCents,
-    })
-      .select("stripeInvoiceId stripeInvoiceItemId")
-      .lean();
-
     await AICallUsageLedger.updateOne(
       { callSid: sid, status: "charging" },
       {
         $set: {
-          status: "paid",
-          stripeInvoiceId: (billingEvent as any)?.stripeInvoiceId || null,
-          stripeInvoiceItemId: (billingEvent as any)?.stripeInvoiceItemId || null,
-          paidAt: new Date(),
+          status: "accrued",
+          paidAt: null,
+          metadata: {
+            ...(claimed as any).metadata,
+            accrualStatus: accrual?.ok ? "ok" : "skipped",
+            thresholdInvoiceCharged: !!accrual?.charged,
+            thresholdBillCents: accrual?.billCents || 0,
+          },
         },
       },
     );
@@ -286,13 +285,14 @@ export default async function handler(
       },
     );
 
-    console.log("[AI Dialer usage] billed talk time", {
+    console.log("[AI Dialer usage] accrued talk time", {
       userEmail: email,
       callSid: sid,
       sessionId: resolvedSessionId ? String(resolvedSessionId) : sessionId,
       durationSec,
       billableSeconds,
       amountCents,
+      charged: !!accrual?.charged,
     });
   } catch (err: any) {
     await AICallUsageLedger.updateOne(
@@ -307,7 +307,7 @@ export default async function handler(
         },
       },
     );
-    return res.status(500).json({ ok: false, error: err?.message || "AI talk-time billing failed" });
+    return res.status(500).json({ ok: false, error: err?.message || "AI talk-time accrual failed" });
   }
 
   res.setHeader("Cache-Control", "no-store");

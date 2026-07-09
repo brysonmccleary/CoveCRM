@@ -4,6 +4,7 @@ import mongoose, { Schema, Document, models } from "mongoose";
 export type AICallUsageLedgerStatus =
   | "pending"
   | "charging"
+  | "accrued"
   | "stripe_created"
   | "paid"
   | "failed"
@@ -46,7 +47,7 @@ const AICallUsageLedgerSchema = new Schema<IAICallUsageLedger>(
     amountCents: { type: Number, required: true, default: 0 },
     status: {
       type: String,
-      enum: ["pending", "charging", "stripe_created", "paid", "failed", "skipped"],
+      enum: ["pending", "charging", "accrued", "stripe_created", "paid", "failed", "skipped"],
       default: "pending",
       index: true,
     },

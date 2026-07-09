@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
 export type AICallTranscriptSource = "voice_turns" | "openai_transcribe" | "none";
+export type BillingOrigin = "dialer" | "regular";
 
 export interface IAICallTranscriptTurn {
   role: "ai" | "lead";
@@ -23,6 +24,7 @@ export interface IAICallTranscript extends Document {
   turns: IAICallTranscriptTurn[];
   fullText: string;
   transcriptSource: AICallTranscriptSource;
+  billingOrigin: BillingOrigin;
   transcriptBillable: boolean;
   transcriptCostCents: number;
   transcriptChargeCents: number;
@@ -75,6 +77,7 @@ const AICallTranscriptSchema = new Schema<IAICallTranscript>(
       enum: ["voice_turns", "openai_transcribe", "none"],
       default: "voice_turns",
     },
+    billingOrigin: { type: String, enum: ["dialer", "regular"], default: "dialer", index: true },
     transcriptBillable: { type: Boolean, default: true },
     transcriptCostCents: { type: Number, default: 0 },
     transcriptChargeCents: { type: Number, default: 0 },

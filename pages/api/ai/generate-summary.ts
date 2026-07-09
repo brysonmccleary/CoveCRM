@@ -87,6 +87,8 @@ Use 5–8 bullets max. Be specific. Use clean, professional language like Close.
     user,
     amount: 0.01,
     source: "openai",
+    eventKey: `openai:lead-summary:${String(lead._id)}`,
+    metadata: { leadId: String(lead._id), origin: "regular" },
   });
 
   console.log(`✅ Lead AI summary saved for lead ${lead._id}`);

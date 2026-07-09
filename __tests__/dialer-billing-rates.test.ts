@@ -202,7 +202,7 @@ describe("dialer connected-duration billing rules", () => {
     expect(aiTranscript).not.toContain("trackUsage({");
     expect(aiTurnsTranscript).toContain('billingOrigin: "dialer"');
     expect(regularTranscript).toContain('aiInsightsBillingOrigin: "regular"');
-    expect(regularTranscript).toContain('eventKey: `call-transcript:${String(args.callId)}`');
+    expect(regularTranscript).toContain('eventKey: `openai:call-transcript:${String(args.callId)}`');
   });
 
   test("regular usage has per-event idempotency and inbound SMS transport billing", () => {
@@ -214,7 +214,7 @@ describe("dialer connected-duration billing rules", () => {
     expect(trackUsage).toContain("[BILLING][PRE-LEDGER-BALANCE-DRIFT]");
     expect(trackUsage).toContain("[BILLING][CRITICAL][LEDGER-CONSUMPTION-SHORTFALL]");
     expect(trackUsage).toContain('bucket: "regular"');
-    expect(inbound).toContain('eventKey: `sms-in:${messageSid || String(savedMessage._id)}`');
+    expect(inbound).toContain('eventKey: `sms:${messageSid || String(savedMessage._id)}`');
     expect(inbound).toContain("amount: 0.02 * numSegments");
     expect(legacy).toContain("legacy endpoint forwarded to /api/twilio/inbound-sms");
     expect(legacy).not.toContain("usageBalance");

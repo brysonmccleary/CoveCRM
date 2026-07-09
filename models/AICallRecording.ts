@@ -36,6 +36,7 @@ export interface IAICallRecording extends Document {
   transcriptText?: string | null;
   summary?: string | null;
   transcribedAt?: Date | null;
+  billingOrigin?: "dialer" | "regular";
 
   createdAt: Date;
   updatedAt: Date;
@@ -91,6 +92,7 @@ const AICallRecordingSchema = new Schema<IAICallRecording>(
     transcriptText: { type: String, default: null },
     summary: { type: String, default: null },
     transcribedAt: { type: Date, default: null },
+    billingOrigin: { type: String, enum: ["dialer", "regular"], default: "dialer", index: true },
   },
   { timestamps: true }
 );

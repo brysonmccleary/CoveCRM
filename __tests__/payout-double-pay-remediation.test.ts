@@ -11,6 +11,7 @@ import AffiliatePayoutLedger from "@/models/AffiliatePayoutLedger";
 import AICallSession from "@/models/AICallSession";
 import AICallUsageLedger from "@/models/AICallUsageLedger";
 import BillingEvent from "@/models/BillingEvent";
+import UsageAccrualLedger from "@/models/UsageAccrualLedger";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 
@@ -58,6 +59,15 @@ jest.mock("@/models/User", () => ({
   __esModule: true,
   default: {
     findById: jest.fn(),
+    find: jest.fn(),
+    aggregate: jest.fn(),
+    updateOne: jest.fn(),
+  },
+}));
+
+jest.mock("@/models/UsageAccrualLedger", () => ({
+  __esModule: true,
+  default: {
     aggregate: jest.fn(),
   },
 }));
@@ -145,6 +155,11 @@ const mockedLedger = AffiliatePayoutLedger as unknown as {
 };
 const mockedUser = User as unknown as {
   findById: jest.Mock;
+  find: jest.Mock;
+  aggregate: jest.Mock;
+  updateOne: jest.Mock;
+};
+const mockedUsageAccrualLedger = UsageAccrualLedger as unknown as {
   aggregate: jest.Mock;
 };
 const mockedSession = AICallSession as unknown as {
@@ -279,6 +294,8 @@ describe("payout double-pay remediation", () => {
     };
 
     mockedUser.aggregate.mockReturnValue(execChain([]));
+    mockedUser.find.mockReturnValue(leanChain([]));
+    mockedUsageAccrualLedger.aggregate.mockReturnValue(execChain([]));
     mockedBillingEvent.find.mockReturnValue(leanChain([staleBillingEvent]));
     mockedAiCallUsageLedger.find.mockReturnValue(leanChain([staleUsageLedger]));
     mockedBillingEvent.updateOne.mockResolvedValue({ modifiedCount: 1 });
@@ -308,5 +325,50 @@ describe("payout double-pay remediation", () => {
         $set: expect.objectContaining({ status: "pending" }),
       }),
     );
+  });
+
+  test("watchdog drift canary logs bucket drift and sets charge hold", async () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    mockedUser.aggregate.mockReturnValue(execChain([]));
+    mockedBillingEvent.find.mockReturnValue(leanChain([]));
+    mockedAiCallUsageLedger.find.mockReturnValue(leanChain([]));
+    mockedSession.find.mockReturnValue(leanChain([]));
+    mockedSession.updateOne.mockResolvedValue({ modifiedCount: 0 });
+    mockedUsageAccrualLedger.aggregate.mockReturnValue(
+      execChain([{ _id: { userEmail: "user@example.com", bucket: "regular" }, expected: 250 }]),
+    );
+    mockedUser.find.mockReturnValue(
+      leanChain([{ email: "user@example.com", usageAccruedCents: 100, aiDialerAccruedSessionCents: 0 }]),
+    );
+    mockedUser.updateOne.mockResolvedValue({ modifiedCount: 1 });
+
+    const { req, res } = mockReqRes({
+      method: "POST",
+      headers: { "x-cron-key": "cron-secret" },
+    });
+
+    await watchdog(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.bucketDrifts).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[BILLING][BUCKET-DRIFT]",
+      expect.objectContaining({
+        user: "user@example.com",
+        bucket: "regular",
+        expected: 250,
+        stored: 100,
+      }),
+    );
+    expect(mockedUser.updateOne).toHaveBeenCalledWith(
+      { email: "user@example.com" },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          usageBillingHold: true,
+          usageBillingHoldReason: "bucket_drift",
+        }),
+      }),
+    );
+    errorSpy.mockRestore();
   });
 });

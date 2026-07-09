@@ -107,6 +107,7 @@ async function markAndBillInsightsOnce(args: {
         aiInsightsProcessedAt: now,
         aiInsightsMinutesBilled: minutes,
         aiInsightsCostCents: costCents,
+        aiInsightsBillingOrigin: "regular",
       },
     }
   );
@@ -126,6 +127,8 @@ async function markAndBillInsightsOnce(args: {
       user: { email: args.userEmail },
       amount: costCents / 100,
       source: "openai",
+      eventKey: `openai:call-transcript:${String(args.callId)}`,
+      metadata: { callId: String(args.callId), origin: "regular", minutes },
     });
   }
 

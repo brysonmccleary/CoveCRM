@@ -561,6 +561,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                         user,
                         amount: billedAmount,
                         source: "twilio-voice",
+                        eventKey: `twilio_voice:${callSid}`,
+                        metadata: {
+                          callSid,
+                          billedSource: finalBilledSource,
+                          billableSeconds,
+                          minutes: mins,
+                          ratePerMinute,
+                        },
                       });
                     }
 

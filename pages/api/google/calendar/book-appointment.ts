@@ -742,7 +742,13 @@ export default async function handler(
       const paramsBase = await getSendParams(String((user as any)._id), to);
       const tw = await twilioClient.messages.create({ ...paramsBase, body: confirmBody });
       const segments = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
-      await trackUsage({ user, amount: SMS_COST * segments, source: "twilio" });
+      await trackUsage({
+        user,
+        amount: SMS_COST * segments,
+        source: "twilio",
+        eventKey: `sms:${tw.sid || `booking-confirmation:${bookingId}`}`,
+        metadata: { messageSid: tw.sid || "", bookingId: String(bookingId || ""), segments },
+      });
     }
 
     // Helper to send/schedule + persist Message (used for reminders only)
@@ -770,7 +776,13 @@ export default async function handler(
 
       const tw = await twilioClient.messages.create(params);
       const segments = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
-      await trackUsage({ user, amount: SMS_COST * segments, source: "twilio" });
+      await trackUsage({
+        user,
+        amount: SMS_COST * segments,
+        source: "twilio",
+        eventKey: `sms:${tw.sid || `booking-reminder:${bookingId}:${scheduledAt?.toISO() || "now"}`}`,
+        metadata: { messageSid: tw.sid || "", bookingId: String(bookingId || ""), segments },
+      });
 
       const message = await Message.create({
         leadId,

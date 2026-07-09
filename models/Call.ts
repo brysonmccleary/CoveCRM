@@ -68,6 +68,7 @@ export interface ICall extends Document {
   aiInsightsProcessedAt?: Date;
   aiInsightsMinutesBilled?: number;
   aiInsightsCostCents?: number;
+  aiInsightsBillingOrigin?: "dialer" | "regular";
 
   // ✅ Structured AI Call Overview (used by lead middle panel)
   aiOverviewReady?: boolean;
@@ -159,6 +160,7 @@ const CallSchema = new Schema<ICall>(
     aiInsightsProcessedAt: Date,
     aiInsightsMinutesBilled: { type: Number, default: 0 },
     aiInsightsCostCents: { type: Number, default: 0 },
+    aiInsightsBillingOrigin: { type: String, enum: ["dialer", "regular"], default: "regular", index: true },
 
     // ✅ AI Call Overview fields (must be in schema or Mongoose will drop them)
     aiOverviewReady: { type: Boolean, default: false },

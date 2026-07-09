@@ -19,6 +19,7 @@ import AICallSession from "@/models/AICallSession";
 import AICallUsageLedger from "@/models/AICallUsageLedger";
 import BillingEvent from "@/models/BillingEvent";
 import User from "@/models/User";
+import UsageAccrualLedger from "@/models/UsageAccrualLedger";
 import { trackAiDialerSessionUsage } from "@/lib/billing/trackAiDialerSessionUsage";
 import { stripe } from "@/lib/stripe";
 
@@ -46,6 +47,7 @@ const MAX_BILLING_PER_RUN = 20;
 const STALE_RUNNING_SESSION_MS = 2 * 60 * 60 * 1000;
 const STALE_CHARGING_BILLING_MS = 30 * 60 * 1000;
 const MAX_STALE_CHARGING_RECOVERY_PER_RUN = 25;
+const BUCKET_DRIFT_TOLERANCE_CENTS = 50;
 
 function currentAiDialerCronKey() {
   return AI_DIALER_CRON_KEY || (process.env.AI_DIALER_CRON_KEY || "").trim();
@@ -237,6 +239,91 @@ async function recoverStaleChargingAiCallUsageLedgers(now: number): Promise<numb
   return recovered;
 }
 
+async function runBucketDriftCanary(): Promise<number> {
+  const ledgerRows = await UsageAccrualLedger.aggregate([
+    { $match: { status: "accrued" } },
+    {
+      $group: {
+        _id: { userEmail: "$userEmail", bucket: "$bucket" },
+        expected: {
+          $sum: {
+            $cond: [
+              { $gt: [{ $subtract: ["$amountCents", "$billedCents"] }, 0] },
+              { $subtract: ["$amountCents", "$billedCents"] },
+              0,
+            ],
+          },
+        },
+      },
+    },
+  ]).exec();
+
+  const expectedByKey = new Map<string, number>();
+  for (const row of ledgerRows as any[]) {
+    const userEmail = String(row?._id?.userEmail || "").toLowerCase();
+    const bucket = String(row?._id?.bucket || "");
+    if (!userEmail || !bucket) continue;
+    expectedByKey.set(`${bucket}:${userEmail}`, Number(row.expected || 0));
+  }
+
+  const users = await User.find({
+    $or: [
+      { usageAccruedCents: { $gt: 0 } },
+      { aiDialerAccruedSessionCents: { $gt: 0 } },
+      { email: { $in: Array.from(expectedByKey.keys()).map((key) => key.split(":").slice(1).join(":")) } },
+    ],
+  })
+    .select("email usageAccruedCents aiDialerAccruedSessionCents")
+    .lean();
+
+  let driftCount = 0;
+  for (const user of users as any[]) {
+    const email = String(user.email || "").toLowerCase();
+    if (!email) continue;
+    const checks = [
+      { bucket: "regular", stored: Number(user.usageAccruedCents || 0) },
+      { bucket: "ai_voice", stored: Number(user.aiDialerAccruedSessionCents || 0) },
+    ];
+    for (const check of checks) {
+      const expected = expectedByKey.get(`${check.bucket}:${email}`) || 0;
+      if (Math.abs(expected - check.stored) <= BUCKET_DRIFT_TOLERANCE_CENTS) continue;
+      driftCount += 1;
+      console.error("[BILLING][BUCKET-DRIFT]", {
+        user: email,
+        bucket: check.bucket,
+        expected,
+        stored: check.stored,
+      });
+      if (check.bucket === "regular") {
+        await User.updateOne(
+          { email },
+          {
+            $set: {
+              usageBillingHold: true,
+              usageBillingHoldReason: "bucket_drift",
+              usageBillingHoldAt: new Date(),
+              usageBillingHoldAccruedCents: check.stored,
+            },
+          },
+        );
+      } else {
+        await User.updateOne(
+          { email },
+          {
+            $set: {
+              aiDialerBillingHold: true,
+              aiDialerBillingHoldReason: "bucket_drift",
+              aiDialerBillingHoldAt: new Date(),
+              aiDialerBillingHoldAccruedCents: check.stored,
+            },
+          },
+        );
+      }
+    }
+  }
+  return driftCount;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ ok: false, message: "Method Not Allowed" });
@@ -258,6 +345,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     recoverStaleChargingBillingEvents(now),
     recoverStaleChargingAiCallUsageLedgers(now),
   ]);
+  const bucketDrifts = await runBucketDriftCanary();
   const staleSessionCutoff = new Date(now - STALE_RUNNING_SESSION_MS);
 
   // ── Staleness closure ─────────────────────────────────────────────────────────
@@ -458,6 +546,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       autoStopped,
       recoveredBillingEvents,
       recoveredAiCallUsageLedgers,
+      bucketDrifts,
     });
   }
 
@@ -504,5 +593,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     autoStopped,
     recoveredBillingEvents,
     recoveredAiCallUsageLedgers,
+    bucketDrifts,
   });
 }

@@ -732,7 +732,13 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
       await trackUsage({ user, amount: 0, source: "twilio-self" as any });
     } else {
       const seg = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
-      await trackUsage({ user, amount: SMS_COST * seg, source: "twilio" });
+      await trackUsage({
+        user,
+        amount: SMS_COST * seg,
+        source: "twilio",
+        eventKey: `sms:${tw.sid || messageId}`,
+        metadata: { messageSid: tw.sid || "", messageId, segments: seg, source: outboundSource },
+      });
     }
     const sentAt = new Date();
     const newStatus = (tw.status as string) || "accepted";

@@ -3,7 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
-import { trackUsage } from "@/lib/billing/trackUsage";
+import { trackAiDialerCentsUsage } from "@/lib/billing/trackAiDialerSessionUsage";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 
@@ -339,6 +339,7 @@ export default async function handler(
     // Save (do NOT overwrite existing summary if already present from outcome flow)
     (rec as any).transcriptText = transcriptText;
     (rec as any).transcribedAt = new Date();
+    (rec as any).billingOrigin = "dialer";
 
     if (!isNonEmptyString(rec.summary) && isNonEmptyString(bulletSummary)) {
       rec.summary = bulletSummary;
@@ -352,10 +353,18 @@ export default async function handler(
     );
     const insightCostCents = insightMinutes * AI_INSIGHT_COST_CENTS_PER_MINUTE;
     if (insightCostCents > 0 && rec.userEmail) {
-      await trackUsage({
-        user: { email: String(rec.userEmail).toLowerCase() },
-        amount: insightCostCents / 100,
-        source: "openai",
+      await trackAiDialerCentsUsage({
+        userEmail: String(rec.userEmail).toLowerCase(),
+        addCents: insightCostCents,
+        description: `Cove CRM AI Dialer transcript usage ($${(insightCostCents / 100).toFixed(2)})`,
+        source: "ai_transcript",
+        eventKey: `recording-transcript:${String(rec.callSid || rec._id)}`,
+        metadata: {
+          recordingId: String(rec._id),
+          callSid: String(rec.callSid || ""),
+          origin: "dialer",
+          insightMinutes,
+        },
       });
     }
 

@@ -630,6 +630,7 @@ function pushAsked(memory: LeadMemory, key: string) {
 
 // ===== NEW: billing context for OpenAI =====
 let _lastInboundUserEmailForBilling: string | null = null;
+let _lastInboundMessageSidForBilling: string | null = null;
 
 function logOpenAIUsage(details: {
   source: string;
@@ -699,6 +700,8 @@ yesno: "yes"|"no"|"unknown"`;
         user: { email: _lastInboundUserEmailForBilling },
         amount: raw,
         source: "openai",
+        eventKey: `openai:inbound-sms-intent:${_lastInboundMessageSidForBilling || input.text}`,
+        metadata: { messageSid: _lastInboundMessageSidForBilling || "", origin: "regular" },
       });
     }
   } catch {}
@@ -1349,6 +1352,8 @@ ${recentAssistant.length ? recentAssistant.join(" | ") : "(none yet)"}
         user: { email: _lastInboundUserEmailForBilling },
         amount: cost,
         source: "openai",
+        eventKey: `openai:inbound-sms-assistant:${_lastInboundMessageSidForBilling || String(lead?._id || "")}`,
+        metadata: { messageSid: _lastInboundMessageSidForBilling || "", leadId: String(lead?._id || ""), origin: "regular" },
       });
     }
     logOpenAIUsage({
@@ -1555,6 +1560,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const accountSid = params.get("AccountSid") || "";
     const fromServiceSid = params.get("MessagingServiceSid") || "";
     const numMedia = parseInt(params.get("NumMedia") || "0", 10);
+    const numSegments = Math.max(1, Number(params.get("NumSegments") || "1") || 1);
 
     if (!fromNumber || !toNumber) {
       return res.status(200).json({ message: "Missing required fields, acknowledged." });
@@ -1589,6 +1595,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ✅ NEW: set billing context for OpenAI
     _lastInboundUserEmailForBilling = (user.email || "").toLowerCase();
+    _lastInboundMessageSidForBilling = messageSid || null;
 
     // ===================== LEAD RESOLUTION (strict) =====================
     const fromDigits = normalizeDigits(fromNumber);
@@ -1788,6 +1795,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       accountSid: accountSid || undefined,
       fromServiceSid: fromServiceSid || undefined,
       numMedia: isNaN(numMedia) ? undefined : numMedia,
+    });
+    await trackUsage({
+      user,
+      amount: 0.02 * numSegments,
+      source: "twilio",
+      eventKey: `sms:${messageSid || String(savedMessage._id)}`,
+      metadata: {
+        messageSid: messageSid || "",
+        messageId: String(savedMessage._id),
+        segments: numSegments,
+        direction: "inbound",
+      },
     });
     queueLeadMemoryHook({
       userEmail: user.email,

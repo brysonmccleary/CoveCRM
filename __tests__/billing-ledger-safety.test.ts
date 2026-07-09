@@ -173,14 +173,14 @@ describe("usage accrual ledger safety", () => {
     jest.doMock("@/models/UsageAccrualLedger", () => ({
       __esModule: true,
       default: {
-        findOneAndUpdate: jest.fn().mockReturnValue(chain({ eventKey: "regular:sms-out:SM1", amountCents: 2 })),
+        findOneAndUpdate: jest.fn().mockReturnValue(chain({ eventKey: "regular:sms:SM1", amountCents: 2 })),
       },
     }));
     const { recordUsageAccrualOnce } = await import("@/lib/billing/usageAccrualLedger");
     const result = await recordUsageAccrualOnce({
       bucket: "regular",
       userEmail: "user@example.com",
-      eventKey: "regular:sms-out:SM1",
+      eventKey: "regular:sms:SM1",
       source: "twilio",
       amountCents: 2,
     });
@@ -289,7 +289,7 @@ describe("usage accrual ledger safety", () => {
       "utf8",
     );
     expect(source.indexOf("Message.findOne({ sid: messageSid })")).toBeLessThan(
-      source.indexOf("eventKey: `sms-in:${messageSid || String(savedMessage._id)}`"),
+      source.indexOf("eventKey: `sms:${messageSid || String(savedMessage._id)}`"),
     );
   });
 });

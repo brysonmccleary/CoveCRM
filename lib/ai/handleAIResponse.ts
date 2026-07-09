@@ -244,11 +244,19 @@ Only include the booking link if we've already sent at least ${MAX_AI_MESSAGES_B
       aiReply = aiReply.replace(/^(Hey|Hi|Hello)[,!]?\s*/i, "Got it — ");
     }
 
+    const billingInbound = await Message.findOne({
+      leadId,
+      direction: "inbound",
+      text: incomingMessage,
+    }).sort({ createdAt: -1 }).select("_id sid").lean();
+
     // ✅ Charge for OpenAI usage ($0.01 per AI response)
     await trackUsage({
       user,
       amount: 0.01,
       source: "openai",
+      eventKey: `openai:ai-sms-response:${String((billingInbound as any)?._id || (billingInbound as any)?.sid || `${leadId}:${incomingMessage}`)}`,
+      metadata: { origin: "regular", feature: "ai_sms_response" },
     });
   } catch (err) {
     console.error("OpenAI error:", err);

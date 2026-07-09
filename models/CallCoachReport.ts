@@ -46,6 +46,7 @@ export interface ICallCoachReport extends Document {
   usageBilledAt?: Date;
   usageBilledAmount?: number;
   usageBilledMinutes?: number;
+  billingOrigin?: "dialer" | "regular";
   generatedAt: Date;
 }
 
@@ -107,6 +108,7 @@ const CallCoachReportSchema = new Schema<ICallCoachReport>(
     usageBilledAt: { type: Date, default: null },
     usageBilledAmount: { type: Number, default: 0 },
     usageBilledMinutes: { type: Number, default: 0 },
+    billingOrigin: { type: String, enum: ["dialer", "regular"], default: "regular", index: true },
     generatedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

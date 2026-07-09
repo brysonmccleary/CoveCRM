@@ -55,7 +55,9 @@ async function billCoachReportUsageOnce(args: {
   reportId: any;
   userEmail: string;
   durationSeconds: number;
+  billingOrigin?: "dialer" | "regular";
 }) {
+  if (args.billingOrigin === "dialer") return;
   const minutes = getBillableCoachMinutes(args.durationSeconds);
   const amountCents = minutes * CALL_COACH_COST_CENTS_PER_MINUTE;
   if (amountCents <= 0) return;
@@ -82,6 +84,8 @@ async function billCoachReportUsageOnce(args: {
       user: { email: args.userEmail },
       amount: amountCents / 100,
       source: "openai",
+      eventKey: `openai:call-coach:${String(args.reportId)}`,
+      metadata: { reportId: String(args.reportId), origin: "regular", minutes },
     });
   } catch (err) {
     await (CallCoachReport as any).updateOne(
@@ -133,13 +137,24 @@ export async function generateCallCoachReport(
     .map((v: any) => String(v || "").toLowerCase().trim())
     .filter(Boolean);
 
+  const explicitBillingOrigin = String(
+    (call as any)?.billingOrigin || (call as any)?.aiInsightsBillingOrigin || "",
+  ).toLowerCase();
   const likelyAIDialer =
     (call as any)?.isAIDialer === true ||
     Boolean((call as any)?.aiDialerSessionId) ||
     Boolean((call as any)?.aiCallSessionId) ||
     sourceBits.some((v: string) => ["ai_dialer", "ai-dialer", "ai dialer"].includes(v));
+  const billingOrigin: "dialer" | "regular" =
+    explicitBillingOrigin === "dialer"
+      ? "dialer"
+      : explicitBillingOrigin === "regular"
+      ? "regular"
+      : likelyAIDialer
+      ? "dialer"
+      : "regular";
 
-  if (likelyAIDialer) {
+  if (billingOrigin === "dialer") {
     return { ok: true, skipped: true, reason: "ai_dialer_call" };
   }
 
@@ -279,6 +294,7 @@ Return this exact JSON structure:
       callSummary: String(parsed.callSummary || ""),
       transcript,
       durationSeconds,
+      billingOrigin,
       generatedAt: new Date(),
     });
 
@@ -286,6 +302,7 @@ Return this exact JSON structure:
       reportId: (report as any)._id,
       userEmail,
       durationSeconds,
+      billingOrigin,
     });
 
     return { ok: true, report };

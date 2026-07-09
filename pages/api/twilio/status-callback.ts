@@ -449,7 +449,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   } else {
                     try {
                       if (!isExempt) {
-                        await trackUsage({ user: userForBilling, amount: billedAmount, source: "twilio-voice" });
+                        await trackUsage({
+                          user: userForBilling,
+                          amount: billedAmount,
+                          source: "twilio-voice",
+                          eventKey: `twilio_voice:${CallSid}`,
+                          metadata: {
+                            callSid: CallSid,
+                            billMinutes,
+                            billSeconds,
+                            ratePerMinute: MANUAL_TALK_RATE_PER_MIN,
+                          },
+                        });
                       }
                       await Call.updateOne(
                         { callSid: CallSid, billedSource: inProgressSource },

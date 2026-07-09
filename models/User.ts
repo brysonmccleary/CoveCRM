@@ -235,9 +235,16 @@ export interface IUser {
   usageAccruedCents?: number;
   usageBilledTotalCents?: number;
   usageLastInvoicedAt?: Date;
+  usageDailyWindowStartedAt?: Date | null;
+  usageDailyAccruedCents?: number;
   billingLockAt?: Date | null;
   billingLockOwner?: string | null;
   billingLockExpiresAt?: Date | null;
+  usageBillingHold?: boolean;
+  usageBillingHoldReason?: string | null;
+  usageBillingHoldAt?: Date | null;
+  usageBillingHoldClearedAt?: Date | null;
+  usageBillingHoldAccruedCents?: number;
   aiDialerBillingLockAt?: Date | null;
   aiDialerBillingLockOwner?: string | null;
   aiDialerBillingLockExpiresAt?: Date | null;
@@ -578,6 +585,13 @@ const UserSchema = new Schema<IUser>({
   usageAccruedCents: { type: Number, default: 0 },
   usageBilledTotalCents: { type: Number, default: 0 },
   usageLastInvoicedAt: { type: Date, default: null },
+  usageDailyWindowStartedAt: { type: Date, default: null },
+  usageDailyAccruedCents: { type: Number, default: 0 },
+  usageBillingHold: { type: Boolean, default: false, index: true },
+  usageBillingHoldReason: { type: String, default: null },
+  usageBillingHoldAt: { type: Date, default: null },
+  usageBillingHoldClearedAt: { type: Date, default: null },
+  usageBillingHoldAccruedCents: { type: Number, default: 0 },
   // Atomic billing lock — prevents double-charging under concurrent webhooks
   billingLockAt: { type: Date, default: null },
   billingLockOwner: { type: String, default: null },
