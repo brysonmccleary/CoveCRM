@@ -1,14 +1,56 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { buffer } from "micro";
 import twilio from "twilio";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import AICallRecording from "@/models/AICallRecording";
 import mongooseConnect from "@/lib/mongooseConnect";
+import User from "@/models/User";
+import {
+  finalizeLiveTransferUsage,
+  markLiveTransferAgentAnswered,
+  markLiveTransferNoHumanAnswer,
+} from "@/lib/billing/liveTransferUsage";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
+const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
+
+export const config = { api: { bodyParser: false } };
 
 function getQueryValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] || "" : String(value || "");
+}
+
+function candidateCallbackUrls(req: NextApiRequest): string[] {
+  const requestPath = req.url || "/api/ai-calls/agent-amd-callback";
+  const configured = new URL(requestPath, `${COVECRM_BASE_URL.replace(/\/$/, "")}/`).toString();
+  const host = String(req.headers.host || "").trim();
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+  const requestHostUrl = host ? `${forwardedProto}://${host}${requestPath}` : "";
+  const urls = [configured, requestHostUrl].filter(Boolean);
+  const configuredUrl = new URL(configured);
+  const alternateHost = configuredUrl.hostname.startsWith("www.")
+    ? configuredUrl.hostname.replace(/^www\./, "")
+    : `www.${configuredUrl.hostname}`;
+  urls.push(`${configuredUrl.protocol}//${alternateHost}${configuredUrl.port ? `:${configuredUrl.port}` : ""}${configuredUrl.pathname}${configuredUrl.search}`);
+  return [...new Set(urls)];
+}
+
+function validatesTwilioSignature(args: {
+  signature: string;
+  params: Record<string, string>;
+  urls: string[];
+  tokens: Array<string | undefined | null>;
+}) {
+  if (!args.signature) return false;
+  for (const token of args.tokens) {
+    const authToken = String(token || "").trim();
+    if (!authToken) continue;
+    for (const url of args.urls) {
+      if (twilio.validateRequest(authToken, args.signature, url, args.params)) return true;
+    }
+  }
+  return false;
 }
 
 async function resolveTwilioClient(userEmail: string) {
@@ -33,7 +75,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).send("Unauthorized");
   }
 
-  const body = req.body || {};
+  const raw = await buffer(req);
+  const params = new URLSearchParams(raw.toString("utf8"));
+  const body = Object.fromEntries(params.entries());
+  const userEmail = getQueryValue(req.query.userEmail).toLowerCase();
+  const callbackUser = userEmail
+    ? await User.findOne({ email: userEmail }).select("twilio.authToken").lean()
+    : null;
+  const validSignature = validatesTwilioSignature({
+    signature: String(req.headers["x-twilio-signature"] || ""),
+    params: body,
+    urls: candidateCallbackUrls(req),
+    tokens: [PLATFORM_AUTH_TOKEN, (callbackUser as any)?.twilio?.authToken],
+  });
+  if (!validSignature) {
+    console.warn("[AGENT-AMD] rejected callback with invalid or missing Twilio signature");
+    return res.status(403).send("Invalid signature");
+  }
+
   const answeredBy = String(body.AnsweredBy || "").toLowerCase();
   const callStatus = String(body.CallStatus || "").toLowerCase();
   const dialCallStatus = String(body.DialCallStatus || "").toLowerCase();
@@ -41,7 +100,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const conferenceName = getQueryValue(req.query.conferenceName);
   const leadCallSid = getQueryValue(req.query.leadCallSid);
-  const userEmail = getQueryValue(req.query.userEmail).toLowerCase();
   const sessionId = getQueryValue(req.query.sessionId);
   const leadId = getQueryValue(req.query.leadId);
   const leadName = getQueryValue(req.query.leadName);
@@ -54,8 +112,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ["busy", "no-answer", "failed", "canceled"].includes(dialCallStatus);
   const isMachine = answeredBy.includes("machine") || answeredBy === "fax";
   const isUnknown = answeredBy === "unknown";
+  const isTerminal = ["completed", "busy", "no-answer", "failed", "canceled"].includes(callStatus);
 
-  if (isHuman) {
+  if (isTerminal && agentCallSid) {
+    try {
+      const finalized = await finalizeLiveTransferUsage({
+        agentCallSid,
+        endedAt: String(body.Timestamp || ""),
+      });
+      if (!finalized) await markLiveTransferNoHumanAnswer(agentCallSid);
+    } catch (err: any) {
+      console.error("[AGENT-AMD] live transfer usage finalization failed", err?.message || err);
+    }
+  }
+
+  if (isHuman && ["answered", "in-progress"].includes(callStatus)) {
+    try {
+      await markLiveTransferAgentAnswered({
+        agentCallSid,
+        answeredAt: String(body.Timestamp || ""),
+      });
+    } catch (err: any) {
+      console.error("[AGENT-AMD] live transfer usage meter start failed", err?.message || err);
+    }
     console.log("[AGENT-AMD] human confirmed — agent will join conference", {
       conferenceName,
       leadCallSid,

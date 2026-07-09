@@ -3,6 +3,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { createLiveTransferUsageLedger } from "@/lib/billing/liveTransferUsage";
 
 const COVECRM_BASE_URL = process.env.COVECRM_BASE_URL || "https://www.covecrm.com";
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
@@ -88,6 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const agentTo = normalizeE164(agentPhone);
   const conferenceName = `conf_${callSid}_${Date.now()}`;
+  const transferInitiatedAt = new Date();
 
   const fallbackUrl = new URL("/api/ai-calls/transfer-fallback", COVECRM_BASE_URL);
   fallbackUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
@@ -143,10 +145,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       timeout: 15,
     };
 
-    await client.calls.create(agentCallOptions);
+    const agentCall = await client.calls.create(agentCallOptions);
+    try {
+      await createLiveTransferUsageLedger({
+        userEmail,
+        sessionId,
+        leadId,
+        leadCallSid: callSid,
+        agentCallSid: String(agentCall.sid),
+        conferenceName,
+        transferInitiatedAt,
+      });
+    } catch (ledgerErr: any) {
+      console.error("[TRANSFER-TWIML] Live transfer usage ledger creation failed; continuing transfer", {
+        leadCallSid: callSid,
+        agentCallSid: agentCall.sid,
+        conferenceName,
+        userEmail,
+        error: ledgerErr?.message || ledgerErr,
+      });
+    }
     console.log("[TRANSFER-TWIML] Agent leg created for two-leg transfer", {
       conferenceName,
       leadCallSid: callSid,
+      agentCallSid: agentCall.sid,
       userEmail,
     });
   } catch (err: any) {
