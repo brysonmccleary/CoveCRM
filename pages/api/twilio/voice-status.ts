@@ -1,5 +1,7 @@
 // pages/api/twilio/voice-status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { buffer } from "micro";
+import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { trackUsage } from "@/lib/billing/trackUsage";
@@ -14,6 +16,8 @@ import InboundCall from "@/models/InboundCall";
 import Lead from "@/models/Lead";
 import { sendEmail } from "@/lib/email";
 
+export const config = { api: { bodyParser: false } };
+
 const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
 const MIN_MANUAL_BILLABLE_SECONDS = 5;
 const NEVER_BILL_EMAILS = new Set(["bryson.mccleary1@gmail.com", "support@covecrm.com"]);
@@ -21,6 +25,44 @@ const BILLING_IN_PROGRESS_SOURCES = [
   "manual_dial_billing_in_progress",
   "twilio_voice_billing_in_progress",
 ];
+const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
+const RAW_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+
+function candidateCallbackUrls(req: NextApiRequest): string[] {
+  const requestPath = req.url || "/api/twilio/voice-status";
+  const configured = RAW_BASE ? new URL(requestPath, `${RAW_BASE}/`).toString() : "";
+  const host = String(req.headers.host || "").trim();
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+  const requestHostUrl = host ? `${forwardedProto}://${host}${requestPath}` : "";
+  const urls = [configured, requestHostUrl].filter(Boolean);
+
+  if (configured) {
+    const url = new URL(configured);
+    const alternateHost = url.hostname.startsWith("www.")
+      ? url.hostname.replace(/^www\./, "")
+      : `www.${url.hostname}`;
+    urls.push(`${url.protocol}//${alternateHost}${url.port ? `:${url.port}` : ""}${url.pathname}${url.search}`);
+  }
+
+  return [...new Set(urls)];
+}
+
+function validatesTwilioSignature(args: {
+  signature: string;
+  params: Record<string, string>;
+  urls: string[];
+  tokens: Array<string | undefined | null>;
+}): boolean {
+  if (!args.signature) return false;
+  for (const token of args.tokens) {
+    const authToken = String(token || "").trim();
+    if (!authToken) continue;
+    for (const url of args.urls) {
+      if (twilio.validateRequest(authToken, args.signature, url, args.params)) return true;
+    }
+  }
+  return false;
+}
 
 /** Helpers */
 function firstDefined<T = any>(...vals: T[]): T | undefined {
@@ -230,10 +272,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: false, ignored: true, reason: "method" });
   }
 
-  await dbConnect();
-
-  const b = req.body || {};
+  // Keep the exact form payload intact for Twilio's request-signature validation.
+  const raw = await buffer(req);
+  const params = new URLSearchParams(raw.toString("utf8"));
+  const b: Record<string, any> = Object.fromEntries(params.entries());
   const q = req.query || {};
+  const signature = String(req.headers["x-twilio-signature"] || "");
+  const userEmailForToken = String(firstDefined(b.userEmail, q.userEmail) || "").trim().toLowerCase();
+
+  // Read-only owner lookup supplies the tenant token when this callback was made
+  // by a tenant Twilio account. No Call/User write or billing code runs before
+  // the signature gate below.
+  const callbackUser = userEmailForToken
+    ? await (User as any).findOne({ email: userEmailForToken }).select("twilio.authToken").lean()
+    : null;
+  const validSignature = validatesTwilioSignature({
+    signature,
+    params: b,
+    urls: candidateCallbackUrls(req),
+    tokens: [PLATFORM_AUTH_TOKEN, callbackUser?.twilio?.authToken],
+  });
+
+  if (!validSignature) {
+    console.warn("[voice-status] rejected callback with invalid or missing Twilio signature");
+    return res.status(403).json({ ok: false, error: "Invalid Twilio signature" });
+  }
+
+  await dbConnect();
 
   const callSid = String(firstDefined(b.callSid, b.CallSid, q.callSid, q.CallSid) || "").trim();
   if (!callSid) return res.status(200).json({ ok: false, error: "missing_callSid" });

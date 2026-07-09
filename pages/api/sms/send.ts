@@ -8,12 +8,19 @@ import Lead from "@/models/Lead";
 import { LeadAIState } from "@/models/LeadAIState";
 import { sendSMS } from "@/lib/twilio/sendSMS";
 import { requireBillingReady } from "@/lib/billing/requireBillingReady";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!enforceRateLimit(req, res, {
+    keyPrefix: "sms:send",
+    subject: String(session.user.email),
+    limit: 60,
+    windowMs: 60 * 60 * 1000,
+  })) return;
 
   const { to, body } = (req.body || {}) as { to?: string; body?: string };
   if (!to || !body) return res.status(400).json({ message: "Missing 'to' or 'body'." });

@@ -118,6 +118,13 @@ export interface IUser {
     expiryDate?: number;
   };
 
+  googleWatch?: {
+    channelId?: string;
+    resourceId?: string;
+    expiration?: string | number | null;
+    channelToken?: string;
+  };
+
   calendarId?: string;
   bookingSettings?: {
     timezone: string;
@@ -477,6 +484,13 @@ const UserSchema = new Schema<IUser>({
     accessToken: String,
     refreshToken: String,
     expiryDate: Number,
+  },
+
+  googleWatch: {
+    channelId: String,
+    resourceId: String,
+    expiration: Schema.Types.Mixed,
+    channelToken: String,
   },
 
   calendarId: String,

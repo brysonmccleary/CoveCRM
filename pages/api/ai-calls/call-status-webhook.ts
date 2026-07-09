@@ -1,6 +1,7 @@
 // pages/api/ai-calls/call-status-webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
+import twilio from "twilio";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
 import AICallSession from "@/models/AICallSession";
@@ -25,12 +26,50 @@ const AI_DIALER_DISABLED =
 // ✅ used to securely kick /api/ai-calls/worker
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
+const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
+const RAW_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 
 // ✅ launch-safe voicemail fast-skip guard window (seconds)
 // Prevents false positives ending real human calls during the first seconds.
 const VOICEMAIL_FAST_SKIP_MIN_SECONDS = Number(
   process.env.AI_DIALER_VOICEMAIL_FAST_SKIP_MIN_SECONDS || "6"
 );
+
+function candidateCallbackUrls(req: NextApiRequest): string[] {
+  const requestPath = req.url || "/api/ai-calls/call-status-webhook";
+  const configured = RAW_BASE ? new URL(requestPath, `${RAW_BASE}/`).toString() : "";
+  const host = String(req.headers.host || "").trim();
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+  const requestHostUrl = host ? `${forwardedProto}://${host}${requestPath}` : "";
+  const urls = [configured, requestHostUrl].filter(Boolean);
+
+  if (configured) {
+    const url = new URL(configured);
+    const alternateHost = url.hostname.startsWith("www.")
+      ? url.hostname.replace(/^www\./, "")
+      : `www.${url.hostname}`;
+    urls.push(`${url.protocol}//${alternateHost}${url.port ? `:${url.port}` : ""}${url.pathname}${url.search}`);
+  }
+
+  return [...new Set(urls)];
+}
+
+function validatesTwilioSignature(args: {
+  signature: string;
+  params: Record<string, string>;
+  urls: string[];
+  tokens: Array<string | undefined | null>;
+}): boolean {
+  if (!args.signature) return false;
+  for (const token of args.tokens) {
+    const authToken = String(token || "").trim();
+    if (!authToken) continue;
+    for (const url of args.urls) {
+      if (twilio.validateRequest(authToken, args.signature, url, args.params)) return true;
+    }
+  }
+  return false;
+}
 
 function parseIntSafe(n?: string | null): number | undefined {
   if (!n) return undefined;
@@ -307,6 +346,24 @@ export default async function handler(
   const raw = await buffer(req);
   const bodyStr = raw.toString("utf8");
   const params = new URLSearchParams(bodyStr);
+  const paramObject: Record<string, string> = Object.fromEntries(params.entries());
+  const signature = String(req.headers["x-twilio-signature"] || "");
+  const qs = req.query as { userEmail?: string };
+  const userEmailForToken = String(qs.userEmail || "").trim().toLowerCase();
+  const callbackUser = userEmailForToken
+    ? await User.findOne({ email: userEmailForToken }).select("twilio.authToken").lean()
+    : null;
+  const validSignature = validatesTwilioSignature({
+    signature,
+    params: paramObject,
+    urls: candidateCallbackUrls(req),
+    tokens: [PLATFORM_AUTH_TOKEN, (callbackUser as any)?.twilio?.authToken],
+  });
+
+  if (!validSignature) {
+    console.warn("[AI Dialer] rejected call-status callback with invalid or missing Twilio signature");
+    return res.status(403).end("Invalid signature");
+  }
 
   await mongooseConnect();
 

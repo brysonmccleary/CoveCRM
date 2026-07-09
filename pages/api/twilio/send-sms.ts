@@ -8,6 +8,7 @@ import Lead from "@/models/Lead";
 import { LeadAIState } from "@/models/LeadAIState";
 // ⬇️ use the Twilio helper we updated earlier
 import { sendSMS } from "@/lib/twilio/sendSMS";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 export default async function handler(
   req: NextApiRequest,
@@ -20,6 +21,12 @@ export default async function handler(
     const session = await getServerSession(req, res, authOptions);
     if (!session?.user?.email)
       return res.status(401).json({ message: "Unauthorized" });
+    if (!enforceRateLimit(req, res, {
+      keyPrefix: "twilio:send-sms",
+      subject: String(session.user.email),
+      limit: 60,
+      windowMs: 60 * 60 * 1000,
+    })) return;
 
     await dbConnect();
 

@@ -1,6 +1,7 @@
 // /pages/api/calendar/webhook.ts
 
 import type { NextApiRequest, NextApiResponse } from "next";
+import { timingSafeEqual } from "crypto";
 import { google } from "googleapis";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -30,6 +31,16 @@ function parseNameFromSummary(summary: string): {
   return { firstName, lastName };
 }
 
+function channelTokensMatch(provided: string, expected: string): boolean {
+  const providedBuffer = Buffer.from(String(provided || ""));
+  const expectedBuffer = Buffer.from(String(expected || ""));
+  return (
+    providedBuffer.length > 0 &&
+    providedBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(providedBuffer, expectedBuffer)
+  );
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse & { socket: { server: HTTPServer & { io?: IOServer } } },
@@ -45,6 +56,7 @@ export default async function handler(
   try {
     const resourceId = req.headers["x-goog-resource-id"] as string;
     const channelId = req.headers["x-goog-channel-id"] as string;
+    const channelToken = String(req.headers["x-goog-channel-token"] || "");
 
     if (!resourceId || !channelId) {
       return res.status(400).json({ message: "Missing Google headers" });
@@ -52,10 +64,18 @@ export default async function handler(
 
     await dbConnect();
 
-    const user = await User.findOne({ "googleWatch.resourceId": resourceId });
+    const user = await User.findOne({
+      "googleWatch.resourceId": resourceId,
+      "googleWatch.channelId": channelId,
+    });
     if (!user) {
       console.warn("Webhook fired for unknown resourceId:", resourceId);
       return res.status(200).end();
+    }
+
+    if (!channelTokensMatch(channelToken, String((user as any).googleWatch?.channelToken || ""))) {
+      console.warn("Calendar webhook fired with invalid channel token", { resourceId, channelId });
+      return res.status(403).json({ message: "Invalid Google channel token" });
     }
 
     const tokens =

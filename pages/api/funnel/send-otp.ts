@@ -7,6 +7,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import FunnelOTPSession from "@/models/FunnelOTPSession";
 import { sendSMS as platformSendSMS } from "@/lib/twilioClient";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -20,6 +21,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (phoneLast10.length !== 10) {
     return res.status(400).json({ error: "Invalid phone number" });
   }
+  if (!enforceRateLimit(req, res, {
+    keyPrefix: "funnel:send-otp",
+    subject: `${campaignId}:${phoneLast10}`,
+    limit: 3,
+    windowMs: 60 * 60 * 1000,
+  })) return;
 
   try {
     await mongooseConnect();

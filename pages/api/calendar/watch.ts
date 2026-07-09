@@ -58,6 +58,7 @@ export default async function handler(
     const calendar = google.calendar({ version: "v3", auth: oauth2Client });
 
     const channelId = `covecrm-${crypto.randomUUID()}`;
+    const channelToken = crypto.randomBytes(32).toString("hex");
     const webhookUrl = `${process.env.NEXTAUTH_URL}/api/calendar/webhook`;
 
     const watchResponse = await calendar.events.watch({
@@ -66,6 +67,7 @@ export default async function handler(
         id: channelId, // Unique ID for the channel
         type: "web_hook",
         address: webhookUrl,
+        token: channelToken,
       },
     });
 
@@ -78,6 +80,7 @@ export default async function handler(
             channelId,
             resourceId: watchResponse.data.resourceId,
             expiration: watchResponse.data.expiration || null,
+            channelToken,
           },
         },
       },

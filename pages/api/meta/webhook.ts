@@ -24,7 +24,7 @@ async function getRawBody(req: NextApiRequest): Promise<Buffer> {
 }
 
 function validateSignature(rawBody: Buffer, signatureHeader: string): boolean {
-  if (!META_APP_SECRET) return true; // skip validation in dev/local when not configured
+  if (!META_APP_SECRET) return false;
   if (!signatureHeader) return false;
 
   const sig = signatureHeader.replace(/^sha256=/, "");
@@ -74,14 +74,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const signatureHeader = String(req.headers["x-hub-signature-256"] || "");
     const isValid = validateSignature(rawBody, signatureHeader);
     if (!isValid) {
-      if (META_APP_SECRET && signatureHeader) {
-        // Only reject if a signature was actually provided and it's wrong.
-        // Meta test webhooks from the developer dashboard send no signature header,
-        // so we allow those through for testing purposes.
-        console.warn("[meta-webhook] Invalid X-Hub-Signature-256 — rejecting");
-        return res.status(200).json({ ok: false, error: "invalid_signature" });
-      }
-      console.warn("[meta-webhook] Signature check skipped — no signature header or META_APP_SECRET not configured");
+      console.warn("[meta-webhook] Missing or invalid X-Hub-Signature-256 — rejecting");
+      return res.status(200).json({ ok: false, error: "invalid_signature" });
     }
 
     // Parse body

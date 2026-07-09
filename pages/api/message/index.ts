@@ -11,6 +11,7 @@ import { LeadAIState } from "@/models/LeadAIState";
 import { initSocket, emitToUser } from "@/lib/socket";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import crypto from "crypto";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 type LeanLead = {
   _id: any;
@@ -38,6 +39,12 @@ export default async function handler(
       ? session.user.email.toLowerCase()
       : "";
   if (!email) return res.status(401).json({ error: "Unauthorized" });
+  if (!enforceRateLimit(req, res, {
+    keyPrefix: "message:send",
+    subject: email,
+    limit: 60,
+    windowMs: 60 * 60 * 1000,
+  })) return;
 
   const {
     leadId,

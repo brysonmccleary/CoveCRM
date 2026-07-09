@@ -1,13 +1,54 @@
 // pages/api/ai-calls/recording-webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
+import twilio from "twilio";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
 import AICallSession from "@/models/AICallSession";
 import Call from "@/models/Call";
+import User from "@/models/User";
 import { Types } from "mongoose";
 
 export const config = { api: { bodyParser: false } };
+
+const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
+const RAW_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+
+function candidateCallbackUrls(req: NextApiRequest): string[] {
+  const requestPath = req.url || "/api/ai-calls/recording-webhook";
+  const configured = RAW_BASE ? new URL(requestPath, `${RAW_BASE}/`).toString() : "";
+  const host = String(req.headers.host || "").trim();
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+  const requestHostUrl = host ? `${forwardedProto}://${host}${requestPath}` : "";
+  const urls = [configured, requestHostUrl].filter(Boolean);
+
+  if (configured) {
+    const url = new URL(configured);
+    const alternateHost = url.hostname.startsWith("www.")
+      ? url.hostname.replace(/^www\./, "")
+      : `www.${url.hostname}`;
+    urls.push(`${url.protocol}//${alternateHost}${url.port ? `:${url.port}` : ""}${url.pathname}${url.search}`);
+  }
+
+  return [...new Set(urls)];
+}
+
+function validatesTwilioSignature(args: {
+  signature: string;
+  params: Record<string, string>;
+  urls: string[];
+  tokens: Array<string | undefined | null>;
+}): boolean {
+  if (!args.signature) return false;
+  for (const token of args.tokens) {
+    const authToken = String(token || "").trim();
+    if (!authToken) continue;
+    for (const url of args.urls) {
+      if (twilio.validateRequest(authToken, args.signature, url, args.params)) return true;
+    }
+  }
+  return false;
+}
 
 function parseIntSafe(n?: string | null): number | undefined {
   if (!n) return undefined;
@@ -28,6 +69,29 @@ export default async function handler(
   const raw = await buffer(req);
   const bodyStr = raw.toString("utf8");
   const params = new URLSearchParams(bodyStr);
+  const paramObject: Record<string, string> = Object.fromEntries(params.entries());
+  const signature = String(req.headers["x-twilio-signature"] || "");
+  const { sessionId } = req.query as { sessionId?: string };
+  const callbackSession =
+    sessionId && Types.ObjectId.isValid(String(sessionId))
+      ? await AICallSession.findById(sessionId).select("userEmail").lean()
+      : null;
+  const callbackUser = callbackSession?.userEmail
+    ? await User.findOne({ email: String(callbackSession.userEmail).toLowerCase() })
+        .select("twilio.authToken")
+        .lean()
+    : null;
+  const validSignature = validatesTwilioSignature({
+    signature,
+    params: paramObject,
+    urls: candidateCallbackUrls(req),
+    tokens: [PLATFORM_AUTH_TOKEN, (callbackUser as any)?.twilio?.authToken],
+  });
+
+  if (!validSignature) {
+    console.warn("[AI Dialer] rejected recording callback with invalid or missing Twilio signature");
+    return res.status(403).end("Invalid signature");
+  }
 
   await mongooseConnect();
 

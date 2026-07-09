@@ -5,6 +5,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import crypto from "crypto";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FunnelOTPSession from "@/models/FunnelOTPSession";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
 const MAX_ATTEMPTS = 5;
 
@@ -26,6 +27,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (phoneLast10.length !== 10) {
     return res.status(400).json({ error: "Invalid phone number" });
   }
+  if (!enforceRateLimit(req, res, {
+    keyPrefix: "funnel:verify-otp",
+    subject: `${sessionId}:${phoneLast10}`,
+    limit: 10,
+    windowMs: 10 * 60 * 1000,
+  })) return;
 
   try {
     await mongooseConnect();
