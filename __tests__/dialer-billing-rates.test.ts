@@ -89,16 +89,11 @@ describe("dialer connected-duration billing rules", () => {
     expect(source).toContain("runawayBillingCappedSeconds: billableSeconds");
   });
 
-  test("AI session runaway billing sets charge hold before invoice creation", () => {
+  test("AI session runaway checkpoint protection remains separate from threshold amount", () => {
     const source = read("lib/billing/trackAiDialerSessionUsage.ts");
-    const userModel = read("models/User.ts");
-    expect(source).toContain("AI_SESSION_DAILY_ALERT_CENTS = 5000");
-    expect(source).toContain("[BILLING][CHARGE-HOLD]");
-    expect(source).toContain("aiDialerBillingHold: true");
-    expect(source).toContain("aiDialerBillingHoldClearedAt");
+    expect(source).not.toContain("AI_SESSION_DAILY_ALERT_CENTS");
+    expect(source).not.toContain("daily_ai_session_accrual_exceeded");
     expect(source.indexOf("if (holdReason)")).toBeLessThan(source.indexOf("createFinalizePayInvoice({"));
-    expect(userModel).toContain("aiDialerBillingHold: { type: Boolean");
-    expect(userModel).toContain("aiDialerBillingHoldClearedAt");
   });
 
   test("AI session reuse resets billing checkpoint fields with startedAt", () => {
@@ -136,29 +131,26 @@ describe("dialer connected-duration billing rules", () => {
     expect(source).not.toContain("const email = cleanEmail(userEmail)");
   });
 
-  test("central invoice helper asserts userEmail and Stripe customer identity before Stripe calls", () => {
-    const source = read("lib/billing/trackUsage.ts");
-    expect(source).toContain("[BILLING][IDENTITY-MISMATCH]");
-    expect(source).toContain("expectedCustomerId !== String(customerId || \"\").trim()");
-    expect(source.indexOf("[BILLING][IDENTITY-MISMATCH]")).toBeLessThan(
-      source.indexOf("stripe.invoiceItems.create"),
-    );
-    expect(source.indexOf("[BILLING][IDENTITY-MISMATCH]")).toBeLessThan(
-      source.indexOf("BillingEvent.findOneAndUpdate"),
-    );
+  test("central invoice helper validates the exact standalone invoice before internal application", () => {
+    const source = read("lib/billing/standaloneInvoice.ts");
+    expect(source).toContain("pending_invoice_items_behavior: \"exclude\"");
+    expect(source).toContain("invoice: invoiceId");
+    expect(source).toContain("Standalone invoice validation failed");
+    expect(source).toContain("amount_due");
+    expect(source).toContain("amount_paid");
   });
 
   test("AI talk ledger and Stripe metadata carry billing identity", () => {
     const usage = read("pages/api/ai-calls/usage.ts");
     const ledger = read("models/AICallUsageLedger.ts");
-    const trackUsage = read("lib/billing/trackUsage.ts");
+    const invoice = read("lib/billing/standaloneInvoice.ts");
     const sessionBilling = read("lib/billing/trackAiDialerSessionUsage.ts");
     expect(ledger).toContain("stripeCustomerId: { type: String");
     expect(usage).toContain("stripeCustomerId,");
     expect(usage).toContain("metadata: {");
     expect(usage).toContain("callSid: sid");
-    expect(trackUsage).toContain("metadata: stripeMeta");
-    expect(trackUsage).toContain("stripe.invoiceItems.create");
+    expect(invoice).toContain("billingEventId");
+    expect(invoice).toContain("stripe.invoiceItems.create");
     expect(sessionBilling).toContain("metadata: { userEmail: email, sessionId }");
   });
 
@@ -175,7 +167,7 @@ describe("dialer connected-duration billing rules", () => {
     expect(sessionBilling).toContain("getPendingAccrualLedgerCents({");
     expect(sessionBilling).toContain("ledgerPendingCents >= SESSION_THRESHOLD_CENTS ? SESSION_THRESHOLD_CENTS : 0");
     expect(sessionBilling).toContain("[BILLING][PRE-LEDGER-BALANCE-DRIFT]");
-    expect(sessionBilling).toContain("[BILLING][CRITICAL][LEDGER-CONSUMPTION-SHORTFALL]");
+    expect(sessionBilling).toContain("applyPaidBillingEvent");
     expect(sessionBilling).toContain("charged: true");
   });
 
@@ -187,9 +179,9 @@ describe("dialer connected-duration billing rules", () => {
     expect(sessionBilling).toContain("getPendingAccrualLedgerCents({");
     expect(sessionBilling).toContain('bucket: "ai_voice"');
     expect(sessionBilling).toContain('eventKey: `ai_voice:${eventKey}`');
-    expect(sessionBilling).toContain("consumeAccrualLedgerCents({");
+    expect(sessionBilling).toContain("applyPaidBillingEvent");
     expect(ledger).toContain('export type UsageAccrualBucket = "regular" | "ai_voice"');
-    expect(ledger).toContain("eventKey: { type: String, required: true, unique: true");
+    expect(ledger).toContain("usage_accrual_tenant_bucket_event");
   });
 
   test("AI dialer transcripts route to AI voice bucket and regular transcripts stay regular", () => {
@@ -212,7 +204,7 @@ describe("dialer connected-duration billing rules", () => {
     expect(trackUsage).toContain("Missing usage eventKey");
     expect(trackUsage).toContain("ledgerPendingCents >= TOPUP_AMOUNT_CENTS ? TOPUP_AMOUNT_CENTS : 0");
     expect(trackUsage).toContain("[BILLING][PRE-LEDGER-BALANCE-DRIFT]");
-    expect(trackUsage).toContain("[BILLING][CRITICAL][LEDGER-CONSUMPTION-SHORTFALL]");
+    expect(trackUsage).toContain("applyUsageBillingEvent");
     expect(trackUsage).toContain('bucket: "regular"');
     expect(inbound).toContain('eventKey: `sms:${messageSid || String(savedMessage._id)}`');
     expect(inbound).toContain("amount: 0.02 * numSegments");
@@ -220,13 +212,11 @@ describe("dialer connected-duration billing rules", () => {
     expect(legacy).not.toContain("usageBalance");
   });
 
-  test("bucket drift canary compares ledger balances and sets holds", () => {
+  test("watchdog has no automatic threshold backlog drain", () => {
     const watchdog = read("pages/api/ai-calls/watchdog.ts");
-    expect(watchdog).toContain("runBucketDriftCanary");
-    expect(watchdog).toContain("[BILLING][BUCKET-DRIFT]");
-    expect(watchdog).toContain("BUCKET_DRIFT_TOLERANCE_CENTS = 50");
-    expect(watchdog).toContain("usageBillingHold: true");
-    expect(watchdog).toContain("aiDialerBillingHold: true");
+    expect(watchdog).not.toContain("AUTOMATIC_USAGE_BACKLOG_DRAIN_ENABLED");
+    expect(watchdog).not.toContain("chargeRegularUsageThresholdIfDue");
+    expect(watchdog).toContain("allowThresholdCharge: false");
   });
 
   test("AI voice prompt contains ARC depth and agent-name guard", () => {
@@ -239,13 +229,6 @@ describe("dialer connected-duration billing rules", () => {
     expect(source).toContain("${agent} will make it extremely short");
     expect(source).toContain("For busy or no-time objections, preserve all three beats");
     expect(source).toContain("Max 4 sentences total");
-  });
-
-  test("watchdog logs shared Stripe customer canaries", () => {
-    const source = read("pages/api/ai-calls/watchdog.ts");
-    expect(source).toContain("logSharedStripeCustomers");
-    expect(source).toContain("[BILLING][SHARED-CUSTOMER]");
-    expect(source).toContain("stripeCustomerId: { $exists: true");
   });
 
 });

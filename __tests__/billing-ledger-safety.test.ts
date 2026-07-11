@@ -1,295 +1,145 @@
-describe("usage accrual ledger safety", () => {
-  let logSpy: jest.SpyInstance;
-  let errorSpy: jest.SpyInstance;
+describe("standalone threshold invoice safety", () => {
+  const event = {
+    _id: "event_1",
+    status: "pending",
+    source: "regular_usage",
+    sourceId: "regular_usage:user_1:1",
+    amountCents: 1000,
+  };
 
-  beforeEach(() => {
+  function setup({ draftAmount = 1000, paidAmount = 1000, payRejects = false, status = "pending" } = {}) {
     jest.resetModules();
-    jest.clearAllMocks();
-    jest.dontMock("@/lib/billing/usageAccrualLedger");
-    jest.dontMock("@/models/UsageAccrualLedger");
-    jest.dontMock("@/models/A2PProfile");
-    logSpy = jest.spyOn(console, "log").mockImplementation(() => undefined);
-    errorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
-    process.env.NODE_ENV = "test";
+    const BillingEvent = {
+      findOneAndUpdate: jest.fn()
+        .mockResolvedValueOnce({ ...event, status })
+        .mockResolvedValueOnce({ ...event, status: "charging" }),
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
+      findById: jest.fn().mockResolvedValue({ ...event, status: "paid" }),
+    };
+    const invoice = (invoiceStatus: string, amountDue: number, amountPaid = 0) => ({
+      id: "in_1", customer: "cus_1", currency: "usd", status: invoiceStatus,
+      amount_due: amountDue, amount_paid: amountPaid,
+      metadata: { billingEventId: "event_1", bucket: "regular", amountCents: "1000" },
+    });
+    const stripe = {
+      invoices: {
+        create: jest.fn().mockResolvedValue(invoice("draft", draftAmount)),
+        retrieve: jest.fn()
+          .mockResolvedValueOnce(invoice("draft", draftAmount))
+          .mockResolvedValueOnce(invoice("paid", paidAmount, paidAmount)),
+        listLineItems: jest.fn().mockResolvedValue({ data: [{ invoice_item: "ii_1", amount: 1000, metadata: { billingEventId: "event_1", bucket: "regular", amountCents: "1000" } }] }),
+        finalizeInvoice: jest.fn().mockResolvedValue(invoice("open", draftAmount)),
+        pay: payRejects ? jest.fn().mockRejectedValue(new Error("card declined")) : jest.fn().mockResolvedValue(invoice("paid", paidAmount, paidAmount)),
+      },
+      invoiceItems: { create: jest.fn().mockResolvedValue({ id: "ii_1" }) },
+    };
+    jest.doMock("@/models/BillingEvent", () => ({ __esModule: true, default: BillingEvent }));
+    jest.doMock("@/lib/stripe", () => ({ stripe }));
+    jest.doMock("@/lib/billing/assertStripeWritesEnabled", () => ({ assertStripeWritesEnabled: jest.fn() }));
+    return { BillingEvent, stripe };
+  }
+
+  const params = {
+    customerId: "cus_1", amountCents: 1000, description: "Usage", source: "regular_usage" as const,
+    sourceId: "regular_usage:user_1:1", userEmail: "user@example.com", userId: "user_1", bucket: "regular" as const,
+  };
+
+  test("creates one empty standalone invoice and attaches one exact item", async () => {
+    const { stripe } = setup();
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await settleStandaloneThresholdInvoice(params);
+    expect(stripe.invoices.create).toHaveBeenCalledWith(expect.objectContaining({
+      customer: "cus_1", auto_advance: false, collection_method: "charge_automatically", pending_invoice_items_behavior: "exclude",
+    }), expect.any(Object));
+    expect(stripe.invoiceItems.create).toHaveBeenCalledWith(expect.objectContaining({
+      invoice: "in_1", customer: "cus_1", amount: 1000, currency: "usd", discountable: false,
+    }), expect.any(Object));
+    expect(stripe.invoices.finalizeInvoice).toHaveBeenCalledTimes(1);
+    expect(stripe.invoices.pay).toHaveBeenCalledTimes(1);
   });
 
-  afterEach(() => {
-    logSpy.mockRestore();
-    errorSpy.mockRestore();
+  test("rejects a wrong draft amount before finalization", async () => {
+    const { stripe } = setup({ draftAmount: 999 });
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await expect(settleStandaloneThresholdInvoice(params)).rejects.toThrow("Standalone invoice validation failed");
+    expect(stripe.invoices.finalizeInvoice).not.toHaveBeenCalled();
   });
 
-  function mockMongoose() {
+  test("rejects a wrong paid amount before marking the event paid", async () => {
+    const { BillingEvent } = setup({ paidAmount: 999 });
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await expect(settleStandaloneThresholdInvoice(params)).rejects.toThrow("Standalone invoice validation failed");
+    expect(BillingEvent.updateOne.mock.calls.some(([, update]: any[]) => update?.$set?.status === "paid")).toBe(false);
+  });
+
+  test("a declined payment never marks the event paid", async () => {
+    const { BillingEvent } = setup({ payRejects: true });
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await expect(settleStandaloneThresholdInvoice(params)).rejects.toThrow("card declined");
+    expect(BillingEvent.updateOne.mock.calls.some(([, update]: any[]) => update?.$set?.status === "paid")).toBe(false);
+  });
+
+  test("an applied event is a Stripe no-op", async () => {
+    const { stripe } = setup({ status: "applied" });
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await settleStandaloneThresholdInvoice(params);
+    expect(stripe.invoices.create).not.toHaveBeenCalled();
+    expect(stripe.invoiceItems.create).not.toHaveBeenCalled();
+  });
+
+  test("an ambiguous charging event without a persisted invoice fails closed", async () => {
+    const { stripe } = setup({ status: "charging" });
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await expect(settleStandaloneThresholdInvoice(params)).rejects.toThrow("manual review required");
+    expect(stripe.invoices.create).not.toHaveBeenCalled();
+  });
+
+  test("a manual-review BillingEvent refuses all automatic Stripe work", async () => {
+    const { BillingEvent, stripe } = setup({ status: "charging" });
+    BillingEvent.findOneAndUpdate.mockReset().mockResolvedValueOnce({ ...event, status: "charging", needsManualReview: true });
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await expect(settleStandaloneThresholdInvoice(params)).rejects.toThrow("requires manual review");
+    expect(stripe.invoices.create).not.toHaveBeenCalled();
+    expect(stripe.invoiceItems.create).not.toHaveBeenCalled();
+    expect(stripe.invoices.pay).not.toHaveBeenCalled();
+  });
+
+  test("a watchdog-style AI checkpoint accrues over $20 without creating an invoice", async () => {
+    jest.resetModules();
+    const chain = (value: any) => ({ select: jest.fn().mockReturnThis(), lean: jest.fn().mockResolvedValue(value) });
+    const createFinalizePayInvoice = jest.fn();
+    const applyPaidBillingEvent = jest.fn();
     jest.doMock("mongoose", () => ({
       __esModule: true,
-      default: {
-        connection: { readyState: 1 },
-        connect: jest.fn(),
-        Types: { ObjectId: jest.fn(() => ({ toString: () => "lock-owner" })) },
-        isValidObjectId: jest.fn(() => true),
-      },
-      connection: { readyState: 1 },
-      connect: jest.fn(),
-      Types: { ObjectId: jest.fn(() => ({ toString: () => "lock-owner" })) },
-      isValidObjectId: jest.fn(() => true),
+      default: { connection: { readyState: 1 }, connect: jest.fn(), Types: { ObjectId: jest.fn(() => ({ toString: () => "lock" })) } },
+      connection: { readyState: 1 }, connect: jest.fn(), Types: { ObjectId: jest.fn(() => ({ toString: () => "lock" })) },
     }));
-  }
-
-  function chain(value: unknown) {
-    return {
-      select: jest.fn().mockReturnThis(),
-      lean: jest.fn().mockResolvedValue(value),
-    };
-  }
-
-  function setupTrackUsageTest({
-    ledgerPendingCents,
-    consumedCents,
-    payRejects = false,
-  }: {
-    ledgerPendingCents: number;
-    consumedCents: number;
-    payRejects?: boolean;
-  }) {
-    mockMongoose();
-    const userDoc = {
-      _id: "user-id",
-      email: "user@example.com",
-      stripeCustomerId: "cus_123",
-      hasEverPaid: true,
-      billingBlocked: false,
-    };
-    const User = {
-      findById: jest.fn(),
-      findOne: jest
-        .fn()
-        .mockResolvedValueOnce(userDoc)
-        .mockReturnValueOnce(chain({ stripeCustomerId: "cus_123" }))
-        .mockReturnValueOnce(chain({ hasEverPaid: true, billingBlocked: false, stripeCustomerId: "cus_123" })),
-      findOneAndUpdate: jest
-        .fn()
-        .mockResolvedValueOnce({ usageAccruedCents: 1000, usageBillingHold: false })
-        .mockResolvedValueOnce({ usageAccruedCents: 1000, usageBilledTotalCents: 0 })
-        .mockResolvedValueOnce({ usageAccruedCents: 0, usageBilledTotalCents: 1000 }),
-      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
-    };
-    const BillingEvent = {
-      findOne: jest.fn(),
-      findOneAndUpdate: jest
-        .fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ _id: "event-id", status: "charging" }),
-      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
-    };
-    const stripe = {
-      invoiceItems: {
-        create: jest.fn().mockResolvedValue({ id: "ii_123" }),
-        del: jest.fn().mockResolvedValue({}),
-      },
-      invoices: {
-        create: jest.fn().mockResolvedValue({ id: "in_123" }),
-        finalizeInvoice: jest.fn().mockResolvedValue({}),
-        pay: payRejects
-          ? jest.fn().mockRejectedValue(new Error("card failed"))
-          : jest.fn().mockResolvedValue({}),
-      },
-    };
-    const usageLedger = {
-      recordUsageAccrualOnce: jest.fn().mockResolvedValue({ accrued: true, duplicate: false, amountCents: 1000 }),
-      getPendingAccrualLedgerCents: jest.fn().mockResolvedValue(ledgerPendingCents),
-      consumeAccrualLedgerCents: jest.fn().mockResolvedValue(consumedCents),
-    };
-    jest.doMock("@/models/User", () => ({ __esModule: true, default: User }));
-    jest.doMock("@/models/A2PProfile", () => ({ __esModule: true, default: {} }));
-    jest.doMock("@/models/BillingEvent", () => ({ __esModule: true, default: BillingEvent }));
-    jest.doMock("@/lib/stripe", () => ({ stripe }));
-    jest.doMock("@/lib/billing/assertStripeWritesEnabled", () => ({
-      assertStripeWritesEnabled: jest.fn(),
-    }));
-    jest.doMock("@/lib/billing/usageAccrualLedger", () => usageLedger);
-    return { User, BillingEvent, stripe, usageLedger, userDoc };
-  }
-
-  function setupAiVoiceTest({
-    consumedCents,
-  }: {
-    consumedCents: number;
-  }) {
-    mockMongoose();
-    const User = {
-      findOne: jest
-        .fn()
-        .mockReturnValueOnce(
-          chain({
-            _id: "user-id",
-            email: "user@example.com",
-            hasAI: true,
-            hasEverPaid: true,
-            billingBlocked: false,
-            stripeCustomerId: "cus_123",
-          }),
-        )
-        .mockReturnValueOnce(chain({ stripeCustomerId: "cus_123" }))
-        .mockReturnValueOnce(chain({ hasEverPaid: true, billingBlocked: false, stripeCustomerId: "cus_123" })),
-      findOneAndUpdate: jest
-        .fn()
-        .mockResolvedValueOnce({ aiDialerAccruedSessionCents: 2000, aiDialerBillingHold: false })
-        .mockResolvedValueOnce({ aiDialerAccruedSessionCents: 2000, aiDialerBilledTotalCents: 0 })
-        .mockResolvedValueOnce({ aiDialerAccruedSessionCents: 0, aiDialerBilledTotalCents: 2000 }),
-      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
-    };
-    const BillingEvent = {
-      findOneAndUpdate: jest
-        .fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ _id: "event-id", status: "charging" }),
-      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
-    };
-    const stripe = {
-      invoiceItems: { create: jest.fn().mockResolvedValue({ id: "ii_123" }), del: jest.fn() },
-      invoices: {
-        create: jest.fn().mockResolvedValue({ id: "in_123" }),
-        finalizeInvoice: jest.fn().mockResolvedValue({}),
-        pay: jest.fn().mockResolvedValue({}),
-      },
-    };
-    const usageLedger = {
-      recordUsageAccrualOnce: jest.fn().mockResolvedValue({ accrued: true, duplicate: false, amountCents: 2000 }),
-      getPendingAccrualLedgerCents: jest.fn().mockResolvedValue(2500),
-      consumeAccrualLedgerCents: jest.fn().mockResolvedValue(consumedCents),
-    };
-    jest.doMock("@/models/User", () => ({ __esModule: true, default: User }));
+    jest.doMock("@/models/User", () => ({ __esModule: true, default: {
+      findOne: jest.fn().mockReturnValue(chain({ _id: "user_1", hasAI: true, hasEverPaid: true, stripeCustomerId: "cus_1" })),
+      findOneAndUpdate: jest.fn().mockResolvedValue({ aiDialerAccruedSessionCents: 2500 }),
+      updateOne: jest.fn(),
+    } }));
     jest.doMock("@/models/AICallSession", () => ({ __esModule: true, default: {} }));
-    jest.doMock("@/models/A2PProfile", () => ({ __esModule: true, default: {} }));
-    jest.doMock("@/models/BillingEvent", () => ({ __esModule: true, default: BillingEvent }));
-    jest.doMock("@/lib/stripe", () => ({ stripe }));
-    jest.doMock("@/lib/billing/assertStripeWritesEnabled", () => ({
-      assertStripeWritesEnabled: jest.fn(),
+    jest.doMock("@/lib/billing/trackUsage", () => ({ createFinalizePayInvoice, applyPaidBillingEvent }));
+    jest.doMock("@/lib/billing/usageAccrualLedger", () => ({
+      recordUsageAccrualOnce: jest.fn().mockResolvedValue({ accrued: true }),
+      getPendingAccrualLedgerCents: jest.fn(),
     }));
-    jest.doMock("@/lib/billing/usageAccrualLedger", () => usageLedger);
-    return { User, stripe, usageLedger };
-  }
-
-  test("duplicate regular event key does not double accrue", async () => {
-    jest.doMock("@/models/UsageAccrualLedger", () => ({
-      __esModule: true,
-      default: {
-        findOneAndUpdate: jest.fn().mockReturnValue(chain({ eventKey: "regular:sms:SM1", amountCents: 2 })),
-      },
-    }));
-    const { recordUsageAccrualOnce } = await import("@/lib/billing/usageAccrualLedger");
-    const result = await recordUsageAccrualOnce({
-      bucket: "regular",
-      userEmail: "user@example.com",
-      eventKey: "regular:sms:SM1",
-      source: "twilio",
-      amountCents: 2,
-    });
-    expect(result).toEqual({ accrued: false, duplicate: true, amountCents: 2 });
-  });
-
-  test("failed Stripe charge does not consume regular ledger rows", async () => {
-    const { stripe, usageLedger } = setupTrackUsageTest({
-      ledgerPendingCents: 1000,
-      consumedCents: 0,
-      payRejects: true,
-    });
-    const { trackUsage } = await import("@/lib/billing/trackUsage");
-    await trackUsage({ user: { email: "user@example.com" }, amount: 10, source: "twilio", eventKey: "evt-1" });
-    expect(stripe.invoices.pay).toHaveBeenCalledTimes(1);
-    expect(usageLedger.consumeAccrualLedgerCents).not.toHaveBeenCalled();
-  });
-
-  test("successful regular threshold charge consumes exactly included ledger rows", async () => {
-    const { usageLedger } = setupTrackUsageTest({ ledgerPendingCents: 1500, consumedCents: 1000 });
-    const { trackUsage } = await import("@/lib/billing/trackUsage");
-    await trackUsage({ user: { email: "user@example.com" }, amount: 10, source: "twilio", eventKey: "evt-2" });
-    expect(usageLedger.consumeAccrualLedgerCents).toHaveBeenCalledWith({
-      bucket: "regular",
-      userEmail: "user@example.com",
-      amountCents: 1000,
-    });
-  });
-
-  test("invoice cannot exceed pending ledger-backed cents", async () => {
-    const { stripe, usageLedger } = setupTrackUsageTest({ ledgerPendingCents: 999, consumedCents: 0 });
-    const { trackUsage } = await import("@/lib/billing/trackUsage");
-    await trackUsage({ user: { email: "user@example.com" }, amount: 10, source: "twilio", eventKey: "evt-3" });
-    expect(stripe.invoiceItems.create).not.toHaveBeenCalled();
-    expect(usageLedger.consumeAccrualLedgerCents).not.toHaveBeenCalled();
-  });
-
-  test("successful AI voice threshold charge consumes exactly included ledger rows", async () => {
-    const { usageLedger } = setupAiVoiceTest({ consumedCents: 2000 });
     const { trackAiDialerCentsUsage } = await import("@/lib/billing/trackAiDialerSessionUsage");
-    await trackAiDialerCentsUsage({
-      userEmail: "user@example.com",
-      addCents: 2000,
-      description: "AI voice usage",
-      source: "ai_voice_call",
-      eventKey: "call:CA1",
+    const result = await trackAiDialerCentsUsage({
+      userEmail: "user@example.com", addCents: 2500, description: "checkpoint", source: "ai_voice_session", eventKey: "watchdog-1", allowThresholdCharge: false,
     });
-    expect(usageLedger.consumeAccrualLedgerCents).toHaveBeenCalledWith({
-      bucket: "ai_voice",
-      userEmail: "user@example.com",
-      amountCents: 2000,
-    });
+    expect(result).toEqual(expect.objectContaining({ accrued: 2500, charged: false }));
+    expect(createFinalizePayInvoice).not.toHaveBeenCalled();
+    expect(applyPaidBillingEvent).not.toHaveBeenCalled();
   });
 
-  test("partial threshold invoice consumes only included rows", async () => {
-    const rows = [
-      { _id: "a", amountCents: 700, billedCents: 0 },
-      { _id: "b", amountCents: 700, billedCents: 0 },
-    ];
-    const updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 });
-    jest.doMock("@/models/UsageAccrualLedger", () => ({
-      __esModule: true,
-      default: {
-        find: jest.fn(() => ({
-          sort: jest.fn().mockReturnThis(),
-          limit: jest.fn().mockReturnThis(),
-          select: jest.fn().mockReturnThis(),
-          lean: jest.fn().mockResolvedValue(rows),
-        })),
-        updateOne,
-      },
-    }));
-    const { consumeAccrualLedgerCents } = await import("@/lib/billing/usageAccrualLedger");
-    const consumed = await consumeAccrualLedgerCents({
-      bucket: "regular",
-      userEmail: "user@example.com",
-      amountCents: 1000,
-    });
-    expect(consumed).toBe(1000);
-    expect(updateOne).toHaveBeenNthCalledWith(1, { _id: "a", billedCents: 0 }, expect.any(Object));
-    expect(updateOne).toHaveBeenNthCalledWith(
-      2,
-      { _id: "b", billedCents: 0 },
-      expect.objectContaining({ $set: expect.objectContaining({ billedCents: 300 }) }),
-    );
-  });
-
-  test("ledger consumption shortfall places a regular bucket hold", async () => {
-    const { User } = setupTrackUsageTest({ ledgerPendingCents: 1000, consumedCents: 700 });
-    const { trackUsage } = await import("@/lib/billing/trackUsage");
-    await trackUsage({ user: { email: "user@example.com" }, amount: 10, source: "twilio", eventKey: "evt-4" });
-    expect(User.updateOne).toHaveBeenCalledWith(
-      { email: "user@example.com" },
-      expect.objectContaining({
-        $set: expect.objectContaining({
-          usageBillingHold: true,
-          usageBillingHoldReason: "ledger_consumption_shortfall",
-        }),
-      }),
-    );
-  });
-
-  test("inbound duplicate MessageSid returns before second accrual", () => {
-    const source = require("fs").readFileSync(
-      require("path").join(__dirname, "../pages/api/twilio/inbound-sms.ts"),
-      "utf8",
-    );
-    expect(source.indexOf("Message.findOne({ sid: messageSid })")).toBeLessThan(
-      source.indexOf("eventKey: `sms:${messageSid || String(savedMessage._id)}`"),
-    );
+  test("threshold source identifiers are immutable and one-trigger only", () => {
+    const regular = require("fs").readFileSync(require("path").join(__dirname, "../lib/billing/trackUsage.ts"), "utf8");
+    const ai = require("fs").readFileSync(require("path").join(__dirname, "../lib/billing/trackAiDialerSessionUsage.ts"), "utf8");
+    expect(regular).toContain("regular_usage:${String(userDoc._id)}:${thresholdSequence}");
+    expect(ai).toContain("ai_voice_session:${String((userDoc as any)._id)}:${thresholdSequence}");
+    expect(regular).toContain("ledgerPendingCents >= TOPUP_AMOUNT_CENTS ? TOPUP_AMOUNT_CENTS : 0");
+    expect(ai).toContain("ledgerPendingCents >= SESSION_THRESHOLD_CENTS ? SESSION_THRESHOLD_CENTS : 0");
   });
 });

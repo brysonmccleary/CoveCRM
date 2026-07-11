@@ -7,6 +7,8 @@ import "dotenv/config";
 import mongooseConnect from "../lib/mongooseConnect";
 import Message from "../models/Message";
 import CallLog from "../models/CallLog";
+import BillingEvent from "../models/BillingEvent";
+import UsageAccrualLedger from "../models/UsageAccrualLedger";
 
 type AnyIndex = {
   name?: string;
@@ -102,7 +104,55 @@ async function ensureCallLogIndexes() {
   }
 }
 
-async function main() {
+export async function ensureBillingIndexes(col: any = UsageAccrualLedger.collection) {
+  const indexes = await col.indexes();
+  const isLegacyEventKeyIndex = (index: any) =>
+    index?.name === "eventKey_1" &&
+    index?.unique === true &&
+    JSON.stringify(index?.key) === JSON.stringify({ eventKey: 1 });
+  const isCompoundLedgerIndex = (index: any) =>
+    index?.unique === true &&
+    JSON.stringify(index?.key) === JSON.stringify({ userEmail: 1, bucket: 1, eventKey: 1 });
+  const legacy = indexes.find(isLegacyEventKeyIndex);
+  const compound = indexes.find(isCompoundLedgerIndex);
+  console.log(`[BILLING INDEX] legacy eventKey_1 exists: ${Boolean(legacy)}`);
+  console.log(`[BILLING INDEX] compound tenant/bucket/eventKey exists: ${Boolean(compound)}`);
+
+  const duplicates = await col.aggregate([
+    {
+      $group: {
+        _id: { userEmail: "$userEmail", bucket: "$bucket", eventKey: "$eventKey" },
+        count: { $sum: 1 },
+        ids: { $push: "$_id" },
+      },
+    },
+    { $match: { count: { $gt: 1 } } },
+    { $limit: 100 },
+  ]).toArray();
+  if (duplicates.length) {
+    throw new Error(`[BILLING INDEX] duplicate tenant/bucket/eventKey rows: ${JSON.stringify(duplicates.map((row: any) => row.ids))}`);
+  }
+
+  if (legacy) {
+    await col.dropIndex("eventKey_1");
+    console.log("[BILLING INDEX] legacy eventKey_1 dropped: true");
+  } else {
+    console.log("[BILLING INDEX] legacy eventKey_1 dropped: false");
+  }
+  if (!compound) {
+    await col.createIndex(
+      { userEmail: 1, bucket: 1, eventKey: 1 },
+      { unique: true, name: "usage_accrual_tenant_bucket_event" },
+    );
+    console.log("[BILLING INDEX] compound tenant/bucket/eventKey created: true");
+  } else {
+    console.log("[BILLING INDEX] compound tenant/bucket/eventKey created: false");
+  }
+  await BillingEvent.createIndexes();
+  console.log("✅ ensured BillingEvent idempotency index");
+}
+
+export async function main() {
   const uri = process.env.MONGODB_URI || process.env.MONGODB_URL || "";
   if (!uri) {
     console.error("❌ Missing MONGODB_URI in environment.");
@@ -113,12 +163,15 @@ async function main() {
 
   await ensureMessageIndexes();
   await ensureCallLogIndexes();
+  await ensureBillingIndexes();
 
   console.log("🎉 All indexes ensured.");
   process.exit(0);
 }
 
-main().catch((err) => {
-  console.error("❌ Failed to create indexes:", err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("❌ Failed to create indexes:", err);
+    process.exit(1);
+  });
+}

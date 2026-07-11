@@ -14,9 +14,8 @@ export type BillingEventSource =
 export type BillingEventStatus =
   | "pending"
   | "charging"
-  | "stripe_created"
   | "paid"
-  | "failed"
+  | "applied"
   | "blocked";
 
 export interface IBillingEvent extends Document {
@@ -30,7 +29,18 @@ export interface IBillingEvent extends Document {
   status: BillingEventStatus;
   stripeInvoiceItemId?: string;
   stripeInvoiceId?: string;
-  stripePaymentIntentId?: string;
+  paidAt?: Date;
+  appliedAt?: Date;
+  appliedBucket?: "regular" | "ai_voice" | "a2p";
+  appliedAmountCents?: number;
+  applicationError?: string;
+  applicationFailedAt?: Date;
+  applicationAttempts?: number;
+  needsApplicationReview?: boolean;
+  needsManualReview?: boolean;
+  manualReviewReason?: string;
+  manualReviewAt?: Date;
+  recoveryAttempts?: number;
   idempotencyKey: string;
   blockedReason?: string;
   metadata?: Record<string, unknown>;
@@ -63,12 +73,23 @@ const BillingEventSchema = new Schema<IBillingEvent>(
     status: {
       type: String,
       required: true,
-      enum: ["pending", "charging", "stripe_created", "paid", "failed", "blocked"],
+      enum: ["pending", "charging", "paid", "applied", "blocked"],
       default: "pending",
     },
     stripeInvoiceItemId: { type: String },
     stripeInvoiceId: { type: String },
-    stripePaymentIntentId: { type: String },
+    paidAt: { type: Date },
+    appliedAt: { type: Date },
+    appliedBucket: { type: String, enum: ["regular", "ai_voice", "a2p"] },
+    appliedAmountCents: { type: Number },
+    applicationError: { type: String },
+    applicationFailedAt: { type: Date },
+    applicationAttempts: { type: Number, default: 0 },
+    needsApplicationReview: { type: Boolean, default: false },
+    needsManualReview: { type: Boolean, default: false },
+    manualReviewReason: { type: String },
+    manualReviewAt: { type: Date },
+    recoveryAttempts: { type: Number, default: 0 },
     idempotencyKey: { type: String, required: true },
     blockedReason: { type: String },
     metadata: { type: Schema.Types.Mixed },

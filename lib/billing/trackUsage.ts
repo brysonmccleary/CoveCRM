@@ -3,8 +3,12 @@ import mongoose from "mongoose";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import { stripe } from "@/lib/stripe";
-import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import BillingEvent, { type BillingEventSource } from "@/models/BillingEvent";
+import {
+  settleStandaloneThresholdInvoice,
+  validatePaidStandaloneInvoice,
+  type ThresholdBucket,
+} from "@/lib/billing/standaloneInvoice";
 import {
   consumeAccrualLedgerCents,
   getPendingAccrualLedgerCents,
@@ -16,8 +20,6 @@ const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
 const TOPUP_AMOUNT_USD = 10;
 const TOPUP_AMOUNT_CENTS = TOPUP_AMOUNT_USD * 100;
-const REGULAR_DAILY_ALERT_CENTS = 5000;
-const REGULAR_DAILY_ALERT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const A2P_APPROVAL_FEE_USD = 15;
 const A2P_APPROVAL_FEE_CENTS = A2P_APPROVAL_FEE_USD * 100;
@@ -68,27 +70,8 @@ async function ensureDb() {
   }
 }
 
-function stripeMetadata(input?: Record<string, unknown>, base?: Record<string, unknown>) {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries({ ...(base || {}), ...(input || {}) })) {
-    if (value === undefined || value === null) continue;
-    out[key] = String(value).slice(0, 500);
-  }
-  return out;
-}
+export { settleStandaloneThresholdInvoice } from "@/lib/billing/standaloneInvoice";
 
-/**
- * Create a BillingEvent ledger entry, then create an invoice item, draft an
- * invoice, finalize it, and pay immediately — all idempotent.
- *
- * Idempotency key is derived deterministically from source + sourceId + amountCents
- * so retries always hit the same Stripe objects (no duplicate charges even if the
- * MongoDB deduction fails after Stripe succeeds).
- *
- * The BillingEvent unique index on (source, sourceId, amountCents) provides a
- * second layer: if the event is already "paid", we return immediately before
- * touching Stripe at all.
- */
 export async function createFinalizePayInvoice(params: {
   customerId: string;
   amountCents: number;
@@ -98,330 +81,148 @@ export async function createFinalizePayInvoice(params: {
   userEmail?: string;
   userId?: string;
   metadata?: Record<string, unknown>;
-}): Promise<void> {
-  const { customerId, amountCents, description, source, sourceId, userEmail, userId, metadata } =
-    params;
-  const normalizedUserEmail = String(userEmail || "").trim().toLowerCase();
-
+  bucket?: ThresholdBucket;
+}) {
   await ensureDb();
+  const bucket = params.bucket || (params.source === "a2p_fee" ? "a2p" : params.source.startsWith("ai_") ? "ai_voice" : "regular");
+  return settleStandaloneThresholdInvoice({ ...params, bucket });
+}
 
-  if (normalizedUserEmail) {
-    const identityUser = await User.findOne({ email: normalizedUserEmail })
-      .select("stripeCustomerId")
-      .lean();
-    const expectedCustomerId = String((identityUser as any)?.stripeCustomerId || "").trim();
-    if (!identityUser || !expectedCustomerId || expectedCustomerId !== String(customerId || "").trim()) {
-      console.error("[BILLING][IDENTITY-MISMATCH]", {
-        userEmail: normalizedUserEmail,
-        customerId: customerId || null,
-        expectedCustomerId: expectedCustomerId || null,
-        source,
-        sourceId,
-        amountCents,
-      });
-      throw new Error("Billing identity mismatch");
-    }
-  }
-
-  // ── Outermost kill switch ─────────────────────────────────────────────────────
-  assertStripeWritesEnabled();
-
-  const eventMetadata = {
-    userEmail: normalizedUserEmail || userEmail || "",
-    userId: userId || "",
-    source,
-    sourceId,
-    ...(metadata || {}),
-  };
-  const stripeMeta = stripeMetadata(eventMetadata);
-
-  // ── Idempotency key (stable, derived from billing facts) ─────────────────────
-  const idempotencyKey = `billing_${source}_${sourceId}_${amountCents}`;
-
-  // ── Belt-and-suspenders kill switch ──────────────────────────────────────────
-  if (process.env.DISABLE_ALL_STRIPE_BILLING === "1") {
-    console.error("[BILLING BLOCKED] DISABLE_ALL_STRIPE_BILLING=1", {
-      customerId, amountCents, description, source, sourceId, idempotencyKey,
-    });
-    await BillingEvent.findOneAndUpdate(
-      { source, sourceId, amountCents },
-      {
-        $set: { status: "blocked", blockedReason: "DISABLE_ALL_STRIPE_BILLING", updatedAt: new Date() },
-        $setOnInsert: {
-          userEmail: userEmail || "", userId: userId || "", stripeCustomerId: customerId,
-          description, idempotencyKey, metadata: eventMetadata, createdAt: new Date(),
-        },
-      },
-      { upsert: true },
-    ).catch(() => {/* non-fatal */});
-    throw new Error("Stripe billing is globally disabled");
-  }
-
-  // ── Safety cap (default $50) ─────────────────────────────────────────────────
-  const BILLING_SINGLE_CHARGE_CAP_CENTS = Number(
-    process.env.BILLING_SINGLE_CHARGE_CAP_CENTS || "5000",
-  );
-  if (!Number.isFinite(BILLING_SINGLE_CHARGE_CAP_CENTS) || BILLING_SINGLE_CHARGE_CAP_CENTS <= 0) {
-    throw new Error("Invalid BILLING_SINGLE_CHARGE_CAP_CENTS");
-  }
-
-  // Per-source cap: AI voice usage capped at $20 by default
-  let effectiveCapCents = BILLING_SINGLE_CHARGE_CAP_CENTS;
-  if (source === "ai_voice_session" || source === "ai_voice_call") {
-    const aiVoiceCap = Number(process.env.AI_VOICE_SINGLE_CHARGE_CAP_CENTS || "2000");
-    if (Number.isFinite(aiVoiceCap) && aiVoiceCap > 0) {
-      effectiveCapCents = Math.min(effectiveCapCents, aiVoiceCap);
-    }
-  }
-
-  if (amountCents > effectiveCapCents) {
-    const blockedReason = `charge_${amountCents}_exceeds_cap_${effectiveCapCents}`;
-    console.error("[BILLING ANOMALY BLOCKED] Single charge exceeds cap", {
-      customerId, amountCents, cap: effectiveCapCents, source, sourceId,
-    });
-    await BillingEvent.findOneAndUpdate(
-      { source, sourceId, amountCents },
-      {
-        $set: { status: "blocked", blockedReason, updatedAt: new Date() },
-        $setOnInsert: {
-          userEmail: userEmail || "", userId: userId || "", stripeCustomerId: customerId,
-          description, idempotencyKey, metadata: eventMetadata, createdAt: new Date(),
-        },
-      },
-      { upsert: true },
-    ).catch(() => {/* non-fatal */});
-    throw new Error(`Billing anomaly blocked: ${amountCents}c exceeds cap of ${effectiveCapCents}c`);
-  }
-
-  // ── Account eligibility guard (usage-style sources) ──────────────────────────
-  // Belt-and-suspenders: callers already check this, but the central helper
-  // verifies independently so a mis-wired caller cannot charge ineligible accounts.
-  if (USAGE_SOURCES.includes(source) && userEmail && !isAdminEmail(userEmail)) {
-    const eligUser = await User.findOne({ email: userEmail.toLowerCase() })
-      .select("hasEverPaid billingBlocked stripeCustomerId")
-      .lean();
-
-    const eligible =
-      eligUser &&
-      (eligUser as any).hasEverPaid === true &&
-      (eligUser as any).billingBlocked !== true &&
-      (eligUser as any).stripeCustomerId;
-
-    if (!eligible) {
-      const blockedReason = !eligUser
-        ? "user_not_found"
-        : !(eligUser as any).hasEverPaid
-        ? "has_ever_paid_false"
-        : (eligUser as any).billingBlocked
-        ? "billing_blocked"
-        : "no_stripe_customer";
-
-      await BillingEvent.findOneAndUpdate(
-        { source, sourceId, amountCents },
-        {
-          $set: { status: "blocked", blockedReason, updatedAt: new Date() },
-          $setOnInsert: {
-            userEmail: userEmail || "", userId: userId || "", stripeCustomerId: customerId,
-            description, idempotencyKey, metadata: eventMetadata, createdAt: new Date(),
-          },
-        },
-        { upsert: true },
-      ).catch(() => {/* non-fatal */});
-
-      console.warn("[BILLING ELIGIBILITY BLOCKED]", { userEmail, source, sourceId, blockedReason });
-      throw new Error(`Billing blocked: ${blockedReason}`);
-    }
-  }
-
-  // ── BillingEvent ledger — idempotency guard ───────────────────────────────────
-  // $setOnInsert fires only if this is a NEW document (first attempt).
-  // If the document already exists, we get back the previous state.
-  const existingEvent = await BillingEvent.findOneAndUpdate(
-    { source, sourceId, amountCents },
-    {
-      $setOnInsert: {
-        userEmail: userEmail || "",
-        userId: userId || "",
-        stripeCustomerId: customerId,
-        description,
-        status: "pending",
-        idempotencyKey,
-        metadata: eventMetadata,
-        createdAt: new Date(),
-      },
-      $set: { updatedAt: new Date() },
-    },
-    { upsert: true, new: false },
-  ).catch(async (err: any) => {
-    // Duplicate key race on concurrent upserts — find the winner
-    if (err.code === 11000) {
-      return BillingEvent.findOne({ source, sourceId, amountCents }).lean();
-    }
-    throw err;
-  });
-
-  if (existingEvent) {
-    const st = String((existingEvent as any).status || "");
-    // Already fully paid — no Stripe write needed
-    if (st === "paid") {
-      console.log("[BILLING SKIPPED] Already paid", { source, sourceId, idempotencyKey });
-      return;
-    }
-    // Invoice created in Stripe and handed off — skip re-creation
-    if (st === "stripe_created" && (existingEvent as any).stripeInvoiceId) {
-      console.log("[BILLING SKIPPED] Stripe invoice already created", {
-        source, sourceId, stripeInvoiceId: (existingEvent as any).stripeInvoiceId,
-      });
-      return;
-    }
-    // A prior attempt claimed this event and never resolved. It may or may not
-    // have reached Stripe — Mongo alone cannot tell. Fail closed: never
-    // auto-retry an ambiguous attempt.
-    if (st === "charging") {
-      console.error("[BILLING NEEDS REVIEW] Unresolved prior charge attempt — refusing to auto-retry", {
-        source, sourceId, amountCents, idempotencyKey,
-      });
-      throw new Error("Billing needs manual review: unresolved prior charge attempt");
-    }
-    // "blocked" events (cap/eligibility) may retry once re-eligible.
-    // Awaited without catch: if this write fails we abort before Stripe.
-    if (st === "blocked") {
-      await BillingEvent.updateOne(
-        { source, sourceId, amountCents },
-        { $set: { status: "pending", blockedReason: undefined, updatedAt: new Date() } },
-      );
-    }
-  }
-
-  // ── Atomic claim: pending/failed → charging ──────────────────────────────────
-  // Exactly one process can win this transition. If this write fails or another
-  // process holds the claim, we abort BEFORE any Stripe call (fail closed).
-  // Deliberately NOT wrapped in .catch — a Mongo failure here must prevent charging.
-  const claimed = await BillingEvent.findOneAndUpdate(
-    { source, sourceId, amountCents, status: { $in: ["pending", "failed"] } },
-    { $set: { status: "charging", updatedAt: new Date() } },
-    { new: true },
-  );
-  if (!claimed) {
-    console.error("[BILLING NEEDS REVIEW] Could not claim BillingEvent (concurrent attempt or state change)", {
-      source, sourceId, amountCents, idempotencyKey,
-    });
-    throw new Error("Billing claim failed; refusing to charge");
-  }
-
-  // ── Audit log ────────────────────────────────────────────────────────────────
-  console.log("[BILLING ATTEMPT]", {
-    customerId, amountCents, description, source, sourceId,
-    idempotencyKey, cap: effectiveCapCents,
-  });
-
-  let invoiceItemId: string | undefined;
-  let invoiceId: string | undefined;
-
+export async function applyUsageBillingEvent(args: {
+  billingEventId: string;
+  userId: string;
+  userEmail: string;
+  bucket: "regular" | "ai_voice";
+  amountCents: number;
+}) {
+  const session = await mongoose.startSession();
   try {
-    const item = await stripe.invoiceItems.create(
-      { customer: customerId, amount: amountCents, currency: "usd", description, metadata: stripeMeta },
-      { idempotencyKey: `item_${idempotencyKey}` },
-    );
-    invoiceItemId = item.id;
-
-    const invoice = await stripe.invoices.create(
-      {
-        customer: customerId,
-        collection_method: "charge_automatically",
-        auto_advance: false,
-        metadata: stripeMeta,
-      },
-      { idempotencyKey: `inv_${idempotencyKey}` },
-    );
-    invoiceId = invoice.id;
-
-    // Mark Stripe objects created — idempotent retry of finalize/pay is now safe
-    await BillingEvent.updateOne(
-      { source, sourceId, amountCents },
-      {
-        $set: {
-          status: "stripe_created",
-          stripeInvoiceItemId: invoiceItemId,
-          stripeInvoiceId: invoiceId,
-          updatedAt: new Date(),
+    await session.withTransaction(async () => {
+      const event = await BillingEvent.findOne({ _id: args.billingEventId, status: "paid" }).session(session);
+      if (!event) return;
+      const fields = args.bucket === "regular"
+        ? { accrued: "usageAccruedCents", billed: "usageBilledTotalCents", last: "usageLastInvoicedAt" }
+        : { accrued: "aiDialerAccruedSessionCents", billed: "aiDialerBilledTotalCents", last: "aiDialerLastChargedAt" };
+      const user = await User.findOneAndUpdate(
+        { _id: args.userId, [fields.accrued]: { $gte: args.amountCents } },
+        { $inc: { [fields.accrued]: -args.amountCents, [fields.billed]: args.amountCents }, $set: { [fields.last]: new Date() } },
+        { new: true, session },
+      );
+      if (!user) throw new Error("Paid billing event cannot be applied: bucket is below its settled threshold");
+      const consumed = await consumeAccrualLedgerCents({
+        bucket: args.bucket,
+        userEmail: args.userEmail,
+        amountCents: args.amountCents,
+        session,
+      });
+      if (consumed !== args.amountCents) throw new Error("Paid billing event cannot be applied: accrual ledger shortfall");
+      const marked = await BillingEvent.updateOne(
+        { _id: args.billingEventId, status: "paid" },
+        {
+          $set: {
+            status: "applied",
+            appliedAt: new Date(),
+            appliedBucket: args.bucket,
+            appliedAmountCents: args.amountCents,
+            needsApplicationReview: false,
+            updatedAt: new Date(),
+          },
+          $unset: { applicationError: 1, applicationFailedAt: 1 },
         },
-      },
-    ).catch(() => {
-      // Non-fatal for THIS in-flight attempt: status remains "charging", which
-      // permanently blocks any future automatic retry — no duplicate possible.
-      console.error("[BILLING NEEDS REVIEW] Failed to record stripe_created; event stays 'charging'", {
-        source, sourceId, invoiceId,
-      });
+        { session },
+      );
+      if (Number((marked as any).modifiedCount || 0) !== 1) throw new Error("Paid billing event application was not claimed");
     });
-
-    await stripe.invoices.finalizeInvoice(
-      invoiceId!,
-      {},
-      { idempotencyKey: `fin_${idempotencyKey}` },
-    );
-
-    await stripe.invoices.pay(
-      invoiceId!,
-      {},
-      { idempotencyKey: `pay_${idempotencyKey}` },
-    );
-
-    // ── Mark paid — idempotency guard for future retries ─────────────────────
-    await BillingEvent.updateOne(
-      { source, sourceId, amountCents },
-      {
-        $set: {
-          status: "paid",
-          stripeInvoiceItemId: invoiceItemId,
-          stripeInvoiceId: invoiceId,
-          updatedAt: new Date(),
-        },
-      },
-    ).catch(() => {
-      // Non-fatal: event stays "charging" (or "stripe_created"), both of which
-      // block automatic retries — the charge cannot be duplicated. Needs manual
-      // reconciliation to mark it paid.
-      console.error("[BILLING NEEDS REVIEW] Failed to record 'paid'; event blocks auto-retry until reconciled", {
-        source, sourceId, idempotencyKey, invoiceId,
-      });
-    });
-
-    console.log("[BILLING SUCCESS]", {
-      customerId, amountCents, description, source, sourceId,
-      idempotencyKey, invoiceItemId, invoiceId,
-    });
-  } catch (err) {
-    // Only mark "failed" (retryable) when we KNOW no Stripe state survived:
-    // no invoice was created AND any orphaned invoice item was deleted.
-    // Anything ambiguous stays "charging", which blocks automatic retry.
-    let safeToRetry = !invoiceItemId && !invoiceId;
-    if (invoiceItemId && !invoiceId) {
-      try {
-        await stripe.invoiceItems.del(invoiceItemId);
-        safeToRetry = true;
-      } catch {
-        safeToRetry = false; // orphaned item may still exist in Stripe
-      }
-    }
-
-    if (safeToRetry) {
-      await BillingEvent.updateOne(
-        { source, sourceId, amountCents },
-        { $set: { status: "failed", updatedAt: new Date() } },
-      ).catch(() => {
-        // If even this fails, event stays "charging" → auto-retry blocked (fail closed)
-        console.error("[BILLING NEEDS REVIEW] Failed to mark 'failed'; event stays 'charging'", {
-          source, sourceId,
-        });
-      });
-    } else {
-      console.error("[BILLING NEEDS REVIEW] Stripe state ambiguous after failure; event stays 'charging' — no auto-retry", {
-        source, sourceId, invoiceItemId, invoiceId,
-      });
-    }
-    throw err;
+  } finally {
+    await session.endSession();
   }
+}
+
+export async function markBillingEventApplicationFailure(event: any, error: unknown) {
+  const eventId = String(event?._id || "");
+  if (!eventId) return;
+  const message = String((error as any)?.message || error || "application failed").slice(0, 1000);
+  await BillingEvent.updateOne(
+    { _id: eventId, status: "paid" },
+    {
+      $set: {
+        applicationError: message,
+        applicationFailedAt: new Date(),
+        needsApplicationReview: true,
+        updatedAt: new Date(),
+      },
+      $inc: { applicationAttempts: 1 },
+    },
+  );
+  console.error("[BILLING][PAID-UNAPPLIED]", {
+    billingEventId: eventId,
+    userEmail: event?.userEmail || "",
+    bucket: event?.metadata?.bucket || "",
+    amountCents: event?.amountCents || 0,
+    invoiceId: event?.stripeInvoiceId || "",
+    error: message,
+  });
+}
+
+export async function applyPaidBillingEvent(event: any, recordFailure = true) {
+  if (String(event?.status || "") === "applied") return;
+  const bucket = String(event?.metadata?.bucket || "") as ThresholdBucket;
+  try {
+    if (bucket === "a2p") {
+      await applyA2PBillingEvent(String(event._id));
+      return;
+    }
+    if (bucket !== "regular" && bucket !== "ai_voice") {
+      throw new Error("Paid BillingEvent has an invalid application bucket");
+    }
+    await applyUsageBillingEvent({
+      billingEventId: String(event._id),
+      userId: String(event.userId || ""),
+      userEmail: String(event.userEmail || ""),
+      bucket,
+      amountCents: Number(event.amountCents || 0),
+    });
+  } catch (error) {
+    if (recordFailure) await markBillingEventApplicationFailure(event, error);
+    throw error;
+  }
+}
+
+export async function recoverPaidBillingEvents(limit = 25) {
+  const events = await BillingEvent.find({ status: "paid", appliedAt: null })
+    .sort({ paidAt: 1, _id: 1 })
+    .limit(Math.max(1, Math.min(100, Math.floor(limit))))
+    .lean();
+  let applied = 0;
+  let failed = 0;
+  for (const event of events as any[]) {
+    try {
+      await validatePaidStandaloneInvoice(event);
+      await applyPaidBillingEvent(event, false);
+      applied += 1;
+    } catch (error) {
+      failed += 1;
+      await markBillingEventApplicationFailure(event, error).catch(() => undefined);
+    }
+  }
+  return { scanned: events.length, applied, failed };
+}
+
+async function applyA2PBillingEvent(billingEventId: string) {
+  await BillingEvent.updateOne(
+    { _id: billingEventId, status: "paid" },
+    {
+      $set: {
+        status: "applied",
+        appliedAt: new Date(),
+        appliedBucket: "a2p",
+        appliedAmountCents: A2P_APPROVAL_FEE_CENTS,
+        needsApplicationReview: false,
+        updatedAt: new Date(),
+      },
+      $unset: { applicationError: 1, applicationFailedAt: 1 },
+    },
+  );
 }
 
 /** ========= Public APIs ========= */
@@ -527,47 +328,18 @@ export async function trackUsage({
     return;
   }
 
-  const nowForAccrual = new Date();
-  const priorDailyWindowStartedAt = (userDoc as any).usageDailyWindowStartedAt
-    ? new Date((userDoc as any).usageDailyWindowStartedAt)
-    : null;
-  const holdClearedAt = (userDoc as any).usageBillingHoldClearedAt
-    ? new Date((userDoc as any).usageBillingHoldClearedAt)
-    : null;
-  const resetDailyWindow =
-    !priorDailyWindowStartedAt ||
-    nowForAccrual.getTime() - priorDailyWindowStartedAt.getTime() >= REGULAR_DAILY_ALERT_WINDOW_MS;
-  const priorDailyAccruedCents = resetDailyWindow
-    ? 0
-    : Number((userDoc as any).usageDailyAccruedCents || 0);
-  const nextDailyAccruedCents = priorDailyAccruedCents + addCents;
-
   // One atomic round trip: update analytics + accrue usage
   const incFields: Record<string, number> = { ...analyticsInc };
   if (addCents > 0) incFields["usageAccruedCents"] = addCents;
-  if (addCents > 0 && !resetDailyWindow) incFields["usageDailyAccruedCents"] = addCents;
 
   const updated = await User.findOneAndUpdate(
     { email: userDoc.email },
-    {
-      $inc: incFields,
-      ...(addCents > 0 && resetDailyWindow
-        ? {
-            $set: {
-              usageDailyWindowStartedAt: nowForAccrual,
-              usageDailyAccruedCents: addCents,
-            },
-          }
-        : {}),
-    },
+    { $inc: incFields },
     {
       new: true,
       projection: {
         usageAccruedCents: 1,
         stripeCustomerId: 1,
-        usageBillingHold: 1,
-        usageDailyWindowStartedAt: 1,
-        usageDailyAccruedCents: 1,
       },
     },
   );
@@ -575,43 +347,6 @@ export async function trackUsage({
   if (!updated) return;
 
   const newAccrued = Number((updated as any).usageAccruedCents || 0);
-  const activeDailyWindowStartedAt = (updated as any).usageDailyWindowStartedAt
-    ? new Date((updated as any).usageDailyWindowStartedAt)
-    : priorDailyWindowStartedAt || nowForAccrual;
-  const clearedAfterWindowStart =
-    !!holdClearedAt &&
-    !!activeDailyWindowStartedAt &&
-    holdClearedAt.getTime() >= activeDailyWindowStartedAt.getTime();
-  const dailyAlertExceeded =
-    nextDailyAccruedCents > REGULAR_DAILY_ALERT_CENTS && !clearedAfterWindowStart;
-  const existingHold = (userDoc as any).usageBillingHold === true || (updated as any).usageBillingHold === true;
-  const holdReason = dailyAlertExceeded
-    ? "daily_regular_usage_accrual_exceeded"
-    : existingHold
-    ? String((userDoc as any).usageBillingHoldReason || "existing_hold")
-    : "";
-
-  if (holdReason) {
-    await User.updateOne(
-      { email: userDoc.email },
-      {
-        $set: {
-          usageBillingHold: true,
-          usageBillingHoldReason: holdReason,
-          usageBillingHoldAt: new Date(),
-          usageBillingHoldAccruedCents: newAccrued,
-        },
-      },
-    );
-    console.error("[BILLING][CHARGE-HOLD]", {
-      userEmail: userDoc.email,
-      bucket: "regular",
-      reason: holdReason,
-      accruedCents: newAccrued,
-    });
-    return;
-  }
-
   if (!canBill && !isProd && platformBilled && newAccrued >= TOPUP_AMOUNT_CENTS) {
     console.warn(
       "[DEV billing] Threshold reached but billing unavailable; accrual remains until enabled.",
@@ -673,15 +408,15 @@ export async function trackUsage({
     return;
   }
 
-  // sourceId encodes: "user X's cumulative billing reaching Y cents".
-  // If Stripe charges but MongoDB deduction fails → next retry computes the
-  // same sourceId → BillingEvent already "paid" → no duplicate charge.
+  // Sequence advances only after the event is atomically applied, so a retry
+  // after Stripe collection uses the same immutable BillingEvent source id.
   const currentBilledTotal = Number((locked as any).usageBilledTotalCents || 0);
-  const sourceId = `usage:${userDoc.email}:${currentBilledTotal + billCents}`;
+  const thresholdSequence = Math.floor(currentBilledTotal / TOPUP_AMOUNT_CENTS) + 1;
+  const sourceId = `regular_usage:${String(userDoc._id)}:${thresholdSequence}`;
   const stripeCustomerId = userDoc.stripeCustomerId as string;
 
   try {
-    await createFinalizePayInvoice({
+    const event = await createFinalizePayInvoice({
       customerId: stripeCustomerId,
       amountCents: billCents,
       description: `Cove CRM usage charge ($${(billCents / 100).toFixed(2)})`,
@@ -689,50 +424,18 @@ export async function trackUsage({
       sourceId,
       userEmail: userDoc.email as string,
       userId: String(userDoc._id),
-    });
-
-    // Commit: only our lockOwner can execute this write
-    await User.findOneAndUpdate(
-      { email: userDoc.email, billingLockOwner: lockOwner },
-      {
-        $inc: { usageAccruedCents: -billCents, usageBilledTotalCents: billCents },
-        $set: {
-          usageLastInvoicedAt: new Date(),
-          billingLockAt: null,
-          billingLockOwner: null,
-          billingLockExpiresAt: null,
-        },
-      },
-    );
-    const consumedCents = await consumeAccrualLedgerCents({
       bucket: "regular",
-      userEmail: userDoc.email as string,
-      amountCents: billCents,
     });
-    if (consumedCents !== billCents) {
-      await User.updateOne(
-        { email: userDoc.email },
-        {
-          $set: {
-            usageBillingHold: true,
-            usageBillingHoldReason: "ledger_consumption_shortfall",
-            usageBillingHoldAt: new Date(),
-            usageBillingHoldAccruedCents: Math.max(0, accrued - billCents),
-          },
-        },
-      );
-      console.error("[BILLING][CRITICAL][LEDGER-CONSUMPTION-SHORTFALL]", {
-        userEmail: userDoc.email,
-        bucket: "regular",
-        invoiceCents: billCents,
-        consumedCents,
-      });
-    }
+    await applyPaidBillingEvent(event);
+    await User.updateOne(
+      { email: userDoc.email, billingLockOwner: lockOwner },
+      { $set: { billingLockAt: null, billingLockOwner: null, billingLockExpiresAt: null } },
+    );
     console.log(
       `💳 Usage invoice: $${(billCents / 100).toFixed(2)} charged to ${userDoc.email}`,
     );
   } catch (err) {
-    console.error("❌ Stripe usage threshold charge failed:", err);
+    console.error("❌ Usage threshold settlement or application failed:", err);
     // Release lock only — keep accrual so next event retries the charge
     await User.updateOne(
       { email: userDoc.email, billingLockOwner: lockOwner },
@@ -806,13 +509,19 @@ export async function chargeA2PApprovalIfNeeded({
   }
 
   // Check BillingEvent first (idempotency via unique index on source+sourceId+amountCents)
-  const sourceId = `a2p:${userDoc.stripeCustomerId}`;
+  const campaignIdentity = String(
+    (userDoc as any)?.a2p?.campaignSid ||
+      (userDoc as any)?.a2p?.campaignId ||
+      (userDoc as any)?.twilio?.a2pCampaignSid ||
+      userDoc._id,
+  );
+  const sourceId = `a2p_fee:${campaignIdentity}`;
   const existing = await BillingEvent.findOne({
     source: "a2p_fee",
     sourceId,
     amountCents: A2P_APPROVAL_FEE_CENTS,
   }).lean();
-  if (existing && (existing as any).status === "paid") {
+  if (existing && String((existing as any).status) === "applied") {
     return { charged: false, reason: "already-charged" };
   }
 
@@ -822,8 +531,7 @@ export async function chargeA2PApprovalIfNeeded({
     String(meta["a2p_approval_charged"] || "").toLowerCase() === "true";
   if (alreadyInMeta) return { charged: false, reason: "already-charged" };
 
-  assertStripeWritesEnabled();
-  await createFinalizePayInvoice({
+  const event = await createFinalizePayInvoice({
     customerId: userDoc.stripeCustomerId,
     amountCents: A2P_APPROVAL_FEE_CENTS,
     description: `A2P 10DLC registration approval fee ($${A2P_APPROVAL_FEE_USD})`,
@@ -831,7 +539,9 @@ export async function chargeA2PApprovalIfNeeded({
     sourceId,
     userEmail: userDoc.email as string,
     userId: String(userDoc._id),
+    bucket: "a2p",
   });
+  await applyPaidBillingEvent(event);
 
   await stripe.customers.update(userDoc.stripeCustomerId, {
     metadata: { ...meta, a2p_approval_charged: "true" },

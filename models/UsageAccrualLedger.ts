@@ -23,7 +23,7 @@ const UsageAccrualLedgerSchema = new Schema<IUsageAccrualLedger>(
   {
     bucket: { type: String, required: true, enum: ["regular", "ai_voice"], index: true },
     userEmail: { type: String, required: true, lowercase: true, trim: true, index: true },
-    eventKey: { type: String, required: true, unique: true, index: true },
+    eventKey: { type: String, required: true, index: true },
     source: { type: String, required: true, index: true },
     origin: { type: String, enum: ["dialer", "regular", null], default: null, index: true },
     amountCents: { type: Number, required: true, default: 0 },
@@ -45,6 +45,10 @@ const UsageAccrualLedgerSchema = new Schema<IUsageAccrualLedger>(
 UsageAccrualLedgerSchema.index(
   { bucket: 1, userEmail: 1, status: 1, accruedAt: 1 },
   { name: "usage_accrual_bucket_user_status_accrued" },
+);
+UsageAccrualLedgerSchema.index(
+  { userEmail: 1, bucket: 1, eventKey: 1 },
+  { unique: true, name: "usage_accrual_tenant_bucket_event" },
 );
 
 export default models.UsageAccrualLedger ||

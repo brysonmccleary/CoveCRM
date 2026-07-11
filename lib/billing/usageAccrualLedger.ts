@@ -1,6 +1,7 @@
 import UsageAccrualLedger, {
   type UsageAccrualBucket,
 } from "@/models/UsageAccrualLedger";
+import type { ClientSession } from "mongoose";
 
 export type RecordUsageAccrualResult = {
   accrued: boolean;
@@ -26,7 +27,7 @@ export async function recordUsageAccrualOnce(args: {
 
   try {
     const existing = await UsageAccrualLedger.findOneAndUpdate(
-      { eventKey },
+      { userEmail: email, bucket: args.bucket, eventKey },
       {
         $setOnInsert: {
           bucket: args.bucket,
@@ -60,21 +61,23 @@ export async function consumeAccrualLedgerCents(args: {
   bucket: UsageAccrualBucket;
   userEmail: string;
   amountCents: number;
+  session?: ClientSession;
 }): Promise<number> {
   const email = String(args.userEmail || "").trim().toLowerCase();
   let remaining = Math.max(0, Math.round(Number(args.amountCents || 0)));
   if (!email || remaining <= 0) return 0;
 
-  const rows = await UsageAccrualLedger.find({
+  let query = UsageAccrualLedger.find({
     bucket: args.bucket,
     userEmail: email,
     status: "accrued",
     $expr: { $lt: ["$billedCents", "$amountCents"] },
   })
     .sort({ accruedAt: 1, createdAt: 1 })
-    .limit(500)
     .select("_id amountCents billedCents")
     .lean();
+  if (args.session) query = query.session(args.session) as any;
+  const rows = await query;
 
   let consumed = 0;
   for (const row of rows as any[]) {
@@ -93,6 +96,7 @@ export async function consumeAccrualLedgerCents(args: {
           ...(nextBilled >= amount ? { status: "billed", billedAt: new Date() } : {}),
         },
       },
+      args.session ? { session: args.session } : undefined,
     );
     if (Number((result as any)?.modifiedCount || 0) > 0) {
       consumed += take;

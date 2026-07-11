@@ -21,6 +21,12 @@ import BillingEvent from "@/models/BillingEvent";
 import User from "@/models/User";
 import UsageAccrualLedger from "@/models/UsageAccrualLedger";
 import { trackAiDialerSessionUsage } from "@/lib/billing/trackAiDialerSessionUsage";
+import {
+  applyPaidBillingEvent,
+  createFinalizePayInvoice,
+  recoverPaidBillingEvents,
+} from "@/lib/billing/trackUsage";
+import { validateStoredStandaloneInvoice, type ThresholdBucket } from "@/lib/billing/standaloneInvoice";
 import { stripe } from "@/lib/stripe";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
@@ -47,6 +53,7 @@ const MAX_BILLING_PER_RUN = 20;
 const STALE_RUNNING_SESSION_MS = 2 * 60 * 60 * 1000;
 const STALE_CHARGING_BILLING_MS = 30 * 60 * 1000;
 const MAX_STALE_CHARGING_RECOVERY_PER_RUN = 25;
+const MAX_PAID_APPLICATION_RECOVERY_PER_RUN = 25;
 const BUCKET_DRIFT_TOLERANCE_CENTS = 50;
 
 function currentAiDialerCronKey() {
@@ -123,6 +130,34 @@ async function logSharedStripeCustomers(): Promise<void> {
   }
 }
 
+async function markChargingEventForManualReview(event: any, reason: string) {
+  await BillingEvent.updateOne(
+    { _id: event._id, status: "charging" },
+    {
+      $set: {
+        needsManualReview: true,
+        manualReviewReason: reason,
+        manualReviewAt: new Date(),
+        updatedAt: new Date(),
+      },
+      $inc: { recoveryAttempts: 1 },
+    },
+  );
+  console.error("[BILLING][CHARGING-MANUAL-REVIEW]", {
+    billingEventId: String(event?._id || ""),
+    userEmail: event?.userEmail || "",
+    userId: event?.userId || "",
+    stripeCustomerId: event?.stripeCustomerId || "",
+    amountCents: event?.amountCents || 0,
+    source: event?.source || "",
+    sourceId: event?.sourceId || "",
+    bucket: event?.metadata?.bucket || "",
+    chargingStartedAt: event?.updatedAt || event?.createdAt || null,
+    recoveryAttempts: Number(event?.recoveryAttempts || 0) + 1,
+    reason,
+  });
+}
+
 function billingStatusFromInvoice(invoice: any): "paid" | "stripe_created" | "pending" {
   const status = String(invoice?.status || "").toLowerCase();
   if (status === "paid") return "paid";
@@ -130,55 +165,58 @@ function billingStatusFromInvoice(invoice: any): "paid" | "stripe_created" | "pe
   return "pending";
 }
 
-async function recoverStaleChargingBillingEvents(now: number): Promise<number> {
+export async function recoverStaleChargingBillingEvents(now: number): Promise<number> {
   const cutoff = new Date(now - STALE_CHARGING_BILLING_MS);
   const staleEvents = await BillingEvent.find({
     status: "charging",
     updatedAt: { $lt: cutoff },
   })
-    .select("_id idempotencyKey stripeInvoiceId")
+    .select("_id userId userEmail stripeCustomerId source sourceId amountCents description metadata stripeInvoiceId stripeInvoiceItemId idempotencyKey createdAt updatedAt recoveryAttempts")
     .limit(MAX_STALE_CHARGING_RECOVERY_PER_RUN)
     .lean();
 
   let recovered = 0;
   for (const event of staleEvents as any[]) {
     const invoiceId = String(event?.stripeInvoiceId || "").trim();
-    const idempotencyKey = String(event?.idempotencyKey || "").trim();
     try {
-      if (invoiceId) {
-        const invoice = await stripe.invoices.retrieve(invoiceId);
-        await BillingEvent.updateOne(
-          { _id: event._id, status: "charging" },
-          {
-            $set: {
-              status: billingStatusFromInvoice(invoice),
-              stripePaymentIntentId:
-                typeof (invoice as any)?.payment_intent === "string"
-                  ? (invoice as any).payment_intent
-                  : ((invoice as any)?.payment_intent?.id || undefined),
-              updatedAt: new Date(),
-            },
-          },
-        );
+      if (!invoiceId) {
+        await markChargingEventForManualReview(event, "ambiguous_invoice_creation");
       } else {
-        await BillingEvent.updateOne(
-          { _id: event._id, status: "charging" },
-          {
-            $set: {
-              status: "pending",
-              updatedAt: new Date(),
-              blockedReason: idempotencyKey
-                ? `stale_charging_reset_no_stripe_invoice:${idempotencyKey}`
-                : "stale_charging_reset_no_stripe_invoice",
-            },
-          },
-        );
+        const invoice = await validateStoredStandaloneInvoice(event, false);
+        const invoiceStatus = String((invoice as any)?.status || "").toLowerCase();
+        if (invoiceStatus === "paid") {
+          await validateStoredStandaloneInvoice(event, true);
+          await BillingEvent.updateOne(
+            { _id: event._id, status: "charging" },
+            { $set: { status: "paid", paidAt: new Date(), updatedAt: new Date() } },
+          );
+          await applyPaidBillingEvent({ ...event, status: "paid" });
+        } else if (invoiceStatus === "draft" || invoiceStatus === "open") {
+          const bucket = String(event?.metadata?.bucket || "") as ThresholdBucket;
+          if (!["regular", "ai_voice", "a2p"].includes(bucket)) {
+            throw new Error("invalid BillingEvent bucket");
+          }
+          const settled = await createFinalizePayInvoice({
+            customerId: String(event.stripeCustomerId || ""),
+            amountCents: Number(event.amountCents || 0),
+            description: String(event.description || ""),
+            source: event.source,
+            sourceId: String(event.sourceId || ""),
+            userEmail: String(event.userEmail || ""),
+            userId: String(event.userId || ""),
+            bucket,
+            metadata: event.metadata || {},
+          });
+          await applyPaidBillingEvent(settled);
+        } else {
+          throw new Error(`unsupported stored invoice status: ${invoiceStatus || "unknown"}`);
+        }
       }
       recovered += 1;
     } catch (err: any) {
+      await markChargingEventForManualReview(event, `stored_invoice_recovery_failed:${String(err?.message || err).slice(0, 500)}`).catch(() => undefined);
       console.warn("[AI WATCHDOG] stale BillingEvent recovery failed (non-blocking)", {
         billingEventId: String(event?._id || ""),
-        idempotencyKey,
         invoiceId,
         error: err?.message || err,
       });
@@ -341,9 +379,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await logSharedStripeCustomers();
 
   const now = Date.now();
-  const [recoveredBillingEvents, recoveredAiCallUsageLedgers] = await Promise.all([
+  const [recoveredBillingEvents, recoveredAiCallUsageLedgers, paidApplicationRecovery] = await Promise.all([
     recoverStaleChargingBillingEvents(now),
     recoverStaleChargingAiCallUsageLedgers(now),
+    recoverPaidBillingEvents(MAX_PAID_APPLICATION_RECOVERY_PER_RUN),
   ]);
   const bucketDrifts = await runBucketDriftCanary();
   const staleSessionCutoff = new Date(now - STALE_RUNNING_SESSION_MS);
@@ -418,7 +457,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     try {
-      await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail, endAt: stopAt });
+      await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail, endAt: stopAt, allowThresholdCharge: false });
       await AICallSession.updateOne(
         { _id: (sess as any)._id, finalBilledAt: null },
         { $set: { finalBilledAt: new Date() } }
@@ -455,7 +494,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sessEmail = String((sess as any).userEmail || "");
     if (!sessId || !sessEmail) continue;
     try {
-      await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail });
+      await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail, allowThresholdCharge: false });
     } catch (err: any) {
       console.warn("[AI WATCHDOG] session billing failed (non-blocking)", {
         sessionId: sessId,
@@ -485,7 +524,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const endAt: Date = (sess as any).stoppedAt || (sess as any).completedAt || new Date();
     if (!sessId || !sessEmail) continue;
     try {
-      await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail, endAt });
+      await trackAiDialerSessionUsage({ sessionId: sessId, userEmail: sessEmail, endAt, allowThresholdCharge: false });
       await AICallSession.updateOne(
         { _id: (sess as any)._id, finalBilledAt: null },
         { $set: { finalBilledAt: new Date() } }
@@ -546,6 +585,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       autoStopped,
       recoveredBillingEvents,
       recoveredAiCallUsageLedgers,
+      paidApplicationRecovery,
       bucketDrifts,
     });
   }
@@ -593,6 +633,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     autoStopped,
     recoveredBillingEvents,
     recoveredAiCallUsageLedgers,
+    paidApplicationRecovery,
     bucketDrifts,
   });
 }

@@ -281,7 +281,7 @@ describe("payout double-pay remediation", () => {
     expect(mockedStripe.transfers.create).not.toHaveBeenCalled();
   });
 
-  test("watchdog recovers stale charging BillingEvent and AI call usage ledgers", async () => {
+  test("watchdog sends ambiguous stale charging BillingEvents to manual review", async () => {
     const staleBillingEvent = {
       _id: "be1",
       idempotencyKey: "billing_ai_voice_call_CA123_8",
@@ -316,7 +316,10 @@ describe("payout double-pay remediation", () => {
     expect(mockedBillingEvent.updateOne).toHaveBeenCalledWith(
       { _id: "be1", status: "charging" },
       expect.objectContaining({
-        $set: expect.objectContaining({ status: "pending" }),
+        $set: expect.objectContaining({
+          needsManualReview: true,
+          manualReviewReason: "ambiguous_invoice_creation",
+        }),
       }),
     );
     expect(mockedAiCallUsageLedger.updateOne).toHaveBeenCalledWith(

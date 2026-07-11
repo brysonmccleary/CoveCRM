@@ -26,6 +26,8 @@ const config: Config = {
     "**/__tests__/payout-double-pay-remediation.test.ts",
     "**/__tests__/dialer-billing-rates.test.ts",
     "**/__tests__/billing-ledger-safety.test.ts",
+    "**/__tests__/billing-index-migration.test.ts",
+    "**/__tests__/billing-production-flows.test.ts",
   ],
   testTimeout: 15000,
   verbose: true,
