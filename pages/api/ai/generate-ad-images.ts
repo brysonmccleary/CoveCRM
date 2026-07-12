@@ -120,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const img = await openai.images.generate({
       model: "gpt-image-1",
       prompt,
-      size: "1024x1024",
+      size: "1536x1024",
     });
 
     const item = img.data?.[0];

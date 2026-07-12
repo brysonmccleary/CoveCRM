@@ -138,7 +138,7 @@ const LeadSchema = new Schema(
     // AI First-Call tracking
     sourceType: {
       type: String,
-      enum: ["csv_import", "facebook_lead", "form_submission", "api_live", "manual_live", "google_sheets_live", "doi_prospecting", "manual_import", "kayla_landing_page"],
+      enum: ["csv_import", "facebook_lead", "facebook_funnel", "form_submission", "api_live", "manual_live", "google_sheets_live", "vendor_api", "doi_prospecting", "manual_import", "kayla_landing_page"],
       default: "manual_live",
     },
     realTimeEligible: { type: Boolean, default: false },

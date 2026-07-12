@@ -225,6 +225,18 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   const theme = template.theme;
   const steps = template.steps;
   const currentStep = steps[stepIndex];
+  const step1BaseBullets =
+    funnelData.benefitBullets && funnelData.benefitBullets.length > 0
+      ? funnelData.benefitBullets
+      : template.reassurance;
+  // Veteran-targeted templates always show their government-endorsement disclaimer
+  // in addition to the bullets above (never either/or, and never duplicated if the
+  // reassurance fallback already includes the exact same line).
+  const step1Bullets =
+    template.governmentDisclaimer && !step1BaseBullets.includes(template.governmentDisclaimer)
+      ? [...step1BaseBullets, template.governmentDisclaimer]
+      : step1BaseBullets;
+  const submitButtonLabel = funnelData.ctaStrip || "Submit Request";
   const selectedState = normalizeStateCode(answers.state);
   const blockedState =
     !!selectedState &&
@@ -414,7 +426,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               cursor: submitting ? "wait" : !isA2PComplianceStub && !smsConsentGiven ? "not-allowed" : "pointer",
             }}
           >
-            {submitting ? "Submitting…" : "Submit Request"}
+            {submitting ? "Submitting…" : submitButtonLabel}
           </button>
         </div>
       );
@@ -574,13 +586,15 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
       </Head>
 
       <main style={{ minHeight: "100vh", background: theme.bg, fontFamily: "'Inter', system-ui, -apple-system, sans-serif", color: theme.text }}>
-        {funnelData.imageUrl && (
-          <div style={{ width: "100%", maxHeight: 260, overflow: "hidden" }}>
-            <img src={funnelData.imageUrl} alt="" style={{ width: "100%", height: 260, objectFit: "cover", display: "block" }} />
-          </div>
-        )}
-
         <section style={{ maxWidth: 540, margin: "0 auto", padding: "28px 18px 64px" }}>
+          {/* Lead-type title header — text-only, replaces the removed hero image */}
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <p style={{ margin: 0, fontSize: 20, fontWeight: 800, color: theme.text, letterSpacing: "0.01em" }}>
+              {template.displayName}
+            </p>
+            <div style={{ width: 48, height: 3, background: theme.accent, borderRadius: 2, margin: "10px auto 0" }} />
+          </div>
+
           {/* Agent / brand strip */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
             {(agent.logoUrl || agent.headshotUrl) ? (
@@ -642,10 +656,10 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
                   : (currentStep.subtitle || (stepIndex === 0 ? template.defaultSubheadline : ""))}
               </p>
 
-              {/* First-step reassurance bullets */}
-              {stepIndex === 0 && template.reassurance.length > 0 && (
+              {/* First-step reassurance bullets — campaign-specific benefitBullets when present, else template default */}
+              {stepIndex === 0 && step1Bullets.length > 0 && (
                 <div style={{ display: "grid", gap: 6, marginBottom: 18 }}>
-                  {template.reassurance.map((item) => (
+                  {step1Bullets.map((item) => (
                     <div key={item} style={{ fontSize: 13, color: theme.muted, display: "flex", alignItems: "flex-start", gap: 6 }}>
                       <span style={{ color: theme.accent, fontWeight: 700, flexShrink: 0 }}>✓</span>
                       <span>{item}</span>
@@ -691,7 +705,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
                     letterSpacing: "0.01em",
                   }}
                 >
-                  {submitting ? "Submitting…" : stepIndex === steps.length - 1 ? "Submit Request" : "Continue →"}
+                  {submitting ? "Submitting…" : stepIndex === steps.length - 1 ? submitButtonLabel : "Continue →"}
                 </button>
               )}
 

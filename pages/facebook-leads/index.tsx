@@ -1,6 +1,6 @@
 // pages/facebook-leads/index.tsx
 // Facebook Lead Manager — generate and manage insurance leads from Facebook Ads
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -2331,6 +2331,23 @@ function HubMetricsRow({ campaigns }: { campaigns: FBCampaign[] }) {
 }
 
 
+function metaErrorMessage(reason: string): string {
+  switch (reason) {
+    case "access_denied":
+      return "You canceled the Meta login before granting access. Click Connect Meta Account to try again.";
+    case "no_code":
+      return "Meta didn't return an authorization code. Please try connecting again.";
+    case "token_exchange":
+      return "Meta rejected the authorization request. Please try connecting again.";
+    case "server_error":
+      return "Something went wrong while connecting your Meta account. Please try again.";
+    default:
+      return reason
+        ? `Failed to connect your Meta account (${reason}). Please try again.`
+        : "Failed to connect your Meta account. Please try again.";
+  }
+}
+
 export default function FacebookLeadsPage() {
   const { status } = useSession();
   const router = useRouter();
@@ -2338,12 +2355,33 @@ export default function FacebookLeadsPage() {
   const [campaigns, setCampaigns] = useState<FBCampaign[]>([]);
   const [campaignFilter, setCampaignFilter] = useState<string>("");
   const [selectedLeadType, setSelectedLeadType] = useState<string>("final_expense");
+  const [metaNotice, setMetaNotice] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const metaQueryHandled = useRef(false);
 
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/auth/signin");
     }
   }, [status, router]);
+
+  useEffect(() => {
+    if (!router.isReady || metaQueryHandled.current) return;
+    const meta = typeof router.query.meta === "string" ? router.query.meta : "";
+    if (!meta) return;
+    metaQueryHandled.current = true;
+
+    const reasonParam = router.query.reason;
+    const reason = typeof reasonParam === "string" ? reasonParam : Array.isArray(reasonParam) ? reasonParam[0] || "" : "";
+
+    if (meta === "connected") {
+      setMetaNotice({ type: "success", message: "Meta account connected successfully." });
+    } else if (meta === "error") {
+      setMetaNotice({ type: "error", message: metaErrorMessage(reason) });
+    }
+
+    const { meta: _meta, reason: _reason, ...rest } = router.query;
+    router.replace({ pathname: router.pathname, query: rest }, undefined, { shallow: true });
+  }, [router.isReady, router.query.meta, router.query.reason]);
 
   const loadCampaigns = async () => {
     try {
@@ -2380,6 +2418,24 @@ export default function FacebookLeadsPage() {
   return (
     <DashboardLayout>
       <div className="mx-auto max-w-6xl space-y-8 p-4 sm:p-6">
+        {metaNotice && (
+          <div
+            className={`flex items-start justify-between gap-4 rounded-xl border p-4 text-sm ${
+              metaNotice.type === "success"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-100"
+                : "border-rose-500/30 bg-rose-500/10 text-rose-100"
+            }`}
+          >
+            <p>{metaNotice.message}</p>
+            <button
+              type="button"
+              onClick={() => setMetaNotice(null)}
+              className="shrink-0 text-xs opacity-70 hover:opacity-100"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <FacebookOnboardingFlow
           selectedLeadType={selectedLeadType}
           onLeadTypeChange={setSelectedLeadType}

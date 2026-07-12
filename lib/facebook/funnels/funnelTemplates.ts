@@ -25,6 +25,10 @@ export type FunnelStep =
 
 export type FunnelTemplate = {
   leadType: string;
+  displayName: string;
+  // Always appended after the step-1 bullets (benefitBullets or reassurance),
+  // regardless of which bullets are shown. Only set on veteran-targeted templates.
+  governmentDisclaimer?: string;
   theme: {
     bg: string;
     panel: string;
@@ -53,6 +57,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       button: "#2563eb",
       buttonText: "#ffffff",
     },
+    displayName: "Mortgage Protection Review",
     eyebrow: "Mortgage Protection Review",
     defaultHeadline: "See mortgage protection options for your family",
     defaultSubheadline: "Answer a few quick questions so a licensed agent can review options for your state.",
@@ -82,6 +87,8 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       button: "#b91c1c",
       buttonText: "#ffffff",
     },
+    displayName: "Veteran Insurance Review",
+    governmentDisclaimer: "No government endorsement implied",
     eyebrow: "Private Coverage Review",
     defaultHeadline: "Veterans and families can review private coverage options",
     defaultSubheadline: "Respectful, private-market options. Not affiliated with the VA or any government agency.",
@@ -112,6 +119,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       button: "#ca8a04",
       buttonText: "#ffffff",
     },
+    displayName: "Final Expense Review",
     eyebrow: "Final Expense Review",
     defaultHeadline: "Help protect your family from final expenses",
     defaultSubheadline: "Simple senior-friendly review with no obligation.",
@@ -141,6 +149,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       button: "#1d4ed8",
       buttonText: "#ffffff",
     },
+    displayName: "Trucker Insurance Review",
     eyebrow: "CDL Driver Coverage Review",
     defaultHeadline: "Coverage options for truck drivers and families",
     defaultSubheadline: "Simple review built for busy drivers.",
@@ -170,6 +179,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       button: "#1d4ed8",
       buttonText: "#ffffff",
     },
+    displayName: "IUL / Cash Value Life Insurance Review",
     eyebrow: "IUL Education Review",
     defaultHeadline: "Explore IUL options with a licensed professional",
     defaultSubheadline: "Educational review only. No hype, no guarantees.",
@@ -199,6 +209,8 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       button: "#b91c1c",
       buttonText: "#ffffff",
     },
+    displayName: "Veteran Mortgage Protection Review",
+    governmentDisclaimer: "No government endorsement implied",
     eyebrow: "Veteran Mortgage Protection Review",
     defaultHeadline: "Protect your family's home — built for those who served",
     defaultSubheadline: "Private-market mortgage protection for veterans. Not affiliated with the VA.",
@@ -230,6 +242,8 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       button: "#1d4ed8",
       buttonText: "#ffffff",
     },
+    displayName: "Veteran IUL Review",
+    governmentDisclaimer: "No government endorsement implied",
     eyebrow: "Veteran IUL Review",
     defaultHeadline: "IUL options designed to honor your service and secure your legacy",
     defaultSubheadline: "Educational review only. Licensed professional. Not affiliated with the VA.",
@@ -260,6 +274,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       button: "#1d4ed8",
       buttonText: "#ffffff",
     },
+    displayName: "Trucker Mortgage Protection Review",
     eyebrow: "Trucker Mortgage Protection Review",
     defaultHeadline: "Protect your family's home — built for CDL drivers",
     defaultSubheadline: "Simple mortgage protection review for truck drivers and their families.",
@@ -290,6 +305,7 @@ export const FUNNEL_TEMPLATES: Record<string, FunnelTemplate> = {
       button: "#1d4ed8",
       buttonText: "#ffffff",
     },
+    displayName: "Trucker IUL Review",
     eyebrow: "Trucker IUL Review",
     defaultHeadline: "Build cash value while you haul — IUL options for CDL drivers",
     defaultSubheadline: "Educational IUL review built for truck drivers and families.",
