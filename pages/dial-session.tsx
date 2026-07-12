@@ -1693,11 +1693,11 @@ export default function DialSession() {
     }
   };
 
-  const persistDisposition = async (leadId: string, label: string) => {
+  const persistDisposition = async (leadId: string, label: string, extra?: Record<string, any>) => {
     // ❌ Do NOT move folders or touch disposition endpoints for "No Answer"
     if (label !== "No Answer") {
       const candidates: Array<{ url: string; body: any; required?: boolean }> = [
-        { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
+        { url: "/api/leads/set-disposition", body: { leadId, disposition: label, ...extra } },
         { url: "/api/leads/update", body: { leadId, update: { disposition: label } } },
       ];
       for (const c of candidates) {
@@ -1731,7 +1731,7 @@ export default function DialSession() {
     }
   };
 
-  const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "Bad Number") => {
+  const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "Bad Number", extra?: Record<string, any>) => {
     const targetLead = activeLead;
     const isInboundOverlayDisposition = inboundOverlayActive;
 
@@ -1767,7 +1767,7 @@ export default function DialSession() {
       // Log call outcome tied to this disposition (once)
       await logCallOutcome({ statusOverride: label, reason: reasonKey });
 
-      await persistDisposition(targetLead.id, label);
+      await persistDisposition(targetLead.id, label, extra);
 
       setHistory((prev) => [{ kind: "text", text: `🏷️ Disposition: ${label}` }, ...prev]);
       setStatus(`Disposition saved: ${label}`);
@@ -2604,6 +2604,14 @@ export default function DialSession() {
               await handleDisposition("Sold");
             } catch (e: any) {
               toast.error(e?.message || "Failed to record sale");
+            }
+          }}
+          onMarkPending={async () => {
+            setShowSaleModal(false);
+            try {
+              await handleDisposition("Sold", { premiumPending: true });
+            } catch (e: any) {
+              toast.error(e?.message || "Failed to mark lead as Sold");
             }
           }}
           onCancel={() => setShowSaleModal(false)}

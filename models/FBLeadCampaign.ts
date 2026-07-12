@@ -83,6 +83,10 @@ const FBLeadCampaignSchema = new Schema(
     totalSpend: { type: Number, default: 0 },
     totalLeads: { type: Number, default: 0 },
     totalClicks: { type: Number, default: 0 },
+    // Rolling window snapshot from the most recent sync (NOT lifetime — see totalSpend/totalLeads above).
+    // Populated by syncAdInsights.ts. Kept separate so window and lifetime numbers never collide.
+    windowSpend7d: { type: Number, default: 0 },
+    windowLeads7d: { type: Number, default: 0 },
     appointments: { type: Number, default: 0 },
     sales: { type: Number, default: 0 },
     revenue: { type: Number, default: 0 }, // legacy estimated; not used for ROAS

@@ -19,6 +19,11 @@ interface SaleModalProps {
     holdbackRevenue: number;
   }) => void;
   onCancel: () => void;
+  // Only offered on a fresh "mark as Sold" flow (not when editing an already-recorded sale).
+  // Lets the agent confirm the sale happened without knowing the premium yet — the lead moves to
+  // Sold immediately but is excluded from sales counts/close-rate/cost-per-sale/ROAS until the
+  // real premium is entered later via this same modal.
+  onMarkPending?: () => void;
 }
 
 export default function SaleModal({
@@ -27,10 +32,12 @@ export default function SaleModal({
   existingComp,
   onSave,
   onCancel,
+  onMarkPending,
 }: SaleModalProps) {
   const [ap, setAp] = useState<string>(existingAP ? String(existingAP) : "");
   const [comp, setComp] = useState<number>(existingComp ?? defaultComp);
   const [saving, setSaving] = useState(false);
+  const [markingPending, setMarkingPending] = useState(false);
   const [error, setError] = useState("");
 
   const apNum = parseFloat(ap) || 0;
@@ -60,6 +67,17 @@ export default function SaleModal({
       onSave({ annualPremium: apNum, compPercentage: comp, grossCommissionRevenue: gross, advanceRevenue: advance, holdbackRevenue: holdback });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleMarkPending = async () => {
+    if (!onMarkPending) return;
+    setError("");
+    setMarkingPending(true);
+    try {
+      onMarkPending();
+    } finally {
+      setMarkingPending(false);
     }
   };
 
@@ -146,12 +164,22 @@ export default function SaleModal({
           </button>
           <button
             onClick={handleSave}
-            disabled={saving || !apNum || apNum <= 0}
+            disabled={saving || markingPending || !apNum || apNum <= 0}
             className="flex-1 px-4 py-2.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-sm font-semibold transition disabled:opacity-40"
           >
             {saving ? "Saving…" : "Save Sale"}
           </button>
         </div>
+
+        {onMarkPending && !existingAP && (
+          <button
+            onClick={handleMarkPending}
+            disabled={saving || markingPending}
+            className="w-full text-xs text-gray-400 hover:text-gray-300 underline disabled:opacity-50"
+          >
+            {markingPending ? "Marking Sold…" : "Not sure yet — mark Sold, premium pending"}
+          </button>
+        )}
       </div>
     </div>
   );

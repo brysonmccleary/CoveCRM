@@ -1915,6 +1915,25 @@ export default function LeadsPanel() {
               }
             } catch {}
           }}
+          onMarkPending={async () => {
+            const leadId = String(saleModalLead._id || "");
+            setSaleModalLead(null);
+            try {
+              const res = await fetch("/api/disposition-lead", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId, newFolderName: "Sold", premiumPending: true }),
+              });
+              const data = await res.json().catch(() => ({} as any));
+              if (data?.success) {
+                setLeads((prev) => prev.filter((l) => l._id !== leadId));
+                setPreviewLead(null);
+                await fetchFolders();
+              } else {
+                toast.error(data?.message || "Failed to mark lead as Sold");
+              }
+            } catch {}
+          }}
           onCancel={() => setSaleModalLead(null)}
         />
       )}

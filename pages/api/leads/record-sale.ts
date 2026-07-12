@@ -6,6 +6,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
+import { trackOutcomeFromDisposition } from "@/lib/facebook/trackCRMOutcome";
 
 const VALID_COMP_PERCENTAGES = [80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145];
 const ADVANCE_PERCENTAGE = 0.75;
@@ -37,8 +38,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
 
-  const lead = await Lead.findOne({ _id: leadId, userEmail }).select("_id").lean();
+  const lead = await Lead.findOne({ _id: leadId, userEmail })
+    .select("_id status revenuePending")
+    .lean();
   if (!lead) return res.status(404).json({ error: "Lead not found" });
+
+  const wasRevenuePending = Boolean((lead as any)?.revenuePending);
 
   const grossCommissionRevenue = Math.round(ap * (comp / 100) * 100) / 100;
   const advanceRevenue = Math.round(grossCommissionRevenue * ADVANCE_PERCENTAGE * 100) / 100;
@@ -54,9 +59,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         grossCommissionRevenue,
         advanceRevenue,
         holdbackRevenue,
+        revenuePending: false,
       },
     }
   );
+
+  // This sale was previously deferred (marked Sold with premium pending) — now that a real
+  // premium is recorded, perform the sales-count increment that trackCRMOutcome.ts skipped
+  // at the time. Only fires on the pending→resolved transition, never on a routine edit of an
+  // already-resolved sale's premium amount.
+  if (wasRevenuePending && String((lead as any)?.status || "").toLowerCase() === "sold") {
+    trackOutcomeFromDisposition(leadId, "Sold").catch((err: any) => {
+      console.warn("[record-sale] deferred trackOutcomeFromDisposition failed:", err?.message);
+    });
+  }
 
   return res.status(200).json({
     ok: true,

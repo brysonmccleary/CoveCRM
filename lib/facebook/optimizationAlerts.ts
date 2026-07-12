@@ -1,5 +1,6 @@
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import { sendEmail } from "@/lib/email";
+import { hasEnoughData } from "@/lib/facebook/verdictGate";
 
 type CampaignAd = {
   metaAdId?: string;
@@ -60,12 +61,15 @@ export async function evaluateFacebookOptimizationAlerts(campaignId: string) {
     const spend = Number(ad.spend || 0);
     const leads = Number(ad.leads || 0);
     const cpl = Number(ad.cpl || 0);
-    if (spend <= 10) return;
+
+    // Same minimum-data bar as every other verdict in the system (5+ leads, $50+ spend).
+    // No per-ad launch timestamp exists yet, so the age check is skipped here (see verdictGate.ts).
+    if (!hasEnoughData({ leads, spend })) return;
 
     let type: "winner_candidate" | "loser_candidate" | null = null;
     if (leads >= 3 && cpl > 0 && cpl <= campaignAvgCpl * 0.8) {
       type = "winner_candidate";
-    } else if (leads === 0 || (cpl > 0 && cpl >= campaignAvgCpl * 1.35)) {
+    } else if (cpl > 0 && cpl >= campaignAvgCpl * 1.35) {
       type = "loser_candidate";
     }
     if (!type) return;

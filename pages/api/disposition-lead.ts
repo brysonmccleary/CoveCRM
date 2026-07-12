@@ -6,6 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import mongoose from "mongoose";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
+import FBLeadEntry from "@/models/FBLeadEntry";
 import { initSocket } from "@/lib/socket";
 import { folderNameForDisposition } from "@/lib/dispositionToFolder";
 import { isSystemFolderName } from "@/lib/systemFolders";
@@ -95,6 +96,10 @@ export default async function handler(
     body.newStatus ??
     "";
 
+  // Only meaningful for a "Sold" transition on a Facebook-attributed lead with no premium yet —
+  // explicitly acknowledges the sale is real but the premium amount isn't known yet.
+  const premiumPending = body.premiumPending === true;
+
   const leadId = String(leadIdRaw || "").trim();
   const rawName = String(nameRaw || "").trim();
 
@@ -123,13 +128,44 @@ export default async function handler(
 
     await mongoSession.withTransaction(async () => {
       const existing = await Lead.findOne({ _id: leadId, userEmail })
-        .select({ _id: 1, folderId: 1, status: 1, soldAt: 1 })
+        .select({ _id: 1, folderId: 1, status: 1, soldAt: 1, grossCommissionRevenue: 1, sourceType: 1 })
         .session(mongoSession)
-        .lean<{ _id: any; folderId?: any; status?: string; soldAt?: Date | null } | null>();
+        .lean<{ _id: any; folderId?: any; status?: string; soldAt?: Date | null; grossCommissionRevenue?: number | null; sourceType?: string } | null>();
 
       if (!existing) throw new Error("Lead not found.");
 
       previousStatus = existing.status;
+
+      // Server-side premium enforcement for Facebook-attributed "Sold" transitions. The 3 web UI
+      // paths already gate this client-side via SaleModal, but this endpoint accepts calls from
+      // any authenticated caller (web session or mobile JWT) with no dependency on the UI — so the
+      // requirement has to live here to actually hold.
+      let revenuePendingUpdate: boolean | undefined;
+      if (desiredLower === "sold") {
+        const fbEntry = await FBLeadEntry.findOne({ crmLeadId: leadId })
+          .select({ _id: 1 })
+          .session(mongoSession)
+          .lean();
+        const isFacebookAttributed =
+          !!fbEntry ||
+          ["facebook_lead", "facebook_funnel"].includes(String(existing.sourceType || "").toLowerCase());
+
+        if (isFacebookAttributed) {
+          const hasRealPremium = Number(existing.grossCommissionRevenue || 0) > 0;
+          if (hasRealPremium) {
+            revenuePendingUpdate = false;
+          } else if (premiumPending) {
+            revenuePendingUpdate = true;
+          } else {
+            throw Object.assign(
+              new Error(
+                "This is a Facebook lead — enter the annual premium (Record Sale) before marking it Sold, or explicitly mark the premium as pending."
+              ),
+              { status: 400 }
+            );
+          }
+        }
+      }
 
       if (existing.folderId) {
         const from = await Folder.findOne({ _id: existing.folderId, userEmail })
@@ -218,6 +254,9 @@ export default async function handler(
             now,
           }),
         );
+      }
+      if (revenuePendingUpdate !== undefined) {
+        setFields.revenuePending = revenuePendingUpdate;
       }
 
       const write = await Lead.updateOne(

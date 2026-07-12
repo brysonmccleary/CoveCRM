@@ -2,6 +2,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import LeadOutcomeEvent from "@/models/LeadOutcomeEvent";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
+import FBLeadCampaign from "@/models/FBLeadCampaign";
 import { getAttributionConfidence, AttributionConfidence } from "@/lib/analytics/attributionConfidence";
 
 type MetricBucket = {
@@ -33,6 +34,10 @@ type MetricBucket = {
   dncRate: number;
   costPerBooked: number;
   costPerSale: number;
+  // Real revenue only (FBLeadCampaign.totalGrossRevenue — agent-entered commission), never the
+  // CRMOutcome/AdMetricsDaily flat per-lead-type estimate. 0 until a real sale is recorded.
+  revenue: number;
+  roas: number;
   confidence: AttributionConfidence;
 };
 
@@ -80,6 +85,8 @@ function emptyBucket(key: string, fields: Partial<MetricBucket>): MetricBucket {
     dncRate: 0,
     costPerBooked: 0,
     costPerSale: 0,
+    revenue: 0,
+    roas: 0,
     confidence: "insufficient_data",
     ...fields,
   };
@@ -104,6 +111,7 @@ function finalize(bucket: MetricBucket): MetricBucket {
   bucket.dncRate = leads ? bucket.optOut / leads : 0;
   bucket.costPerBooked = bucket.bookedAppointments && bucket.spend ? bucket.spend / bucket.bookedAppointments : 0;
   bucket.costPerSale = bucket.sold && bucket.spend ? bucket.spend / bucket.sold : 0;
+  bucket.roas = bucket.spend > 0 && bucket.revenue > 0 ? bucket.revenue / bucket.spend : 0;
   bucket.confidence = getAttributionConfidence({
     leads,
     spend: bucket.spend,
@@ -187,6 +195,14 @@ export async function buildFacebookAttributionRollups(userEmail: string) {
     spendByCampaign.set(cid, prev);
   }
 
+  // Real revenue only — FBLeadCampaign.totalGrossRevenue (agent-entered commission via
+  // scoreAdPerformance.ts), never the CRMOutcome/AdMetricsDaily flat estimate.
+  const revenueCampaigns = await FBLeadCampaign.find({ userEmail: email }).select("_id totalGrossRevenue").lean() as any[];
+  const revenueByCampaign = new Map<string, number>();
+  for (const c of revenueCampaigns) {
+    revenueByCampaign.set(String(c._id), Number(c.totalGrossRevenue || 0));
+  }
+
   const maps = {
     byState: new Map<string, MetricBucket>(),
     byLeadType: new Map<string, MetricBucket>(),
@@ -230,10 +246,15 @@ export async function buildFacebookAttributionRollups(userEmail: string) {
   }
 
   for (const bucket of maps.byCampaign.values()) {
-    const spend = spendByCampaign.get(clean(bucket.campaignId || bucket.key));
+    const cid = clean(bucket.campaignId || bucket.key);
+    const spend = spendByCampaign.get(cid);
     if (spend) {
       bucket.spend = spend.spend;
       bucket.firstSeenAt = firstDate(bucket.firstSeenAt, spend.firstDate);
+    }
+    const revenue = revenueByCampaign.get(cid);
+    if (revenue) {
+      bucket.revenue = revenue;
     }
   }
 

@@ -6,8 +6,9 @@ import CRMOutcome from "@/models/CRMOutcome";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
 import FBLeadEntry from "@/models/FBLeadEntry";
 import Lead from "@/models/Lead";
+import { hasEnoughData } from "@/lib/facebook/verdictGate";
 
-export type PerformanceClass = "SCALE" | "DUPLICATE_TEST" | "MONITOR" | "FIX" | "PAUSE";
+export type PerformanceClass = "SCALE" | "DUPLICATE_TEST" | "MONITOR" | "FIX" | "PAUSE" | "LEARNING";
 
 export interface ScoreResult {
   score: number;
@@ -226,6 +227,13 @@ export async function scoreAdPerformance(campaignId: string): Promise<ScoreResul
     costPerAppointment: costPerAppointmentRaw,
     closeRate: closeRateRaw,
   });
+
+  // Below the minimum sample size, a SCALE/FIX/PAUSE verdict is statistical noise, not signal.
+  // Report LEARNING instead — the raw score is still computed/returned for internal callers,
+  // but nothing should ever render it as a pass/fail verdict until there's enough data.
+  if (!hasEnoughData({ leads: totalLeads, spend: totalSpend, createdAt: (campaign as any).createdAt })) {
+    result.performanceClass = "LEARNING";
+  }
 
   const optOutRate = totalLeads > 0 ? (optOuts / totalLeads) * 100 : 0;
   const badNumberRate = totalLeads > 0 ? (badNumbers / totalLeads) * 100 : 0;

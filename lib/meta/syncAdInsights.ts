@@ -284,14 +284,17 @@ export async function syncAdInsights(
     syncedDays++;
   }
 
-  // ✅ Update FBLeadCampaign aggregate metrics so campaign cards show real synced data
+  // ✅ Update FBLeadCampaign aggregate metrics so campaign cards show real synced data.
+  //
+  // IMPORTANT: totalSpend/totalLeads/totalClicks/totalImpressions/cpl/cpm/cpc/ctr are LIFETIME
+  // numbers. They must NEVER be derived from `totals` (the current sync's window-only sum) —
+  // doing so silently truncates a campaign's history down to whatever window this particular
+  // sync call requested (7/14/30/90 days), every time it runs. Lifetime numbers are recomputed
+  // here by aggregating every AdMetricsDaily row ever written for the campaign, since each day's
+  // row is durably upserted (never deleted) across all past syncs.
   const syncedAt = new Date();
   for (const [cid, totals] of campaignTotals.entries()) {
     try {
-      const aggCpl = totals.leads > 0 && totals.spend > 0 ? totals.spend / totals.leads : 0;
-      const aggCpm = totals.spendForRatios > 0 ? totals.weightedCpm / totals.spendForRatios : 0;
-      const aggCpc = totals.clicks > 0 ? totals.weightedCpc / totals.clicks : 0;
-      const aggCtr = totals.impressions > 0 ? totals.weightedCtr / totals.impressions : 0;
       const campaignDoc = userCampaigns.find((campaign) => String((campaign as any)._id) === cid);
       const currentAds = Array.isArray((campaignDoc as any)?.ads) ? [ ...(campaignDoc as any).ads ] : [];
       const perAdTotals = campaignAdTotals.get(cid) || new Map();
@@ -307,16 +310,66 @@ export async function syncAdInsights(
           cpl: Math.round(adTotals.cpl * 100) / 100,
         };
       });
+
+      // Lifetime aggregate — every AdMetricsDaily row for this campaign, not just this sync's window.
+      const lifetimeAgg = await AdMetricsDaily.aggregate([
+        { $match: { campaignId: new Types.ObjectId(cid) } },
+        {
+          $group: {
+            _id: null,
+            spend: { $sum: "$spend" },
+            leads: { $sum: "$leads" },
+            clicks: { $sum: "$clicks" },
+            impressions: { $sum: "$impressions" },
+          },
+        },
+      ]);
+      const lifetime = lifetimeAgg[0] || { spend: 0, leads: 0, clicks: 0, impressions: 0 };
+      const lifetimeSpend = Math.round((Number(lifetime.spend) || 0) * 100) / 100;
+      const lifetimeLeads = Number(lifetime.leads) || 0;
+      const lifetimeClicks = Number(lifetime.clicks) || 0;
+      const lifetimeImpressions = Number(lifetime.impressions) || 0;
+
+      const storedSpend = Number((campaignDoc as any)?.totalSpend || 0);
+      const storedLeads = Number((campaignDoc as any)?.totalLeads || 0);
+
+      // Guard: a fresh lifetime aggregate should never come in lower than what's already stored.
+      // If it does, AdMetricsDaily rows are missing (e.g. a gap in sync history) — warn and keep
+      // the stored value rather than silently shrinking the campaign's real totals.
+      let finalSpend = lifetimeSpend;
+      if (lifetimeSpend < storedSpend) {
+        console.warn(
+          `[syncAdInsights] Lifetime totalSpend aggregate ($${lifetimeSpend}) is LOWER than stored value ($${storedSpend}) for campaign ${cid}. AdMetricsDaily rows may be missing — keeping stored value instead of shrinking it.`
+        );
+        finalSpend = storedSpend;
+      }
+      let finalLeads = lifetimeLeads;
+      if (lifetimeLeads < storedLeads) {
+        console.warn(
+          `[syncAdInsights] Lifetime totalLeads aggregate (${lifetimeLeads}) is LOWER than stored value (${storedLeads}) for campaign ${cid}. AdMetricsDaily rows may be missing — keeping stored value instead of shrinking it.`
+        );
+        finalLeads = storedLeads;
+      }
+
+      const lifetimeCpl = finalLeads > 0 && finalSpend > 0 ? finalSpend / finalLeads : 0;
+      const lifetimeCpm = lifetimeImpressions > 0 && finalSpend > 0 ? (finalSpend / lifetimeImpressions) * 1000 : 0;
+      const lifetimeCpc = lifetimeClicks > 0 && finalSpend > 0 ? finalSpend / lifetimeClicks : 0;
+      const lifetimeCtr = lifetimeImpressions > 0 ? lifetimeClicks / lifetimeImpressions : 0;
+
       await FBLeadCampaign.findByIdAndUpdate(cid, {
         $set: {
-          totalSpend: Math.round(totals.spend * 100) / 100,
-          totalLeads: totals.leads,
-          totalClicks: totals.clicks,
-          totalImpressions: totals.impressions,
-          cpl: Math.round(aggCpl * 100) / 100,
-          cpm: Math.round(aggCpm * 100) / 100,
-          cpc: Math.round(aggCpc * 100) / 100,
-          ctr: Math.round(aggCtr * 10000) / 10000,
+          totalSpend: finalSpend,
+          totalLeads: finalLeads,
+          totalClicks: lifetimeClicks,
+          totalImpressions: lifetimeImpressions,
+          cpl: Math.round(lifetimeCpl * 100) / 100,
+          cpm: Math.round(lifetimeCpm * 100) / 100,
+          cpc: Math.round(lifetimeCpc * 100) / 100,
+          ctr: Math.round(lifetimeCtr * 10000) / 10000,
+          // Window snapshot — this sync call's requested window only (e.g. last 7/30 days).
+          // Kept separate from the lifetime fields above; never conflate the two.
+          windowSpend7d: Math.round(totals.spend * 100) / 100,
+          windowLeads7d: totals.leads,
           metaLastSyncedAt: syncedAt,
           metaSyncStatus: "synced",
           metaSyncError: "",

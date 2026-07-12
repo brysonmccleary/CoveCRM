@@ -1778,6 +1778,26 @@ export default function LeadProfileDial() {
               setDisposition("");
             }
           }}
+          onMarkPending={async () => {
+            setShowSaleModal(false);
+            const leadId = String(lead._id || lead.id || "").trim();
+            setSavingDisposition(true);
+            try {
+              const res = await fetch("/api/disposition-lead", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId, newFolderName: "Sold", premiumPending: true }),
+              });
+              const data = await res.json().catch(() => ({} as any));
+              if (!res.ok || !data?.success) throw new Error(data?.message || "Failed to move lead");
+              toast.success(`Moved to ${data?.folderName || "Sold"} — premium pending`);
+            } catch (e: any) {
+              toast.error(e?.message || "Failed to mark lead as Sold");
+            } finally {
+              setSavingDisposition(false);
+              setDisposition("");
+            }
+          }}
           onCancel={() => { setShowSaleModal(false); setDisposition(""); }}
         />
       )}

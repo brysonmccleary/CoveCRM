@@ -38,6 +38,10 @@ type RollupRow = {
   dncRate: number;
   costPerBooked: number;
   costPerSale: number;
+  // Real revenue only (agent-entered commission via FBLeadCampaign.totalGrossRevenue) — never
+  // the CRMOutcome/AdMetricsDaily flat per-lead-type estimate. 0 until a real sale is recorded.
+  revenue: number;
+  roas: number;
   confidence: Confidence;
 };
 
@@ -197,6 +201,8 @@ function aggregateRows(rows: RollupRow[], keyFor: (row: RollupRow) => string, pa
       dncRate: 0,
       costPerBooked: 0,
       costPerSale: 0,
+      revenue: 0,
+      roas: 0,
       confidence: "insufficient_data",
       ...patch(row),
     };
@@ -209,6 +215,7 @@ function aggregateRows(rows: RollupRow[], keyFor: (row: RollupRow) => string, pa
     prev.optOut += row.optOut || 0;
     prev.contactConnected += row.contactConnected || 0;
     prev.spend += row.spend || 0;
+    prev.revenue += row.revenue || 0;
     if (confidenceRank[row.confidence] > confidenceRank[prev.confidence]) prev.confidence = row.confidence;
     grouped.set(key, prev);
   }
@@ -220,6 +227,7 @@ function aggregateRows(rows: RollupRow[], keyFor: (row: RollupRow) => string, pa
     soldRate: row.leads ? row.sold / row.leads : 0,
     badNumberRate: row.leads ? row.badNumber / row.leads : 0,
     dncRate: row.leads ? row.optOut / row.leads : 0,
+    roas: row.spend > 0 && row.revenue > 0 ? row.revenue / row.spend : 0,
   }));
 }
 
@@ -272,6 +280,7 @@ function totalFrom(rows: RollupRow[]) {
       acc.optOut += row.optOut || 0;
       acc.notInterested += row.notInterested || 0;
       acc.spend += row.spend || 0;
+      acc.revenue += row.revenue || 0;
       if (confidenceRank[row.confidence] > confidenceRank[acc.confidence]) acc.confidence = row.confidence;
       return acc;
     },
@@ -284,6 +293,7 @@ function totalFrom(rows: RollupRow[]) {
       optOut: 0,
       notInterested: 0,
       spend: 0,
+      revenue: 0,
       confidence: "insufficient_data" as Confidence,
     }
   );
@@ -484,6 +494,8 @@ export default function AdCommandCenterPage() {
   const bookedRate = totals.leads ? totals.booked / totals.leads : 0;
   const soldRate = totals.leads ? totals.sold / totals.leads : 0;
   const noShowRate = totals.booked ? totals.noShows / totals.booked : 0;
+  // Real revenue only — never CRMOutcome's flat per-lead-type estimate.
+  const roas = totals.spend > 0 && totals.revenue > 0 ? totals.revenue / totals.spend : 0;
   const syncEndpoint = metaStatus?.adAccountId ? `/act_${metaStatus.adAccountId}/insights` : "/act_{adAccountId}/insights";
   const statusCampaign =
     prepared.selectedCampaign ||
@@ -623,12 +635,13 @@ export default function AdCommandCenterPage() {
             </select>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
             <TopCard label="Total Spend" value={loading ? "--" : money(totals.spend)} helper={prepared.selectedCampaign ? "Spend for this campaign." : "Spend across campaigns."} />
             <TopCard label="Total Leads" value={loading ? "--" : int(totals.leads)} helper="Tracked from attributed leads." />
             <TopCard label="Overall Booked %" value={loading ? "--" : pct(bookedRate)} helper="Booked calls divided by leads." />
             <TopCard label="Overall Sold %" value={loading ? "--" : pct(soldRate)} helper="Sales divided by leads." />
             <TopCard label="Overall No-show %" value={loading ? "--" : pct(noShowRate)} helper="No-shows divided by booked calls." />
+            <TopCard label="ROAS" value={loading ? "--" : roas > 0 ? `${roas.toFixed(2)}x` : "—"} helper="Real revenue ÷ spend (agent-entered commission only)." />
           </div>
 
           <div className="flex flex-wrap gap-2 rounded-lg border border-white/10 bg-[#0f172a] p-2">

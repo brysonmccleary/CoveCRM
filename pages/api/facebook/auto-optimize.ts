@@ -3,12 +3,15 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
+import AdMetricsDaily from "@/models/AdMetricsDaily";
 import User from "@/models/User";
 import CampaignActionLog from "@/models/CampaignActionLog";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import { sendEmail } from "@/lib/email";
 import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
+import { scoreAdPerformance } from "@/lib/facebook/scoreAdPerformance";
+import { hasEnoughData } from "@/lib/facebook/verdictGate";
 
 type Summary = {
   processed: number;
@@ -87,113 +90,98 @@ const buildUserBudgetState = (campaigns: any[]): Map<string, UserBudgetState> =>
   return map;
 };
 
-type OutcomeMetrics = {
-  appointments: number;
-  answered: number;
-  notInterested: number;
-  noResponse: number;
-  sales: number;
-  totalLeads: number;
+// NOTE: appointments/sales/costPerAppointment/costPerSale/closeRate/contactRate/leadQualityScore/
+// performanceScore are no longer computed here. They used to be recomputed from
+// campaign.leadOutcomeStats/outcomeStats — fields that are never written anywhere in the codebase,
+// so this recomputation always produced zeros and silently overwrote the correct values that
+// lib/facebook/scoreAdPerformance.ts (the real, CRMOutcome-backed pipeline) had just written.
+// scoreAdPerformance is now the single source of truth for those numbers; see the per-campaign
+// loop below, which calls it directly instead.
+
+const TREND_WINDOW_DAYS = 7;
+
+type CampaignTrend = {
+  currentSpend: number;
+  currentLeads: number;
+  currentClicks: number;
+  currentImpressions: number;
+  priorSpend: number;
+  priorLeads: number;
+  priorClicks: number;
+  priorImpressions: number;
+  currentCpl: number;
+  priorCpl: number;
+  currentCtr: number;
+  priorCtr: number;
 };
 
-function getOutcomeMetrics(campaign: any): OutcomeMetrics {
-  const stats =
-    (campaign?.leadOutcomeStats as Record<string, any>) ||
-    (campaign?.outcomeStats as Record<string, any>) ||
-    {};
-  const appointments =
-    Number(
-      stats.bookedAppointments ??
-        stats.booked ??
-        stats.appointments ??
-        stats.scheduled ??
-        0
-    ) || 0;
-  const answered = Number(stats.answered ?? stats.answer ?? stats.contacts ?? 0) || 0;
-  const notInterested = Number(stats.notInterested ?? stats.disqualified ?? 0) || 0;
-  const noResponse = Number(stats.noResponse ?? stats.unreached ?? 0) || 0;
-  const sales = Number(stats.sales ?? stats.closed ?? stats.wins ?? 0) || 0;
-  const totalLeads =
-    Number(campaign?.totalLeads ?? 0) ||
-    appointments + answered + notInterested + noResponse;
+// Real week-over-week trend, built from AdMetricsDaily's daily rows — the previous version of
+// this compared campaign.cpl/ctr/leadsThisWeek against campaign.previousAvgCpl/avgCtr/leadsLastWeek,
+// fields that are never written anywhere in the codebase. Every fallback silently resolved to the
+// current value itself, making 3 of the 4 fatigue signals mathematically always false. This
+// version reads real prior-7d vs current-7d sums instead.
+async function getCampaignTrend(campaignId: any, now: Date): Promise<CampaignTrend> {
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  const currentStart = new Date(now.getTime() - TREND_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const priorStart = new Date(now.getTime() - 2 * TREND_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const currentStartStr = fmt(currentStart);
+
+  const rows = await AdMetricsDaily.find({
+    campaignId,
+    date: { $gte: fmt(priorStart), $lte: fmt(now) },
+  })
+    .select("date spend leads clicks impressions")
+    .lean();
+
+  let currentSpend = 0, currentLeads = 0, currentClicks = 0, currentImpressions = 0;
+  let priorSpend = 0, priorLeads = 0, priorClicks = 0, priorImpressions = 0;
+
+  for (const row of rows as any[]) {
+    const isCurrent = String(row.date) >= currentStartStr;
+    if (isCurrent) {
+      currentSpend += Number(row.spend || 0);
+      currentLeads += Number(row.leads || 0);
+      currentClicks += Number(row.clicks || 0);
+      currentImpressions += Number(row.impressions || 0);
+    } else {
+      priorSpend += Number(row.spend || 0);
+      priorLeads += Number(row.leads || 0);
+      priorClicks += Number(row.clicks || 0);
+      priorImpressions += Number(row.impressions || 0);
+    }
+  }
+
   return {
-    appointments,
-    answered,
-    notInterested,
-    noResponse,
-    sales,
-    totalLeads,
+    currentSpend, currentLeads, currentClicks, currentImpressions,
+    priorSpend, priorLeads, priorClicks, priorImpressions,
+    currentCpl: currentLeads > 0 ? currentSpend / currentLeads : 0,
+    priorCpl: priorLeads > 0 ? priorSpend / priorLeads : 0,
+    currentCtr: currentImpressions > 0 ? currentClicks / currentImpressions : 0,
+    priorCtr: priorImpressions > 0 ? priorClicks / priorImpressions : 0,
   };
 }
 
-function calculateLeadQualityScore(
-  campaign: any,
-  metrics?: OutcomeMetrics
-): number {
-  const { appointments, answered, notInterested, noResponse, totalLeads } =
-    metrics || getOutcomeMetrics(campaign);
+type FatigueResult = {
+  fatigued: boolean;
+  cplSpike: boolean;
+  ctrDrop: boolean;
+  leadDrop: boolean;
+  frequencyHigh: boolean;
+};
 
-  if (!totalLeads) return 0;
-  const score =
-    appointments * 5 + answered * 2 - notInterested * 2 - noResponse * 1;
-  return Number((score / totalLeads).toFixed(2));
-}
-
-function calculatePerformanceScore(params: {
-  targetCpl: number;
-  actualCpl: number;
-  leadQualityScore: number;
-  appointmentTarget: number;
-  costPerAppointment: number;
-  closeRate: number;
-}): number {
-  const cplScore =
-    params.targetCpl > 0 && params.actualCpl > 0
-      ? (params.targetCpl / params.actualCpl) * 100
-      : 0;
-  const appointmentScore =
-    params.appointmentTarget > 0 && params.costPerAppointment > 0
-      ? (params.appointmentTarget / params.costPerAppointment) * 100
-      : 0;
-  const leadQualityComponent = Math.max(params.leadQualityScore * 20, 0);
-  const closeRateScore = Math.max(params.closeRate * 100, 0);
-  const rawScore =
-    cplScore * 0.3 +
-    leadQualityComponent * 0.2 +
-    appointmentScore * 0.3 +
-    closeRateScore * 0.2;
-  const capped = Math.max(0, Math.min(150, rawScore));
-  return Number(capped.toFixed(2));
-}
-
-function detectCreativeFatigue(campaign: any): boolean {
-  const currentCpl = Number(campaign?.cpl ?? 0);
-  const prevAvgCpl = Number(
-    campaign?.previousAvgCpl ?? campaign?.avgCpl ?? currentCpl
-  );
-  const currentCtr = Number(campaign?.ctr ?? campaign?.currentCtr ?? 0);
-  const prevAvgCtr = Number(
-    campaign?.previousAvgCtr ?? campaign?.avgCtr ?? currentCtr
-  );
+function detectCreativeFatigue(campaign: any, trend: CampaignTrend): FatigueResult {
   const frequencyHigh = Number(campaign?.frequency ?? 0) > 2.5;
+  const cplSpike = trend.priorCpl > 0 && trend.currentCpl > trend.priorCpl * 1.3;
+  const ctrDrop = trend.priorCtr > 0 && trend.currentCtr > 0 && trend.currentCtr < trend.priorCtr * 0.75;
+  const leadDrop = trend.priorLeads > 0 && trend.currentLeads < trend.priorLeads;
 
-  const weeklyLeads: number[] = Array.isArray(campaign?.weeklyLeads)
-    ? (campaign.weeklyLeads as number[])
-    : [];
-  const inferredThisWeek =
-    Number(campaign?.leadsThisWeek ?? campaign?.currentWeekLeads ?? 0) ||
-    (weeklyLeads.length ? Number(weeklyLeads[weeklyLeads.length - 1] ?? 0) : 0);
-  const inferredLastWeek =
-    Number(campaign?.leadsLastWeek ?? campaign?.previousWeekLeads ?? 0) ||
-    (weeklyLeads.length > 1 ? Number(weeklyLeads[weeklyLeads.length - 2] ?? 0) : 0);
-
-  const cplSpike = prevAvgCpl > 0 && currentCpl > prevAvgCpl * 1.3;
-  const ctrDrop =
-    prevAvgCtr > 0 && currentCtr > 0 && currentCtr < prevAvgCtr * 0.75;
-  const leadDrop =
-    inferredLastWeek > 0 && inferredThisWeek < inferredLastWeek;
-
-  return cplSpike || ctrDrop || frequencyHigh || leadDrop;
+  return {
+    fatigued: cplSpike || ctrDrop || frequencyHigh || leadDrop,
+    cplSpike,
+    ctrDrop,
+    leadDrop,
+    frequencyHigh,
+  };
 }
 
 function getGuardrailReason(
@@ -493,11 +481,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  let isCronRequest = false;
   if (req.method === "GET") {
     const token = String(req.query.token || "");
     if (!process.env.CRON_SECRET || token !== process.env.CRON_SECRET) {
       return res.status(401).json({ error: "Unauthorized" });
     }
+    isCronRequest = true;
     console.log("[auto-optimize] Authorized cron execution");
   }
 
@@ -508,8 +498,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const previewReallocation = req.method === "POST" && body.previewReallocation === true;
   const applyReallocation = req.method === "POST" && body.applyReallocation === true;
   const metaMockMode = process.env.META_MOCK_MODE === "true";
-  const session = await getServerSession(req, res, authOptions);
-  if (!isExperimentalAdminEmail(session?.user?.email)) return res.status(403).json({ error: 'Forbidden' });
+  // Cron requests are already authenticated via CRON_SECRET above and have no browser
+  // session — skip the session/admin check entirely for them. Non-cron calls (POST from
+  // the dashboard) still require a real admin session, unchanged.
+  const session = isCronRequest ? null : await getServerSession(req, res, authOptions);
+  if (!isCronRequest && !isExperimentalAdminEmail(session?.user?.email)) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
   const sessionEmail =
     typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
   const requiresSession =
@@ -690,81 +685,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const targetCpl = Number(campaign.targetCpl || 0);
     const cpl = Number(campaign.cpl || 0);
 
+    // Captured BEFORE re-scoring below, so this is a genuine prior-vs-current comparison.
     const previousPerformanceScore = Number(campaign.performanceScore ?? 0);
-    const previousAvgCpl = Number(
-      campaign.previousAvgCpl ?? campaign.avgCpl ?? campaign.cpl ?? 0
-    );
-    const outcomeMetrics = getOutcomeMetrics(campaign);
-    const leadQualityScore = calculateLeadQualityScore(campaign, outcomeMetrics);
-    const appointments = outcomeMetrics.appointments;
-    const sales = outcomeMetrics.sales;
-    const answered = outcomeMetrics.answered;
-    const rawCostPerAppointment = appointments > 0 ? spend / appointments : 0;
-    const rawCostPerSale = sales > 0 ? spend / sales : 0;
-    const appointmentRateRaw = leads > 0 ? appointments / leads : 0;
-    const closeRateRaw = appointments > 0 ? sales / appointments : 0;
-    const contactRateRaw = leads > 0 ? answered / leads : 0;
-    const costPerAppointment = appointments > 0 ? Number(rawCostPerAppointment.toFixed(2)) : 0;
-    const costPerSale = sales > 0 ? Number(rawCostPerSale.toFixed(2)) : 0;
-    const appointmentRate = Number(appointmentRateRaw.toFixed(4));
-    const closeRate = Number(closeRateRaw.toFixed(4));
-    const contactRate = Number(contactRateRaw.toFixed(4));
-    const appointmentTarget = Number(
-      campaign.targetCostPerBooked ?? campaign.targetCostPerAppointment ?? 0
-    );
-    const computedPerformanceScore = calculatePerformanceScore({
-      targetCpl,
-      actualCpl: cpl,
-      leadQualityScore,
-      appointmentTarget,
-      costPerAppointment: rawCostPerAppointment,
-      closeRate: closeRateRaw,
+
+    // scoreAdPerformance is the single source of truth for appointments/sales/costPerAppointment/
+    // costPerSale/appointmentRate/closeRate/contactRate/leadQualityScore/performanceScore — it
+    // aggregates the real CRMOutcome/AdMetricsDaily records. Re-read what it just persisted rather
+    // than recomputing a second, divergent copy of the same numbers here.
+    const scoreResult = await scoreAdPerformance(String(campaign._id)).catch((err: any) => {
+      console.error("[facebook/auto-optimize] scoreAdPerformance failed", {
+        campaignId: String(campaign._id),
+        error: err?.message || err,
+      });
+      return null;
     });
-    const creativeFatigueDetected = detectCreativeFatigue(campaign);
+    const scoredCampaign = await FBLeadCampaign.findById(campaign._id)
+      .select("appointments sales costPerAppointment costPerSale appointmentRate closeRate contactRate leadQualityScore performanceScore")
+      .lean();
+    const appointments = Number((scoredCampaign as any)?.appointments || 0);
+    const sales = Number((scoredCampaign as any)?.sales || 0);
+    const costPerAppointment = Number((scoredCampaign as any)?.costPerAppointment || 0);
+    const costPerSale = Number((scoredCampaign as any)?.costPerSale || 0);
+    const appointmentRate = Number((scoredCampaign as any)?.appointmentRate || 0);
+    const closeRate = Number((scoredCampaign as any)?.closeRate || 0);
+    const contactRate = Number((scoredCampaign as any)?.contactRate || 0);
+    const leadQualityScore = Number((scoredCampaign as any)?.leadQualityScore || 0);
+    const computedPerformanceScore = Number(
+      (scoredCampaign as any)?.performanceScore ?? scoreResult?.score ?? 0
+    );
+
+    const trend = await getCampaignTrend(campaign._id, now);
+    const fatigueResult = detectCreativeFatigue(campaign, trend);
+    const creativeFatigueDetected = fatigueResult.fatigued;
     if (creativeFatigueDetected) {
       summary.fatiguedCampaigns += 1;
     }
     const metricUpdates: Record<string, any> = {};
-    if (campaign.leadQualityScore !== leadQualityScore) {
-      metricUpdates.leadQualityScore = leadQualityScore;
-    }
-    if (campaign.performanceScore !== computedPerformanceScore) {
-      metricUpdates.performanceScore = computedPerformanceScore;
-    }
-    if (campaign.appointments !== appointments) {
-      metricUpdates.appointments = appointments;
-    }
-    if (campaign.sales !== sales) {
-      metricUpdates.sales = sales;
-    }
-    if (campaign.costPerAppointment !== costPerAppointment) {
-      metricUpdates.costPerAppointment = costPerAppointment;
-    }
-    if (campaign.costPerSale !== costPerSale) {
-      metricUpdates.costPerSale = costPerSale;
-    }
-    if (campaign.appointmentRate !== appointmentRate) {
-      metricUpdates.appointmentRate = appointmentRate;
-    }
-    if (campaign.closeRate !== closeRate) {
-      metricUpdates.closeRate = closeRate;
-    }
-    if (campaign.contactRate !== contactRate) {
-      metricUpdates.contactRate = contactRate;
-    }
     if (!!campaign.creativeFatigue !== creativeFatigueDetected) {
       metricUpdates.creativeFatigue = creativeFatigueDetected;
     }
     if (!!campaign.creativeRefreshNeeded !== creativeFatigueDetected) {
       metricUpdates.creativeRefreshNeeded = creativeFatigueDetected;
     }
-    const cplSpikeFlag = previousAvgCpl > 0 && cpl > previousAvgCpl * 1.25;
+    // Gate runs BEFORE any email/recommendation decision below — a campaign below the minimum
+    // sample size never qualifies as "declining" or "performing well," no matter what the raw
+    // trend flags say.
+    const campaignHasEnoughData = hasEnoughData({ leads, spend, createdAt: campaign.createdAt, now });
+
     const performanceDropFlag =
       previousPerformanceScore > 0 && computedPerformanceScore < previousPerformanceScore * 0.8;
-    const shouldRecommendReplaceAd = creativeFatigueDetected || cplSpikeFlag || performanceDropFlag;
+    const shouldRecommendReplaceAd =
+      campaignHasEnoughData && (creativeFatigueDetected || performanceDropFlag);
     const lastNewAdAt = campaign.lastDuplicatedAt ? new Date(campaign.lastDuplicatedAt) : null;
     const noRecentAd = !lastNewAdAt || now.getTime() - lastNewAdAt.getTime() > SEVEN_DAYS_MS;
-    const shouldRecommendNewAd = computedPerformanceScore > 85 && leads >= 5 && noRecentAd;
+    const shouldRecommendNewAd =
+      campaignHasEnoughData && computedPerformanceScore > 85 && leads >= 5 && noRecentAd;
     if (!!campaign.recommendReplaceAd !== shouldRecommendReplaceAd) {
       metricUpdates.recommendReplaceAd = shouldRecommendReplaceAd;
     }
@@ -783,10 +758,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (shouldSendRecommendationEmail) {
       const reasonParts: string[] = [];
       if (shouldRecommendReplaceAd) {
-        if (creativeFatigueDetected) {
-          reasonParts.push("Creative fatigue indicators are rising.");
-        } else if (cplSpikeFlag) {
-          reasonParts.push("CPL has increased more than 25% vs the recent average.");
+        if (fatigueResult.cplSpike) {
+          reasonParts.push("CPL has increased more than 30% vs the prior 7 days.");
+        } else if (fatigueResult.ctrDrop) {
+          reasonParts.push("CTR has dropped more than 25% vs the prior 7 days.");
+        } else if (fatigueResult.leadDrop) {
+          reasonParts.push("Lead volume dropped vs the prior 7 days.");
+        } else if (fatigueResult.frequencyHigh) {
+          reasonParts.push("Ad frequency is elevated — audience saturation is likely.");
         } else if (performanceDropFlag) {
           reasonParts.push("Performance score dropped more than 20% week over week.");
         }

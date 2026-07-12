@@ -25,7 +25,7 @@ const AdMetricsDailySchema = new Schema(
     appointmentsBooked: { type: Number, default: 0 },
     appointmentsShowed: { type: Number, default: 0 },
     sales: { type: Number, default: 0 },
-    revenue: { type: Number, default: 0 },
+    revenue: { type: Number, default: 0 }, // ⚠️ ESTIMATED (flat per-lead-type guess) — never real money, never use for ROAS. See FBLeadCampaign.totalGrossRevenue.
     notInterested: { type: Number, default: 0 },
     badNumbers: { type: Number, default: 0 },
     optOuts: { type: Number, default: 0 },

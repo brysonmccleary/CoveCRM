@@ -134,6 +134,10 @@ const LeadSchema = new Schema(
     grossCommissionRevenue: { type: Number, default: null },
     advanceRevenue: { type: Number, default: null },
     holdbackRevenue: { type: Number, default: null },
+    // True when a Facebook-attributed lead was marked Sold without a premium yet (agent chose
+    // "premium pending" instead of entering AP). While true, the sale is excluded from sales
+    // counts/close-rate/cost-per-sale/ROAS. Cleared by record-sale.ts once a real premium lands.
+    revenuePending: { type: Boolean, default: false },
 
     // AI First-Call tracking
     sourceType: {

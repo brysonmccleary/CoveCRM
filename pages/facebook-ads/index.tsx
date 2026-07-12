@@ -166,10 +166,18 @@ const PERFORMANCE_REASONING: Record<string, string> = {
   FIX: "Reason: CPL is above target or lead quality needs improvement.",
   PAUSE: "Reason: Campaign is underperforming and should stop spending.",
   DUPLICATE_TEST: "Reason: Campaign is strong enough to test a new variation.",
+  LEARNING: "Reason: Not enough data yet (needs 5+ leads, $50+ spend, and 72+ hours before a verdict is meaningful).",
 };
 
 function ClassBadge({ cls }: { cls: string | null }) {
   if (!cls) return <span className="text-gray-500 text-xs">—</span>;
+  if (cls === "LEARNING") {
+    return (
+      <span className="text-[10px] px-2 py-0.5 rounded-full border font-semibold bg-white/10 text-gray-300 border-white/10">
+        Not enough data yet
+      </span>
+    );
+  }
   const color = CLASS_COLORS[cls] || "bg-white/10 text-gray-300 border-white/10";
   return (
     <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${color}`}>
@@ -178,8 +186,11 @@ function ClassBadge({ cls }: { cls: string | null }) {
   );
 }
 
-function ScoreBar({ score }: { score: number | null }) {
+function ScoreBar({ score, cls }: { score: number | null; cls?: string | null }) {
   if (score === null) return <span className="text-gray-500 text-xs">—</span>;
+  if (cls === "LEARNING") {
+    return <span className="text-gray-500 text-xs">Learning…</span>;
+  }
   const pct = Math.max(0, Math.min(100, score));
   const color =
     pct >= 90
@@ -1699,7 +1710,7 @@ This removes it from CoveCRM and archives it in Meta.`
                             </div>
                           </td>
                           <td className="p-3">
-                            <ScoreBar score={c.performanceScore} />
+                            <ScoreBar score={c.performanceScore} cls={c.performanceClass} />
                           </td>
                           <td className="p-3 text-left text-gray-300">
                             {typeof c.leadQualityScore === "number"

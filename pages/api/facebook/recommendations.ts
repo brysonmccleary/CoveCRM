@@ -4,6 +4,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import dbConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "../../../models/FBLeadCampaign";
+import { hasEnoughData } from "@/lib/facebook/verdictGate";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -46,6 +47,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         type: "setup",
         campaign: name,
         message: "Campaign has not been scored yet. Sync Meta insights && start tracking CRM outcomes before optimizing."
+      });
+      continue;
+    }
+
+    // Below the minimum sample size (5+ leads, $50+ spend, 72+ hours), no performance verdict
+    // is trustworthy — don't render SCALE/FIX/PAUSE/CPL/frequency/etc. messages at all.
+    if (
+      pClass === "LEARNING" ||
+      !hasEnoughData({ leads: totalLeads, spend: totalSpend, createdAt: (c as any).createdAt })
+    ) {
+      recommendations.push({
+        type: "learning",
+        campaign: name,
+        message: "Not enough data yet to score this campaign confidently (needs 5+ leads, $50+ spend, and 72+ hours running). Recommendations will appear once it qualifies."
       });
       continue;
     }
