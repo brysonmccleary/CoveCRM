@@ -7,7 +7,6 @@ import LeadPreviewPanel from "@/components/LeadPreviewPanel";
 import SaleModal from "@/components/SaleModal";
 import toast from "react-hot-toast";
 import { getNumberState } from "@/lib/twilio/localPresence";
-import ImportLeadsChooser from "@/components/ImportLeadsChooser";
 
 function formatPhoneNumber(phone: string): string {
   const d = (phone || "").replace(/\D/g, "");
@@ -225,7 +224,6 @@ export default function LeadsPage() {
 
   // import panel toggle for top "Import Leads" button
   const [showImport, setShowImport] = useState(false);
-  const [showImportChooser, setShowImportChooser] = useState(false);
 
   useEffect(() => {
     fetch("/api/settings/profile")
@@ -554,10 +552,16 @@ export default function LeadsPage() {
         {/* Top actions */}
         <div className="flex flex-wrap gap-2 mb-4">
           <button
-            onClick={() => setShowImportChooser(true)}
+            onClick={() => setShowImport((v) => !v)}
             className="bg-[#6b5b95] text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
           >
-            Import Leads
+            {showImport ? "Close Import" : "Import Leads"}
+          </button>
+          <button
+            onClick={handleConnectGoogleSheet}
+            className="bg-green-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
+          >
+            Connect Google Sheet
           </button>
           <button onClick={() => router.push("/ai-dial-session").catch(() => {})} className="bg-indigo-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer">
             AI Dial Session
@@ -830,19 +834,6 @@ export default function LeadsPage() {
             }
           }}
           onCancel={() => setSaleModalLead(null)}
-        />
-      )}
-      {showImportChooser && (
-        <ImportLeadsChooser
-          onClose={() => setShowImportChooser(false)}
-          onCsv={() => {
-            setShowImportChooser(false);
-            setShowImport(true);
-          }}
-          onGoogleSheets={() => {
-            setShowImportChooser(false);
-            handleConnectGoogleSheet();
-          }}
         />
       )}
     </div>
