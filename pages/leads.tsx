@@ -7,6 +7,7 @@ import LeadPreviewPanel from "@/components/LeadPreviewPanel";
 import SaleModal from "@/components/SaleModal";
 import toast from "react-hot-toast";
 import { getNumberState } from "@/lib/twilio/localPresence";
+import ImportLeadsChooser from "@/components/ImportLeadsChooser";
 
 function formatPhoneNumber(phone: string): string {
   const d = (phone || "").replace(/\D/g, "");
@@ -224,6 +225,7 @@ export default function LeadsPage() {
 
   // import panel toggle for top "Import Leads" button
   const [showImport, setShowImport] = useState(false);
+  const [showImportChooser, setShowImportChooser] = useState(false);
 
   useEffect(() => {
     fetch("/api/settings/profile")
@@ -552,16 +554,10 @@ export default function LeadsPage() {
         {/* Top actions */}
         <div className="flex flex-wrap gap-2 mb-4">
           <button
-            onClick={() => setShowImport((v) => !v)}
+            onClick={() => setShowImportChooser(true)}
             className="bg-[#6b5b95] text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
           >
-            {showImport ? "Close Import" : "Import Leads"}
-          </button>
-          <button
-            onClick={handleConnectGoogleSheet}
-            className="bg-green-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
-          >
-            Connect Google Sheet
+            Import Leads
           </button>
           <button onClick={() => router.push("/ai-dial-session").catch(() => {})} className="bg-indigo-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer">
             AI Dial Session
@@ -801,13 +797,52 @@ export default function LeadsPage() {
                 body: JSON.stringify({ leadId, newFolderName: "Sold" }),
               });
               const data = await res.json().catch(() => ({} as any));
-              if (data?.success) {
-                if (leads) setLeads((prev) => (prev || []).filter((l) => l._id !== leadId));
-                setPreviewLead(null);
+              if (!res.ok || !data?.success) {
+                toast.error(data?.message || "Failed to move lead to Sold");
+                return;
               }
-            } catch {}
+              toast.success(`Moved to ${data?.folderName || "Sold"}`);
+              if (leads) setLeads((prev) => (prev || []).filter((l) => l._id !== leadId));
+              setPreviewLead(null);
+            } catch (e: any) {
+              toast.error(e?.message || "Failed to save sale");
+            }
+          }}
+          onMarkPending={async () => {
+            const leadId = String(saleModalLead._id || "");
+            setSaleModalLead(null);
+            try {
+              const res = await fetch("/api/disposition-lead", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leadId, newFolderName: "Sold", premiumPending: true }),
+              });
+              const data = await res.json().catch(() => ({} as any));
+              if (!res.ok || !data?.success) {
+                toast.error(data?.message || "Failed to mark lead as Sold");
+                return;
+              }
+              toast.success(`Moved to ${data?.folderName || "Sold"} — premium pending`);
+              if (leads) setLeads((prev) => (prev || []).filter((l) => l._id !== leadId));
+              setPreviewLead(null);
+            } catch (e: any) {
+              toast.error(e?.message || "Failed to mark lead as Sold");
+            }
           }}
           onCancel={() => setSaleModalLead(null)}
+        />
+      )}
+      {showImportChooser && (
+        <ImportLeadsChooser
+          onClose={() => setShowImportChooser(false)}
+          onCsv={() => {
+            setShowImportChooser(false);
+            setShowImport(true);
+          }}
+          onGoogleSheets={() => {
+            setShowImportChooser(false);
+            handleConnectGoogleSheet();
+          }}
         />
       )}
     </div>
