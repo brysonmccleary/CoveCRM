@@ -37,6 +37,8 @@ import { sendAffiliateApprovedEmail, sendEmail } from "@/lib/email";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { Resend } from "resend";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
+import { computeHasAIForCustomer } from "@/lib/billing/computeHasAIForCustomer";
+import { computeAIEntitlement } from "@/lib/billing/computeAIEntitlement";
 import {
   AFFILIATE_MONTHLY_CREDIT_CENTS,
   AFFILIATE_MONTHLY_CREDIT_USD,
@@ -160,8 +162,6 @@ const PLAN_PRICE_MAP: Record<string, { planCode: "base" | "ai"; billingInterval:
 const HOUSE_CODE = U(process.env.AFFILIATE_HOUSE_CODE || "COVE50");
 const isHouseCode = (code?: string | null) => !!code && U(code) === HOUSE_CODE;
 
-// AI Suite price id (single upgrade)
-const AI_PRICE_ID = (process.env.STRIPE_PRICE_ID_AI_MONTHLY || "").trim();
 
 // slim audit logger
 const audit = (msg: string, extra?: Record<string, unknown>) => {
@@ -721,40 +721,6 @@ async function reverseAffiliateCreditForInvoice(args: {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
-/* AI entitlement helper: compute hasAI across ALL active subs for customer     */
-/* ──────────────────────────────────────────────────────────────────────────── */
-
-async function computeHasAIForCustomer(customerId: string): Promise<boolean> {
-  if (!customerId || !AI_PRICE_ID) return false;
-
-  try {
-    const subs = await stripe.subscriptions.list({
-      customer: customerId,
-      status: "all",
-      expand: ["data.items.data.price"],
-      limit: 100,
-    });
-
-    for (const sub of subs.data as Stripe.Subscription[]) {
-      const activeLike = sub.status === "active" || sub.status === "trialing";
-      if (!activeLike) continue;
-
-      const items = sub.items?.data || [];
-      const hasAiOnThisSub = items.some((it: any) => it?.price?.id === AI_PRICE_ID);
-      if (hasAiOnThisSub) return true;
-    }
-
-    return false;
-  } catch (e: any) {
-    audit("computeHasAIForCustomer failed", {
-      customerId,
-      message: e?.message || String(e),
-    });
-    return false;
-  }
-}
-
-/* ──────────────────────────────────────────────────────────────────────────── */
 /* Webhook handler                                                             */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
@@ -889,17 +855,35 @@ export default async function handler(
             break;
           }
 
-          const currentBalance = Number((user as any).aiDialerBalance || 0);
-          (user as any).aiDialerBalance = currentBalance + amountUSD;
-          (user as any).aiDialerLastTopUpAt = new Date();
+          // Atomic idempotent credit: only applies if this Stripe checkout
+          // session hasn't already been credited. Mirrors the atomic-upsert
+          // idempotency pattern used for affiliate credits above (findOneAndUpdate
+          // keyed on an immutable Stripe id — no read-then-write race, so a
+          // webhook retry/redelivery can never double-credit the balance).
+          const credited = await User.findOneAndUpdate(
+            { email, aiDialerCreditedSessionIds: { $ne: s.id } },
+            {
+              $inc: { aiDialerBalance: amountUSD },
+              $set: { aiDialerLastTopUpAt: new Date() },
+              $addToSet: { aiDialerCreditedSessionIds: s.id },
+            },
+            { new: true },
+          );
 
-          await user.save();
+          if (!credited) {
+            audit("ai_dialer_topup: duplicate session, skip re-credit", {
+              email,
+              sessionId: s.id,
+              addedUSD: amountUSD,
+            });
+            break;
+          }
 
           audit("ai_dialer_topup: credited", {
             email,
             sessionId: s.id,
             addedUSD: amountUSD,
-            newBalanceUSD: (user as any).aiDialerBalance,
+            newBalanceUSD: (credited as any).aiDialerBalance,
           });
 
           break;
@@ -1384,9 +1368,23 @@ export default async function handler(
         if (user) {
           user.subscriptionStatus = activeLike ? "active" : "canceled";
 
-          // ✅ CRITICAL: recompute AI entitlement across ALL active subs
-          const computedHasAI = await computeHasAIForCustomer(customerId);
-          user.hasAI = isAdminFree(user.email) ? true : computedHasAI;
+          // ✅ CRITICAL: recompute AI entitlement across ALL active subs.
+          // computeAIEntitlement folds in grandfatheredAI so this never clobbers
+          // a grandfathered user's hasAI back to false on an unrelated renewal.
+          const hasPaidAIPlanOrUpgrade = await computeHasAIForCustomer(customerId, audit);
+          const adminFree1 = isAdminFree(user.email);
+          const entitlement1 = computeAIEntitlement(
+            {
+              hasAI: user.hasAI,
+              aiEntitlementSource: (user as any).aiEntitlementSource,
+              grandfatheredAI: (user as any).grandfatheredAI,
+              planCode: (user as any).planCode,
+            },
+            { hasPaidAIPlanOrUpgrade },
+            adminFree1,
+          );
+          user.hasAI = entitlement1.hasAI;
+          (user as any).aiEntitlementSource = entitlement1.aiEntitlementSource;
 
           // Ensure flag exists (do not arm it here)
           if (typeof (user as any).aiDialerAutoReloadArmed !== "boolean") {
@@ -1406,8 +1404,21 @@ export default async function handler(
           }
           if (mappedPlan?.planCode) {
             (user as any).planCode = mappedPlan.planCode;
-            user.hasAI = isAdminFree(user.email) ? true : mappedPlan.planCode === "ai";
-            (user as any).aiEntitlementSource = mappedPlan.planCode === "ai" ? "plan" : "none";
+            // Re-derive via the same central function so a grandfathered user's
+            // base-plan renewal (mappedPlan.planCode === "base") can never
+            // downgrade them back to aiEntitlementSource "none".
+            const entitlement2 = computeAIEntitlement(
+              {
+                hasAI: user.hasAI,
+                aiEntitlementSource: (user as any).aiEntitlementSource,
+                grandfatheredAI: (user as any).grandfatheredAI,
+                planCode: mappedPlan.planCode,
+              },
+              { hasPaidAIPlanOrUpgrade },
+              adminFree1,
+            );
+            user.hasAI = entitlement2.hasAI;
+            (user as any).aiEntitlementSource = entitlement2.aiEntitlementSource;
           }
 
           await user.save();
@@ -1423,9 +1434,20 @@ export default async function handler(
         if (user) {
           user.subscriptionStatus = "canceled";
 
-          // ✅ If they still have an active AI sub, keep hasAI true.
-          const computedHasAI = await computeHasAIForCustomer(customerId);
-          user.hasAI = isAdminFree(user.email) ? true : computedHasAI;
+          // ✅ If they still have an active AI sub — or are grandfathered — keep hasAI true.
+          const hasPaidAIPlanOrUpgrade = await computeHasAIForCustomer(customerId, audit);
+          const entitlement = computeAIEntitlement(
+            {
+              hasAI: user.hasAI,
+              aiEntitlementSource: (user as any).aiEntitlementSource,
+              grandfatheredAI: (user as any).grandfatheredAI,
+              planCode: (user as any).planCode,
+            },
+            { hasPaidAIPlanOrUpgrade },
+            isAdminFree(user.email),
+          );
+          user.hasAI = entitlement.hasAI;
+          (user as any).aiEntitlementSource = entitlement.aiEntitlementSource;
 
           if (typeof (user as any).aiDialerAutoReloadArmed !== "boolean") {
             (user as any).aiDialerAutoReloadArmed = false;

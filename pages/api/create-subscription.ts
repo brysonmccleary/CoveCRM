@@ -6,6 +6,16 @@ import User from "@/models/User";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import type Stripe from "stripe";
+import { computeHasAIForCustomer } from "@/lib/billing/computeHasAIForCustomer";
+import { computeAIEntitlement } from "@/lib/billing/computeAIEntitlement";
+
+const ADMIN_FREE_AI_EMAILS: string[] = (process.env.ADMIN_FREE_AI_EMAILS || "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+function isAdminFree(email?: string | null) {
+  return !!email && ADMIN_FREE_AI_EMAILS.includes(email.toLowerCase());
+}
 
 const ACTIVATION_ENFORCEMENT_STARTED_AT = new Date(
   process.env.ACCOUNT_ACTIVATION_ENFORCEMENT_STARTED_AT || "2026-04-10T00:00:00.000Z"
@@ -164,6 +174,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         existingSetupSecret = await createSetupIntent(customerId, userIdMeta, reusable.id, effectiveEmail);
       }
 
+      // Recompute via the central entitlement function rather than deriving
+      // hasAI from planCode alone — this endpoint fires on every card update
+      // (PaymentMethodForm) and must never clobber a grandfathered user's hasAI.
+      const hasPaidAIPlanOrUpgrade = await computeHasAIForCustomer(customerId);
+      const entitlement = computeAIEntitlement(
+        {
+          hasAI: (userDoc as any).hasAI,
+          aiEntitlementSource: (userDoc as any).aiEntitlementSource,
+          grandfatheredAI: (userDoc as any).grandfatheredAI,
+          planCode,
+        },
+        { hasPaidAIPlanOrUpgrade },
+        isAdminFree(effectiveEmail),
+      );
+
       await User.updateOne(
         { _id: userDoc._id },
         {
@@ -172,8 +197,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             stripeSubscriptionId: reusable.id,
             billingInterval: interval,
             planCode,
-            hasAI: planCode === "ai",
-            aiEntitlementSource: planCode === "ai" ? "plan" : "none",
+            hasAI: entitlement.hasAI,
+            aiEntitlementSource: entitlement.aiEntitlementSource,
           },
         },
       );
@@ -208,19 +233,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       idempotencyKey: `sub_${customerId}_${selectedPriceId}`,
     });
 
-    await User.updateOne(
-      { _id: userDoc._id },
-      {
-        $set: {
-          stripePriceId: selectedPriceId,
-          stripeSubscriptionId: subscription.id,
-          billingInterval: interval,
+    {
+      // Same central-entitlement recompute as the reusable-subscription branch
+      // above — a brand-new subscription for a grandfathered user (e.g. after
+      // their prior subscription was fully canceled) must not lose hasAI either.
+      const hasPaidAIPlanOrUpgrade = await computeHasAIForCustomer(customerId);
+      const entitlement = computeAIEntitlement(
+        {
+          hasAI: (userDoc as any).hasAI,
+          aiEntitlementSource: (userDoc as any).aiEntitlementSource,
+          grandfatheredAI: (userDoc as any).grandfatheredAI,
           planCode,
-          hasAI: planCode === "ai",
-          aiEntitlementSource: planCode === "ai" ? "plan" : "none",
         },
-      },
-    );
+        { hasPaidAIPlanOrUpgrade },
+        isAdminFree(effectiveEmail),
+      );
+
+      await User.updateOne(
+        { _id: userDoc._id },
+        {
+          $set: {
+            stripePriceId: selectedPriceId,
+            stripeSubscriptionId: subscription.id,
+            billingInterval: interval,
+            planCode,
+            hasAI: entitlement.hasAI,
+            aiEntitlementSource: entitlement.aiEntitlementSource,
+          },
+        },
+      );
+    }
 
     const latest = subscription.latest_invoice as Stripe.Invoice | null;
     const clientSecret =

@@ -68,3 +68,6 @@ __pycache__/
 patch_*.py
 COVECRM_REVIEW/
 COVECRM_REVIEW/
+
+# migration rollback manifests (contain user _ids, not secrets, but noisy/local)
+scripts/migrations/.rollback-manifests/

@@ -14,6 +14,8 @@
     "repair:a2p": "tsx scripts/repair-a2p-messaging-services.ts",
     "repair:billing:dry": "DRY_RUN=1 tsx scripts/repair-billing-blocked-users.ts",
     "repair:billing": "tsx scripts/repair-billing-blocked-users.ts",
+    "grandfather:ai:dry": "tsx scripts/migrations/grandfather-legacy-ai-users.ts",
+    "grandfather:ai:apply": "APPLY=1 tsx scripts/migrations/grandfather-legacy-ai-users.ts",
     "socket": "node server/socket-server.ts"
   },
   "dependencies": {

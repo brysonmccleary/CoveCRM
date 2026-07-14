@@ -159,7 +159,10 @@ export interface IUser {
   plan?: "Free" | "Pro";
   planCode?: "free" | "base" | "ai";
   billingInterval?: "monthly" | "annual";
-  aiEntitlementSource?: "plan" | "upgrade" | "legacy" | "none";
+  aiEntitlementSource?: "plan" | "upgrade" | "legacy" | "grandfathered" | "none";
+  grandfatheredAI?: boolean;
+  grandfatheredAIAt?: Date | null;
+  grandfatheredAIReason?: string | null;
   subscriptionStatus?: "active" | "canceled" | "pending";
   trialStartedAt?: Date | null;
   trialEndsAt?: Date | null;
@@ -192,6 +195,8 @@ export interface IUser {
    */
   aiDialerBalance?: number;
   aiDialerLastTopUpAt?: Date;
+  /** Stripe checkout session IDs already credited to aiDialerBalance — idempotency guard against webhook retries. */
+  aiDialerCreditedSessionIds?: string[];
 
   /**
    * ✅ NEW: "armed" flag so we ONLY auto-reload after the user actually uses AI dialer.
@@ -534,9 +539,12 @@ const UserSchema = new Schema<IUser>({
   billingInterval: { type: String, enum: ["monthly", "annual"], default: "monthly" },
   aiEntitlementSource: {
     type: String,
-    enum: ["plan", "upgrade", "legacy", "none"],
+    enum: ["plan", "upgrade", "legacy", "grandfathered", "none"],
     default: "none",
   },
+  grandfatheredAI: { type: Boolean, default: false },
+  grandfatheredAIAt: { type: Date, default: null },
+  grandfatheredAIReason: { type: String, default: null },
   subscriptionStatus: {
     type: String,
     enum: ["active", "canceled", "pending"],
@@ -568,6 +576,7 @@ const UserSchema = new Schema<IUser>({
 
   aiDialerBalance: { type: Number, default: 0 },
   aiDialerLastTopUpAt: { type: Date, default: null },
+  aiDialerCreditedSessionIds: { type: [String], default: [] },
 
   // ✅ NEW: only allow auto-reload after first real AI dialer usage
   aiDialerAutoReloadArmed: { type: Boolean, default: false },
