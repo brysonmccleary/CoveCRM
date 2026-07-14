@@ -1,14 +1,12 @@
 // lib/facebook/generateWeeklyMarketReport.ts
 // Generate weekly market intelligence report using competitor ad data
-import { OpenAI } from "openai";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import AdActionReport from "@/models/AdActionReport";
 import CompetitorAd from "@/models/CompetitorAd";
 import CRMOutcome from "@/models/CRMOutcome";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { completeTextWithKimiFallback } from "@/lib/ai/providers/textCompletionWithFallback";
 
 export async function generateWeeklyMarketReport(
   userId: string,
@@ -105,8 +103,9 @@ Generate a weekly market report that includes:
 
 Be specific, actionable, and data-driven. Plain text, no markdown. Under 500 words.`;
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o",
+  const result = await completeTextWithKimiFallback({
+    site: "generateWeeklyMarketReport",
+    openaiModel: "gpt-4o",
     messages: [
       {
         role: "system",
@@ -116,11 +115,11 @@ Be specific, actionable, and data-driven. Plain text, no markdown. Under 500 wor
       { role: "user", content: prompt },
     ],
     temperature: 0.7,
-    max_tokens: 1000,
+    maxTokens: 1000,
   });
 
-  const reportText = completion.choices[0]?.message?.content ?? "";
-  const tokensUsed = completion.usage?.total_tokens ?? 0;
+  const reportText = result.content ?? "";
+  const tokensUsed = result.usage?.totalTokens ?? 0;
 
   // Build market intelligence summary
   const topHooks = competitorAds

@@ -49,11 +49,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       "businessHoursStart",
       "businessHoursEnd",
       "businessHoursTimezone",
+      "reviewRequestEnabled",
+      "reviewRequestUrl",
+      "missedCallTextBackEnabled",
     ];
 
     const update: Record<string, any> = {};
     for (const key of allowed) {
       if (key in req.body) update[key] = req.body[key];
+    }
+
+    for (const key of ["reviewRequestEnabled", "missedCallTextBackEnabled"]) {
+      if (key in update && typeof update[key] !== "boolean") {
+        return res.status(400).json({ error: `${key} must be a boolean` });
+      }
+    }
+    if ("reviewRequestUrl" in update) {
+      const value = String(update.reviewRequestUrl || "").trim();
+      if (value) {
+        try {
+          const parsed = new URL(value);
+          if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("bad protocol");
+        } catch {
+          return res.status(400).json({ error: "Review URL must be a valid http or https URL" });
+        }
+      }
+      update.reviewRequestUrl = value;
     }
 
     const settings = await AISettings.findOneAndUpdate(

@@ -15,6 +15,7 @@ import Call from "@/models/Call";
 import InboundCall from "@/models/InboundCall";
 import Lead from "@/models/Lead";
 import { sendEmail } from "@/lib/email";
+import { sendMissedCallTextOnce } from "@/lib/sms/sendMissedCallText";
 
 export const config = { api: { bodyParser: false } };
 
@@ -517,6 +518,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       } catch (e: any) {
         console.warn("[voice-status] missed-call email failed", e?.message || e);
+      }
+
+      try {
+        await sendMissedCallTextOnce({
+          callSid,
+          status,
+          ownerEmail: userEmail,
+          from,
+          leadId,
+        });
+      } catch (e: any) {
+        console.warn("[voice-status] missed-call text-back failed", e?.message || e);
       }
     }
 

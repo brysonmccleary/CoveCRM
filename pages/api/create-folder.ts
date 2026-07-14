@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
+import { LEAD_TYPES } from "@/lib/leads/leadTypes";
 
 export default async function handler(
   req: NextApiRequest,
@@ -26,12 +27,14 @@ export default async function handler(
       aiFirstCallDelayMinutes,
       aiRealTimeOnly,
       aiScriptKey,
+      leadType,
     } = req.body as {
       name?: string;
       aiFirstCallEnabled?: boolean;
       aiFirstCallDelayMinutes?: number;
       aiRealTimeOnly?: boolean;
       aiScriptKey?: string;
+      leadType?: string;
     };
 
     if (!name || name.trim() === "") {
@@ -59,6 +62,11 @@ export default async function handler(
     const scriptKeyRaw = typeof aiScriptKey === "string" ? aiScriptKey.trim() : "default";
     const scriptKey = VALID_SCRIPT_KEYS.includes(scriptKeyRaw) ? scriptKeyRaw : "default";
 
+    const leadTypeRaw = typeof leadType === "string" ? leadType.trim() : "";
+    if (leadTypeRaw && !(LEAD_TYPES as readonly string[]).includes(leadTypeRaw)) {
+      return res.status(400).json({ message: `leadType must be one of: ${LEAD_TYPES.join(", ")}` });
+    }
+
     await dbConnect();
     const newFolder = await Folder.create({
       name: name.trim(),
@@ -69,6 +77,7 @@ export default async function handler(
       aiRealTimeOnly: realTimeOnly,
       aiScriptKey: scriptKey,
       aiEnabledAt: aiEnabled ? new Date() : null,
+      ...(leadTypeRaw ? { leadType: leadTypeRaw } : {}),
     });
 
     res.status(201).json({

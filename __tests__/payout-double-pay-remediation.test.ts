@@ -52,6 +52,7 @@ jest.mock("@/models/AffiliatePayoutLedger", () => ({
     aggregate: jest.fn(),
     find: jest.fn(),
     findOneAndUpdate: jest.fn(),
+    countDocuments: jest.fn().mockResolvedValue(0),
   },
 }));
 

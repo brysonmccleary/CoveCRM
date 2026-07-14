@@ -13,6 +13,7 @@ import { isSystemFolderName } from "@/lib/systemFolders";
 import jwt from "jsonwebtoken";
 import { recordLeadOutcome } from "@/lib/analytics/recordLeadOutcome";
 import { buildSoldAtTransitionSet } from "@/lib/leads/foundationFields";
+import { sendReviewRequestOnce } from "@/lib/reviews/sendReviewRequest";
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -297,6 +298,13 @@ export default async function handler(
     }).catch((err) => {
       console.warn("disposition-lead: outcome event failed (non-fatal):", err?.message || err);
     });
+
+    // Review-request automation (best-effort, non-blocking) — only on a "Sold" transition
+    if (desiredLower === "sold") {
+      sendReviewRequestOnce({ leadId, userEmail }).catch((err) => {
+        console.warn("disposition-lead: review request failed (non-fatal):", err?.message || err);
+      });
+    }
 
     // Socket notify (best-effort)
     try {

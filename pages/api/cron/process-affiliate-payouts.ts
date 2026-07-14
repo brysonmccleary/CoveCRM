@@ -106,10 +106,35 @@ async function processClaimedCredit(entry: any, affiliate: any) {
   await entry.save();
 }
 
+const MAX_PAYOUT_RETRY_ATTEMPTS = 5;
+const RETRY_BACKOFF_DAYS_PER_ATTEMPT = 1;
+
+// A transient Stripe transfer error (network blip, rate limit, temporary
+// Connect balance issue, ...) used to park a claimed credit in a terminal
+// "failed" status with no way back — the only query that selects payable
+// credits matches status:"held" exclusively, so it was permanently stranded.
+// Now: requeue back to "held" (so the existing payableAt-gated query
+// naturally re-claims it on a future run) with linear backoff applied to
+// payableAt itself — not to any billing rate/threshold/cap — up to
+// MAX_PAYOUT_RETRY_ATTEMPTS. Once exhausted, mark a genuinely terminal
+// "failed_permanent" status so a stuck payout is surfaced, not silently lost.
 async function markClaimFailed(entry: any, err: any) {
-  entry.status = "failed";
+  const now = new Date();
+  const retryCount = Number(entry.retryCount || 0) + 1;
+
+  entry.retryCount = retryCount;
+  entry.lastFailedAt = now;
   entry.reversalReason = `stripe_transfer_failed:${err?.message || String(err)}`.slice(0, 500);
+
+  if (retryCount < MAX_PAYOUT_RETRY_ATTEMPTS) {
+    entry.status = "held";
+    entry.payableAt = new Date(now.getTime() + retryCount * RETRY_BACKOFF_DAYS_PER_ATTEMPT * 24 * 60 * 60 * 1000);
+  } else {
+    entry.status = "failed_permanent";
+  }
+
   await entry.save();
+  return retryCount >= MAX_PAYOUT_RETRY_ATTEMPTS;
 }
 
 function cronSecretMatches(req: NextApiRequest) {
@@ -129,7 +154,8 @@ export async function processAffiliatePayoutsNow() {
 
   let processed = 0;
   let succeeded = 0;
-  let failed = 0;
+  let failedRetryable = 0;
+  let failedPermanent = 0;
   let skippedInactive = 0;
   let skippedBelowMinimum = 0;
   let skippedNotReady = 0;
@@ -192,16 +218,29 @@ export async function processAffiliatePayoutsNow() {
           idempotencyKey: `payout:${String((claimed as any)._id)}`,
           error: err?.message || err,
         });
-        await markClaimFailed(claimed, err);
-        failed += 1;
+        const exhausted = await markClaimFailed(claimed, err);
+        if (exhausted) failedPermanent += 1;
+        else failedRetryable += 1;
       }
     }
   }
 
+  // Visibility: total currently-stuck payouts needing manual review, regardless
+  // of whether anything failed on this particular run — so a run with zero new
+  // failures still surfaces any backlog rather than it going silently unnoticed.
+  // Includes the legacy "failed" status too, in case any pre-existing rows are
+  // sitting in that now-superseded terminal state.
+  const stuckPayoutsTotal = await AffiliatePayoutLedger.countDocuments({
+    status: { $in: ["failed_permanent", "failed"] },
+  });
+
   return {
     processed,
     succeeded,
-    failed,
+    failed: failedRetryable + failedPermanent, // total failures this run (back-compat field)
+    failedRetryable,
+    failedPermanent,
+    stuckPayoutsTotal,
     skippedInactive,
     skippedBelowMinimum,
     skippedNotReady,

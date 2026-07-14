@@ -19,6 +19,8 @@ export default function Sidebar({ collapsed = false }: SidebarProps) {
   const [assistantMessages, setAssistantMessages] = useState<any[]>([]);
   const [assistantInput, setAssistantInput] = useState("");
   const [assistantLoading, setAssistantLoading] = useState(false);
+  const [pendingBulkTextConfirmation, setPendingBulkTextConfirmation] = useState<string | null>(null);
+  const [pendingActionConfirmation, setPendingActionConfirmation] = useState<{ toolName: string; token: string } | null>(null);
   const isAdmin = (session?.user?.email ?? "").toLowerCase() === EXPERIMENTAL_ADMIN;
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -276,17 +278,20 @@ export default function Sidebar({ collapsed = false }: SidebarProps) {
                   if (!assistantInput.trim()) return;
                   const msg = assistantInput;
                   setAssistantInput("");
+                  const history = assistantMessages.slice(-20);
                   setAssistantMessages(m => [...m, { role: "user", content: msg }]);
                   setAssistantLoading(true);
 
-                  const res = await fetch("/api/ai/assistant", {
+                  const res = await fetch("/api/chat-assistant", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ message: msg }),
+                    body: JSON.stringify({ message: msg, history, pendingBulkTextConfirmation, pendingActionConfirmation }),
                   });
 
                   const data = await res.json();
-                  setAssistantMessages(m => [...m, { role: "assistant", content: data.reply }]);
+                  setPendingBulkTextConfirmation(data.pendingBulkTextConfirmation || null);
+                  setPendingActionConfirmation(data.pendingActionConfirmation || null);
+                  setAssistantMessages(m => [...m, { role: "assistant", content: data.reply || data.message || "Assistant request failed." }]);
                   setAssistantLoading(false);
                 }}
                 className="bg-indigo-600 px-3 py-2 rounded-lg text-sm"

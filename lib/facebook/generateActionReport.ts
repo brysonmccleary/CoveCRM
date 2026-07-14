@@ -1,13 +1,11 @@
 // lib/facebook/generateActionReport.ts
 // Generate daily AI action report for a user's FB campaigns
-import { OpenAI } from "openai";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import AdActionReport from "@/models/AdActionReport";
 import CRMOutcome from "@/models/CRMOutcome";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { completeTextWithKimiFallback } from "@/lib/ai/providers/textCompletionWithFallback";
 
 export async function generateDailyActionReport(
   userId: string,
@@ -100,8 +98,9 @@ Generate a daily action report that:
 
 Be direct and specific. Use plain text, no markdown headers. Keep it under 400 words.`;
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o",
+  const result = await completeTextWithKimiFallback({
+    site: "generateActionReport",
+    openaiModel: "gpt-4o",
     messages: [
       {
         role: "system",
@@ -111,11 +110,11 @@ Be direct and specific. Use plain text, no markdown headers. Keep it under 400 w
       { role: "user", content: prompt },
     ],
     temperature: 0.7,
-    max_tokens: 800,
+    maxTokens: 800,
   });
 
-  const reportText = completion.choices[0]?.message?.content ?? "";
-  const tokensUsed = completion.usage?.total_tokens ?? 0;
+  const reportText = result.content ?? "";
+  const tokensUsed = result.usage?.totalTokens ?? 0;
 
   // Add reasoning to campaign actions
   const actionsWithReasoning = campaignActions.map((ca) => ({

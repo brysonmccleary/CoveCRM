@@ -1,5 +1,6 @@
 // models/Folder.ts
 import mongoose, { Schema, models, model } from "mongoose";
+import { LEAD_TYPES } from "@/lib/leads/leadTypes";
 
 // Canonical Folder shape in-app
 export interface IFolder extends mongoose.Document {
@@ -8,6 +9,8 @@ export interface IFolder extends mongoose.Document {
   assignedDrips: any[];
   createdAt: Date;
   updatedAt: Date;
+  /** Default leadType applied to new leads created in this folder that don't already have their own. */
+  leadType?: string;
 }
 
 // Explicit schema for clarity, but keep strict:false so legacy fields
@@ -37,6 +40,12 @@ const FolderSchema = new Schema<any>(
     aiNewLeadsOnly: { type: Boolean, default: true },
     aiEnabledAt: { type: Date, default: null },
     aiScriptKey: { type: String, default: "default" },
+
+    // Default leadType for new leads landing in this folder without their
+    // own explicit leadType (CSV/Sheets/vendor-API imports). No default here
+    // deliberately — unset means "no folder override," preserving today's
+    // Final Expense fallback for folders that haven't opted into a type.
+    leadType: { type: String, enum: LEAD_TYPES, default: undefined },
   },
   {
     timestamps: true,
@@ -45,6 +54,9 @@ const FolderSchema = new Schema<any>(
 );
 
 // Helpful index for per-user/system-name lookups
+// Keep this non-unique until the duplicate-folder audit/migration has been
+// run against production. Turning an existing index unique from application
+// code can fail startup when legacy duplicates exist.
 FolderSchema.index({ userEmail: 1, name: 1 });
 
 const Folder =

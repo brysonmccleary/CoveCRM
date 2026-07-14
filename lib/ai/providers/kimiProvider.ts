@@ -44,6 +44,7 @@ export async function callKimiProvider(
       messages: request.messages,
       temperature: request.temperature ?? 0.2,
       max_tokens: request.maxTokens ?? 900,
+      ...(request.responseFormat ? { response_format: { type: request.responseFormat } } : {}),
     });
 
     return {
@@ -51,6 +52,13 @@ export async function callKimiProvider(
       provider: "kimi",
       model: KIMI_MODEL,
       content: String(response.choices?.[0]?.message?.content || "").trim(),
+      usage: response.usage
+        ? {
+            promptTokens: response.usage.prompt_tokens,
+            completionTokens: response.usage.completion_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+        : undefined,
     };
   } catch (err: any) {
     return {

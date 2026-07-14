@@ -8,11 +8,10 @@ import mongoose from "mongoose";
 import Lead from "@/models/Lead";
 import Call from "@/models/Call";
 import { getUserByEmail } from "@/models/User";
-import { OpenAI } from "openai";
+import { completeTextWithKimiFallback } from "@/lib/ai/providers/textCompletionWithFallback";
 import { trackUsage } from "@/lib/billing/trackUsage";
 import { isAdmin } from "@/lib/featureFlags";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
@@ -71,14 +70,15 @@ Use 5–8 bullets max. Be specific. Use clean, professional language like Close.
   const __gate = await requireAI(__email, { allowOwnerBypass: true });
   if (!__gate.ok) return;
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o",
+  const result = await completeTextWithKimiFallback({
+    site: "generate-summary",
+    openaiModel: "gpt-4o",
     messages,
     temperature: 0.5,
-    max_tokens: 500,
+    maxTokens: 500,
   });
 
-  const summary = completion.choices[0].message.content?.trim();
+  const summary = result.content?.trim();
   lead.aiSummary = summary || "No summary generated.";
   await lead.save();
 

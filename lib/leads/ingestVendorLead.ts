@@ -113,6 +113,14 @@ export async function ingestVendorLead(input: VendorLeadInput): Promise<VendorLe
   const folder = await resolveFolder(userEmail, cleanString(input.folderId), input.folderName);
   const externalId = cleanString(input.externalId);
 
+  // An explicit leadType in the payload always wins. When absent, the
+  // folder's default (if the folder has one set) is applied — but only at
+  // creation time, never blasted onto an existing lead via an update that
+  // simply didn't include a leadType this time (see below).
+  const rawLeadType = cleanString(input.leadType);
+  const explicitLeadType = rawLeadType ? sanitizeLeadType(rawLeadType) : undefined;
+  const folderLeadType = cleanString((folder as any)?.leadType) || undefined;
+
   const leadFields: Record<string, unknown> = {
     ...custom,
     "First Name": cleanString(input.firstName) || undefined,
@@ -125,7 +133,7 @@ export async function ingestVendorLead(input: VendorLeadInput): Promise<VendorLe
     State: cleanString(input.state) || undefined,
     Notes: cleanString(input.notes) || undefined,
     Age: cleanString(input.age) || undefined,
-    leadType: sanitizeLeadType(cleanString(input.leadType)),
+    ...(explicitLeadType ? { leadType: explicitLeadType } : {}),
     sourceType: "vendor_api",
     realTimeEligible: true,
     source: "vendor_api",
@@ -150,6 +158,7 @@ export async function ingestVendorLead(input: VendorLeadInput): Promise<VendorLe
   try {
     const created = await Lead.create({
       ...leadFields,
+      ...(explicitLeadType ? {} : folderLeadType ? { leadType: folderLeadType } : {}),
       userEmail,
       folderId: folder._id,
       externalId: externalId || undefined,

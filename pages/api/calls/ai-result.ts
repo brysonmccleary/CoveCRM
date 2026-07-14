@@ -109,8 +109,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         // Set appointmentTime on lead and move to Booked Appointment folder
         if (lead) {
-          let bookedFolder = await Folder.findOne({ userEmail: userEmail.toLowerCase(), name: "Booked Appointment" });
-          if (!bookedFolder) bookedFolder = await Folder.create({ userEmail: userEmail.toLowerCase(), name: "Booked Appointment" });
+          const normalizedUserEmail = userEmail.toLowerCase();
+          const bookedFolder = await Folder.findOneAndUpdate(
+            { userEmail: normalizedUserEmail, name: "Booked Appointment" },
+            {
+              $setOnInsert: {
+                userEmail: normalizedUserEmail,
+                name: "Booked Appointment",
+                assignedDrips: [],
+              },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true },
+          );
           await Lead.updateOne(
             { _id: lead._id },
             { $set: { appointmentTime: new Date(appointmentDate), folderId: bookedFolder._id, status: "Booked Appointment" } }
@@ -144,8 +154,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       else if (outcome === "do_not_call") systemFolderName = "Do Not Contact";
 
       if (systemFolderName) {
-        let sysFolder = await Folder.findOne({ userEmail: userEmail.toLowerCase(), name: systemFolderName });
-        if (!sysFolder) sysFolder = await Folder.create({ userEmail: userEmail.toLowerCase(), name: systemFolderName });
+        const normalizedUserEmail = userEmail.toLowerCase();
+        const sysFolder = await Folder.findOneAndUpdate(
+          { userEmail: normalizedUserEmail, name: systemFolderName },
+          {
+            $setOnInsert: {
+              userEmail: normalizedUserEmail,
+              name: systemFolderName,
+              assignedDrips: [],
+            },
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true },
+        );
         const leadUpdate: Record<string, any> = { folderId: sysFolder._id, status: systemFolderName };
         // Durable DNC flag — prevents future AI dial session from calling this lead
         if (outcome === "do_not_call") {

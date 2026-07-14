@@ -2,6 +2,7 @@
 import dbConnect from "@/lib/mongooseConnect";
 import Booking from "@/models/Booking";
 import { sendSMS } from "@/lib/twilio/sendSMS";
+import { withStopFooter } from "@/lib/sms/complianceFooter";
 import { DateTime } from "luxon";
 
 // Derive the DateTime instance type without importing Luxon types directly
@@ -13,12 +14,6 @@ const formatTime = (dt: LuxonDateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE
 // Format: "August 5, 2025"
 const formatDate = (dt: LuxonDateTime) =>
   dt.toLocaleString({ month: "long", day: "numeric", year: "numeric" });
-
-function withStopFooter(msg: string) {
-  return /reply stop to opt out/i.test(msg)
-    ? msg
-    : `${msg} Reply STOP to opt out.`;
-}
 
 function safeTz(input: any) {
   const tz = (typeof input === "string" && input.trim()) ? input.trim() : "";

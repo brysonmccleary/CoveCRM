@@ -1,6 +1,7 @@
 // components/FoldersList.tsx
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
+import { LEAD_TYPES } from "@/lib/leads/leadTypes";
 
 interface Folder {
   _id: string;
@@ -8,6 +9,7 @@ interface Folder {
   leadCount: number;
   aiFirstCallEnabled?: boolean;
   aiScriptKey?: string;
+  leadType?: string;
 }
 
 interface FoldersListProps {
@@ -63,6 +65,23 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
     if (res.ok) {
       setFolders((prev) =>
         prev.map((f) => f._id === folderId ? { ...f, aiScriptKey } : f)
+      );
+      setSavedFolderIds((prev) => ({ ...prev, [folderId]: true }));
+      setTimeout(() => {
+        setSavedFolderIds((prev) => { const next = { ...prev }; delete next[folderId]; return next; });
+      }, 2000);
+    }
+  };
+
+  const updateLeadType = async (folderId: string, leadType: string) => {
+    const res = await fetch("/api/folders/ai-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folderId, leadType }),
+    });
+    if (res.ok) {
+      setFolders((prev) =>
+        prev.map((f) => f._id === folderId ? { ...f, leadType } : f)
       );
       setSavedFolderIds((prev) => ({ ...prev, [folderId]: true }));
       setTimeout(() => {
@@ -272,6 +291,32 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
                         <span style={{ fontSize: "11px", color: "#4ade80" }}>Saved ✓</span>
                       )}
                     </span>
+                  )}
+
+                  {!isSystem && (
+                    <select
+                      title="Default lead type for new leads in this folder"
+                      value={folder.leadType || ""}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        updateLeadType(folder._id, e.target.value);
+                      }}
+                      style={{
+                        backgroundColor: "transparent",
+                        border: "1px solid #1e293b",
+                        borderRadius: "4px",
+                        color: "#64748b",
+                        fontSize: "10px",
+                        padding: "1px 4px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <option value="">Lead type: —</option>
+                      {LEAD_TYPES.map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
                   )}
 
                   {!isSystem && (

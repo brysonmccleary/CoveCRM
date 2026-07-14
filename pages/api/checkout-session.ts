@@ -1,4 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "./auth/[...nextauth]";
 import { stripe } from "@/lib/stripe";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 
@@ -10,43 +12,33 @@ export default async function handler(
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  const { email, price } = req.body as {
-    email?: string;
-    price?: number | string;
-  };
+  const session = await getServerSession(req, res, authOptions);
+  const email = session?.user?.email?.toLowerCase();
+  if (!email) return res.status(401).json({ message: "Unauthorized" });
 
-  if (!email || price == null) {
-    return res.status(400).json({ message: "Missing required parameters" });
+  // Price is never accepted from the client — always resolved server-side
+  // from a fixed Stripe price ID, matching the pattern used by
+  // pages/api/stripe/create-checkout-session.ts and create-ai-checkout.ts.
+  const PRICE_ID = process.env.STRIPE_PRICE_ID_MONTHLY;
+  if (!PRICE_ID || !PRICE_ID.startsWith("price_")) {
+    return res.status(500).json({ message: "Missing STRIPE_PRICE_ID_MONTHLY (Stripe price_... id)" });
   }
 
   try {
     assertStripeWritesEnabled();
-    const session = await stripe.checkout.sessions.create({
+    const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer_email: email,
-      line_items: [
-        {
-          price_data: {
-            currency: "usd",
-            unit_amount: Math.round(Number(price) * 100), // to cents
-            product_data: {
-              name: "Cove CRM Monthly Subscription",
-              description: "Full access to Cove CRM with affiliate system",
-            },
-            recurring: { interval: "month" },
-          },
-          quantity: 1,
-        },
-      ],
+      line_items: [{ price: PRICE_ID, quantity: 1 }],
       success_url: `${req.headers.origin}/success?email=${encodeURIComponent(
         email,
       )}`,
       cancel_url: `${req.headers.origin}/billing?email=${encodeURIComponent(
         email,
-      )}&price=${price}`,
+      )}`,
     });
 
-    return res.status(200).json({ url: session.url });
+    return res.status(200).json({ url: checkoutSession.url });
   } catch (err) {
     console.error("Stripe Checkout Error:", err);
     return res.status(500).json({ message: "Stripe checkout failed" });

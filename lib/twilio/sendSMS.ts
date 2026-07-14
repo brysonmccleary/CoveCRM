@@ -38,6 +38,9 @@ export type SmsOutboundSource =
   | "booking_confirmation"
   | "booking_reminder"
   | "inbound_ai_reply"
+  | "missed_call_text_back"
+  | "review_request"
+  | "assistant_bulk_text"
   | "test_safe_mode";
 
 const ALLOWED_OUTBOUND_SOURCES = new Set<SmsOutboundSource>([
@@ -46,6 +49,9 @@ const ALLOWED_OUTBOUND_SOURCES = new Set<SmsOutboundSource>([
   "booking_confirmation",
   "booking_reminder",
   "inbound_ai_reply",
+  "missed_call_text_back",
+  "review_request",
+  "assistant_bulk_text",
   "test_safe_mode",
 ]);
 

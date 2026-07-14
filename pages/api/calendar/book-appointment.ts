@@ -308,12 +308,17 @@ export default async function handler(
     }
 
     // Move to "Booked Appointment" + set status
-    let folder = await Folder.findOne({
-      userEmail,
-      name: "Booked Appointment",
-    });
-    if (!folder)
-      folder = await Folder.create({ userEmail, name: "Booked Appointment" });
+    const folder = await Folder.findOneAndUpdate(
+      { userEmail, name: "Booked Appointment" },
+      {
+        $setOnInsert: {
+          userEmail,
+          name: "Booked Appointment",
+          assignedDrips: [],
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
 
     lead.folderId = folder._id;
     lead.status = "Booked Appointment";

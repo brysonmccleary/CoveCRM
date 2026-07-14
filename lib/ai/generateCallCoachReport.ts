@@ -1,12 +1,11 @@
 // lib/ai/generateCallCoachReport.ts
 // Generates an AI-powered call coaching report for a completed call.
-import { OpenAI } from "openai";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 import CallCoachReport from "@/models/CallCoachReport";
 import { trackUsage } from "@/lib/billing/trackUsage";
+import { completeTextWithKimiFallback } from "@/lib/ai/providers/textCompletionWithFallback";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const CALL_COACH_COST_CENTS_PER_MINUTE = Number(
   process.env.CALL_COACH_COST_CENTS_PER_MINUTE || "2",
 );
@@ -218,21 +217,22 @@ Return this exact JSON structure:
 
   let parsed: any;
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      response_format: { type: "json_object" },
+    const result = await completeTextWithKimiFallback({
+      site: "generateCallCoachReport",
+      openaiModel: "gpt-4o",
+      responseFormat: "json_object",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userContent },
       ],
-      max_tokens: 1800,
+      maxTokens: 1800,
       temperature: 0.3,
     });
 
-    const raw = completion.choices[0]?.message?.content || "{}";
+    const raw = result.content || "{}";
     parsed = JSON.parse(raw);
   } catch (err: any) {
-    console.error("[generateCallCoachReport] OpenAI error:", err?.message);
+    console.error("[generateCallCoachReport] AI provider error:", err?.message);
     return { ok: false, error: "AI generation failed" };
   }
 

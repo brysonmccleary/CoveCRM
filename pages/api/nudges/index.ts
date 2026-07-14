@@ -15,7 +15,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userEmail = session.user.email.toLowerCase();
 
   if (req.method === "GET") {
-    const nudges = await FollowUpNudge.find({ userEmail, dismissed: false })
+    const nudges = await FollowUpNudge.find({
+      userEmail,
+      dismissed: false,
+      $or: [{ dueAt: { $lte: new Date() } }, { dueAt: { $exists: false } }],
+    })
       .sort({ priority: 1, generatedAt: -1 })
       .limit(5)
       .lean();

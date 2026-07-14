@@ -19,6 +19,7 @@ type LeanFolder = {
   aiRealTimeOnly?: boolean;
   aiScriptKey?: string;
   aiEnabledAt?: Date | null;
+  leadType?: string;
   newLeadCount?: number;
 };
 
@@ -34,6 +35,7 @@ type DBFolder = {
   aiRealTimeOnly?: boolean;
   aiScriptKey?: string;
   aiEnabledAt?: any;
+  leadType?: string;
 };
 
 function escapeRegex(s: string) {
@@ -58,6 +60,7 @@ function toLeanFolder(doc: DBFolder, email: string): LeanFolder {
     aiRealTimeOnly: doc.aiRealTimeOnly ?? true,
     aiScriptKey: doc.aiScriptKey ?? "default",
     aiEnabledAt: doc.aiEnabledAt ? new Date(doc.aiEnabledAt) : null,
+    leadType: doc.leadType || "",
   };
 }
 

@@ -7,6 +7,8 @@ import toast from "react-hot-toast";
 import FolderLeadsTable from "./FolderLeadsTable";
 import { getNumberState } from "@/lib/twilio/localPresence";
 import { SYSTEM_FOLDERS, isSystemFolderName } from "@/lib/systemFolders";
+import ImportLeadsChooser from "./ImportLeadsChooser";
+import { LEAD_TYPES } from "@/lib/leads/leadTypes";
 
 function formatPhoneNumber(phone: string): string {
   const d = (phone || "").replace(/\D/g, "");
@@ -214,6 +216,7 @@ type ResumeInfo = { lastIndex: number | null; total: number | null };
 ========================= */
 export default function LeadsPanel() {
   const [showImport, setShowImport] = useState(false);
+  const [showImportChooser, setShowImportChooser] = useState(false);
   const [folders, setFolders] = useState<any[]>([]);
   const [expandedFolder, setExpandedFolder] = useState<string | null>(null);
   const [leads, setLeads] = useState<any[]>([]);
@@ -262,6 +265,7 @@ export default function LeadsPanel() {
 
   const [folderScriptKey, setFolderScriptKey] = useState<string>("final_expense");
   const [savingScript, setSavingScript] = useState(false);
+  const [savingLeadTypeFolderId, setSavingLeadTypeFolderId] = useState<string | null>(null);
 
   // ✅ NEW: modal refs for “click outside to close”
   const modalCardRef = useRef<HTMLDivElement | null>(null);
@@ -914,6 +918,38 @@ export default function LeadsPanel() {
     }
   };
 
+  const handleLeadTypeChange = async (folder: any, nextLeadType: string) => {
+    const folderId = String(folder._id);
+    const previousLeadType = String(folder.leadType || "");
+    setSavingLeadTypeFolderId(folderId);
+    setFolders((prev) =>
+      prev.map((item) => String(item._id) === folderId ? { ...item, leadType: nextLeadType } : item),
+    );
+
+    try {
+      const res = await fetch("/api/folders/ai-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderId, leadType: nextLeadType }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Failed to save lead type");
+      setFolders((prev) =>
+        prev.map((item) =>
+          String(item._id) === folderId ? { ...item, leadType: data?.leadType ?? nextLeadType } : item,
+        ),
+      );
+      toast.success("Lead type saved");
+    } catch (error: any) {
+      setFolders((prev) =>
+        prev.map((item) => String(item._id) === folderId ? { ...item, leadType: previousLeadType } : item),
+      );
+      toast.error(error?.message || "Failed to save lead type");
+    } finally {
+      setSavingLeadTypeFolderId(null);
+    }
+  };
+
   const handleAIFirstCallToggle = async (folder: any) => {
     const folderId = String(folder._id);
     const nextEnabled = !folder.aiFirstCallEnabled;
@@ -1024,17 +1060,10 @@ export default function LeadsPanel() {
       {/* Top actions */}
       <div className="flex flex-wrap gap-2">
         <button
-          onClick={() => setShowImport(!showImport)}
+          onClick={() => setShowImportChooser(true)}
           className="bg-[#6b5b95] text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
         >
-          {showImport ? "Close Import" : "Import Leads"}
-        </button>
-
-        <button
-          onClick={handleConnectGoogleSheet}
-          className="bg-green-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
-        >
-          Connect Google Sheet
+          Import Leads
         </button>
 
         <button
@@ -1124,6 +1153,20 @@ export default function LeadsPanel() {
       <LeadSearchInline />
 
       {showImport && <LeadImportPanel onImportSuccess={fetchFolders} />}
+
+      {showImportChooser && (
+        <ImportLeadsChooser
+          onClose={() => setShowImportChooser(false)}
+          onCsv={() => {
+            setShowImportChooser(false);
+            setShowImport(true);
+          }}
+          onGoogleSheets={() => {
+            setShowImportChooser(false);
+            handleConnectGoogleSheet();
+          }}
+        />
+      )}
 
       <section className="space-y-3">
         <h3 className="font-bold text-lg">Lead Folders</h3>
@@ -1243,11 +1286,27 @@ export default function LeadsPanel() {
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) => handleScriptKeyChange(e.target.value, folder._id)}
                       className="rounded-full border border-slate-600 bg-slate-900/60 px-2 py-1 text-xs font-semibold text-gray-200 outline-none transition focus:border-indigo-400"
-                      title="AI Script / Lead Type"
+                      title="AI calling script"
                     >
                       {SCRIPT_OPTIONS.map((script) => (
                         <option key={script.key} value={script.key}>
                           Script: {script.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={folder.leadType || ""}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => handleLeadTypeChange(folder, e.target.value)}
+                      disabled={savingLeadTypeFolderId === String(folder._id)}
+                      className="rounded-full border border-slate-600 bg-slate-900/60 px-2 py-1 text-xs font-semibold text-gray-200 outline-none transition focus:border-indigo-400 disabled:opacity-60"
+                      title="Lead type used for this folder and new imported leads"
+                    >
+                      <option value="">Lead type: Not set</option>
+                      {LEAD_TYPES.map((leadType) => (
+                        <option key={leadType} value={leadType}>
+                          Lead type: {leadType}
                         </option>
                       ))}
                     </select>

@@ -60,23 +60,42 @@ export async function processMetaLead(
 
   const now = new Date();
 
-  // Mark as processing and increment attemptCount atomically.
-  // $set and $inc must be siblings at the top level — not nested inside each other.
-  let attemptCount = 1;
+  // Atomic claim: this is the guard against double-creating a Lead or
+  // double-firing the AI first-call flow when Meta redelivers the same
+  // leadgen event (at-least-once delivery). Only one concurrent call for a
+  // given leadgenId can win this transition — a second call arriving before
+  // the first finishes sees processingStatus already "processing" (or
+  // "processed"/"duplicate" for an already-completed one) and its $nin
+  // filter won't match, so it bails out immediately, before ever reaching
+  // retrieveMetaLead/Lead.create/triggerAIFirstCall below. Mirrors the
+  // atomic-upsert idempotency pattern used for the Stripe ai_dialer_topup
+  // credit (pages/api/stripe/webhook.ts).
+  let claimed: any = null;
   try {
-    await MetaLeadWebhookEvent.updateOne(
-      { leadgenId },
-      {
-        $set: { processingStatus: "processing", lastAttemptAt: now },
-        $inc: { attemptCount: 1 },
-      }
+    claimed = await MetaLeadWebhookEvent.findOneAndUpdate(
+      { leadgenId, processingStatus: { $nin: ["processing", "processed", "duplicate"] } },
+      { $set: { processingStatus: "processing", lastAttemptAt: now }, $inc: { attemptCount: 1 } },
+      { new: true }
     );
-    const evt = await MetaLeadWebhookEvent.findOne({ leadgenId }).select("attemptCount").lean() as any;
-    if (evt?.attemptCount) attemptCount = evt.attemptCount;
   } catch (err: any) {
-    console.warn("[processMetaLead] Failed to mark event as processing:", err?.message);
+    console.error(
+      "[processMetaLead] Failed to atomically claim event, aborting to avoid a possible duplicate:",
+      err?.message
+    );
+    return;
   }
 
+  if (!claimed) {
+    console.info(
+      `[processMetaLead] Meta lead ${leadgenId} already processing/processed — skipping concurrent or duplicate delivery`
+    );
+    return;
+  }
+
+  const attemptCount = Number(claimed?.attemptCount) || 1;
+
+  // Defensive secondary check — cheap, and catches a Lead created through any
+  // other path (e.g. manual import) with the same metaLeadgenId.
   const existingLead = await Lead.findOne({ metaLeadgenId: leadgenId }).lean();
   if (existingLead) {
     console.info(`[processMetaLead] Duplicate Meta lead ${leadgenId} — skipping`);

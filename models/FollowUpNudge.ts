@@ -1,5 +1,5 @@
 // models/FollowUpNudge.ts
-import mongoose, { Schema, models, model } from "mongoose";
+import { Schema, models, model } from "mongoose";
 
 const FollowUpNudgeSchema = new Schema(
   {
@@ -11,6 +11,7 @@ const FollowUpNudgeSchema = new Schema(
     priority: { type: String, enum: ["high", "medium", "low"], default: "medium" },
     dismissed: { type: Boolean, default: false },
     generatedAt: { type: Date, default: Date.now },
+    dueAt: { type: Date, default: Date.now, index: true },
   },
   { timestamps: true }
 );

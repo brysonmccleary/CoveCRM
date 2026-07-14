@@ -50,6 +50,9 @@ export default async function handler(
       result.skippedNotReady +
       result.claimMisses,
     failed: result.failed,
+    failedRetryable: result.failedRetryable,
+    failedPermanent: result.failedPermanent,
+    stuckPayoutsTotal: result.stuckPayoutsTotal,
     skippedInactive: result.skippedInactive,
     skippedBelowMinimum: result.skippedBelowMinimum,
     skippedNotReady: result.skippedNotReady,

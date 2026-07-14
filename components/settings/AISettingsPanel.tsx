@@ -12,6 +12,9 @@ interface AISettings {
   liveTransferEnabled?: boolean;
   liveTransferPhone?: string;
   newLeadCallDelayMinutes?: number;
+  reviewRequestEnabled?: boolean;
+  reviewRequestUrl?: string;
+  missedCallTextBackEnabled?: boolean;
 }
 
 interface AIInsightUsage {
@@ -298,6 +301,48 @@ export default function AISettingsPanel() {
               disabled={saving || aiLocked}
             />
           </SettingRow>
+
+          <SettingRow
+            label="Missed-Call Text Back"
+            description="Automatically text callers after an unanswered inbound call."
+            locked={aiLocked}
+          >
+            <Toggle
+              checked={!!settings.missedCallTextBackEnabled}
+              onChange={(v) => save({ missedCallTextBackEnabled: v })}
+              disabled={saving || aiLocked}
+            />
+          </SettingRow>
+
+          <SettingRow
+            label="Review Request After Sale"
+            description="Send one review-request text when a lead is marked Sold."
+            locked={aiLocked}
+          >
+            <Toggle
+              checked={!!settings.reviewRequestEnabled}
+              onChange={(v) => save({ reviewRequestEnabled: v })}
+              disabled={saving || aiLocked}
+            />
+          </SettingRow>
+
+          {settings.reviewRequestEnabled && (
+            <SettingRow
+              label="Review Link"
+              description="Your Google, Yelp, or other public review URL."
+              locked={aiLocked}
+            >
+              <input
+                type="url"
+                value={settings.reviewRequestUrl || ""}
+                onChange={(e) => setSettings((s) => ({ ...s, reviewRequestUrl: e.target.value }))}
+                onBlur={(e) => save({ reviewRequestUrl: e.target.value })}
+                placeholder="https://..."
+                className="bg-[#1e293b] border border-white/10 text-white text-sm rounded px-3 py-1.5 w-64"
+                disabled={saving || aiLocked}
+              />
+            </SettingRow>
+          )}
         </div>
       </div>
       </div>

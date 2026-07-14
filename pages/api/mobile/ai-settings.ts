@@ -20,6 +20,9 @@ const ALLOWED_FIELDS = [
   "businessHoursEnd",
   "businessHoursTimezone",
   "newLeadCallDelayMinutes",
+  "reviewRequestEnabled",
+  "reviewRequestUrl",
+  "missedCallTextBackEnabled",
 ] as const;
 
 function getEmailFromAuth(req: NextApiRequest): string | null {
@@ -79,6 +82,23 @@ export default async function handler(
     const update: Record<string, any> = {};
     for (const field of ALLOWED_FIELDS) {
       if (field in (req.body || {})) update[field] = req.body[field];
+    }
+    for (const field of ["reviewRequestEnabled", "missedCallTextBackEnabled"]) {
+      if (field in update && typeof update[field] !== "boolean") {
+        return res.status(400).json({ ok: false, error: `${field} must be a boolean` });
+      }
+    }
+    if ("reviewRequestUrl" in update) {
+      const value = String(update.reviewRequestUrl || "").trim();
+      if (value) {
+        try {
+          const parsed = new URL(value);
+          if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("bad protocol");
+        } catch {
+          return res.status(400).json({ ok: false, error: "Review URL must be a valid http or https URL" });
+        }
+      }
+      update.reviewRequestUrl = value;
     }
 
     const settings = await AISettings.findOneAndUpdate(

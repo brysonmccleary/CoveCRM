@@ -4,8 +4,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import mongoose from "mongoose";
+import { LEAD_TYPES } from "@/lib/leads/leadTypes";
 import { google } from "googleapis";
 import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
@@ -134,6 +136,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         nameCandidate
       );
 
+    // This importer never maps a "Lead Type" column, so every inserted lead
+    // is a blank-leadType case — fetch the folder's default once for the
+    // whole import rather than per row.
+    const destFolder = await Folder.findById(targetFolderId).select({ leadType: 1 }).lean();
+    const folderLeadTypeRaw = String((destFolder as any)?.leadType || "").trim();
+    const folderLeadType = (LEAD_TYPES as readonly string[]).includes(folderLeadTypeRaw)
+      ? folderLeadTypeRaw
+      : undefined;
+
     // ---- Import rows
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
@@ -196,7 +207,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...(orClauses.length ? { $or: orClauses } : {}),
       };
 
-      const setOnInsert: any = { createdAt: new Date(), status: "New" };
+      const setOnInsert: any = {
+        createdAt: new Date(),
+        status: "New",
+        ...(folderLeadType ? { leadType: folderLeadType } : {}),
+      };
       const set: any = {
         userEmail,
         ownerEmail: userEmail,

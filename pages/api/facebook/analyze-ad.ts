@@ -9,9 +9,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadSubscription from "@/models/FBLeadSubscription";
-import OpenAI from "openai";
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { completeTextWithKimiFallback } from "@/lib/ai/providers/textCompletionWithFallback";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -78,17 +76,18 @@ Respond ONLY with this JSON schema (no markdown, no extra text):
 }`;
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
+    const result = await completeTextWithKimiFallback({
+      site: "facebook/analyze-ad",
+      openaiModel: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
       temperature: 0.7,
-      max_tokens: 1200,
+      maxTokens: 1200,
     });
 
-    const raw = completion.choices[0]?.message?.content?.trim() || "{}";
+    const raw = result.content?.trim() || "{}";
 
     let analysis: any;
     try {

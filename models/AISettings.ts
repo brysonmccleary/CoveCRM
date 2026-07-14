@@ -17,6 +17,12 @@ const AISettingsSchema = new Schema(
     aiCallCoachingEnabled: { type: Boolean, default: true },
     liveTransferEnabled: { type: Boolean, default: false },
     liveTransferPhone: { type: String, default: "" },
+    // Review-request automation (on "Sold" disposition) — off by default
+    reviewRequestEnabled: { type: Boolean, default: false },
+    reviewRequestUrl: { type: String, default: "" },
+    // Missed-call text-back — off by default. No separate A2P toggle: the
+    // existing sendSMS() gates (A2P/compliance) are enforced regardless.
+    missedCallTextBackEnabled: { type: Boolean, default: false },
     // New lead call config
     newLeadCallDelayMinutes: { type: Number, default: 5, min: 0, max: 60 },
     // Business hours

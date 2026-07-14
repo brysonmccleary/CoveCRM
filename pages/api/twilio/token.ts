@@ -1,11 +1,19 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
 import twilio from "twilio";
 
 const AccessToken = twilio.jwt.AccessToken;
 const VoiceGrant = AccessToken.VoiceGrant;
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    const session = await getServerSession(req, res, authOptions);
+    const identity = session?.user?.email?.toLowerCase();
+    if (!identity) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const {
       TWILIO_ACCOUNT_SID,
       TWILIO_API_KEY_SID,
@@ -23,8 +31,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         .status(500)
         .json({ error: "Twilio environment variables missing" });
     }
-
-    const identity = `user_${Math.floor(Math.random() * 1000000)}`;
 
     const voiceGrant = new VoiceGrant({
       outgoingApplicationSid: TWILIO_APP_SID,

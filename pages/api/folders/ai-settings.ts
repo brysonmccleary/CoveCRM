@@ -5,6 +5,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import { Types } from "mongoose";
+import { LEAD_TYPES } from "@/lib/leads/leadTypes";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
@@ -40,6 +41,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!existingFolder) return res.status(404).json({ message: "Folder not found" });
 
   const update: any = {};
+  const unset: any = {};
 
   if (Object.prototype.hasOwnProperty.call(body, "aiFirstCallEnabled")) {
     if (typeof body.aiFirstCallEnabled !== "boolean") {
@@ -82,10 +84,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     update.aiScriptKey = VALID_SCRIPT_KEYS.includes(scriptKey) ? scriptKey : "default";
   }
 
-  const folder = Object.keys(update).length
+  // Default leadType for new leads landing in this folder. An empty string
+  // clears the override (folder goes back to having no default); any other
+  // value must be one of the canonical lead types.
+  if (Object.prototype.hasOwnProperty.call(body, "leadType")) {
+    if (typeof body.leadType !== "string") {
+      return res.status(400).json({ message: "leadType must be a string" });
+    }
+    const leadType = body.leadType.trim();
+    if (!leadType) {
+      unset.leadType = "";
+    } else if (!(LEAD_TYPES as readonly string[]).includes(leadType)) {
+      return res.status(400).json({ message: `leadType must be one of: ${LEAD_TYPES.join(", ")}` });
+    } else {
+      update.leadType = leadType;
+    }
+  }
+
+  const hasChanges = Object.keys(update).length > 0 || Object.keys(unset).length > 0;
+  const folder = hasChanges
     ? await Folder.findOneAndUpdate(
         { _id: new Types.ObjectId(folderId), userEmail: email },
-        { $set: update },
+        {
+          ...(Object.keys(update).length ? { $set: update } : {}),
+          ...(Object.keys(unset).length ? { $unset: unset } : {}),
+        },
         { new: true }
       )
     : existingFolder;
@@ -100,5 +123,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     aiRealTimeOnly: f.aiRealTimeOnly,
     aiScriptKey: f.aiScriptKey,
     aiEnabledAt: f.aiEnabledAt,
+    leadType: f.leadType || "",
   });
 }

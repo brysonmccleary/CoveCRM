@@ -1,5 +1,6 @@
 // components/CreateFolderPanel.tsx
 import { useEffect, useState } from "react";
+import { LEAD_TYPES } from "@/lib/leads/leadTypes";
 
 interface DripSuggestion {
   suggestion: string;
@@ -16,6 +17,7 @@ export default function CreateFolderPanel() {
   const [aiFirstCallDelayMinutes, setAiFirstCallDelayMinutes] = useState(1);
   const [aiRealTimeOnly, setAiRealTimeOnly] = useState(true);
   const [aiScriptKey, setAiScriptKey] = useState("final_expense");
+  const [leadType, setLeadType] = useState("");
 
   // Fetch AI drip suggestion whenever folder name changes (debounced)
   useEffect(() => {
@@ -65,6 +67,7 @@ export default function CreateFolderPanel() {
         aiRealTimeOnly,
         aiScriptKey,
         aiEnabledAt: aiFirstCallEnabled ? new Date().toISOString() : null,
+        leadType: leadType || undefined,
       }),
     });
 
@@ -193,6 +196,26 @@ export default function CreateFolderPanel() {
             </label>
           </div>
         )}
+      </div>
+
+      {/* Tucked in below AI First-Call, styled to match — not a primary control */}
+      <div style={{ borderTop: "1px solid #334155", marginTop: "12px", paddingTop: "12px" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#94a3b8" }}>
+          <span>Default lead type for this folder</span>
+          <select
+            value={leadType}
+            onChange={(e) => setLeadType(e.target.value)}
+            style={{ backgroundColor: "#0f172a", border: "1px solid #334155", borderRadius: "4px", color: "#cbd5e1", fontSize: "12px", padding: "3px 6px" }}
+          >
+            <option value="">None (default: Final Expense)</option>
+            {LEAD_TYPES.map((type) => (
+              <option key={type} value={type}>{type}</option>
+            ))}
+          </select>
+        </label>
+        <p style={{ fontSize: "11px", color: "#64748b", margin: "4px 0 0" }}>
+          Applied to new leads imported into this folder that don't already have their own lead type.
+        </p>
       </div>
 
       <button

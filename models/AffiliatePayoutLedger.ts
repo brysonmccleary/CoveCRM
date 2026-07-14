@@ -22,6 +22,7 @@ export interface IAffiliatePayoutLedger extends Document {
     | "processing"
     | "paid"
     | "failed"
+    | "failed_permanent"
     | "reversed"
     | "clawback_owed"
     | "pending";
@@ -33,6 +34,9 @@ export interface IAffiliatePayoutLedger extends Document {
   reversalReason?: string | null;
   processingStartedAt?: Date | null;
   claimOwner?: string | null;
+  /** Number of Stripe transfer attempts that have failed for this credit so far. */
+  retryCount?: number;
+  lastFailedAt?: Date | null;
 }
 
 const AffiliatePayoutLedgerSchema = new Schema<IAffiliatePayoutLedger>(
@@ -59,6 +63,7 @@ const AffiliatePayoutLedgerSchema = new Schema<IAffiliatePayoutLedger>(
         "processing",
         "paid",
         "failed",
+        "failed_permanent",
         "reversed",
         "clawback_owed",
         "pending",
@@ -73,6 +78,8 @@ const AffiliatePayoutLedgerSchema = new Schema<IAffiliatePayoutLedger>(
     reversalReason: { type: String, default: null },
     processingStartedAt: { type: Date, default: null },
     claimOwner: { type: String, default: null },
+    retryCount: { type: Number, default: 0 },
+    lastFailedAt: { type: Date, default: null },
   },
   { collection: "affiliatepayoutledger" },
 );

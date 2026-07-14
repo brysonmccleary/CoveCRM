@@ -9,6 +9,8 @@ export interface IInboundCall extends Document {
   leadName?: string | null;
   conferenceName?: string | null;
   missedEmailSentAt?: Date | null;
+  missedTextSentAt?: Date | null;
+  missedTextSendingAt?: Date | null;
   state: "ringing" | "answered" | "bridging" | "declined" | "completed" | "expired" | "ended";
   createdAt: Date;
   updatedAt: Date;
@@ -25,6 +27,8 @@ const InboundCallSchema = new Schema<IInboundCall>(
     leadName: { type: String },
     conferenceName: { type: String },
     missedEmailSentAt: { type: Date },
+    missedTextSentAt: { type: Date },
+    missedTextSendingAt: { type: Date },
     state: {
       type: String,
       enum: ["ringing", "answered", "bridging", "declined", "completed", "expired", "ended"],

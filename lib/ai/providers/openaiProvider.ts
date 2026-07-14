@@ -23,34 +23,48 @@ export function getOpenAIEnvDiagnostics() {
 
 // Foundation-only chat-completions adapter. The existing support assistant still
 // owns the Responses API tool loop and remains the default/fallback path.
+//
+// modelOverride lets a caller (e.g. the Kimi-fallback wrapper) request a
+// specific OpenAI model instead of OPENAI_SUPPORT_MODEL — existing callers
+// that omit it are completely unaffected.
 export async function callOpenAIChatProvider(
-  request: AiProviderChatRequest
+  request: AiProviderChatRequest,
+  modelOverride?: string
 ): Promise<AiProviderChatResult> {
+  const model = modelOverride || OPENAI_MODEL;
   const apiKey = normalizeProviderApiKey(process.env.OPENAI_API_KEY);
   if (!apiKey) {
-    return { ok: false, provider: "openai", error: "provider_not_configured", errorCode: "provider_not_configured", model: OPENAI_MODEL };
+    return { ok: false, provider: "openai", error: "provider_not_configured", errorCode: "provider_not_configured", model };
   }
 
   try {
     const client = new OpenAI({ apiKey });
     const response = await client.chat.completions.create({
-      model: OPENAI_MODEL,
+      model,
       messages: request.messages,
       temperature: request.temperature ?? 0.2,
       max_tokens: request.maxTokens ?? 900,
+      ...(request.responseFormat ? { response_format: { type: request.responseFormat } } : {}),
     });
 
     return {
       ok: true,
       provider: "openai",
-      model: OPENAI_MODEL,
+      model,
       content: String(response.choices?.[0]?.message?.content || "").trim(),
+      usage: response.usage
+        ? {
+            promptTokens: response.usage.prompt_tokens,
+            completionTokens: response.usage.completion_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+        : undefined,
     };
   } catch (err: any) {
     return {
       ok: false,
       provider: "openai",
-      model: OPENAI_MODEL,
+      model,
       status: err?.status,
       error: sanitizeProviderError(err),
       errorCode: providerErrorCode(err),

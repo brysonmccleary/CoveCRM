@@ -1,3 +1,4 @@
+// pages/api/create-booking.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import dbConnect from "@/lib/mongooseConnect";

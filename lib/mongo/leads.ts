@@ -7,6 +7,8 @@ import {
   isSoldStatus,
   withDerivedTimezone,
 } from "@/lib/leads/foundationFields";
+import { LEAD_TYPES, normalizeLeadType } from "@/lib/leads/leadTypes";
+import Folder from "@/models/Folder";
 
 const normalizeExternalId = (value: any): string | undefined => {
   if (value == null) return undefined;
@@ -70,6 +72,8 @@ const LeadSchema = new Schema(
     status: { type: String, default: "New" },
     soldAt: { type: Date, default: null, index: true },
     soldAtApproximate: { type: Boolean, default: false },
+    reviewRequestSentAt: { type: Date, default: null },
+    reviewRequestSendingAt: { type: Date, default: null },
     contactAttempts: { type: Number, default: 0 },
     lastContactedAt: { type: Date, default: null },
     timezone: { type: String, default: "" },
@@ -112,7 +116,7 @@ const LeadSchema = new Schema(
     // Lead type used by AI
     leadType: {
       type: String,
-      enum: ["Final Expense", "Veteran", "Mortgage Protection", "IUL", "Trucker"],
+      enum: LEAD_TYPES,
       default: "Final Expense",
     },
 
@@ -249,12 +253,35 @@ LeadSchema.pre("updateMany", applyLeadFoundationUpdateFields);
 
 // -------- Utilities --------
 export const sanitizeLeadType = (input: string): string => {
-  const normalized = (input || "").toLowerCase().trim();
-  if (normalized.includes("veteran") || normalized === "vet") return "Veteran";
-  if (normalized.includes("mortgage")) return "Mortgage Protection";
-  if (normalized.includes("iul")) return "IUL";
-  return "Final Expense";
+  return normalizeLeadType(input) || "Final Expense";
 };
+
+/**
+ * Pure decision: what leadType should this imported row end up with?
+ * An explicit, non-blank row value always wins (sanitized). Otherwise falls
+ * back to the folder's default, if the folder has one; otherwise the same
+ * "Final Expense" fallback sanitizeLeadType has always produced.
+ */
+export function resolveLeadTypeForImport(rawRowLeadType: unknown, folderLeadTypeDefault: string | null): string {
+  const raw = String(rawRowLeadType || "").trim();
+  if (raw) return sanitizeLeadType(raw);
+  return folderLeadTypeDefault || "Final Expense";
+}
+
+/**
+ * Fetches a folder's leadType default (if set) for use as a fallback when an
+ * incoming lead doesn't specify its own leadType. Never overrides an explicit
+ * value — callers only use this when the lead's own leadType is blank.
+ */
+async function getFolderLeadTypeDefault(folderId: Types.ObjectId): Promise<string | null> {
+  try {
+    const folderDoc = await (Folder as any).findById(folderId).select({ leadType: 1 }).lean();
+    const value = String(folderDoc?.leadType || "").trim();
+    return value && (LEAD_TYPES as readonly string[]).includes(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
 
@@ -283,6 +310,7 @@ export const createLeadsFromCSV = async (
   folderId: string | Types.ObjectId
 ) => {
   const fid = toObjectId(folderId);
+  const folderLeadType = await getFolderLeadTypeDefault(fid);
 
   const mapped = leads.map((lead) => {
     const emailLower =
@@ -297,6 +325,8 @@ export const createLeadsFromCSV = async (
     // never write ownerEmail in new docs
     const { ownerEmail, ...rest } = lead;
 
+    const leadType = resolveLeadTypeForImport(lead.leadType, folderLeadType);
+
     return omitBlankExternalId(withDerivedTimezone({
       ...rest,
       userEmail,
@@ -306,7 +336,7 @@ export const createLeadsFromCSV = async (
       normalizedPhone,
       Email: emailLower,
       email: emailLower2 ?? emailLower, // ✅ ensure lowercase mirror exists
-      leadType: sanitizeLeadType(lead.leadType || ""),
+      leadType,
     }));
   });
 
@@ -320,6 +350,7 @@ export const createLeadsFromGoogleSheet = async (
   folderId: string | Types.ObjectId
 ) => {
   const fid = toObjectId(folderId);
+  const folderLeadType = await getFolderLeadTypeDefault(fid);
 
   const parsed = sheetLeads.map((lead) => {
     const emailLower =
@@ -333,6 +364,8 @@ export const createLeadsFromGoogleSheet = async (
 
     const { ownerEmail, ...rest } = lead;
 
+    const leadType = resolveLeadTypeForImport(lead.leadType, folderLeadType);
+
     return omitBlankExternalId(withDerivedTimezone({
       ...rest,
       userEmail,
@@ -343,7 +376,7 @@ export const createLeadsFromGoogleSheet = async (
       normalizedPhone,
       Email: emailLower,
       email: emailLower2 ?? emailLower, // ✅ ensure lowercase mirror exists
-      leadType: sanitizeLeadType(lead.leadType || ""),
+      leadType,
     }));
   });
 
