@@ -11,7 +11,7 @@ const EXPERIMENTAL_ADMIN = "bryson.mccleary1@gmail.com";
 
 type DripTabMode = "sms" | "email";
 
-type DripDelayUnit = "hours" | "days" | "weeks" | "months";
+type DripDelayUnit = "minutes" | "hours" | "days" | "weeks" | "months";
 
 interface MessageStep {
   text: string;
@@ -32,6 +32,8 @@ function parseLegacyDayUI(day?: string | null): { value: number; unit: DripDelay
   if (monthM) { const n = parseInt(monthM[1] || monthM[2], 10); if (!isNaN(n)) return { value: n, unit: "months" }; }
   const weekM = raw.match(/(?:weeks?\s+(\d+)|(\d+)\s+weeks?)/);
   if (weekM) { const n = parseInt(weekM[1] || weekM[2], 10); if (!isNaN(n)) return { value: n, unit: "weeks" }; }
+  const minuteM = raw.match(/(?:minutes?\s+(\d+)|(\d+)\s+minutes?)/);
+  if (minuteM) { const n = parseInt(minuteM[1] || minuteM[2], 10); if (!isNaN(n)) return { value: n, unit: "minutes" }; }
   const hourM = raw.match(/(?:hours?\s+(\d+)|(\d+)\s+hours?)/);
   if (hourM) { const n = parseInt(hourM[1] || hourM[2], 10); if (!isNaN(n)) return { value: n, unit: "hours" }; }
   const dayM = raw.match(/(?:days?\s+(\d+)|(\d+)\s+days?|^day\s+(\d+)$|^(\d+)$)/);
@@ -41,6 +43,7 @@ function parseLegacyDayUI(day?: string | null): { value: number; unit: DripDelay
 
 function delayToLegacyDay(value: number, unit: DripDelayUnit): string {
   if (value === 0 && unit === "days") return "immediately";
+  if (unit === "minutes") return `${value} minutes`;
   if (unit === "hours") return `${value} hours`;
   if (unit === "days") return `Day ${value}`;
   if (unit === "weeks") return `Week ${value}`;
@@ -335,10 +338,15 @@ export default function DripCampaignsPanel() {
       const step = { ...updated[idx] };
       if (key === "delayValue") {
         const num = typeof value === "number" ? value : parseInt(String(value), 10);
-        step.delayValue = isNaN(num) ? 0 : Math.max(0, num);
+        step.delayValue = step.delayUnit === "minutes"
+          ? Math.min(60, Math.max(1, isNaN(num) ? 1 : num))
+          : isNaN(num) ? 0 : Math.max(0, num);
         step.day = delayToLegacyDay(step.delayValue, step.delayUnit ?? "days");
       } else if (key === "delayUnit") {
         step.delayUnit = value as DripDelayUnit;
+        if (step.delayUnit === "minutes") {
+          step.delayValue = Math.min(60, Math.max(1, step.delayValue ?? 1));
+        }
         step.day = delayToLegacyDay(step.delayValue ?? 0, step.delayUnit);
       } else {
         step.text = String(value);
@@ -353,12 +361,13 @@ export default function DripCampaignsPanel() {
       const last = prev[prev.length - 1];
       const lastValue = last?.delayValue ?? 0;
       const lastUnit = last?.delayUnit ?? "days";
-      const nextValue = lastValue + 1;
+      const nextUnit: DripDelayUnit = lastUnit === "minutes" ? "days" : lastUnit;
+      const nextValue = lastUnit === "minutes" ? 1 : lastValue + 1;
       const newStep: MessageStep = {
         text: "",
-        day: delayToLegacyDay(nextValue, lastUnit),
+        day: delayToLegacyDay(nextValue, nextUnit),
         delayValue: nextValue,
-        delayUnit: lastUnit,
+        delayUnit: nextUnit,
       };
       return [...prev, newStep];
     });
@@ -367,6 +376,11 @@ export default function DripCampaignsPanel() {
   const handleDuplicateNewStep = (idx: number) => {
     setMessageSteps((prev) => {
       const copy = { ...prev[idx] };
+      if (copy.delayUnit === "minutes") {
+        copy.delayValue = 1;
+        copy.delayUnit = "days";
+        copy.day = delayToLegacyDay(1, "days");
+      }
       return [...prev.slice(0, idx + 1), copy, ...prev.slice(idx + 1)];
     });
   };
@@ -472,11 +486,16 @@ export default function DripCampaignsPanel() {
 
     if (key === "delayValue") {
       const num = typeof value === "number" ? value : parseInt(String(value), 10);
-      step.delayValue = isNaN(num) ? 0 : Math.max(0, num);
       const unit = step.delayUnit ?? "days";
+      step.delayValue = unit === "minutes"
+        ? Math.min(60, Math.max(1, isNaN(num) ? 1 : num))
+        : isNaN(num) ? 0 : Math.max(0, num);
       step.day = delayToLegacyDay(step.delayValue, unit);
     } else if (key === "delayUnit") {
       step.delayUnit = value as DripDelayUnit;
+      if (step.delayUnit === "minutes") {
+        step.delayValue = Math.min(60, Math.max(1, step.delayValue ?? 1));
+      }
       step.day = delayToLegacyDay(step.delayValue ?? 0, step.delayUnit);
     } else if (key === "text") {
       step.text = String(value);
@@ -493,16 +512,18 @@ export default function DripCampaignsPanel() {
     const lastStep = existing[existing.length - 1];
     const lastValue = lastStep?.delayValue ?? 0;
     const lastUnit = lastStep?.delayUnit ?? "days";
+    const nextUnit: DripDelayUnit = lastUnit === "minutes" ? "days" : lastUnit;
     // Default next step: +1 of same unit, or 1 day if immediately
-    const nextValue = lastUnit === "days" ? Math.max(1, lastValue + 1)
+    const nextValue = lastUnit === "minutes" ? 1
+      : lastUnit === "days" ? Math.max(1, lastValue + 1)
       : lastUnit === "months" ? lastValue + 1
       : lastUnit === "weeks" ? lastValue + 1
       : lastValue + 1;
     const newStep: MessageStep = {
       text: "",
-      day: delayToLegacyDay(nextValue, lastUnit),
+      day: delayToLegacyDay(nextValue, nextUnit),
       delayValue: nextValue,
-      delayUnit: lastUnit,
+      delayUnit: nextUnit,
     };
     setEditableDrips((prev) => ({ ...prev, [dripId]: [...existing, newStep] }));
   };
@@ -1013,9 +1034,11 @@ setBackendCampaigns((prev) =>
                       <input
                         type="number"
                         min={1}
+                        max={du === "minutes" ? 60 : undefined}
                         value={dv}
                         onChange={(e) => {
-                          const num = parseInt(e.target.value, 10) || 1;
+                          const rawNum = parseInt(e.target.value, 10) || 1;
+                          const num = du === "minutes" ? Math.min(60, Math.max(1, rawNum)) : rawNum;
                           setAIPreviewSteps((prev) => prev.map((s, i) =>
                             i === idx ? { ...s, delayValue: num, delayUnit: du, day: delayToLegacyDay(num, du) } : s
                           ));
@@ -1026,12 +1049,14 @@ setBackendCampaigns((prev) =>
                         value={du}
                         onChange={(e) => {
                           const unit = e.target.value as DripDelayUnit;
+                          const nextValue = unit === "minutes" ? Math.min(60, Math.max(1, dv)) : dv;
                           setAIPreviewSteps((prev) => prev.map((s, i) =>
-                            i === idx ? { ...s, delayUnit: unit, day: delayToLegacyDay(dv, unit) } : s
+                            i === idx ? { ...s, delayValue: nextValue, delayUnit: unit, day: delayToLegacyDay(nextValue, unit) } : s
                           ));
                         }}
                         className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
                       >
+                        {idx === 1 && <option value="minutes">Minutes</option>}
                         <option value="hours">Hours</option>
                         <option value="days">Days</option>
                         <option value="weeks">Weeks</option>
@@ -1150,6 +1175,7 @@ setBackendCampaigns((prev) =>
                   <input
                     type="number"
                     min={1}
+                    max={step.delayUnit === "minutes" ? 60 : undefined}
                     value={step.delayValue ?? 1}
                     onChange={(e) => handleNewStepChange(idx, "delayValue", parseInt(e.target.value, 10) || 1)}
                     className="w-20 bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
@@ -1159,6 +1185,7 @@ setBackendCampaigns((prev) =>
                     onChange={(e) => handleNewStepChange(idx, "delayUnit", e.target.value)}
                     className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
                   >
+                    {idx === 1 && <option value="minutes">Minutes</option>}
                     <option value="hours">Hours</option>
                     <option value="days">Days</option>
                     <option value="weeks">Weeks</option>
@@ -1267,6 +1294,7 @@ setBackendCampaigns((prev) =>
                             <input
                               type="number"
                               min={0}
+                              max={(msg.delayUnit ?? parseLegacyDayUI(msg.day).unit) === "minutes" ? 60 : undefined}
                               value={msg.delayValue ?? parseLegacyDayUI(msg.day).value}
                               onChange={(e) => handleEditMessage(cid, idx, "delayValue", parseInt(e.target.value, 10) || 0)}
                               className="w-20 bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
@@ -1276,6 +1304,7 @@ setBackendCampaigns((prev) =>
                               onChange={(e) => handleEditMessage(cid, idx, "delayUnit", e.target.value)}
                               className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
                             >
+                              {idx === 1 && <option value="minutes">minutes from enrollment</option>}
                               <option value="hours">hours from enrollment</option>
                               <option value="days">days from enrollment</option>
                               <option value="weeks">weeks from enrollment</option>
@@ -1404,6 +1433,7 @@ setBackendCampaigns((prev) =>
                           <input
                             type="number"
                             min={0}
+                            max={(msg.delayUnit ?? parseLegacyDayUI(msg.day).unit) === "minutes" ? 60 : undefined}
                             value={msg.delayValue ?? parseLegacyDayUI(msg.day).value}
                             onChange={(e) => handleEditMessage(camp._id, idx, "delayValue", parseInt(e.target.value, 10) || 0)}
                             className="w-20 bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
@@ -1413,6 +1443,7 @@ setBackendCampaigns((prev) =>
                             onChange={(e) => handleEditMessage(camp._id, idx, "delayUnit", e.target.value)}
                             className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-sm"
                           >
+                            {idx === 1 && <option value="minutes">minutes from enrollment</option>}
                             <option value="hours">hours from enrollment</option>
                             <option value="days">days from enrollment</option>
                             <option value="weeks">weeks from enrollment</option>

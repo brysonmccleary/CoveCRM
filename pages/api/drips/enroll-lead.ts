@@ -251,7 +251,7 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
       return res.status(400).json({ error: "Campaign is not an active SMS campaign" });
     }
 
-    const user = await User.findOne({ email }).select("_id email name agentPhone").lean();
+    const user = await User.findOne({ email }).select("_id email name agentPhone timezone").lean();
     if (!user?._id) return res.status(404).json({ error: "User not found" });
 
     // Compute initial nextSendAt (immediate if unspecified)
@@ -464,6 +464,8 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
               leadFirstName: leadFirst,
               leadLastName: leadLast,
               leadState: (lead as any).State || (lead as any).state || null,
+              leadTimezone: (lead as any).timezone || null,
+              agentTimezone: (user as any).timezone || null,
               agentName: user.name || null,
               agentPhone: (user as any).agentPhone || null,
               campaignIsGlobal: !!(campaign as any).isGlobal,

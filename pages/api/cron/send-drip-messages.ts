@@ -343,14 +343,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // ── Gate 14: Cooldown (min 2 hours between drip sends to same lead) ─
       const cooldownThreshold = new Date(now.getTime() - MIN_COOLDOWN_MINUTES * 60 * 1000);
-      const recentDrip = await ScheduledDripMessage.findOne({
-        leadId: record.leadId,
-        status: "sent",
-        sentAt: { $gte: cooldownThreshold },
-      })
-        .sort({ sentAt: -1 })
-        .select({ sentAt: 1 })
-        .lean();
+      const isRapidFirstFollowUp =
+        Number(record.stepIndex) === 1 &&
+        record.delayUnit === "minutes" &&
+        Number(record.delayValue) >= 1 &&
+        Number(record.delayValue) <= 60;
+      const recentDrip = isRapidFirstFollowUp
+        ? null
+        : await ScheduledDripMessage.findOne({
+            leadId: record.leadId,
+            status: "sent",
+            sentAt: { $gte: cooldownThreshold },
+          })
+            .sort({ sentAt: -1 })
+            .select({ sentAt: 1 })
+            .lean();
 
       if (recentDrip && (recentDrip as any).sentAt) {
         const rescheduledTo = new Date(

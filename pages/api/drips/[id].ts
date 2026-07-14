@@ -5,7 +5,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
 
-const VALID_DELAY_UNITS = new Set(["hours", "days", "weeks", "months"]);
+const VALID_DELAY_UNITS = new Set(["minutes", "hours", "days", "weeks", "months"]);
 
 function normalizeSteps(steps: any[]) {
   if (steps === undefined) return undefined;
@@ -19,7 +19,8 @@ function normalizeSteps(steps: any[]) {
     const day = String(step?.day || (index === 0 ? "immediately" : `Day ${index}`)).trim();
     const time = typeof step?.time === "string" ? step.time : "9:00 AM";
 
-    // Preserve V2 delay fields when valid; reject "minutes" and unknown units.
+    // Preserve V2 delay fields when valid. Minute timing is intentionally
+    // limited to the first follow-up so later steps retain normal spacing.
     const rawUnit = step?.delayUnit;
     const rawValue = step?.delayValue;
     const delayUnit =
@@ -30,6 +31,15 @@ function normalizeSteps(steps: any[]) {
       rawValue != null && !isNaN(Number(rawValue))
         ? Math.max(0, Number(rawValue))
         : undefined;
+
+    if (
+      delayUnit === "minutes" &&
+      (index !== 1 || delayValue === undefined || delayValue < 1 || delayValue > 60)
+    ) {
+      throw new Error(
+        "Minute delays are only allowed for message 2 and must be between 1 and 60 minutes"
+      );
+    }
 
     return {
       text,
@@ -210,8 +220,11 @@ if (!drip) {
 
     res.setHeader("Allow", "GET,PUT,DELETE");
     return res.status(405).json({ error: "Method not allowed" });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Drip update/delete error:", error);
+    if (String(error?.message || "").startsWith("Minute delays are only allowed")) {
+      return res.status(400).json({ error: error.message });
+    }
     return res.status(500).json({ error: "Server error" });
   }
 }

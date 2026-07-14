@@ -156,7 +156,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    const VALID_DELAY_UNITS = new Set(["hours", "days", "weeks", "months"]);
+    const VALID_DELAY_UNITS = new Set(["minutes", "hours", "days", "weeks", "months"]);
 
     const email = String(session.user.email).toLowerCase();
 
@@ -173,7 +173,8 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         day = index === 0 ? "immediately" : `Day ${index}`;
       }
 
-      // Preserve V2 delay fields when valid; reject "minutes" and unknown units.
+      // Preserve V2 delay fields when valid. Minute timing is intentionally
+      // limited to the first follow-up so later steps retain normal spacing.
       const rawUnit = step.delayUnit;
       const rawValue = step.delayValue;
       const delayUnit =
@@ -184,6 +185,15 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         rawValue != null && !isNaN(Number(rawValue))
           ? Math.max(0, Number(rawValue))
           : undefined;
+
+      if (
+        delayUnit === "minutes" &&
+        (index !== 1 || delayValue === undefined || delayValue < 1 || delayValue > 60)
+      ) {
+        throw new Error(
+          "Minute delays are only allowed for message 2 and must be between 1 and 60 minutes"
+        );
+      }
 
       return {
         text: trimmedText,
@@ -225,6 +235,9 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     });
   } catch (err: any) {
     console.error("[drips/campaigns POST] error", err);
+    if (String(err?.message || "").startsWith("Minute delays are only allowed")) {
+      return res.status(400).json({ error: err.message });
+    }
     return res
       .status(500)
       .json({ error: "Server error", detail: err?.message || "Unknown error" });

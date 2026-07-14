@@ -32,7 +32,7 @@ const ScheduledDripMessageSchema = new Schema(
 
     // Delay info (stored for display/debug; sendAt is the authoritative time)
     delayValue: { type: Number },
-    delayUnit: { type: String, enum: ["hours", "days", "weeks", "months"] },
+    delayUnit: { type: String, enum: ["minutes", "hours", "days", "weeks", "months"] },
 
     // Lifecycle
     status: {

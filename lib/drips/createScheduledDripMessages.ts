@@ -52,6 +52,8 @@ export interface CreateScheduledDripMessagesParams {
   leadFirstName?: string | null;
   leadLastName?: string | null;
   leadState?: string | null;
+  leadTimezone?: string | null;
+  agentTimezone?: string | null;
   agentName?: string | null;
   agentPhone?: string | null;
   campaignIsGlobal?: boolean;
@@ -87,6 +89,8 @@ export async function createScheduledDripMessages(
     leadFirstName,
     leadLastName,
     leadState,
+    leadTimezone,
+    agentTimezone,
     agentName,
     agentPhone,
     campaignIsGlobal,
@@ -125,6 +129,8 @@ export async function createScheduledDripMessages(
       enrolledAt,
       step: { delayValue, delayUnit, day: step.day },
       leadState,
+      leadTimezone,
+      agentTimezone,
     });
 
     if (!sendAt) {
@@ -172,7 +178,7 @@ export async function createScheduledDripMessages(
       bodySnapshot,
       toNumber: leadPhone,
       sendAt,
-      timezone: require("@/lib/drips/computeScheduledDripSendAt").resolveLeadTimezone(leadState),
+      timezone: resolveLeadTimezone(leadState, leadTimezone, agentTimezone),
       delayValue: resolvedValue ?? undefined,
       delayUnit: resolvedUnit ?? undefined,
       status: "pending",

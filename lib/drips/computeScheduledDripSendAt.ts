@@ -7,9 +7,9 @@
 // needs to re-check quiet hours.
 
 import { DateTime } from "luxon";
-import { getTimezoneFromState } from "@/utils/timezone";
+import { resolveStateCode, stateToTimezone } from "@/utils/timezone";
 
-export type DripDelayUnit = "hours" | "days" | "weeks" | "months";
+export type DripDelayUnit = "minutes" | "hours" | "days" | "weeks" | "months";
 
 const QUIET_START_HOUR = 21; // 9:00 PM
 const QUIET_END_HOUR = 8;   // 8:00 AM
@@ -34,19 +34,29 @@ function applyQuietHours(dt: DateTime): DateTime {
 
 // ── Timezone resolution ─────────────────────────────────────────────────────
 
-export function resolveLeadTimezone(state?: string | null): string {
-  if (!state) {
-    console.warn("[drip/computeSendAt] No lead state — falling back to America/New_York");
-    return "America/New_York";
+function validIanaTimezone(value?: string | null): string | null {
+  const zone = String(value || "").trim();
+  return zone && DateTime.now().setZone(zone).isValid ? zone : null;
+}
+
+export function resolveLeadTimezone(
+  state?: string | null,
+  leadTimezone?: string | null,
+  agentTimezone?: string | null,
+): string {
+  const explicitLeadZone = validIanaTimezone(leadTimezone);
+  if (explicitLeadZone) return explicitLeadZone;
+
+  const stateCode = resolveStateCode(state);
+  if (stateCode && stateToTimezone[stateCode]) {
+    return stateToTimezone[stateCode];
   }
-  const tz = getTimezoneFromState(state);
-  if (!tz) {
-    console.warn(
-      `[drip/computeSendAt] Could not resolve timezone for state "${state}" — falling back to America/New_York`
-    );
-    return "America/New_York";
-  }
-  return tz;
+
+  const agentZone = validIanaTimezone(agentTimezone);
+  if (agentZone) return agentZone;
+
+  console.warn("[drip/computeSendAt] No valid lead or agent timezone — falling back to America/New_York");
+  return "America/New_York";
 }
 
 // ── Legacy day-field parser ─────────────────────────────────────────────────
@@ -83,6 +93,13 @@ export function parseLegacyDayField(day?: string | null): ParsedDelay | null {
     if (!isNaN(n) && n >= 0) return { value: n, unit: "weeks" };
   }
 
+  // "minute 5" / "5 minutes" / "Minute 5"
+  const minuteM = raw.match(/(?:minutes?\s+(\d+)|(\d+)\s+minutes?)/);
+  if (minuteM) {
+    const n = parseInt(minuteM[1] || minuteM[2], 10);
+    if (!isNaN(n) && n >= 0) return { value: n, unit: "minutes" };
+  }
+
   // "hour 3" / "3 hours" / "Hour 3"
   const hourM = raw.match(/(?:hours?\s+(\d+)|(\d+)\s+hours?)/);
   if (hourM) {
@@ -106,6 +123,7 @@ export function parseLegacyDayField(day?: string | null): ParsedDelay | null {
  */
 export function delayToLegacyDayString(value: number, unit: DripDelayUnit): string {
   if (value === 0 && unit === "days") return "immediately";
+  if (unit === "minutes") return `${value} minutes`;
   if (unit === "hours") return `${value} hours`;
   if (unit === "days") return `Day ${value}`;
   if (unit === "weeks") return `Week ${value}`;
@@ -136,21 +154,24 @@ export interface StepDelayInput {
  *   - "Day 7" / delayValue=7 delayUnit=days → enrollment + 7 days at 9AM lead-local
  *   - "Month 3" / delayValue=3 delayUnit=months → enrollment + 3 calendar months at 9AM
  *   - "immediately" / delayValue=0 → enrolledAt, quiet-hours adjusted
+ *   - "5 minutes" / delayValue=5 delayUnit=minutes → enrolledAt + 5m, quiet-hours adjusted
  *   - "3 hours" / delayValue=3 delayUnit=hours → enrolledAt + 3h, quiet-hours adjusted
  */
 export function computeScheduledDripSendAt(params: {
   enrolledAt: Date;
   step: StepDelayInput;
   leadState?: string | null;
+  leadTimezone?: string | null;
+  agentTimezone?: string | null;
 }): Date | null {
-  const { enrolledAt, step, leadState } = params;
+  const { enrolledAt, step, leadState, leadTimezone, agentTimezone } = params;
 
   // Birthday steps are permanently disabled
   if (isBirthdayStep(step.day)) {
     return null;
   }
 
-  const tz = resolveLeadTimezone(leadState);
+  const tz = resolveLeadTimezone(leadState, leadTimezone, agentTimezone);
   const baseUTC = DateTime.fromJSDate(enrolledAt).toUTC();
 
   // Resolve delay (explicit fields take priority over legacy "day" string)
@@ -174,9 +195,11 @@ export function computeScheduledDripSendAt(params: {
     }
   }
 
-  if (unit === "hours") {
-    // Add exact hours, then apply quiet hours in lead-local
-    const rawUTC = baseUTC.plus({ hours: value });
+  if (unit === "minutes" || unit === "hours") {
+    // Add the exact short delay, then apply quiet hours in lead-local.
+    const rawUTC = unit === "minutes"
+      ? baseUTC.plus({ minutes: value })
+      : baseUTC.plus({ hours: value });
     const leadLocal = rawUTC.setZone(tz);
     return applyQuietHours(leadLocal).toUTC().toJSDate();
   }

@@ -123,9 +123,11 @@ export function resolveStateCode(input?: string | null): string | null {
     if (stateToTimezone[code]) return code;
   }
 
-  // Name → code (normalize to letters only)
-  const key = trimmed.toLowerCase().replace(/[^a-z]/g, "");
-  return STATE_NAME_TO_CODE[key] || null;
+  // Name → code. Try normalized words first, then a compact form so inputs
+  // such as "New York", "new-york", and "Washington, D.C." all resolve.
+  const wordKey = trimmed.toLowerCase().replace(/[^a-z]+/g, " ").trim();
+  const compactKey = wordKey.replace(/[^a-z]/g, "");
+  return STATE_NAME_TO_CODE[wordKey] || STATE_NAME_TO_CODE[compactKey] || null;
 }
 
 /**
