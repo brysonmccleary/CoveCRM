@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
+import { LEAD_TYPES } from "@/lib/leads/leadTypes";
+
+const VENDOR_LEADS_ENDPOINT = "https://www.covecrm.com/api/v1/leads";
 
 type KeyRecord = {
   _id: string;
   name: string;
+  folderId?: string | null;
   folderName?: string;
   keyPrefix: string;
   lastUsedAt?: string | null;
@@ -65,11 +69,21 @@ function displayDate(value?: string | null) {
   return value ? new Date(value).toLocaleString() : "Never";
 }
 
-function ApiKeysPanel({ onBack, onClose }: { onBack: () => void; onClose: () => void }) {
+function ApiKeysPanel({
+  onBack,
+  onClose,
+  onVendorConnectionCreated,
+}: {
+  onBack: () => void;
+  onClose: () => void;
+  onVendorConnectionCreated?: () => void | Promise<void>;
+}) {
   const [keys, setKeys] = useState<KeyRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [folderName, setFolderName] = useState("");
+  const [folderNameEdited, setFolderNameEdited] = useState(false);
+  const [leadType, setLeadType] = useState("");
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState("");
 
@@ -92,19 +106,23 @@ function ApiKeysPanel({ onBack, onClose }: { onBack: () => void; onClose: () => 
   const createKey = async () => {
     if (!name.trim()) return toast.error("Enter the vendor name");
     if (!folderName.trim()) return toast.error("Enter the folder name");
+    if (!leadType) return toast.error("Select the lead type");
     setCreating(true);
     try {
       const response = await fetch("/api/developer/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), folderName: folderName.trim() }),
+        body: JSON.stringify({ name: name.trim(), folderName: folderName.trim(), leadType }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || "Failed to create API key");
       setNewKey(data.key);
       setName("");
       setFolderName("");
+      setFolderNameEdited(false);
+      setLeadType("");
       await load();
+      await onVendorConnectionCreated?.();
     } catch (error: any) {
       toast.error(error.message || "Failed to create API key");
     } finally {
@@ -134,11 +152,27 @@ function ApiKeysPanel({ onBack, onClose }: { onBack: () => void; onClose: () => 
       {newKey && (
         <div style={{ marginTop: 20, padding: 16, borderRadius: 8, border: "1px solid #6b5b95", background: "#1e293b" }}>
           <strong>Your key is ready. Copy it now—you won’t see it again.</strong>
-          <p style={{ color: "#94a3b8", margin: "8px 0 0" }}>Send this key to your lead vendor. Their new leads will automatically appear in the folder you chose.</p>
+          <p style={{ color: "#94a3b8", margin: "8px 0 0" }}>The folder is already created. Send this key to your lead vendor and every new lead will automatically appear there.</p>
           <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
             <code style={{ flex: 1, minWidth: 260, padding: 10, borderRadius: 6, background: "#020617", overflowWrap: "anywhere" }}>{newKey}</code>
             <button style={primary} onClick={async () => { await navigator.clipboard.writeText(newKey); toast.success("API key copied"); }}>Copy</button>
           </div>
+          <div style={{ marginTop: 12, color: "#cbd5e1", lineHeight: 1.7 }}>
+            <div><strong>Endpoint:</strong> <code>{VENDOR_LEADS_ENDPOINT}</code></div>
+            <div><strong>Method:</strong> POST</div>
+            <div><strong>Authorization:</strong> Bearer API key or <code>x-api-key</code></div>
+          </div>
+          <button
+            style={{ ...secondary, marginTop: 10, marginRight: 10 }}
+            onClick={async () => {
+              await navigator.clipboard.writeText(
+                `POST ${VENDOR_LEADS_ENDPOINT}\nAuthorization: Bearer ${newKey}\nContent-Type: application/json`,
+              );
+              toast.success("Vendor setup copied");
+            }}
+          >
+            Copy Vendor Setup
+          </button>
           <button style={{ ...secondary, marginTop: 10 }} onClick={() => setNewKey("")}>I saved it</button>
         </div>
       )}
@@ -148,7 +182,11 @@ function ApiKeysPanel({ onBack, onClose }: { onBack: () => void; onClose: () => 
         <label style={{ display: "block", marginBottom: 6 }}>1. Who is sending you leads?</label>
         <input
           value={name}
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => {
+            const nextName = event.target.value;
+            setName(nextName);
+            if (!folderNameEdited) setFolderName(nextName.trim() ? `${nextName.trim()} Leads` : "");
+          }}
           placeholder="Example: ABC Lead Company"
           maxLength={80}
           style={{ width: "100%", boxSizing: "border-box", borderRadius: 7, border: "1px solid rgba(255,255,255,0.2)", background: "#0f172a", color: "white", padding: "10px 12px", marginBottom: 14 }}
@@ -156,12 +194,24 @@ function ApiKeysPanel({ onBack, onClose }: { onBack: () => void; onClose: () => 
         <label style={{ display: "block", marginBottom: 6 }}>2. What should their CoveCRM folder be called?</label>
         <input
           value={folderName}
-          onChange={(event) => setFolderName(event.target.value)}
+          onChange={(event) => {
+            setFolderName(event.target.value);
+            setFolderNameEdited(true);
+          }}
           placeholder="Example: ABC Vendor Leads"
           maxLength={120}
           style={{ width: "100%", boxSizing: "border-box", borderRadius: 7, border: "1px solid rgba(255,255,255,0.2)", background: "#0f172a", color: "white", padding: "10px 12px", marginBottom: 14 }}
         />
-        <button style={primary} onClick={createKey} disabled={creating}>{creating ? "Creating…" : "Create API Key"}</button>
+        <label style={{ display: "block", marginBottom: 6 }}>3. What type of leads are these?</label>
+        <select
+          value={leadType}
+          onChange={(event) => setLeadType(event.target.value)}
+          style={{ width: "100%", boxSizing: "border-box", borderRadius: 7, border: "1px solid rgba(255,255,255,0.2)", background: "#0f172a", color: "white", padding: "10px 12px", marginBottom: 14 }}
+        >
+          <option value="">Select lead type</option>
+          {LEAD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+        </select>
+        <button style={primary} onClick={createKey} disabled={creating}>{creating ? "Creating…" : "Create Folder & API Key"}</button>
       </div>
 
       <div style={{ marginTop: 20 }}>
@@ -170,7 +220,7 @@ function ApiKeysPanel({ onBack, onClose }: { onBack: () => void; onClose: () => 
             <div>
               <strong>{key.name}</strong>
               <div style={{ color: "#94a3b8", marginTop: 4 }}><code>{key.keyPrefix}…</code>{key.revokedAt ? " · Revoked" : ""}</div>
-              <div style={{ color: "#94a3b8", marginTop: 4 }}>Leads go to: <strong>{key.folderName || "Chosen by vendor"}</strong></div>
+              <div style={{ color: "#94a3b8", marginTop: 4 }}>Leads go to: <strong>{key.folderName || `${key.name} Leads`}</strong>{!key.folderId ? " · Legacy key will bind automatically" : ""}</div>
               <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Created {displayDate(key.createdAt)} · Last used {displayDate(key.lastUsedAt)}</div>
             </div>
             {!key.revokedAt && <button style={secondary} onClick={() => void revoke(key)}>Revoke</button>}
@@ -182,8 +232,8 @@ function ApiKeysPanel({ onBack, onClose }: { onBack: () => void; onClose: () => 
         <h3 style={{ marginTop: 0 }}>What happens next?</h3>
         <ol style={{ margin: 0, paddingLeft: 22, color: "#cbd5e1", lineHeight: 1.8 }}>
           <li>Create the key above.</li>
+          <li>CoveCRM immediately creates and locks the destination folder.</li>
           <li>Copy the key and send it to your lead vendor.</li>
-          <li>Your folder is created automatically when the first lead arrives.</li>
           <li>New leads appear in that folder in CoveCRM.</li>
         </ol>
       </div>
@@ -191,12 +241,22 @@ function ApiKeysPanel({ onBack, onClose }: { onBack: () => void; onClose: () => 
   );
 }
 
-export default function ImportLeadsChooser({ onClose, onCsv, onGoogleSheets }: { onClose: () => void; onCsv: () => void; onGoogleSheets: () => void }) {
+export default function ImportLeadsChooser({
+  onClose,
+  onCsv,
+  onGoogleSheets,
+  onVendorConnectionCreated,
+}: {
+  onClose: () => void;
+  onCsv: () => void;
+  onGoogleSheets: () => void;
+  onVendorConnectionCreated?: () => void | Promise<void>;
+}) {
   const [showApiKeys, setShowApiKeys] = useState(false);
   return (
     <div style={overlay} role="dialog" aria-modal="true" aria-label="Import leads">
       <div style={panel}>
-        {showApiKeys ? <ApiKeysPanel onBack={() => setShowApiKeys(false)} onClose={onClose} /> : (
+        {showApiKeys ? <ApiKeysPanel onBack={() => setShowApiKeys(false)} onClose={onClose} onVendorConnectionCreated={onVendorConnectionCreated} /> : (
           <>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
               <div><h2 style={{ margin: 0, fontSize: 24 }}>Import Leads</h2><p style={{ color: "#94a3b8", marginBottom: 0 }}>Choose how leads should enter CoveCRM.</p></div>

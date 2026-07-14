@@ -1165,6 +1165,7 @@ export default function LeadsPanel() {
             setShowImportChooser(false);
             handleConnectGoogleSheet();
           }}
+          onVendorConnectionCreated={fetchFolders}
         />
       )}
 

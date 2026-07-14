@@ -4,6 +4,9 @@ import crypto from "crypto";
 import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import ApiKey from "@/models/ApiKey";
+import Folder from "@/models/Folder";
+import { LEAD_TYPES } from "@/lib/leads/leadTypes";
+import { isSystemFolderName } from "@/lib/systemFolders";
 
 const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -26,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === "GET") {
     const keys = await ApiKey.find({ userEmail })
-      .select("name folderName keyPrefix lastUsedAt createdAt revokedAt")
+      .select("name folderId folderName keyPrefix lastUsedAt createdAt revokedAt")
       .sort({ createdAt: -1 })
       .lean();
     return res.status(200).json({ keys });
@@ -35,19 +38,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === "POST") {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
     const folderName = typeof req.body?.folderName === "string" ? req.body.folderName.trim() : "";
+    const leadType = typeof req.body?.leadType === "string" ? req.body.leadType.trim() : "";
     if (!name) return res.status(422).json({ message: "Key name is required" });
     if (!folderName) return res.status(422).json({ message: "Folder name is required" });
+    if (!(LEAD_TYPES as readonly string[]).includes(leadType)) {
+      return res.status(422).json({ message: `Lead type must be one of: ${LEAD_TYPES.join(", ")}` });
+    }
     if (name.length > 80) return res.status(422).json({ message: "Key name must be 80 characters or fewer" });
     if (folderName.length > 120) return res.status(422).json({ message: "Folder name must be 120 characters or fewer" });
+    if (isSystemFolderName(folderName)) {
+      return res.status(422).json({ message: "Choose a regular lead folder name" });
+    }
+
+    const folder = await Folder.findOneAndUpdate(
+      { userEmail, name: folderName },
+      {
+        $set: { leadType },
+        $setOnInsert: { userEmail, name: folderName, assignedDrips: [] },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+    if (!folder?._id) return res.status(500).json({ message: "Failed to create destination folder" });
 
     const key = generateKey();
     const keyHash = crypto.createHash("sha256").update(key).digest("hex");
     const keyPrefix = key.slice(0, "cove_live_".length + 4);
-    const created = await ApiKey.create({ userEmail, name, folderName, keyPrefix, keyHash });
+    const created = await ApiKey.create({
+      userEmail,
+      name,
+      folderId: folder._id,
+      folderName: folder.name,
+      keyPrefix,
+      keyHash,
+    });
     return res.status(201).json({
       id: String(created._id),
       name: created.name,
+      folderId: String(created.folderId),
       folderName: created.folderName,
+      leadType: (folder as any).leadType,
       key,
       keyPrefix: created.keyPrefix,
       createdAt: created.createdAt,

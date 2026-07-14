@@ -3,6 +3,7 @@ import mongoose, { Schema, model, models } from "mongoose";
 export interface IApiKey extends mongoose.Document {
   userEmail: string;
   name: string;
+  folderId: mongoose.Types.ObjectId | null;
   folderName: string;
   keyPrefix: string;
   keyHash: string;
@@ -14,6 +15,7 @@ export interface IApiKey extends mongoose.Document {
 const ApiKeySchema = new Schema<IApiKey>({
   userEmail: { type: String, required: true, lowercase: true, index: true },
   name: { type: String, required: true, trim: true },
+  folderId: { type: Schema.Types.ObjectId, ref: "Folder", default: null, index: true },
   folderName: { type: String, default: "", trim: true },
   keyPrefix: { type: String, required: true },
   keyHash: { type: String, required: true },

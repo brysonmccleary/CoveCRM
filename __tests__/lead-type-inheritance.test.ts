@@ -183,4 +183,21 @@ describe("ingestVendorLead (/api/v1/leads) — folder leadType inheritance", () 
     const updatePayload = findOneAndUpdate.mock.calls[0][1] as any;
     expect(updatePayload.$set.leadType).toBeUndefined();
   });
+
+  test("a bound vendor key routes through its exact folder id", async () => {
+    const folderId = new Types.ObjectId();
+    jest.spyOn(Folder, "findOne").mockResolvedValue({ _id: folderId, leadType: "Mortgage Protection" } as any);
+    jest.spyOn(Lead, "findOne").mockReturnValue({ select: jest.fn().mockReturnThis(), lean: jest.fn().mockResolvedValue(null) } as any);
+    const create = jest.spyOn(Lead, "create").mockResolvedValue({ _id: new Types.ObjectId() } as any);
+
+    await ingestVendorLead({
+      userEmail: "agent@example.com",
+      folderId: String(folderId),
+      phone: "5551234567",
+    });
+
+    expect(Folder.findOne).toHaveBeenCalledWith({ _id: String(folderId), userEmail: "agent@example.com" });
+    expect((create.mock.calls[0][0] as any).folderId).toBe(folderId);
+    expect((create.mock.calls[0][0] as any).leadType).toBe("Mortgage Protection");
+  });
 });
