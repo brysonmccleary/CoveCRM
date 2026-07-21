@@ -297,6 +297,7 @@ export const authOptions: NextAuthOptions = {
         (session.user as any).billingInterval = (u as any)?.billingInterval || null;
         (session.user as any).hasAI = (u as any)?.hasAI === true;
         (session.user as any).aiEntitlementSource = (u as any)?.aiEntitlementSource || null;
+        (session.user as any).grandfatheredAI = (u as any)?.grandfatheredAI === true;
         (session.user as any).affiliateReferralCode = (u as any)?.affiliateReferralCode || null;
         (session.user as any).accountActivated = isAccountActivated(u);
         const last = u?.a2p?.lastSyncedAt

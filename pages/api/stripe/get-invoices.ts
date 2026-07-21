@@ -36,6 +36,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
   } catch (err: any) {
     console.error("get-invoices error:", err?.message || err);
-    return res.status(500).json({ error: err?.message || "Failed to load invoices" });
+    return res.status(500).json({ error: "We couldn't load your invoices right now." });
   }
 }

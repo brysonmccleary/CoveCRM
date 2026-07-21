@@ -6,6 +6,10 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 import type Stripe from "stripe";
+import {
+  findActiveCrmPlanSubscription,
+  isPhoneNumberSubscription,
+} from "@/lib/billing/stripePlanClassification";
 
 type PlanCode = "free" | "base" | "ai";
 type BillingInterval = "monthly" | "annual";
@@ -66,12 +70,15 @@ export default async function handler(
     return res.status(200).json({
       planCode: legacyPlanCode(user),
       billingInterval: legacyBillingInterval(user),
-      amount: (user as any).planCode === "ai" || (user as any).hasAI ? 150 : null,
+      amount: null,
       nextBillingDate: null,
       status: (user as any).subscriptionStatus || null,
       trialEnd: (user as any).trialEndsAt || null,
       cancelAtPeriodEnd: false,
-      hasAIUpgrade: !!(user as any).hasAI,
+      hasAIUpgrade: (user as any).aiEntitlementSource === "upgrade",
+      hasAI: (user as any).hasAI === true,
+      aiEntitlementSource: (user as any).aiEntitlementSource || null,
+      grandfatheredAI: (user as any).grandfatheredAI === true,
     });
   }
 
@@ -79,13 +86,14 @@ export default async function handler(
     const subs = await stripe.subscriptions.list({
       customer: stripeCustomerId,
       status: "all",
-      limit: 10,
+      limit: 100,
       expand: ["data.items.data.price"],
     });
 
-    const activeLike = subs.data.find((sub) =>
-      ["active", "trialing", "past_due", "incomplete"].includes(sub.status)
-    );
+    // A Stripe customer can have separate subscriptions for CRM access and
+    // each phone number. Never let a phone-number renewal become the plan
+    // shown in Billing & Usage (or overwrite the apparent CRM price).
+    const activeLike = findActiveCrmPlanSubscription(subs.data);
 
     if (!activeLike) {
       return res.status(200).json({
@@ -96,7 +104,10 @@ export default async function handler(
         status: (user as any).subscriptionStatus || null,
         trialEnd: (user as any).trialEndsAt || null,
         cancelAtPeriodEnd: false,
-        hasAIUpgrade: !!(user as any).hasAI,
+        hasAIUpgrade: (user as any).aiEntitlementSource === "upgrade",
+        hasAI: (user as any).hasAI === true,
+        aiEntitlementSource: (user as any).aiEntitlementSource || null,
+        grandfatheredAI: (user as any).grandfatheredAI === true,
       });
     }
 
@@ -107,7 +118,7 @@ export default async function handler(
 
     for (const item of items) {
       const price = item.price as Stripe.Price | null | undefined;
-      if (!price?.id) continue;
+      if (!price?.id || isPhoneNumberSubscription({ items: { data: [{ price: { id: price.id } }] } })) continue;
       const mapped = PRICE_MAP[price.id];
       if (price.id === process.env.AI_Upgrade) hasAIUpgrade = true;
 
@@ -134,7 +145,10 @@ export default async function handler(
         ? new Date((activeLike as any).trial_end * 1000).toISOString()
         : ((user as any).trialEndsAt || null),
       cancelAtPeriodEnd: !!activeLike.cancel_at_period_end,
-      hasAIUpgrade: hasAIUpgrade || (user as any).aiEntitlementSource === "upgrade" || !!(user as any).hasAI,
+      hasAIUpgrade: hasAIUpgrade || (user as any).aiEntitlementSource === "upgrade",
+      hasAI: (user as any).hasAI === true,
+      aiEntitlementSource: (user as any).aiEntitlementSource || null,
+      grandfatheredAI: (user as any).grandfatheredAI === true,
     });
   } catch (err: any) {
     console.error("get-subscription error:", err?.message || err);
@@ -146,7 +160,10 @@ export default async function handler(
       status: (user as any).subscriptionStatus || null,
       trialEnd: (user as any).trialEndsAt || null,
       cancelAtPeriodEnd: false,
-      hasAIUpgrade: !!(user as any).hasAI,
+      hasAIUpgrade: (user as any).aiEntitlementSource === "upgrade",
+      hasAI: (user as any).hasAI === true,
+      aiEntitlementSource: (user as any).aiEntitlementSource || null,
+      grandfatheredAI: (user as any).grandfatheredAI === true,
     });
   }
 }

@@ -12,7 +12,7 @@ export default async function handler(
 
   if (!clientId || !clientSecret || !redirectUri) {
     return res.status(500).json({
-      error: "Missing Google OAuth env vars",
+      error: "Google connection is temporarily unavailable. Please try again later.",
       have: {
         clientId: !!clientId,
         clientSecret: !!clientSecret,

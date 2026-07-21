@@ -194,11 +194,6 @@ export default function BillingPage() {
         {/* Zero-amount success path (no clientSecret, no error) */}
         {!loading && !hasError && !clientSecret && !setupClientSecret && (
           <div className="text-center space-y-2">
-            {subscriptionId && (
-              <p className="text-xs text-gray-500">
-                Subscription: {subscriptionId}
-              </p>
-            )}
             <p className="text-gray-700 dark:text-gray-300">
               Subscription started. Redirecting to your dashboard…
             </p>

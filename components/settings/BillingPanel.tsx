@@ -4,6 +4,7 @@ import { useSession } from "next-auth/react";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, CardElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import toast from "react-hot-toast";
+import { publicErrorMessage } from "@/lib/publicErrorMessage";
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || "");
 
@@ -19,6 +20,9 @@ type SubscriptionSummary = {
   trialEnd?: string | null;
   cancelAtPeriodEnd?: boolean;
   hasAIUpgrade?: boolean;
+  hasAI?: boolean;
+  aiEntitlementSource?: string | null;
+  grandfatheredAI?: boolean;
 };
 
 type PaymentMethod = {
@@ -42,21 +46,18 @@ function formatDate(value?: string | null) {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-function planLabel(planCode?: string | null) {
+function planLabel(planCode?: string | null, aiEntitlementSource?: string | null, includedAccess = false) {
+  if (includedAccess) return "Full Access (Included)";
+  if (aiEntitlementSource === "grandfathered" || aiEntitlementSource === "legacy") {
+    return "Legacy Plan + Grandfathered AI";
+  }
   if (planCode === "base") return "Base Plan";
   if (planCode === "ai") return "AI Plan";
-  return "Legacy (Grandfathered)";
+  return "Free Plan";
 }
 
 function intervalLabel(interval?: string | null) {
   return interval === "annual" ? "Annual" : "Monthly";
-}
-
-function monthlyAmount(planCode?: string | null, hasAIUpgrade?: boolean) {
-  if (planCode === "ai") return 150;
-  if (planCode === "base" && hasAIUpgrade) return 150;
-  if (planCode === "base") return 100;
-  return null;
 }
 
 function PaymentMethodForm({
@@ -92,12 +93,16 @@ function PaymentMethodForm({
           body: JSON.stringify({ email, planCode, interval }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data?.error || "Unable to initialize payment method");
+        if (!res.ok) {
+          throw new Error(publicErrorMessage(data?.error, "We couldn't open the secure payment form. Please try again."));
+        }
         if (cancelled) return;
         setClientSecret(data.setupClientSecret || data.clientSecret || null);
         setSubscriptionId(data.subscriptionId || null);
       } catch (err: any) {
-        if (!cancelled) setError(err?.message || "Unable to initialize payment method");
+        if (!cancelled) {
+          setError(publicErrorMessage(err?.message, "We couldn't open the secure payment form. Please try again."));
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -127,7 +132,9 @@ function PaymentMethodForm({
       const result = clientSecret.startsWith("pi_")
         ? await stripe.confirmCardPayment(clientSecret, confirmParams)
         : await stripe.confirmCardSetup(clientSecret, confirmParams);
-      if (result.error) throw new Error(result.error.message || "Card setup failed");
+      if (result.error) {
+        throw new Error(publicErrorMessage(result.error.message, "Your card couldn't be saved. Please check it and try again."));
+      }
       const paymentMethodId = String(
         (result as any).setupIntent?.payment_method ||
           (result as any).paymentIntent?.payment_method ||
@@ -141,7 +148,9 @@ function PaymentMethodForm({
         body: JSON.stringify({ email, subscriptionId, paymentMethodId }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.ok === false) throw new Error(data?.error || "Payment method could not be saved");
+      if (!res.ok || data?.ok === false) {
+        throw new Error(publicErrorMessage(data?.error, "Your payment method couldn't be saved. Please try again."));
+      }
       try {
         const provisionRes = await fetch("/api/twilio/provision-number", { method: "POST" });
         const provisionData = await provisionRes.json().catch(() => ({}));
@@ -159,7 +168,7 @@ function PaymentMethodForm({
       toast.success("Payment method saved");
       onSaved();
     } catch (err: any) {
-      setError(err?.message || "Payment method could not be saved");
+      setError(publicErrorMessage(err?.message, "Your payment method couldn't be saved. Please try again."));
     } finally {
       setSaving(false);
     }
@@ -249,14 +258,25 @@ export default function BillingPanel() {
         : "free";
   const effectiveInterval: BillingInterval =
     subscription?.billingInterval === "annual" || user?.billingInterval === "annual" ? "annual" : "monthly";
-  const hasAIUpgrade = subscription?.hasAIUpgrade === true || user?.aiEntitlementSource === "upgrade";
-  const amount = monthlyAmount(effectivePlanCode, hasAIUpgrade);
+  const aiEntitlementSource = subscription?.aiEntitlementSource || user?.aiEntitlementSource || null;
+  const hasAI = subscription?.hasAI === true || user?.hasAI === true;
+  const grandfatheredAI = subscription?.grandfatheredAI === true || user?.grandfatheredAI === true;
+  const hasAIUpgrade = subscription?.hasAIUpgrade === true || aiEntitlementSource === "upgrade";
+  const amount = typeof subscription?.amount === "number" ? subscription.amount : null;
+  const hasActivePaidPlan = amount !== null && ["active", "trialing", "past_due", "incomplete"].includes(
+    String(subscription?.status || ""),
+  );
+  const hasIncludedAccess = !hasActivePaidPlan && hasAI && (
+    grandfatheredAI || aiEntitlementSource === "grandfathered" || aiEntitlementSource === "legacy"
+  );
   const trialEnd = subscription?.trialEnd || user?.trialEndsAt || null;
   const trialEndsAtMs = trialEnd ? new Date(trialEnd).getTime() : 0;
   const trialActive = Boolean(trialEndsAtMs && trialEndsAtMs > Date.now());
   const cardOnFile = paymentMethod !== null || user?.cardOnFile === true;
-  const isBasePlan = effectivePlanCode === "base" && user?.hasAI !== true && !hasAIUpgrade;
-  const paidUser = cardOnFile && Boolean((user?.stripeSubscriptionId || subscription?.status) && effectivePlanCode !== "free");
+  const isBasePlan = effectivePlanCode === "base" && !hasAI && !hasAIUpgrade;
+  const paidUser = cardOnFile && hasActivePaidPlan;
+  const canManagePaymentMethod = !hasIncludedAccess || hasActivePaidPlan;
+  const currentPlanLabel = planLabel(effectivePlanCode, aiEntitlementSource, hasIncludedAccess);
 
   const planForSetup = useMemo<PlanCode>(() => {
     return effectivePlanCode === "ai" ? "ai" : "base";
@@ -269,13 +289,15 @@ export default function BillingPanel() {
     try {
       const res = await fetch("/api/stripe/create-ai-upgrade", { method: "POST" });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.success === false) throw new Error(data?.error || "Upgrade failed");
+      if (!res.ok || data?.success === false) {
+        throw new Error(publicErrorMessage(data?.error, "We couldn't complete the upgrade. Please try again."));
+      }
       setUpgradeMessage(data?.message || "AI features unlocked!");
       setTimeout(() => {
         window.location.href = window.location.href;
       }, 2000);
     } catch (err: any) {
-      setUpgradeError(err?.message || "Upgrade failed");
+      setUpgradeError(publicErrorMessage(err?.message, "We couldn't complete the upgrade. Please try again."));
     } finally {
       setUpgradeLoading(false);
     }
@@ -287,12 +309,14 @@ export default function BillingPanel() {
     try {
       const res = await fetch("/api/stripe/cancel-subscription", { method: "POST" });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.success === false) throw new Error(data?.error || "Cancellation failed");
+      if (!res.ok || data?.success === false) {
+        throw new Error(publicErrorMessage(data?.error, "We couldn't schedule the cancellation. Please try again."));
+      }
       toast.success("Subscription will cancel at period end");
       await loadBilling();
       setCancelConfirming(false);
     } catch (err: any) {
-      setCancelError(err?.message || "Cancellation failed");
+      setCancelError(publicErrorMessage(err?.message, "We couldn't schedule the cancellation. Please try again."));
     } finally {
       setCancelLoading(false);
     }
@@ -313,21 +337,27 @@ export default function BillingPanel() {
       <section className="border border-white/10 rounded p-4 space-y-3">
         <h3 className="font-semibold text-lg">Current Plan</h3>
         <p className="text-sm font-semibold text-white">
-          {planLabel(effectivePlanCode)} — {intervalLabel(effectiveInterval)} — {amount === null ? "Included" : `$${amount}/mo`}
+          {currentPlanLabel} — {hasActivePaidPlan ? `${intervalLabel(effectiveInterval)} — $${amount}/mo` : "Included"}
         </p>
         <div className="grid gap-3 md:grid-cols-2">
-          <p className="text-sm text-gray-300">Plan: <span className="font-semibold text-white">{planLabel(effectivePlanCode)}</span></p>
-          <p className="text-sm text-gray-300">Billing interval: <span className="font-semibold text-white">{intervalLabel(effectiveInterval)}</span></p>
+          <p className="text-sm text-gray-300">Plan: <span className="font-semibold text-white">{currentPlanLabel}</span></p>
+          <p className="text-sm text-gray-300">Billing interval: <span className="font-semibold text-white">{hasActivePaidPlan ? intervalLabel(effectiveInterval) : "Not billed"}</span></p>
           <p className="text-sm text-gray-300">Next billing date: <span className="font-semibold text-white">{formatDate(subscription?.nextBillingDate || null)}</span></p>
-          <p className="text-sm text-gray-300">Monthly amount: <span className="font-semibold text-white">{amount === null ? "Included" : `$${amount}`}</span></p>
+          <p className="text-sm text-gray-300">Monthly amount: <span className="font-semibold text-white">{hasActivePaidPlan ? `$${amount}` : "Included"}</span></p>
         </div>
         {trialActive && (
           <p className="rounded bg-blue-500/10 px-3 py-2 text-sm text-blue-200">
             Your free trial ends on {formatDate(trialEnd)}. You won&apos;t be charged until then.
           </p>
         )}
-        <p className={`rounded px-3 py-2 text-sm ${cardOnFile ? "bg-emerald-500/10 text-emerald-300" : "bg-yellow-500/10 text-yellow-200"}`}>
-          {cardOnFile ? "Payment method on file" : "No payment method — add one to keep access after trial"}
+        <p className={`rounded px-3 py-2 text-sm ${cardOnFile || hasIncludedAccess ? "bg-emerald-500/10 text-emerald-300" : "bg-yellow-500/10 text-yellow-200"}`}>
+          {hasIncludedAccess
+            ? "Full access is included on this account. No plan payment method is required."
+            : cardOnFile
+              ? "Payment method on file"
+              : trialActive
+                ? "Add a payment method before the trial ends to keep access."
+                : "No payment method is currently on file."}
         </p>
       </section>
 
@@ -339,8 +369,10 @@ export default function BillingPanel() {
               <p className="text-sm text-gray-300">
                 {paymentMethod.brand.toUpperCase()} ending in {paymentMethod.last4} · Expires {paymentMethod.expMonth}/{paymentMethod.expYear}
               </p>
+            ) : hasIncludedAccess ? (
+              <p className="text-sm text-gray-400">No plan payment method is required for this included account.</p>
             ) : (
-            <p className="text-sm text-gray-400">Add a card to activate your phone number and keep access after trial.</p>
+              <p className="text-sm text-gray-400">Add a card when you are ready to activate paid billing.</p>
             )}
             {numberProvisionMessage && (
               <p className="mt-2 rounded bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
@@ -348,19 +380,19 @@ export default function BillingPanel() {
               </p>
             )}
           </div>
-          {cardOnFile && (
+          {canManagePaymentMethod && (
             <button
               type="button"
               onClick={() => setShowCardForm((v) => !v)}
               className="rounded border border-white/15 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10"
               style={{ cursor: "pointer" }}
             >
-              Update payment method
+              {cardOnFile ? "Update payment method" : "Add payment method"}
             </button>
           )}
         </div>
 
-        {(!cardOnFile || showCardForm) && email && (
+        {showCardForm && canManagePaymentMethod && email && (
           <Elements stripe={stripePromise}>
             <PaymentMethodForm
               email={email}

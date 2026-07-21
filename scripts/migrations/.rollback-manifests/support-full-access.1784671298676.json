@@ -1,0 +1,14 @@
+[
+  {
+    "_id": "69372fc414a2146b06fecebe",
+    "email": "support@covecrm.com",
+    "appliedAt": "2026-07-21T22:01:38.676Z",
+    "prior": {
+      "hasAI": false,
+      "grandfatheredAI": false,
+      "aiEntitlementSource": "none",
+      "grandfatheredAIAt": null,
+      "grandfatheredAIReason": null
+    }
+  }
+]

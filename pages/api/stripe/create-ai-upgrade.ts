@@ -13,7 +13,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const requiredEnv = ["AI_Upgrade", "STRIPE_SECRET_KEY"];
   for (const key of requiredEnv) {
     if (!process.env[key]) {
-      return res.status(500).json({ success: false, error: `Missing required env var: ${key}` });
+      console.error("create-ai-upgrade: billing configuration is unavailable", { key });
+      return res.status(503).json({ success: false, error: "AI upgrades are temporarily unavailable. Please contact CoveCRM support." });
     }
   }
 
@@ -38,12 +39,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const aiUpgradePriceId = process.env.AI_Upgrade || "";
     if (!aiUpgradePriceId) {
-      return res.status(500).json({ success: false, error: "Missing AI upgrade price ID" });
+      return res.status(503).json({ success: false, error: "AI upgrades are temporarily unavailable. Please contact CoveCRM support." });
     }
 
     const customerId = String((user as any).stripeCustomerId || (user as any).stripeCustomerID || "").trim();
     if (!customerId) {
-      return res.status(400).json({ success: false, error: "Missing Stripe customer" });
+      return res.status(400).json({ success: false, error: "Please add a payment method before upgrading." });
     }
 
     let upgradeId = "";
@@ -86,6 +87,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ success: true, message: "AI features unlocked" });
   } catch (err: any) {
     console.error("create-ai-upgrade error:", err?.message || err);
-    return res.status(500).json({ success: false, error: err?.message || "AI upgrade failed" });
+    return res.status(500).json({ success: false, error: "We couldn't complete the AI upgrade. Please try again or contact CoveCRM support." });
   }
 }

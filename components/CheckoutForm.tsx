@@ -32,13 +32,13 @@ export default function CheckoutForm({
     if (loading) return;
 
     if (!stripe || !elements) {
-      toast.error("Stripe is not ready.");
+      toast.error("The secure payment form is still loading. Please try again.");
       return;
     }
 
     const cardElement = elements.getElement(CardElement);
     if (!cardElement) {
-      toast.error("Card element not found.");
+      toast.error("The secure payment form couldn't load. Please refresh and try again.");
       return;
     }
 
@@ -46,7 +46,7 @@ export default function CheckoutForm({
 
     try {
       if (!clientSecret) {
-        toast.error("Missing Stripe client secret.");
+        toast.error("The secure payment form couldn't start. Please refresh and try again.");
         return;
       }
 
@@ -69,7 +69,7 @@ export default function CheckoutForm({
         if (setupIntent?.status === "succeeded") {
           const pm = (setupIntent as any).payment_method;
           if (!pm) {
-            toast.error("Card saved, but payment method missing.");
+            toast.error("We couldn't finish saving your card. Please try again.");
             return;
           }
 

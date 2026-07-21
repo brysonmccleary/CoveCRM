@@ -29,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ) {
       return res
         .status(500)
-        .json({ error: "Twilio environment variables missing" });
+        .json({ error: "Calling is temporarily unavailable. Please try again later." });
     }
 
     const voiceGrant = new VoiceGrant({

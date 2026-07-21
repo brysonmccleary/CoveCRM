@@ -44,16 +44,6 @@ function getPriceId(planCode: PlanCode, interval: BillingInterval): string {
   return process.env.CoveCRM_AI_Annual_Plan || "";
 }
 
-function requireEnv(res: NextApiResponse, keys: string[]) {
-  for (const key of keys) {
-    if (!process.env[key]) {
-      res.status(500).json({ error: `Missing required env var: ${key}` });
-      return false;
-    }
-  }
-  return true;
-}
-
 async function ensureStripeCustomer(userDoc: any, email: string): Promise<string> {
   let cid: string | null = userDoc?.stripeCustomerId || userDoc?.stripeCustomerID || null;
 
@@ -107,13 +97,6 @@ async function createSetupIntent(customerId: string, userId: string, subscriptio
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end("Method not allowed");
-  if (!requireEnv(res, [
-    "CoveCRM_Base",
-    "CoveCRM_AI_Plan",
-    "CoveCRM_AI_Annual_Plan",
-    "CoveCRM_Annual_Base_Plan",
-    "STRIPE_SECRET_KEY",
-  ])) return;
 
   const { email: bodyEmail, affiliateEmail, planCode: bodyPlanCode, interval: bodyInterval } = (req.body || {}) as {
     email?: string;
@@ -144,7 +127,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const selectedPriceId = getPriceId(planCode, interval);
 
     if (!selectedPriceId) {
-      return res.status(500).json({ error: `Missing Stripe price ID for ${planCode} ${interval}.` });
+      console.error("create-subscription: selected plan price is not configured", { planCode, interval });
+      return res.status(503).json({ error: "Billing is temporarily unavailable. Please contact CoveCRM support." });
     }
 
     const customerId = await ensureStripeCustomer(userDoc, effectiveEmail);
@@ -280,6 +264,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     console.error("Stripe subscription error:", err);
-    return res.status(500).json({ error: err?.message || "Subscription creation failed" });
+    return res.status(500).json({ error: "We couldn't prepare billing right now. Please try again or contact CoveCRM support." });
   }
 }

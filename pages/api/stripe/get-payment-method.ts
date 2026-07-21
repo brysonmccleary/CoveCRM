@@ -48,6 +48,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     console.error("get-payment-method error:", err?.message || err);
-    return res.status(500).json({ error: err?.message || "Failed to load payment method" });
+    return res.status(500).json({ error: "We couldn't load your payment method right now." });
   }
 }

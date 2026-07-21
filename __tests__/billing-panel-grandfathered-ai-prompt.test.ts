@@ -9,7 +9,7 @@ import path from "path";
 // prove a grandfathered user (hasAI: true) never sees the "Unlock AI
 // Features" upgrade prompt.
 describe("BillingPanel isBasePlan suppresses the AI upgrade prompt for grandfathered users", () => {
-  const EXPECTED_LINE = 'effectivePlanCode === "base" && user?.hasAI !== true && !hasAIUpgrade';
+  const EXPECTED_LINE = 'effectivePlanCode === "base" && !hasAI && !hasAIUpgrade';
 
   test("the component's isBasePlan expression matches what this test replicates", () => {
     const source = fs.readFileSync(

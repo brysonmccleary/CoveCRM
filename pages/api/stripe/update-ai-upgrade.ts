@@ -15,7 +15,10 @@ export default async function handler(
   const session = await getServerSession(req, res, authOptions);
   if (!session || !session.user?.email) return res.status(401).end();
   const aiPriceId = process.env.AI_Upgrade;
-  if (!aiPriceId) return res.status(500).json({ error: "Missing AI upgrade price ID" });
+  if (!aiPriceId) {
+    console.error("update-ai-upgrade: billing configuration is unavailable");
+    return res.status(503).json({ error: "AI upgrades are temporarily unavailable. Please contact CoveCRM support." });
+  }
 
   await dbConnect();
   const user = await getUserByEmail(session.user.email);
