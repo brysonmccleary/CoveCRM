@@ -1,7 +1,6 @@
 // pages/api/twilio/status-callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
-import twilio from "twilio";
 import mongooseConnect from "@/lib/mongooseConnect";
 import mongoose from "mongoose";
 import { getUserByPhoneNumber } from "@/lib/getUserByPhoneNumber";
@@ -11,10 +10,12 @@ import Call from "@/models/Call";
 import { sendEmail } from "@/lib/email";
 import { trackUsage } from "@/lib/billing/trackUsage";
 import { MANUAL_TALK_RATE_PER_MIN } from "@/lib/billing/dialerRates";
+import { markBillingMeterWebhookSeen } from "@/lib/billing/billingMeterHealth";
+import { validateSubaccountWebhook } from "@/lib/twilio/validateSubaccountWebhook";
+import { getPlatformTwilioClientScoped } from "@/lib/twilio/getPlatformClient";
 
 export const config = { api: { bodyParser: false } };
 
-const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
 const RAW_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const BASE_URL = RAW_BASE || "";
 const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
@@ -25,26 +26,21 @@ const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
 const NEVER_BILL_EMAILS = new Set(["bryson.mccleary1@gmail.com", "support@covecrm.com"]);
 const BILLING_IN_PROGRESS_SOURCES = ["manual_dial_billing_in_progress", "twilio_voice_billing_in_progress"];
 
-function candidateUrls(path: string): string[] {
-  if (!BASE_URL) return [];
-  const u = new URL(BASE_URL);
-  const withWww = u.hostname.startsWith("www.") ? BASE_URL : `${u.protocol}//www.${u.hostname}${u.port ? ":" + u.port : ""}`;
-  const withoutWww = u.hostname.startsWith("www.") ? `${u.protocol}//${u.hostname.replace(/^www\./, "")}${u.port ? ":" + u.port : ""}` : BASE_URL;
-  return [
-    `${BASE_URL}${path}`,
-    `${withWww}${path}`,
-    `${withoutWww}${path}`,
-  ].filter((v, i, a) => !!v && a.indexOf(v) === i);
-}
-async function tryValidate(signature: string, params: Record<string, any>, urls: string[], tokens: (string | undefined)[]) {
-  for (const token of tokens) {
-    const t = (token || "").trim();
-    if (!t) continue;
-    for (const url of urls) {
-      if (twilio.validateRequest(t, signature, url, params)) return true;
-    }
+function candidateUrls(req: NextApiRequest): string[] {
+  const requestPath = req.url || "/api/twilio/status-callback";
+  const configured = BASE_URL ? new URL(requestPath, `${BASE_URL}/`).toString() : "";
+  const host = String(req.headers.host || "").trim();
+  const proto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+  const requestHostUrl = host ? `${proto}://${host}${requestPath}` : "";
+  const urls = [configured, requestHostUrl].filter(Boolean);
+  if (configured) {
+    const url = new URL(configured);
+    const alternateHost = url.hostname.startsWith("www.")
+      ? url.hostname.replace(/^www\./, "")
+      : `www.${url.hostname}`;
+    urls.push(`${url.protocol}//${alternateHost}${url.port ? `:${url.port}` : ""}${url.pathname}${url.search}`);
   }
-  return false;
+  return [...new Set(urls)];
 }
 
 // Helper: resolve which user owns a Twilio number
@@ -65,6 +61,10 @@ function ceilMinutesFromSeconds(seconds: number) {
   return Math.ceil(seconds / 60);
 }
 
+function sanitizeTwilioSid(value: unknown) {
+  return String(value || "").replace(/[^A-Za-z0-9]/g, "").trim();
+}
+
 // Treat anything that is NOT explicitly "human" as voicemail/machine for stats purposes
 // (Option A wants to exclude machines/voicemail; AnsweredBy can be machine_start/machine_end/fax/unknown/etc.)
 function isNonHumanAnsweredBy(ans: string) {
@@ -82,55 +82,84 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const bodyStr = raw.toString("utf8");
   const params = new URLSearchParams(bodyStr);
   const signature = (req.headers["x-twilio-signature"] || "") as string;
-  const urls = candidateUrls("/api/twilio/status-callback");
+  const urls = candidateUrls(req);
   const paramsObj = Object.fromEntries(params as any);
+  const callbackAccountSid = sanitizeTwilioSid(params.get("AccountSid"));
+  const callbackCallSid = sanitizeTwilioSid(params.get("CallSid"));
+  let valid = false;
+  let apiVerifiedCall: any = null;
+  let callbackOwnerEmail = "";
+  let connected = false;
+  try {
+    valid = await validateSubaccountWebhook({
+      accountSid: callbackAccountSid,
+      signature,
+      urls,
+      params: paramsObj,
+    });
+  } catch (error: any) {
+    console.error("[status-callback] signature validation error", {
+      error: String(error?.message || error).slice(0, 300),
+    });
+  }
 
-  await mongooseConnect();
-
-  // Try platform token first
-  let valid = await tryValidate(signature, paramsObj, urls, [PLATFORM_AUTH_TOKEN]);
-
-  // If invalid and not bypass, try the user's personal token when we can infer the owner
-  if (!valid && !ALLOW_DEV_TWILIO_TEST) {
-    const To = params.get("To") || params.get("Called") || "";
-    const From = params.get("From") || params.get("Caller") || "";
-    const CallSid = params.get("CallSid") || "";
-
-    const inboundOwner = To ? await getUserByPhoneNumber(To) : null;
-    const outboundOwner = From ? await getUserByPhoneNumber(From) : null;
-    const callDoc = CallSid ? await Call.findOne({ callSid: CallSid }) : null;
-
-    let personalToken: string | undefined;
-    const candidateEmails = [
-      inboundOwner?.email?.toLowerCase?.(),
-      outboundOwner?.email?.toLowerCase?.(),
-      (callDoc as any)?.userEmail?.toLowerCase?.(),
-    ].filter(Boolean) as string[];
-
-    for (const em of candidateEmails) {
-      const u = await User.findOne({ email: em });
-      const tok = (u as any)?.twilio?.authToken as string | undefined;
-      if (tok) { personalToken = tok; break; }
-    }
-
-    if (personalToken) {
-      valid = await tryValidate(signature, paramsObj, urls, [personalToken]);
+  if (!valid && !ALLOW_DEV_TWILIO_TEST && /^AC[a-zA-Z0-9]{32}$/.test(callbackAccountSid) && /^CA[a-zA-Z0-9]{32}$/.test(callbackCallSid)) {
+    // Auth Token rotation and URL canonicalization can make an otherwise real
+    // Twilio signature unverifiable. For voice callbacks only, authenticate the
+    // tenant through our account mapping and fetch the exact CallSid from that
+    // exact subaccount. Downstream lifecycle/billing fields are replaced with
+    // this authoritative resource, never trusted from the rejected POST.
+    try {
+      await mongooseConnect();
+      connected = true;
+      const callbackOwner = await User.findOne({ "twilio.accountSid": callbackAccountSid })
+        .select("email twilio.accountSid")
+        .lean<any>();
+      callbackOwnerEmail = String(callbackOwner?.email || "").toLowerCase();
+      if (callbackOwnerEmail) {
+        const fetched = await getPlatformTwilioClientScoped(callbackAccountSid)
+          .calls(callbackCallSid)
+          .fetch();
+        if (
+          sanitizeTwilioSid((fetched as any)?.sid) === callbackCallSid &&
+          sanitizeTwilioSid((fetched as any)?.accountSid) === callbackAccountSid
+        ) {
+          apiVerifiedCall = fetched;
+        }
+      }
+    } catch (error: any) {
+      console.error("[status-callback] authoritative Twilio call verification failed", {
+        error: String(error?.message || error).slice(0, 300),
+      });
     }
   }
 
-  if (!valid && !ALLOW_DEV_TWILIO_TEST) {
-    console.warn("❌ Invalid Twilio signature on status-callback (all tokens/URLs failed)");
+  if (!valid && !apiVerifiedCall && !ALLOW_DEV_TWILIO_TEST) {
+    console.warn("❌ Invalid Twilio signature on status-callback (signature and authoritative call verification failed)");
     res.status(403).end("Invalid signature");
     return;
+  }
+  if (!valid && apiVerifiedCall) {
+    console.warn("[status-callback] accepted callback via authoritative Call API verification", {
+      accountSid: `${callbackAccountSid.slice(0, 4)}…${callbackAccountSid.slice(-4)}`,
+      callSid: `${callbackCallSid.slice(0, 4)}…${callbackCallSid.slice(-4)}`,
+    });
   }
   if (!valid && ALLOW_DEV_TWILIO_TEST) {
     console.warn("⚠️ Dev bypass: Twilio signature validation skipped (status-callback).");
   }
 
+  if (!connected) await mongooseConnect();
+  if (valid || apiVerifiedCall) {
+    await markBillingMeterWebhookSeen(callbackAccountSid).catch((error: any) =>
+      console.warn("[status-callback] could not mark billing webhook health", error?.message || error),
+    );
+  }
+
   try {
     // Common fields
-    const To = params.get("To") || params.get("Called") || "";
-    const From = params.get("From") || params.get("Caller") || "";
+    const To = String(apiVerifiedCall?.to || params.get("To") || params.get("Called") || "");
+    const From = String(apiVerifiedCall?.from || params.get("From") || params.get("Caller") || "");
     const MessagingServiceSid = params.get("MessagingServiceSid") || "";
 
     // ---- SMS fields
@@ -140,11 +169,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const ErrorCode = params.get("ErrorCode") || undefined;
 
     // ---- Voice fields
-    const CallSid = params.get("CallSid") || "";
-    const callStatusRaw = (params.get("CallStatus") || "").toLowerCase(); // initiated | ringing | in-progress | completed | busy | failed | no-answer | canceled
+    const CallSid = String(apiVerifiedCall?.sid || params.get("CallSid") || "");
+    const callStatusRaw = String(apiVerifiedCall?.status || params.get("CallStatus") || "").toLowerCase(); // initiated | ringing | in-progress | completed | busy | failed | no-answer | canceled
     const CallStatus = callStatusRaw === "in-progress" ? "answered" : callStatusRaw;
 
-    const CallDurationStr = params.get("CallDuration"); // seconds (string)
+    const CallDurationStr = apiVerifiedCall?.duration ?? params.get("CallDuration"); // seconds (string)
     const AnsweredByRaw = params.get("AnsweredBy") || ""; // human | machine_* | fax | unknown | ...
     const AnsweredBy = normalizeAnsweredBy(AnsweredByRaw);
     const Timestamp = params.get("Timestamp") || undefined;
@@ -245,7 +274,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const ownerUser = direction === "inbound" ? inboundOwner : outboundOwner;
       const userEmail =
         ownerUser?.email?.toLowerCase?.() ||
-        (await resolveOwnerEmailByOwnedNumber(ownerNumber));
+        (await resolveOwnerEmailByOwnedNumber(ownerNumber)) ||
+        callbackOwnerEmail;
 
       const now = Timestamp ? new Date(Timestamp) : new Date();
       const durationSec = CallDurationStr ? parseInt(CallDurationStr, 10) || 0 : undefined;
@@ -280,11 +310,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           callSid: CallSid,
           userEmail: userEmail || undefined,
           direction,
-          startedAt: CallStatus === "answered" ? now : new Date(),
-          from: ownerNumber,
-          to: otherNumber,
-          ownerNumber,
-          otherNumber,
         };
         const set: any = {
           status: CallStatus,

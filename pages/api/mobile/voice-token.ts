@@ -4,6 +4,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import jwt from "jsonwebtoken";
 import twilio from "twilio";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 const MOBILE_JWT_SECRET =
@@ -35,6 +36,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    const billingCheck = await checkCallingAllowed(identity);
+    if (!billingCheck.allowed) {
+      return res.status(402).json({
+        error: "billing_required",
+        reason: billingCheck.reason,
+        redirect: billingCheck.redirect,
+      });
+    }
+
     // Resolve per-user or platform Account SID (same as /api/twilio/voice/token)
     const resolved = (await getClientForUser(identity)) as any;
     const usingPersonal = !!resolved?.usingPersonal;

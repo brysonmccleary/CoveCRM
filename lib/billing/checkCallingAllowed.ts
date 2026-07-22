@@ -4,6 +4,7 @@
 import User from "@/models/User";
 import mongooseConnect from "@/lib/mongooseConnect";
 import { requireBillingReady } from "@/lib/billing/requireBillingReady";
+import { checkBillingMeterHealthy } from "@/lib/billing/billingMeterHealth";
 
 export interface CallingCheck {
   allowed: boolean;
@@ -18,7 +19,7 @@ const BLOCKED_MESSAGE =
 export async function checkCallingAllowed(email: string): Promise<CallingCheck> {
   await mongooseConnect();
   const user = await User.findOne({ email: email.toLowerCase() })
-    .select("billingMode billingBlocked billingBlockedReason callingBlocked hasEverPaid pastDueSince trialGranted role createdAt email usedCode")
+    .select("billingMode billingBlocked billingBlockedReason callingBlocked hasEverPaid pastDueSince trialGranted role createdAt email usedCode twilio.accountSid")
     .lean<any>();
 
   if (!user) return { allowed: false, reason: "User not found" };
@@ -35,6 +36,10 @@ export async function checkCallingAllowed(email: string): Promise<CallingCheck> 
 
   // Self-billed users manage their own Twilio — no platform payment check.
   if ((user as any).billingMode === "self") return { allowed: true };
+  // Platform admins are never usage-billed by this path.
+  if (String((user as any).role || "").toLowerCase() === "admin") {
+    return { allowed: true };
+  }
 
   // Already explicitly blocked.
   if ((user as any).callingBlocked) {
@@ -45,16 +50,24 @@ export async function checkCallingAllowed(email: string): Promise<CallingCheck> 
   const pastDueSince: Date | null = (user as any).pastDueSince ?? null;
   if ((user as any).hasEverPaid && pastDueSince) {
     const elapsed = Date.now() - new Date(pastDueSince).getTime();
-    if (elapsed <= GRACE_PERIOD_MS) {
-      return { allowed: true };
+    if (elapsed > GRACE_PERIOD_MS) {
+      // Grace period expired — promote to callingBlocked.
+      await User.updateOne(
+        { email: email.toLowerCase() },
+        { $set: { callingBlocked: true } }
+      );
+      return { allowed: false, reason: BLOCKED_MESSAGE };
     }
-    // Grace period expired — promote to callingBlocked.
-    await User.updateOne(
-      { email: email.toLowerCase() },
-      { $set: { callingBlocked: true } }
-    );
-    return { allowed: false, reason: BLOCKED_MESSAGE };
   }
+
+  // Fail closed: a customer cannot start another platform-billed call unless
+  // the Twilio-first usage reconciler has succeeded recently for their exact
+  // subaccount. This converts a metering outage into a temporary call pause,
+  // never another silent free-usage window.
+  const meter = await checkBillingMeterHealthy({
+    accountSid: String((user as any)?.twilio?.accountSid || ""),
+  });
+  if (!meter.ok) return { allowed: false, reason: meter.reason };
 
   return { allowed: true };
 }

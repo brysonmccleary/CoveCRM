@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { getPlatformTwilioAuth } from "@/lib/twilio/getPlatformClient";
 import { isAdmin } from "@/lib/featureFlags";
+import { initializeBillingMeter } from "@/lib/billing/billingMeterHealth";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
 const DEFAULT_AREA_CODE = (process.env.TWILIO_DEFAULT_AREA_CODE || "").trim();
@@ -284,6 +285,11 @@ export async function ensureUserTwilioIdentity(email: string): Promise<
     }
 
     await user.save();
+    await initializeBillingMeter({
+      accountSid: subSid,
+      userEmail: String(user.email),
+      healthy: true,
+    });
 
     return {
       ok: true,
@@ -389,6 +395,11 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
 
     (user as any).numberProvisionedAt = new Date();
     await user.save();
+    await initializeBillingMeter({
+      accountSid: subSid,
+      userEmail: String(user.email),
+      healthy: true,
+    });
 
     return {
       ok: true,

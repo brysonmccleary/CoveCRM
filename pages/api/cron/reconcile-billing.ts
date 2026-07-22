@@ -5,8 +5,11 @@ import {
   previousUtcDayWindow,
   reconcileBillingForTenant,
   utcDayWindow,
-  type ReconciliationWindow,
 } from "@/lib/billing/reconcileNightly";
+import {
+  ensureTwilioVoiceBillingIndexes,
+  reconcileTwilioVoiceUsageForTenant,
+} from "@/lib/billing/reconcileTwilioVoiceUsage";
 
 export const config = { maxDuration: 300 };
 
@@ -21,17 +24,24 @@ function authorized(req: NextApiRequest) {
   return bearer === `Bearer ${secret}` || headerSecret === secret;
 }
 
-// Read-only: loops every tenant and calls the existing single-tenant
-// reconcileBillingForTenant() as-is. This function performs no writes —
-// it only reads and logs. Findings are surfaced via structured console.log
-// per tenant so they're inspectable in Vercel's log output; nothing here
-// charges, refunds, or otherwise touches money.
-async function reconcileAllTenants(window: ReconciliationWindow) {
-  const users = await User.find({}).select({ email: 1 }).lean();
+// Forward metering recovery. Twilio is the source of truth; every platform
+// subaccount gets a durable discovery cursor and idempotent call candidate.
+async function reconcileAllTenants() {
+  const users = await User.find({
+    "twilio.accountSid": { $type: "string", $ne: "" },
+    "numbers.0": { $exists: true },
+    billingMode: { $ne: "self" },
+    role: { $ne: "admin" },
+  })
+    .select({ email: 1, "twilio.accountSid": 1 })
+    .lean();
 
   let tenantsChecked = 0;
   let tenantsFailed = 0;
-  let tenantsWithFindings = 0;
+  let callsDiscovered = 0;
+  let callsMetered = 0;
+  let callsSkipped = 0;
+  let callsPending = 0;
 
   const tenantEmails = (users as any[])
     .map((u) => String(u?.email || "").trim().toLowerCase())
@@ -44,39 +54,20 @@ async function reconcileAllTenants(window: ReconciliationWindow) {
     await Promise.all(
       batch.map(async (userEmail) => {
         try {
-          const report = await reconcileBillingForTenant({ userEmail, window });
+          const report = await reconcileTwilioVoiceUsageForTenant({ userEmail });
           tenantsChecked += 1;
-
-          const hasFindings =
-            report.aiFindings.length > 0 ||
-            report.manualFindings.length > 0 ||
-            report.transferGapCandidates.length > 0 ||
-            report.stripeBatchCoverage.some((row: any) => !row.match);
-
-          if (hasFindings) {
-            tenantsWithFindings += 1;
-            console.log(
-              "[billing-reconciliation] DRIFT FOUND",
-              JSON.stringify({
-                userEmail,
-                window: report.window.label,
-                summary: report.summary,
-                aiFindings: report.aiFindings,
-                manualFindings: report.manualFindings,
-                transferGapCandidates: report.transferGapCandidates,
-                stripeMismatches: report.stripeBatchCoverage.filter((row: any) => !row.match),
-              }),
-            );
-          } else {
-            console.log(
-              "[billing-reconciliation] clean",
-              JSON.stringify({ userEmail, window: report.window.label, summary: report.summary }),
-            );
-          }
+          callsDiscovered += report.discovered;
+          callsMetered += report.metered;
+          callsSkipped += report.skipped;
+          callsPending += report.pending;
+          console.log(
+            "[billing-meter] tenant healthy",
+            JSON.stringify({ userEmail, ...report, accountSid: undefined }),
+          );
         } catch (error: any) {
           tenantsFailed += 1;
           console.error(
-            "[billing-reconciliation] tenant check failed",
+            "[billing-meter] tenant unhealthy; outbound calling will fail closed",
             JSON.stringify({ userEmail, error: String(error?.message || error).slice(0, 300) }),
           );
         }
@@ -84,7 +75,14 @@ async function reconcileAllTenants(window: ReconciliationWindow) {
     );
   }
 
-  return { tenantsChecked, tenantsFailed, tenantsWithFindings };
+  return {
+    tenantsChecked,
+    tenantsFailed,
+    callsDiscovered,
+    callsMetered,
+    callsSkipped,
+    callsPending,
+  };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -94,6 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!authorized(req)) return res.status(401).json({ ok: false, error: "Unauthorized" });
 
   const userEmail = String(req.query.userEmail || req.body?.userEmail || "").trim().toLowerCase();
+  const requestedMode = String(req.query.mode || req.body?.mode || "").trim().toLowerCase();
   const requestedDay = String(req.query.day || req.body?.day || "").trim();
   const window = requestedDay ? utcDayWindow(requestedDay) : previousUtcDayWindow();
   if (!window) return res.status(400).json({ ok: false, error: "day must be YYYY-MM-DD" });
@@ -101,20 +100,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Manual single-tenant debugging mode — unchanged behavior, still requires userEmail.
+    // Explicit single-tenant forward mode is used for release verification and
+    // incident recovery without forcing a full-fleet run.
+    if (userEmail && requestedMode === "forward") {
+      await ensureTwilioVoiceBillingIndexes();
+      const report = await reconcileTwilioVoiceUsageForTenant({ userEmail });
+      res.setHeader("Cache-Control", "no-store");
+      return res.status(200).json({ ok: true, mode: "forward-metering-single-tenant", ...report });
+    }
+
+    // Manual historical audit mode — unchanged behavior.
     if (userEmail) {
       const report = await reconcileBillingForTenant({ userEmail, window });
       res.setHeader("Cache-Control", "no-store");
       return res.status(200).json({ ok: true, mode: "single-tenant", ...report });
     }
 
-    // Cron mode (no userEmail) — loop every tenant, read-only, log findings only.
-    const summary = await reconcileAllTenants(window);
+    // Cron mode (no userEmail): repair forward usage for every platform
+    // subaccount. The first successful run establishes a no-backfill cutoff.
+    await ensureTwilioVoiceBillingIndexes();
+    const summary = await reconcileAllTenants();
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({
       ok: true,
-      mode: "all-tenants",
-      window: { start: window.start.toISOString(), end: window.end.toISOString(), label: window.label },
+      mode: "forward-metering-all-tenants",
       ...summary,
     });
   } catch (error: any) {

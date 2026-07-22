@@ -4,6 +4,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { twiml as TwilioTwiml } from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
 export const config = { api: { bodyParser: false } };
 
@@ -58,13 +59,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Safety: only treat `To` as PSTN when it is a real E.164 number.
   const postedToE164 = /^\+\d{8,16}$/.test(postedTo) ? postedTo : "";
   if (postedToE164) {
-    const vr = new TwilioTwiml.VoiceResponse();
     const rawCallerId = String((req as any).__twilioCallerId || "").trim();
     const callerIdE164 = /^\+\d{8,16}$/.test(rawCallerId) ? rawCallerId : "";
     const rawUserEmail = String((req as any).__userEmail || "").trim();
     // Fallback: extract email from Twilio Client identity ("client:email@example.com")
     const userEmailParam = rawUserEmail || identityFromTwilioFrom(String((req as any).__twilioFrom || ""));
     const leadIdParam = String((req as any).__leadId || "").trim();
+
+    // Re-check immediately before emitting <Dial>. Voice tokens can live for an
+    // hour, so token-time gating alone cannot fail closed during a later meter
+    // outage.
+    const billingCheck = userEmailParam
+      ? await checkCallingAllowed(userEmailParam)
+      : { allowed: false, reason: "Missing calling identity" };
+    if (!billingCheck.allowed) {
+      const blocked = new TwilioTwiml.VoiceResponse();
+      blocked.say("Calling is temporarily unavailable. Please try again shortly.");
+      blocked.hangup();
+      res.setHeader("Content-Type", "text/xml");
+      res.status(200).send(blocked.toString());
+      return;
+    }
+
+    const vr = new TwilioTwiml.VoiceResponse();
 
     // answerOnBridge=true: browser leg hears ringback until lead answers (SDK fires "ringing")
     const dialOpts: any = { answerOnBridge: "true" };

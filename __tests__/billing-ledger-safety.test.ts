@@ -7,7 +7,7 @@ describe("standalone threshold invoice safety", () => {
     amountCents: 1000,
   };
 
-  function setup({ draftAmount = 1000, paidAmount = 1000, payRejects = false, status = "pending" } = {}) {
+  function setup({ draftAmount = 1000, paidAmount = 1000, payRejects = false, status = "pending", nestedInvoiceItem = false } = {}) {
     jest.resetModules();
     const BillingEvent = {
       findOneAndUpdate: jest.fn()
@@ -27,7 +27,13 @@ describe("standalone threshold invoice safety", () => {
         retrieve: jest.fn()
           .mockResolvedValueOnce(invoice("draft", draftAmount))
           .mockResolvedValueOnce(invoice("paid", paidAmount, paidAmount)),
-        listLineItems: jest.fn().mockResolvedValue({ data: [{ invoice_item: "ii_1", amount: 1000, metadata: { billingEventId: "event_1", bucket: "regular", amountCents: "1000" } }] }),
+        listLineItems: jest.fn().mockResolvedValue({ data: [{
+          ...(nestedInvoiceItem
+            ? { parent: { invoice_item_details: { invoice_item: "ii_1" } } }
+            : { invoice_item: "ii_1" }),
+          amount: 1000,
+          metadata: { billingEventId: "event_1", bucket: "regular", amountCents: "1000" },
+        }] }),
         finalizeInvoice: jest.fn().mockResolvedValue(invoice("open", draftAmount)),
         pay: payRejects ? jest.fn().mockRejectedValue(new Error("card declined")) : jest.fn().mockResolvedValue(invoice("paid", paidAmount, paidAmount)),
       },
@@ -54,6 +60,14 @@ describe("standalone threshold invoice safety", () => {
     expect(stripe.invoiceItems.create).toHaveBeenCalledWith(expect.objectContaining({
       invoice: "in_1", customer: "cus_1", amount: 1000, currency: "usd", discountable: false,
     }), expect.any(Object));
+    expect(stripe.invoices.finalizeInvoice).toHaveBeenCalledTimes(1);
+    expect(stripe.invoices.pay).toHaveBeenCalledTimes(1);
+  });
+
+  test("accepts Stripe's current nested invoice-item line reference", async () => {
+    const { stripe } = setup({ nestedInvoiceItem: true });
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await settleStandaloneThresholdInvoice(params);
     expect(stripe.invoices.finalizeInvoice).toHaveBeenCalledTimes(1);
     expect(stripe.invoices.pay).toHaveBeenCalledTimes(1);
   });

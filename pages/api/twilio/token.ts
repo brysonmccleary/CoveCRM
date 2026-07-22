@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import twilio from "twilio";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
 const AccessToken = twilio.jwt.AccessToken;
 const VoiceGrant = AccessToken.VoiceGrant;
@@ -12,6 +13,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const identity = session?.user?.email?.toLowerCase();
     if (!identity) {
       return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const billingCheck = await checkCallingAllowed(identity);
+    if (!billingCheck.allowed) {
+      return res.status(402).json({
+        error: "billing_required",
+        reason: billingCheck.reason,
+        redirect: billingCheck.redirect,
+      });
     }
 
     const {

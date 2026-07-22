@@ -28,6 +28,15 @@ function id(value: unknown): string {
   return typeof value === "string" ? value : String((value as any)?.id || "");
 }
 
+function invoiceItemIdForLine(line: any): string {
+  // Stripe's newer Basil/Clover response shape moved this reference under
+  // parent.invoice_item_details while older API versions expose invoice_item.
+  return id(
+    line?.invoice_item ||
+      line?.parent?.invoice_item_details?.invoice_item,
+  );
+}
+
 async function validateInvoice(args: {
   invoice: any;
   invoiceId: string;
@@ -41,7 +50,7 @@ async function validateInvoice(args: {
   const { invoice, invoiceId, invoiceItemId, eventId, customerId, amountCents, bucket, paid } = args;
   const lines = await stripe.invoices.listLineItems(invoiceId, { limit: 100 });
   const items = (lines as any)?.data || [];
-  const expected = items.filter((line: any) => id(line?.invoice_item) === invoiceItemId);
+  const expected = items.filter((line: any) => invoiceItemIdForLine(line) === invoiceItemId);
   const failures: string[] = [];
   if (String(invoice?.id || "") !== invoiceId) failures.push("invoice_id");
   if (id(invoice?.customer) !== customerId) failures.push("customer");
