@@ -8,6 +8,7 @@ import transcriptHandler from "../pages/api/leads/transcript";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
+import BillingMeterHealth from "@/models/BillingMeterHealth";
 import twilioClient from "@/lib/twilioClient";
 
 jest.mock("next-auth/next", () => ({
@@ -28,6 +29,13 @@ jest.mock("@/models/User", () => ({
 }));
 
 jest.mock("@/models/Lead", () => ({
+  __esModule: true,
+  default: {
+    findOne: jest.fn(),
+  },
+}));
+
+jest.mock("@/models/BillingMeterHealth", () => ({
   __esModule: true,
   default: {
     findOne: jest.fn(),
@@ -94,6 +102,9 @@ const mockedGetServerSession = getServerSession as jest.Mock;
 const mockedDbConnect = dbConnect as jest.Mock;
 const mockedUser = User as unknown as { findOne: jest.Mock };
 const mockedLead = Lead as unknown as { findOne: jest.Mock };
+const mockedBillingMeterHealth = BillingMeterHealth as unknown as {
+  findOne: jest.Mock;
+};
 const mockedTwilioClient = twilioClient as unknown as {
   incomingPhoneNumbers: jest.Mock;
 };
@@ -213,11 +224,32 @@ describe("P1 security remediations", () => {
 
     test("authenticated request issues a token scoped to the caller's own identity", async () => {
       mockedGetServerSession.mockResolvedValue({ user: { email: "Agent@Example.com" } });
+      const accountSid = "AC" + "1".repeat(32);
+      const userLean = jest.fn().mockResolvedValue({
+        email: "agent@example.com",
+        hasEverPaid: true,
+        billingMode: "platform",
+        role: "member",
+        twilio: { accountSid },
+      });
+      const userSelect = jest.fn().mockReturnValue({ lean: userLean });
+      mockedUser.findOne.mockReturnValue({ select: userSelect });
+
+      const healthLean = jest.fn().mockResolvedValue({
+        status: "healthy",
+        lastSucceededAt: new Date(),
+        lastError: null,
+      });
+      const healthSelect = jest.fn().mockReturnValue({ lean: healthLean });
+      mockedBillingMeterHealth.findOne.mockReturnValue({ select: healthSelect });
       const { req, res } = mockReqRes({ method: "GET" });
 
       await twilioTokenHandler(req, res);
 
       expect(res.statusCode).toBe(200);
+      expect(mockedUser.findOne).toHaveBeenCalledWith({ email: "agent@example.com" });
+      expect(userSelect).toHaveBeenCalled();
+      expect(mockedBillingMeterHealth.findOne).toHaveBeenCalledWith({ accountSid });
       const body = (res as any).body;
       expect(body.identity).toBe("agent@example.com");
       expect(typeof body.token).toBe("string");
