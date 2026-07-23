@@ -217,6 +217,7 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
     brandSid: a2p.brandSid,
     existingCampaignSid: resolveExistingCampaignSid(a2p.campaignSid, a2p.usa2pSid),
     createPayload,
+    allowFailedUpdate: true,
     log,
   });
 

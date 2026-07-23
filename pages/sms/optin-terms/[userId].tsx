@@ -53,16 +53,17 @@ export default function OptInTerms(props: Props) {
 
         <h2 className="text-xl font-semibold mt-6 mb-2">6. Privacy</h2>
         <p className="text-slate-200 mb-6">
-          See the <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-privacy/${encodeURIComponent(userId)}`}>SMS Opt-In Privacy</a> page
+          Your consent applies only to SMS messages from <span className="font-semibold">{businessName}</span>. We do not share, sell, or
+          provide your mobile phone number, mobile opt-in data, or messaging consent data to third parties or affiliates for marketing or
+          promotional purposes. See the{" "}
+          <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-privacy/${encodeURIComponent(userId)}`}>SMS Opt-In Privacy</a> page
           for details about how data is handled for this opt-in.
         </p>
 
         <div className="text-xs text-slate-500">
           <a className="underline text-slate-300 hover:text-white" href={`/sms/optin/${encodeURIComponent(userId)}`}>Back to Opt-In</a>
           {" • "}
-          <a className="underline text-slate-300 hover:text-white" href="/legal/terms">Platform Terms</a>
-          {" • "}
-          <a className="underline text-slate-300 hover:text-white" href="/legal/privacy">Platform Privacy</a>
+          <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-privacy/${encodeURIComponent(userId)}`}>SMS Opt-In Privacy</a>
         </div>
       </div>
     </div>

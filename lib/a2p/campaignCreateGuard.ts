@@ -121,6 +121,7 @@ export async function ensureA2PCampaignWithoutDuplicateCreate(args: {
   existingCampaignSid?: any;
   createPayload: any;
   allowCreate?: boolean;
+  allowFailedUpdate?: boolean;
   log?: (...args: any[]) => void;
 }): Promise<GuardResult> {
   const {
@@ -129,6 +130,7 @@ export async function ensureA2PCampaignWithoutDuplicateCreate(args: {
     brandSid,
     createPayload,
     allowCreate = true,
+    allowFailedUpdate = false,
     log,
   } = args;
   const existingCampaignSid = clean(args.existingCampaignSid);
@@ -138,6 +140,18 @@ export async function ensureA2PCampaignWithoutDuplicateCreate(args: {
       const existing = await fetchCampaign(client, messagingServiceSid, existingCampaignSid);
       const status = campaignStatusOf(existing);
       if (isCampaignRejectedOrFailed(status)) {
+        if (!allowFailedUpdate) {
+          log?.("A2P campaign guard: preserving failed/rejected campaign until explicit resubmission", {
+            messagingServiceSid,
+            campaignSid: existingCampaignSid,
+            status,
+          });
+          return preserveExistingCampaign(
+            existing,
+            existingCampaignSid,
+            "existing_failed_campaign_requires_explicit_resubmission",
+          );
+        }
         log?.("A2P campaign guard: updating existing failed/rejected campaign", {
           messagingServiceSid,
           campaignSid: existingCampaignSid,
@@ -161,6 +175,13 @@ export async function ensureA2PCampaignWithoutDuplicateCreate(args: {
     const sid = campaignSidOf(sameBrand);
     const status = campaignStatusOf(sameBrand);
     if (sid && isCampaignRejectedOrFailed(status)) {
+      if (!allowFailedUpdate) {
+        return preserveExistingCampaign(
+          sameBrand,
+          sid,
+          "recovered_failed_campaign_requires_explicit_resubmission",
+        );
+      }
       log?.("A2P campaign guard: updating recovered same-brand failed/rejected campaign", {
         messagingServiceSid,
         campaignSid: sid,

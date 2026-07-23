@@ -41,13 +41,12 @@ export default function OptInPrivacy(props: Props) {
 
         <h2 className="text-xl font-semibold mt-6 mb-2">3. Sharing</h2>
         <p className="text-slate-200 mb-4">
-          We do not sell or share mobile or personal data with third parties, affiliates, or partners for marketing or promotional purposes.
-          We only share data with third parties when it is strictly necessary to deliver our service and only under binding agreements that
-          ensure confidentiality. Under no circumstances will mobile data be shared or sold for advertising or promotional use.
+          We do not share, sell, or provide your mobile phone number, mobile opt-in data, or messaging consent data to third parties or
+          affiliates for marketing or promotional purposes.
         </p>
         <p className="text-slate-200 mb-4">
-          Data may be processed by service providers used to deliver SMS services and to host CoveCRM. These providers receive only the
-          information necessary to perform their services and are required to protect the data.
+          Service providers may process mobile information only as necessary to deliver the SMS services you requested. They may not use
+          your mobile information or messaging consent for their own marketing or promotional purposes.
         </p>
 
         <h2 className="text-xl font-semibold mt-6 mb-2">4. Retention</h2>
@@ -57,6 +56,8 @@ export default function OptInPrivacy(props: Props) {
 
         <h2 className="text-xl font-semibold mt-6 mb-2">5. Your Choices</h2>
         <ul className="list-disc list-inside space-y-2 text-slate-200 mb-6">
+          <li>Message frequency varies.</li>
+          <li>Message and data rates may apply.</li>
           <li>Opt out anytime by replying <span className="font-semibold">STOP</span>.</li>
           <li>For help, reply <span className="font-semibold">HELP</span>.</li>
           <li>To request access or deletion, contact support at <a className="underline text-slate-300 hover:text-white" href="mailto:support@covecrm.com">support@covecrm.com</a>.</li>
@@ -66,8 +67,6 @@ export default function OptInPrivacy(props: Props) {
           <a className="underline text-slate-300 hover:text-white" href={`/sms/optin/${encodeURIComponent(userId)}`}>Back to Opt-In</a>
           {" • "}
           <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-terms/${encodeURIComponent(userId)}`}>Opt-in Terms</a>
-          {" • "}
-          <a className="underline text-slate-300 hover:text-white" href="/legal/privacy">Platform Privacy</a>
         </div>
       </div>
     </div>
