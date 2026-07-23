@@ -11,6 +11,7 @@ import {
   ensureA2PCampaignWithoutDuplicateCreate,
   resolveExistingCampaignSid,
 } from "@/lib/a2p/campaignCreateGuard";
+import { requireBillingReady } from "@/lib/billing/requireBillingReady";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -39,6 +40,21 @@ const BRAND_OK_FOR_CAMPAIGN = new Set([
 ]);
 
 const TRUSTHUB_APPROVED = new Set(["APPROVED", "TWILIO_APPROVED"]);
+
+const TRUSTHUB_SUBMITTED = new Set([
+  "PENDING_REVIEW",
+  "IN_REVIEW",
+  "APPROVED",
+  "TWILIO_APPROVED",
+]);
+
+const TRUSTHUB_FAILED = new Set([
+  "FAILED",
+  "REJECTED",
+  "TWILIO_REJECTED",
+  "DECLINED",
+  "TERMINATED",
+]);
 
 const CAMPAIGN_APPROVED = new Set([
   "APPROVED",
@@ -901,6 +917,13 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
     return null;
   }
 
+  if (
+    String(user.subscriptionStatus || "").toLowerCase() === "canceled" ||
+    !requireBillingReady(user).ok
+  ) {
+    return null;
+  }
+
   let profile = await A2PProfile.findOne({ userId: String(user._id) });
   if (!profile) {
     console.log("[A2P DEBUG] return reason", { reason: "a2p_profile_not_found", userEmail: normalizedEmail });
@@ -1073,7 +1096,12 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
       a2pProfileEndUserSid: String(profile.a2pProfileEndUserSid || "").trim() || null,
     });
 
-    if (!trustProductSid && profile.profileSid && profileApproved) {
+    if (
+      !trustProductSid &&
+      profile.profileSid &&
+      TRUSTHUB_SUBMITTED.has(profileStatus) &&
+      !TRUSTHUB_FAILED.has(profileStatus)
+    ) {
       const recoveredTrustProductSid = await recoverExistingTrustProductForProfile({
         client: trusthubClient,
         auth: trusthubAuth,
@@ -1118,7 +1146,12 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
     }
 
     let a2pProfileEndUserSid = String(profile.a2pProfileEndUserSid || "").trim();
-    if (trustProductSid && profile.profileSid && profileApproved) {
+    if (
+      trustProductSid &&
+      profile.profileSid &&
+      TRUSTHUB_SUBMITTED.has(profileStatus) &&
+      !TRUSTHUB_FAILED.has(profileStatus)
+    ) {
       console.log("[A2P DEBUG] trustProductStatus normalized", {
         userEmail: normalizedEmail,
         trustProductSid,
@@ -1263,9 +1296,21 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
       : "";
 
     if (!brandSid && profile.profileSid && trustProductSid) {
-      const trustApproved = TRUSTHUB_APPROVED.has(trustProductStatus);
+      const requiredAssignmentsComplete = Boolean(
+        profile.businessEndUserSid &&
+          profile.authorizedRepEndUserSid &&
+          profile.supportingDocumentSid &&
+          profile.assignedToPrimary &&
+          a2pProfileEndUserSid,
+      );
+      const brandReady =
+        requiredAssignmentsComplete &&
+        TRUSTHUB_SUBMITTED.has(profileStatus) &&
+        TRUSTHUB_SUBMITTED.has(trustProductStatus) &&
+        !TRUSTHUB_FAILED.has(profileStatus) &&
+        !TRUSTHUB_FAILED.has(trustProductStatus);
 
-      if (profileApproved && trustApproved) {
+      if (brandReady) {
         // Scan first before creating to avoid duplicates.
         const preExisting = await findExistingBrandForBundles({
           client: trusthubClient,

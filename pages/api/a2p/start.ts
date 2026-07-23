@@ -78,6 +78,21 @@ const BRAND_OK_FOR_CAMPAIGN = new Set([
   "REGISTERED",
 ]);
 
+const TRUSTHUB_SUBMITTED = new Set([
+  "PENDING_REVIEW",
+  "IN_REVIEW",
+  "APPROVED",
+  "TWILIO_APPROVED",
+]);
+
+const TRUSTHUB_FAILED = new Set([
+  "FAILED",
+  "REJECTED",
+  "TWILIO_REJECTED",
+  "DECLINED",
+  "TERMINATED",
+]);
+
 function log(...args: any[]) {
   console.log("[A2P start]", ...args);
 }
@@ -2022,12 +2037,10 @@ export default async function handler(
       twilioAccountSidUsed,
     });
 
-    const SECONDARY_PROFILE_APPROVED = new Set([
-      "APPROVED",
-      "TWILIO_APPROVED",
-    ]);
-
-    if (!SECONDARY_PROFILE_APPROVED.has(secondaryProfileStatus)) {
+    if (
+      !TRUSTHUB_SUBMITTED.has(secondaryProfileStatus) ||
+      TRUSTHUB_FAILED.has(secondaryProfileStatus)
+    ) {
       await A2PProfile.updateOne(
         { _id: a2pId },
         {
@@ -2042,7 +2055,7 @@ export default async function handler(
             approvalHistory: {
               stage: "profile_submitted",
               at: new Date(),
-              note: `Secondary Customer Profile submitted; waiting for approval (${secondaryProfileStatus}) before brand creation`,
+              note: `Secondary Customer Profile has not been successfully submitted (${secondaryProfileStatus})`,
             },
           },
         },
@@ -2050,7 +2063,7 @@ export default async function handler(
 
       return res.status(200).json({
         message:
-          "Secondary customer profile submitted and awaiting Twilio review before brand creation.",
+          "Secondary customer profile has not been successfully submitted.",
         data: {
           profileSid: secondaryProfileSid,
           profileStatus: secondaryProfileStatus,
@@ -2158,12 +2171,25 @@ export default async function handler(
       twilioAccountSidUsed,
     });
 
-    const TRUST_PRODUCT_APPROVED = new Set([
-      "APPROVED",
-      "TWILIO_APPROVED",
-    ]);
+    live = await A2PProfile.findOne({ userId }).lean<any>();
+    const requiredAssignmentsComplete = Boolean(
+      live?.businessEndUserSid &&
+        live?.authorizedRepEndUserSid &&
+        live?.supportingDocumentSid &&
+        live?.assignedToPrimary &&
+        live?.a2pProfileEndUserSid,
+    );
+    const canCreateBrand = Boolean(
+      secondaryProfileSid &&
+        trustProductSid &&
+        requiredAssignmentsComplete &&
+        TRUSTHUB_SUBMITTED.has(secondaryProfileStatus) &&
+        TRUSTHUB_SUBMITTED.has(trustProductStatus) &&
+        !TRUSTHUB_FAILED.has(secondaryProfileStatus) &&
+        !TRUSTHUB_FAILED.has(trustProductStatus),
+    );
 
-    if (!TRUST_PRODUCT_APPROVED.has(trustProductStatus)) {
+    if (!canCreateBrand) {
       await A2PProfile.updateOne(
         { _id: a2pId },
         {
@@ -2178,7 +2204,7 @@ export default async function handler(
             approvalHistory: {
               stage: "trust_product_submitted",
               at: new Date(),
-              note: `A2P Trust Product submitted; waiting for approval (${trustProductStatus}) before brand creation`,
+              note: `A2P bundles are not ready for Brand creation (${trustProductStatus})`,
             },
           },
         },
@@ -2186,7 +2212,7 @@ export default async function handler(
 
       return res.status(200).json({
         message:
-          "A2P Trust Product submitted and awaiting Twilio review before brand creation.",
+          "A2P bundles are waiting for completed assignments and compliant evaluations before brand creation.",
         data: {
           profileSid: secondaryProfileSid,
           trustProductSid,
