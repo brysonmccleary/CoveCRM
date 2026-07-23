@@ -9,8 +9,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadSubscription from "@/models/FBLeadSubscription";
-
-const META_GRAPH_BASE = "https://graph.facebook.com/v19.0";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
 
 // Lead type → search terms that surface strong life insurance ads
 const LEAD_TYPE_SEARCH_TERMS: Record<string, string> = {
@@ -152,7 +151,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const token = process.env.META_SYSTEM_USER_TOKEN || process.env.META_PAGE_ACCESS_TOKEN || "";
   if (!token) return res.status(500).json({ error: "Meta access token not configured" });
 
-  const url = new URL(`${META_GRAPH_BASE}/ads_archive`);
+  const url = new URL(metaGraphUrl("ads_archive"));
   url.searchParams.set("access_token", token);
   url.searchParams.set("ad_type", "ALL");
   url.searchParams.set("ad_reached_countries", '["US"]');

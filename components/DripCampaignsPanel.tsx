@@ -1248,7 +1248,8 @@ setBackendCampaigns((prev) =>
                 onClick={() => toggleExpand(String(campaignId))}
                 className="text-left font-semibold text-lg cursor-pointer"
               >
-                {d.name} — {(d.campaign?.steps || d.defaultSteps || []).length} messages
+                {d.name} — {(d.campaign?.steps || d.defaultSteps || []).length}{" "}
+                {(d.campaign?.steps || d.defaultSteps || []).length === 1 ? "message" : "messages"}
               </button>
               <button
                 onClick={() => handleAssignDrip(String(campaignId), d.name)}
@@ -1380,7 +1381,7 @@ setBackendCampaigns((prev) =>
               onClick={() => toggleExpand(camp._id)}
               className="text-left font-semibold text-lg cursor-pointer"
             >
-              {camp.name} — {(camp.steps || []).length} messages
+              {camp.name} — {(camp.steps || []).length} {(camp.steps || []).length === 1 ? "message" : "messages"}
             </button>
             <div className="flex gap-2">
               <button

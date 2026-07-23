@@ -1,5 +1,4 @@
 import type { LaunchReadiness } from "./LaunchReadinessCard";
-import ProfileVisibilityNotice from "./ProfileVisibilityNotice";
 import type { PageIdentity } from "./PageIdentityCard";
 
 type LaunchReviewStepProps = {
@@ -24,7 +23,7 @@ export default function LaunchReviewStep({ page, leadType, readiness }: LaunchRe
     <section className="rounded-3xl border border-white/10 bg-[#0f172a] p-5 shadow-2xl shadow-black/20 sm:p-7">
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Step 5</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Step 4</p>
           <h2 className="mt-1 text-2xl font-bold text-white">
             {readiness.ready ? "Ready for final review" : "Not ready to launch yet"}
           </h2>
@@ -75,9 +74,6 @@ export default function LaunchReviewStep({ page, leadType, readiness }: LaunchRe
         Budget, licensed states, and the generated ad are finalized in the launch step above. Nothing spends until you activate the paused campaign.
       </div>
 
-      <div className="mt-5">
-        <ProfileVisibilityNotice compact />
-      </div>
     </section>
   );
 }

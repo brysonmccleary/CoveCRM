@@ -30,6 +30,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     pageId: String(req.query.pageId || leadTypeAssets?.pageId || user.metaPageId || "").trim(),
     adAccountId: String(req.query.adAccountId || leadTypeAssets?.adAccountId || user.metaAdAccountId || "").trim(),
     accessToken: String(user.metaSystemUserToken || user.metaAccessToken || "").trim(),
+    requireLeadAdsEligibility: String(req.query.campaignType || "") === "native_form",
     force: String(req.query.force || "") === "true",
   });
 

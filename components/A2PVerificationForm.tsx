@@ -752,8 +752,13 @@ export default function A2PVerificationForm() {
 
   // ---------- UI ----------
   return (
-    <div className="border border-black dark:border-white p-4 rounded space-y-4">
-      <h2 className="text-xl font-bold">A2P Brand Verification</h2>
+    <div className="space-y-4 rounded border border-black p-4 dark:border-white">
+      <div>
+        <h2 className="text-xl font-bold">A2P Brand Verification</h2>
+        <p className="mt-1 text-sm text-gray-400">
+          Complete each section, then review and submit. Your entries stay in place while sections are collapsed.
+        </p>
+      </div>
 
       {/* Status banner at the top */}
       <div className="mb-2">
@@ -817,6 +822,12 @@ export default function A2PVerificationForm() {
         </div>
       </div>
 
+      <details open className="group rounded-xl border border-white/10 bg-[#0f172a]/35 p-4">
+        <summary className="cursor-pointer list-none text-base font-semibold text-white">
+          <span className="mr-2 text-blue-300">1</span> Business identity
+          <span className="float-right text-sm text-gray-500 group-open:hidden">Open</span>
+        </summary>
+        <div className="mt-4 space-y-3">
       {/* Business */}
       <div>
         <input
@@ -998,6 +1009,15 @@ export default function A2PVerificationForm() {
         )}
       </div>
 
+        </div>
+      </details>
+
+      <details className="group rounded-xl border border-white/10 bg-[#0f172a]/35 p-4">
+        <summary className="cursor-pointer list-none text-base font-semibold text-white">
+          <span className="mr-2 text-blue-300">2</span> Campaign and compliance links
+          <span className="float-right text-sm text-gray-500 group-open:hidden">Open</span>
+        </summary>
+        <div className="mt-4 space-y-3">
       {/* Campaign Type */}
       <div className="space-y-1">
         <label className="text-sm text-gray-500">Campaign Type</label>
@@ -1138,6 +1158,15 @@ export default function A2PVerificationForm() {
         </p>
       </div>
 
+        </div>
+      </details>
+
+      <details className="group rounded-xl border border-white/10 bg-[#0f172a]/35 p-4">
+        <summary className="cursor-pointer list-none text-base font-semibold text-white">
+          <span className="mr-2 text-blue-300">3</span> Contact and sample messages
+          <span className="float-right text-sm text-gray-500 group-open:hidden">Open</span>
+        </summary>
+        <div className="mt-4 space-y-3">
       {/* Contact */}
       <div>
         <input
@@ -1223,6 +1252,15 @@ export default function A2PVerificationForm() {
         </div>
       </div>
 
+        </div>
+      </details>
+
+      <details className="group rounded-xl border border-white/10 bg-[#0f172a]/35 p-4">
+        <summary className="cursor-pointer list-none text-base font-semibold text-white">
+          <span className="mr-2 text-blue-300">4</span> Consent details and evidence
+          <span className="float-right text-sm text-gray-500 group-open:hidden">Open</span>
+        </summary>
+        <div className="mt-4 space-y-3">
       {/* Opt-in Details */}
       <div>
         <textarea
@@ -1298,6 +1336,9 @@ export default function A2PVerificationForm() {
           </p>
         )}
       </div>
+
+        </div>
+      </details>
 
       {/* Submit */}
       <button

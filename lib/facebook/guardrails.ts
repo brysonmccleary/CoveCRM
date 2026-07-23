@@ -1,4 +1,4 @@
-import { normalizeStateCodes } from "@/lib/facebook/geo/usStates";
+import { normalizeStateCodesStrict } from "@/lib/facebook/geo/usStates";
 
 export type PerformanceGuardrailDecision =
   | "flag_high_cpl"
@@ -7,7 +7,7 @@ export type PerformanceGuardrailDecision =
   | "monitor";
 
 export function validateStates(states: unknown): string[] {
-  const normalized = normalizeStateCodes(states);
+  const normalized = normalizeStateCodesStrict(states);
   if (!normalized.length) {
     throw new Error("Licensed states required");
   }

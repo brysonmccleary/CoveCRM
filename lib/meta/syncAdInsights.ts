@@ -7,8 +7,7 @@ import FBLeadCampaign from "@/models/FBLeadCampaign";
 import Lead from "@/lib/mongo/leads";
 import { Types } from "mongoose";
 import { evaluateFacebookOptimizationAlerts } from "@/lib/facebook/optimizationAlerts";
-
-const META_GRAPH_BASE = "https://graph.facebook.com/v19.0";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
 
 interface InsightRecord {
   campaign_id?: string;
@@ -49,7 +48,7 @@ export async function syncAdInsights(
   // Normalize ad account ID
   const actId = adAccountId.startsWith("act_") ? adAccountId : `act_${adAccountId}`;
 
-  const url = new URL(`${META_GRAPH_BASE}/${actId}/insights`);
+  const url = new URL(metaGraphUrl(`${actId}/insights`));
   url.searchParams.set("access_token", accessToken);
   url.searchParams.set(
     "fields",
@@ -388,7 +387,7 @@ export async function syncAdInsights(
     if (!metaCampaignId) continue;
 
     try {
-      const healthUrl = new URL(`${META_GRAPH_BASE}/${metaCampaignId}`);
+      const healthUrl = new URL(metaGraphUrl(metaCampaignId));
       healthUrl.searchParams.set("fields", "effective_status,status,daily_budget");
       healthUrl.searchParams.set("access_token", accessToken);
 

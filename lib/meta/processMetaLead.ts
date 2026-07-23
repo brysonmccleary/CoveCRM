@@ -13,6 +13,8 @@ import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+import { stableLeadEventId } from "@/lib/facebook/hostedAttribution";
+import { enqueueMetaLifecycleEventSafely } from "@/lib/meta/capi";
 
 const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   final_expense: "Final Expense",
@@ -193,6 +195,10 @@ export async function processMetaLead(
     (_lt === "iul"                 && _seg === "trucker") ? "trucker_iul" :
     FB_LEAD_TYPE_TO_AI_SCRIPT_KEY[_lt] || "final_expense";
   let folder: any = null;
+  const attributedAd = (Array.isArray((campaign as any).ads) ? (campaign as any).ads : []).find(
+    (candidate: any) => String(candidate?.metaAdId || "").trim() === String(adId || leadData?.adId || "").trim()
+  );
+  const leadEventId = stableLeadEventId("meta-native", leadgenId);
 
   if ((campaign as any).folderId) {
     try {
@@ -242,6 +248,11 @@ export async function processMetaLead(
     leadType: (campaign as any).leadType,
     source: "facebook_meta_native",
     facebookLeadId: leadgenId,
+    leadEventId,
+    metaAdId: String(adId || leadData?.adId || ""),
+    metaCreativeId: String(attributedAd?.metaCreativeId || ""),
+    variantId: String(attributedAd?.variantId || ""),
+    creativeFamily: String(attributedAd?.creativeFamily || ""),
     folderId: (folder as any)._id,
     importedToCrm: !dupCheck.isDuplicate,
     importedAt: dupCheck.isDuplicate ? undefined : new Date(),
@@ -321,6 +332,10 @@ export async function processMetaLead(
     metaLeadgenId: leadgenId,
     metaFormId: formId || leadData.formId,
     metaAdId: adId || leadData.adId,
+    metaCreativeId: String(attributedAd?.metaCreativeId || ""),
+    metaVariantId: String(attributedAd?.variantId || ""),
+    metaCreativeFamily: String(attributedAd?.creativeFamily || ""),
+    metaLeadEventId: leadEventId,
     metaAdsetId: adsetId || leadData.adsetId,
     metaCampaignId: metaCampaignId || leadData.campaignId,
     metaPageId: pageId || leadData.pageId,
@@ -352,6 +367,18 @@ export async function processMetaLead(
   } catch (err: any) {
     console.warn("[processMetaLead] scoreLeadOnArrival failed (non-blocking):", err?.message);
   }
+  await enqueueMetaLifecycleEventSafely({
+    userEmail,
+    leadId: String((newLead as any)._id),
+    leadEventId,
+    eventName: "LeadAccepted",
+    email: leadData.email,
+    phone: leadData.phone,
+    metaCampaignId: String(metaCampaignId || leadData.campaignId || ""),
+    metaAdId: String(adId || leadData.adId || ""),
+    metaCreativeId: String(attributedAd?.metaCreativeId || ""),
+    creativeFamily: String(attributedAd?.creativeFamily || ""),
+  }, undefined, (error) => console.warn("[processMetaLead] CAPI queue failed (non-blocking):", error?.message));
 
   try {
     if (leadData.phone && (folder as any)?._id) {

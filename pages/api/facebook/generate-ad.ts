@@ -9,6 +9,10 @@ import {
   isWinnerSupportedLeadType,
   selectRecommendedVariant,
 } from "@/lib/facebook/winningAdLibrary";
+import {
+  applyGlobalWinnerHints,
+  loadGlobalGenerationHints,
+} from "@/lib/facebook/globalIntelligence/anonymizedLearning";
 
 const LEAD_FORM_QUESTIONS = {
   mortgage_protection: [
@@ -179,6 +183,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     audienceSegment: audienceSegmentParam = "standard",
     regenerationAttempt: regenerationAttemptParam = 0,
     generationNonce: generationNonceParam = "",
+    licensedStates = [],
   } = req.body as {
     leadType?: string;
     location?: string;
@@ -188,6 +193,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     variantCount?: number;
     regenerationAttempt?: number;
     generationNonce?: string;
+    licensedStates?: string[];
   };
 
   if (!isWinnerSupportedLeadType(leadType)) {
@@ -224,8 +230,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     campaignName: campaignNameSeeded,
     location,
   });
-  const selectedVariant = selectRecommendedVariant(leadType, variants);
-  const selectedVariants = generateWinningVariantList({
+  const libraryRecommendedVariant = selectRecommendedVariant(leadType, variants);
+  const selectedVariantsFromLibrary = generateWinningVariantList({
     leadType,
     audienceSegment,
     userId: userEmail,
@@ -233,7 +239,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     location,
     variantCount: requestedVariantCount,
   });
-  const dailyBudgetCents = Math.round((Number(dailyBudget) || 25) * 100);
+  const globalLearningHints = await loadGlobalGenerationHints({
+    leadType,
+    stateCodes: Array.isArray(licensedStates) ? licensedStates : [],
+  });
+  const selectedVariants = applyGlobalWinnerHints(selectedVariantsFromLibrary, globalLearningHints);
+  const selectedVariant = selectedVariants[0] || libraryRecommendedVariant;
+  const budgetDollars = Number(dailyBudget);
+  if (!Number.isFinite(budgetDollars) || budgetDollars < 5) {
+    return res.status(400).json({ ok: false, error: "dailyBudget must be a finite number >= 5" });
+  }
+  const dailyBudgetCents = Math.round(budgetDollars * 100);
   const buildDraftFromVariant = (variant: typeof variants.emotional, index = 0) => {
     const landingPageConfig = buildWinningFunnelConfig(variant);
     const visualVariantBaseSeed = [
@@ -283,6 +299,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       regenerationAttempt,
       visualVariantIndex,
       vendorStyleTag: variant.vendorStyleTag,
+      displayAmount: variant.displayAmount,
       generatedBy: "winner_library",
       copySource: "winner_library",
     };
@@ -295,5 +312,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     draft: selectedDrafts[0] || recommendedDraft,
     drafts: selectedDrafts,
     variantCount: selectedDrafts.length,
+    globalLearningHints,
   });
 }

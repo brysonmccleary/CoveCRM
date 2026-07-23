@@ -13,13 +13,12 @@ import {
   generateWinningVariantList,
   isWinnerSupportedLeadType,
 } from "@/lib/facebook/winningAdLibrary";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
 
 type ApplyActionType = "SCALE" | "DECREASE" | "PAUSE" | "FIX";
 
 const MAX_BUDGET_CHANGE_PERCENT = 30;
 const MIN_SPEND_TO_EXECUTE = 50;
-const META_GRAPH_VERSION = "v18.0";
-const META_GRAPH_CREATIVE_VERSION = "v19.0";
 
 function num(value: unknown): number {
   const n = Number(value);
@@ -66,7 +65,7 @@ async function uploadMetaAdImageFromDataUrl(
   imageParams.set("access_token", accessToken);
 
   const imageResp = await fetch(
-    `https://graph.facebook.com/${META_GRAPH_CREATIVE_VERSION}/act_${adAccountId}/adimages`,
+    metaGraphUrl(`act_${adAccountId}/adimages`),
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -104,7 +103,7 @@ async function updateCampaignBudget(params: {
   budgetParams.set("access_token", params.accessToken);
 
   const resp = await fetch(
-    `https://graph.facebook.com/${META_GRAPH_VERSION}/${params.campaign.metaAdsetId}`,
+    metaGraphUrl(params.campaign.metaAdsetId),
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -224,7 +223,7 @@ async function createRefreshCreativeAd(params: {
   creativeParams.set("access_token", params.accessToken);
 
   const creativeResp = await fetch(
-    `https://graph.facebook.com/${META_GRAPH_CREATIVE_VERSION}/act_${adAccountId}/adcreatives`,
+    metaGraphUrl(`act_${adAccountId}/adcreatives`),
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -245,7 +244,7 @@ async function createRefreshCreativeAd(params: {
   adParams.set("access_token", params.accessToken);
 
   const adResp = await fetch(
-    `https://graph.facebook.com/${META_GRAPH_CREATIVE_VERSION}/act_${adAccountId}/ads`,
+    metaGraphUrl(`act_${adAccountId}/ads`),
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -416,7 +415,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       pauseParams.set("access_token", accessToken);
 
       const resp = await fetch(
-        `https://graph.facebook.com/${META_GRAPH_VERSION}/${campaign.metaCampaignId}`,
+        metaGraphUrl(campaign.metaCampaignId),
         {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },

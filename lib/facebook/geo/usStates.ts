@@ -80,6 +80,21 @@ export function normalizeStateCodes(values: unknown): string[] {
   return out;
 }
 
+export function normalizeStateCodesStrict(values: unknown): string[] {
+  const rawValues = Array.isArray(values) ? values : String(values || "").split(",");
+  const out: string[] = [];
+  for (const value of rawValues) {
+    const raw = String(value || "").trim();
+    if (!raw) continue;
+    const code = normalizeStateCode(raw);
+    if (!code) {
+      throw new Error(`Unsupported state targeting selection: ${raw}`);
+    }
+    if (!out.includes(code)) out.push(code);
+  }
+  return out;
+}
+
 export function isStateAllowed(state: unknown, licensedStates: unknown): boolean {
   const selected = normalizeStateCodes(licensedStates);
   if (!selected.length) return true;

@@ -97,8 +97,13 @@ const BillingEventSchema = new Schema<IBillingEvent>(
   { timestamps: true },
 );
 
-// Primary idempotency guard: (source, sourceId, amountCents) must be unique.
-// A duplicate upsert on this index signals "already processed" → skip Stripe.
+// Defense in depth: a logical billing event can never be recreated with a
+// different amount. The older three-field index remains useful for existing
+// deployments, while this identity-only index is the stronger charge boundary.
+BillingEventSchema.index(
+  { source: 1, sourceId: 1 },
+  { unique: true, name: "billing_event_source_identity" },
+);
 BillingEventSchema.index(
   { source: 1, sourceId: 1, amountCents: 1 },
   { unique: true },

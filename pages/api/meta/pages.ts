@@ -7,6 +7,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { classifyMetaHealthError, markMetaHealthFailure } from "@/lib/meta/metaHealth";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
@@ -24,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const url = new URL("https://graph.facebook.com/v19.0/me/accounts");
+    const url = new URL(metaGraphUrl("me/accounts"));
     url.searchParams.set("access_token", token);
     url.searchParams.set("fields", "id,name,access_token,category,link,tasks,picture.type(large){url},instagram_business_account{id}");
 

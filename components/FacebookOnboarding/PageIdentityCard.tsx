@@ -1,5 +1,3 @@
-import ProfileVisibilityNotice from "./ProfileVisibilityNotice";
-
 export type PageIdentity = {
   name?: string;
   category?: string;
@@ -22,7 +20,7 @@ export default function PageIdentityCard({ page }: PageIdentityCardProps) {
     <section className="rounded-3xl border border-white/10 bg-[#0f172a] p-5 shadow-2xl shadow-black/20 sm:p-7">
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Step 3</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Step 2</p>
           <h2 className="mt-1 text-2xl font-bold text-white">Confirm what customers will see</h2>
           <p className="mt-2 text-sm leading-6 text-gray-400">
             Your ad identity should look like a real business, not a personal profile.
@@ -72,9 +70,6 @@ export default function PageIdentityCard({ page }: PageIdentityCardProps) {
             </div>
           )}
         </div>
-      </div>
-      <div className="mt-5">
-        <ProfileVisibilityNotice compact />
       </div>
     </section>
   );

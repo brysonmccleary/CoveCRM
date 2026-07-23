@@ -28,16 +28,21 @@ function Toggle({
   checked,
   onChange,
   disabled,
+  label,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
+  label: string;
 }) {
   return (
     <button
       type="button"
       onClick={() => !disabled && onChange(!checked)}
       disabled={disabled}
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50 ${
         checked ? "bg-indigo-600" : "bg-gray-600"
       }`}
@@ -167,6 +172,7 @@ export default function AISettingsPanel() {
             locked={aiLocked}
           >
             <Toggle
+              label="New Lead Auto-Call"
               checked={!!settings.aiNewLeadCallEnabled}
               onChange={(v) => save({ aiNewLeadCallEnabled: v })}
               disabled={saving || aiLocked}
@@ -200,6 +206,7 @@ export default function AISettingsPanel() {
             locked={aiLocked}
           >
             <Toggle
+              label="Live Transfer"
               checked={!!settings.liveTransferEnabled}
               onChange={(v) => save({ liveTransferEnabled: v })}
               disabled={saving || aiLocked}
@@ -232,6 +239,7 @@ export default function AISettingsPanel() {
             locked={aiLocked}
           >
             <Toggle
+              label="AI Dialer Transcripts"
               checked={!!settings.aiDialerTranscriptsEnabled}
               onChange={(v) => save({ aiDialerTranscriptsEnabled: v })}
               disabled={saving || aiLocked}
@@ -254,6 +262,7 @@ export default function AISettingsPanel() {
             locked={aiLocked}
           >
             <Toggle
+              label="AI Call Insights"
               checked={settings.aiCallOverviewEnabled !== false}
               onChange={(v) => save({ aiCallOverviewEnabled: v })}
               disabled={saving || aiLocked}
@@ -266,6 +275,7 @@ export default function AISettingsPanel() {
             locked={aiLocked}
           >
             <Toggle
+              label="AI Coaching"
               checked={!!settings.aiCallCoachingEnabled}
               onChange={(v) => save({ aiCallCoachingEnabled: v })}
               disabled={saving || aiLocked}
@@ -296,6 +306,7 @@ export default function AISettingsPanel() {
             locked={aiLocked}
           >
             <Toggle
+              label="AI SMS Assistant"
               checked={!!settings.aiTextingEnabled}
               onChange={(v) => save({ aiTextingEnabled: v })}
               disabled={saving || aiLocked}
@@ -308,6 +319,7 @@ export default function AISettingsPanel() {
             locked={aiLocked}
           >
             <Toggle
+              label="Missed-Call Text Back"
               checked={!!settings.missedCallTextBackEnabled}
               onChange={(v) => save({ missedCallTextBackEnabled: v })}
               disabled={saving || aiLocked}
@@ -320,6 +332,7 @@ export default function AISettingsPanel() {
             locked={aiLocked}
           >
             <Toggle
+              label="Review Request After Sale"
               checked={!!settings.reviewRequestEnabled}
               onChange={(v) => save({ reviewRequestEnabled: v })}
               disabled={saving || aiLocked}

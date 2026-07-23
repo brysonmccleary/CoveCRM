@@ -5,6 +5,10 @@ describe("standalone threshold invoice safety", () => {
     source: "regular_usage",
     sourceId: "regular_usage:user_1:1",
     amountCents: 1000,
+    userEmail: "user@example.com",
+    userId: "user_1",
+    stripeCustomerId: "cus_1",
+    metadata: { bucket: "regular" },
   };
 
   function setup({ draftAmount = 1000, paidAmount = 1000, payRejects = false, status = "pending", nestedInvoiceItem = false } = {}) {
@@ -115,6 +119,30 @@ describe("standalone threshold invoice safety", () => {
     await expect(settleStandaloneThresholdInvoice(params)).rejects.toThrow("requires manual review");
     expect(stripe.invoices.create).not.toHaveBeenCalled();
     expect(stripe.invoiceItems.create).not.toHaveBeenCalled();
+    expect(stripe.invoices.pay).not.toHaveBeenCalled();
+  });
+
+  test("an event identity mismatch refuses all Stripe work", async () => {
+    const { BillingEvent, stripe } = setup();
+    BillingEvent.findOneAndUpdate.mockReset().mockResolvedValueOnce({
+      ...event,
+      stripeCustomerId: "cus_someone_else",
+    });
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await expect(settleStandaloneThresholdInvoice(params)).rejects.toThrow("identity mismatch");
+    expect(stripe.invoices.create).not.toHaveBeenCalled();
+    expect(stripe.invoiceItems.create).not.toHaveBeenCalled();
+    expect(stripe.invoices.pay).not.toHaveBeenCalled();
+  });
+
+  test("a missing durable invoice reference stops before any payable invoice item", async () => {
+    const { BillingEvent, stripe } = setup();
+    BillingEvent.updateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 });
+    const { settleStandaloneThresholdInvoice } = await import("@/lib/billing/standaloneInvoice");
+    await expect(settleStandaloneThresholdInvoice(params)).rejects.toThrow("not durably persisted");
+    expect(stripe.invoices.create).toHaveBeenCalledTimes(1);
+    expect(stripe.invoiceItems.create).not.toHaveBeenCalled();
+    expect(stripe.invoices.finalizeInvoice).not.toHaveBeenCalled();
     expect(stripe.invoices.pay).not.toHaveBeenCalled();
   });
 

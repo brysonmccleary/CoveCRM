@@ -6,6 +6,9 @@ import User from "@/models/User";
 import { buildCampaignStructure } from "@/lib/facebook/buildCampaignStructure";
 import { validateStates } from "@/lib/facebook/guardrails";
 import { validateWinningVariantMetadata } from "@/lib/facebook/winningAdLibrary";
+import { requireDailyBudgetCents } from "@/lib/facebook/launchFingerprint";
+import { hasRecentMetaQualitySignal, isCapiEnabled } from "@/lib/meta/capi";
+import { assertNativeFormComplianceMode } from "@/lib/facebook/metaLeadFormTemplate";
 
 const VALID_LEAD_TYPES = [
   "final_expense",
@@ -23,7 +26,7 @@ export async function validateLaunchInput(params: {
 
   const body = params.body || {};
   const user = await User.findOne({ email: String(params.userEmail).toLowerCase() })
-    .select("_id metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaLeadTypeAssets")
+    .select("_id metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaLeadTypeAssets metaDatasetId metaCapiAdAccountId metaCapiEnabled")
     .lean() as any;
 
   if (!user) throw new Error("User account not found");
@@ -51,8 +54,21 @@ export async function validateLaunchInput(params: {
 
   if (!accessToken || !adAccountId) throw new Error("Ad account connection required");
   if (!pageId) throw new Error("Facebook page connection required");
+  if (String(body.campaignType || "") === "native_form") assertNativeFormComplianceMode();
 
   if (!VALID_LEAD_TYPES.includes(leadType)) throw new Error("Lead type required");
+  const performanceGoal = body.performanceGoal === "QUALITY_LEAD" ? "QUALITY_LEAD" : "LEAD_GENERATION";
+  if (performanceGoal === "QUALITY_LEAD" && (
+    !String(user.metaDatasetId || "").trim() ||
+    String(user.metaCapiAdAccountId || "").replace(/^act_/, "") !== adAccountId.replace(/^act_/, "") ||
+    !user.metaCapiEnabled ||
+    !isCapiEnabled()
+  )) {
+    throw new Error("Conversion leads optimization requires an enabled CoveCRM CAPI dataset connected to the selected ad account");
+  }
+  if (performanceGoal === "QUALITY_LEAD" && !(await hasRecentMetaQualitySignal(params.userEmail))) {
+    throw new Error("Conversion leads optimization requires a successful qualified CRM event in Meta within the last 30 days");
+  }
 
   const licensedStates = validateStates(body.licensedStates);
   const winningFamily = validateWinningVariantMetadata({
@@ -70,8 +86,9 @@ export async function validateLaunchInput(params: {
   const structure = buildCampaignStructure({
     campaignName: body.campaignName,
     licensedStates,
-    dailyBudgetCents: Number(body.dailyBudgetCents || 0),
+    dailyBudgetCents: requireDailyBudgetCents(body.dailyBudgetCents),
     audienceSegment: String(body.audienceSegment || "").trim() || undefined,
+    performanceGoal,
     creatives: [
       {
         primaryText: body.primaryText,

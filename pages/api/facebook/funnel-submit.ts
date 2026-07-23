@@ -8,14 +8,20 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import crypto from "crypto";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FunnelOTPSession from "@/models/FunnelOTPSession";
+import FunnelSubmission from "@/models/FunnelSubmission";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import FBLeadEntry from "@/models/FBLeadEntry";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
+import SmsConsentEvidence from "@/models/SmsConsentEvidence";
 import { isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
 import { buildLeadSheetPayload } from "@/lib/facebook/sheets/mapLeadToSheetRow";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+import { resolveHostedAttribution, stableLeadEventId } from "@/lib/facebook/hostedAttribution";
+import { buildHostedConsentEvidence, requestIp } from "@/lib/facebook/hostedConsent";
+import { scoreHostedLeadOnArrival } from "@/lib/facebook/hostedLeadScoring";
+import { enqueueMetaLifecycleEventSafely } from "@/lib/meta/capi";
 
 const LEAD_TYPE_MAP: Record<string, string> = {
   final_expense: "Final Expense",
@@ -57,6 +63,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     answers,
     stateRestrictionWarning,
     stateOutsidePrimaryLicensedArea,
+    smsConsentGiven,
+    attributionToken,
+    fbclid,
+    fbc,
+    fbp,
+    utm,
   } = req.body as {
     campaignId?: string;
     firstName?: string;
@@ -69,6 +81,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     answers?: Record<string, any>;
     stateRestrictionWarning?: boolean;
     stateOutsidePrimaryLicensedArea?: boolean;
+    smsConsentGiven?: boolean;
+    attributionToken?: string;
+    fbclid?: string;
+    fbc?: string;
+    fbp?: string;
+    utm?: Record<string, string>;
   };
 
   if (!campaignId) return res.status(400).json({ error: "campaignId is required" });
@@ -81,7 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const campaign = await (FBLeadCampaign as any).findOne({
       _id: campaignId,
     })
-      .select("userId userEmail folderId campaignName leadType campaignType webhookKey metaCampaignId metaAdId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet funnelVersion")
+      .select("userId userEmail folderId campaignName leadType audienceSegment campaignType webhookKey metaCampaignId metaAdsetId ads licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet funnelVersion publicAgentProfile complianceProfile")
       .lean() as any;
 
     if (!campaign) {
@@ -112,7 +130,71 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Campaign has no owner" });
     }
 
-    if (campaign.funnelVersion === "a2p-compliance-stub") {
+    let attribution = {
+      metaAdId: "",
+      metaCreativeId: "",
+      variantId: "",
+      creativeFamily: "",
+    };
+    if (attributionToken) {
+      try {
+        attribution = resolveHostedAttribution({
+          token: attributionToken,
+          campaignId: campaign._id,
+          ads: Array.isArray(campaign.ads) ? campaign.ads : [],
+        });
+      } catch (error: any) {
+        return res.status(400).json({ error: error?.message || "Invalid hosted-funnel attribution" });
+      }
+    }
+
+    const complianceOnly = campaign.funnelVersion === "a2p-compliance-stub";
+    if (!complianceOnly && smsConsentGiven !== true) {
+      return res.status(400).json({ error: "SMS and telephone contact consent is required for this funnel." });
+    }
+    const ipAddress = requestIp(req.headers as Record<string, any>, req.socket?.remoteAddress || "");
+    const userAgent = String(req.headers["user-agent"] || "").slice(0, 1000);
+    const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || "https://www.covecrm.com").replace(/\/$/, "");
+    const consentEvidence = buildHostedConsentEvidence({
+      userId: campaign.userId,
+      userEmail,
+      firstName,
+      lastName,
+      phone,
+      email,
+      consentGiven: smsConsentGiven === true,
+      agentName: campaign.publicAgentProfile?.displayName,
+      businessName: campaign.publicAgentProfile?.businessName,
+      leadType: campaign.leadType,
+      audienceSegment: campaign.audienceSegment,
+      complianceOnly,
+      pageUrl: `${appUrl}/f/${campaign._id}`,
+      privacyUrl: String(campaign.complianceProfile?.privacyUrl || `${appUrl}/legal/privacy`),
+      termsUrl: String(campaign.complianceProfile?.termsUrl || `${appUrl}/legal/terms`),
+      ip: ipAddress,
+      userAgent,
+      submittedAt: new Date(),
+    });
+
+    if (complianceOnly) {
+      await Promise.all([
+        SmsConsentEvidence.create(consentEvidence),
+        FunnelSubmission.create({
+          campaignId: campaign._id,
+          userId: campaign.userId,
+          userEmail,
+          leadType: campaign.leadType,
+          firstName: consentEvidence.firstName,
+          lastName: consentEvidence.lastName,
+          phone: consentEvidence.phone,
+          email: consentEvidence.email,
+          state: String(state || ""),
+          rawPayload: req.body,
+          wasDuplicate: false,
+          ipAddress,
+          userAgent,
+        }),
+      ]);
       return res.status(200).json({ ok: true, complianceOnly: true } as any);
     }
 
@@ -188,6 +270,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     });
 
+    const rawSubmission = await FunnelSubmission.create({
+      campaignId: campaign._id,
+      userId: campaign.userId,
+      userEmail,
+      leadType: campaign.leadType,
+      firstName: String(firstName || "").trim(),
+      lastName: String(lastName || "").trim(),
+      phone: String(phone || "").trim(),
+      email: normalizedEmail,
+      state: String(state || "").trim(),
+      rawPayload: req.body,
+      wasDuplicate: !!duplicateLead,
+      ipAddress,
+      userAgent,
+    });
+    await SmsConsentEvidence.create(consentEvidence);
+
     if (duplicateLead) {
       return res.status(200).json({
         ok: true,
@@ -211,6 +310,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const rawPhone = String(phone || "").trim();
     const phoneLast10 = rawPhone.replace(/\D+/g, "").slice(-10);
+    const leadEventId = stableLeadEventId("hosted", crypto.randomUUID());
+    const safeUtm = Object.fromEntries(
+      Object.entries(utm && typeof utm === "object" ? utm : {})
+        .slice(0, 10)
+        .map(([key, value]) => [String(key).slice(0, 40), String(value || "").slice(0, 300)])
+    );
 
     const lead = await Lead.create({
       "First Name": String(firstName || "").trim(),
@@ -230,13 +335,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       assignedDrips: [],
       campaignId: campaign._id,
       metaCampaignId: campaign.metaCampaignId || "",
-      metaAdId: campaign.metaAdId || "",
+      metaAdsetId: campaign.metaAdsetId || "",
+      metaAdId: attribution.metaAdId,
+      metaCreativeId: attribution.metaCreativeId,
+      metaVariantId: attribution.variantId,
+      metaCreativeFamily: attribution.creativeFamily,
+      metaLeadEventId: leadEventId,
+      metaFbclid: String(fbclid || "").slice(0, 500),
+      metaFbc: String(fbc || "").slice(0, 500),
+      metaFbp: String(fbp || "").slice(0, 500),
+      metaUtm: safeUtm,
       leadType: normalizedLeadType,
       leadSource: "facebook_funnel",
       sourceType: "facebook_funnel",
       stateRestrictionWarning: !!(outsideLicensedArea || stateRestrictionWarning),
       stateOutsidePrimaryLicensedArea: !!(outsideLicensedArea || stateOutsidePrimaryLicensedArea),
     });
+    await FunnelSubmission.updateOne(
+      { _id: (rawSubmission as any)._id, createdLeadId: null },
+      { $set: { createdLeadId: (lead as any)._id } }
+    );
+
+    try {
+      await scoreHostedLeadOnArrival(String((lead as any)._id));
+    } catch (scoreErr: any) {
+      console.warn("[funnel-submit] scoreLeadOnArrival failed (non-blocking):", scoreErr?.message);
+    }
+    await enqueueMetaLifecycleEventSafely({
+      userEmail,
+      leadId: String((lead as any)._id),
+      leadEventId,
+      eventName: "LeadAccepted",
+      email: String(email || ""),
+      phone: rawPhone,
+      fbc: String(fbc || ""),
+      fbp: String(fbp || ""),
+      eventSourceUrl: consentEvidence.pageUrl,
+      metaCampaignId: String(campaign.metaCampaignId || ""),
+      metaAdId: attribution.metaAdId,
+      metaCreativeId: attribution.metaCreativeId,
+      creativeFamily: attribution.creativeFamily,
+    }, undefined, (error) => console.warn("[funnel-submit] CAPI queue failed (non-blocking):", error?.message));
 
     if (campaign.campaignType === "hosted_funnel_otp" && otpSessionIdToConsume) {
       try { await FunnelOTPSession.deleteOne({ _id: otpSessionIdToConsume }); } catch {}
@@ -252,14 +391,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         email: String(email || "").trim().toLowerCase(),
         phone: rawPhone,
         facebookLeadId: `funnel_${String((lead as any)._id)}`,
+        leadEventId,
         crmLeadId: (lead as any)._id,
         folderId: folderId || undefined,
         importedToCrm: true,
         importedAt: new Date(),
         source: "hosted_funnel",
         leadType: campaign.leadType,
-        metaCampaignId: campaign.metaCampaignId || "",
-        metaAdId: campaign.metaAdId || "",
+        metaAdId: attribution.metaAdId,
+        metaCreativeId: attribution.metaCreativeId,
+        variantId: attribution.variantId,
+        creativeFamily: attribution.creativeFamily,
+        fbclid: String(fbclid || "").slice(0, 500),
+        fbc: String(fbc || "").slice(0, 500),
+        fbp: String(fbp || "").slice(0, 500),
+        utm: safeUtm,
       });
     } catch (fbEntryErr: any) {
       console.warn("[funnel-submit] FBLeadEntry create failed (non-fatal):", fbEntryErr?.message);

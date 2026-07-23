@@ -95,6 +95,10 @@
     {
       "path": "/api/cron/reconcile-billing",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/recruiting-cloud-worker",
+      "schedule": "* * * * *"
     }
   ]
 }

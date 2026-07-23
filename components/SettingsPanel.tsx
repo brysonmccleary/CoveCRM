@@ -229,15 +229,15 @@ export default function SettingsPanel() {
   ];
 
   return (
-    <div className="flex min-h-screen text-white bg-[#1e293b]">
-      <aside className="w-64 p-6 border-r border-gray-700 bg-[#1e293b]">
-        <h2 className="text-xl font-bold mb-6">Settings</h2>
-        <div className="space-y-2">
+    <div className="flex min-h-screen flex-col bg-[#1e293b] text-white xl:flex-row">
+      <aside className="w-full border-b border-gray-700 bg-[#1e293b] p-4 xl:w-64 xl:shrink-0 xl:border-b-0 xl:border-r xl:p-6">
+        <h2 className="mb-3 text-xl font-bold xl:mb-6">Settings</h2>
+        <div className="flex gap-2 overflow-x-auto pb-1 xl:block xl:space-y-2 xl:overflow-visible xl:pb-0">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`block w-full text-left px-3 py-2 rounded cursor-pointer ${
+              className={`shrink-0 whitespace-nowrap rounded px-3 py-2 text-left xl:block xl:w-full ${
                 activeTab === tab.id
                   ? "bg-gray-700 font-semibold"
                   : "hover:bg-gray-800 transition"
@@ -249,7 +249,7 @@ export default function SettingsPanel() {
         </div>
       </aside>
 
-      <main className="flex-1 p-8 overflow-y-auto bg-[#1e293b]">
+      <main className="min-w-0 flex-1 overflow-y-auto bg-[#1e293b] p-4 sm:p-6 xl:p-8">
         {activeTab === "profile" && (
           <div className="space-y-8 max-w-xl">
             <h2 className="text-2xl font-bold">Your Profile</h2>

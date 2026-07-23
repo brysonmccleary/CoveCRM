@@ -37,6 +37,31 @@ function invoiceItemIdForLine(line: any): string {
   );
 }
 
+function assertEventIdentity(args: {
+  event: any;
+  customerId: string;
+  normalizedEmail: string;
+  userId?: string;
+  bucket: ThresholdBucket;
+}) {
+  const failures: string[] = [];
+  if (String(args.event?.stripeCustomerId || "") !== args.customerId) failures.push("customer");
+  if (String(args.event?.userEmail || "").trim().toLowerCase() !== args.normalizedEmail) failures.push("email");
+  if (String(args.event?.userId || "") !== String(args.userId || "")) failures.push("user");
+  if (String(args.event?.metadata?.bucket || "") !== args.bucket) failures.push("bucket");
+  if (failures.length) {
+    throw new Error(`BillingEvent identity mismatch; refusing Stripe work: ${failures.join(", ")}`);
+  }
+}
+
+function assertReferencePersisted(result: any, reference: "invoice" | "invoice_item") {
+  const matched = Number(result?.matchedCount ?? result?.n ?? 0);
+  const modified = Number(result?.modifiedCount ?? result?.nModified ?? 0);
+  if (matched < 1 && modified < 1) {
+    throw new Error(`BillingEvent ${reference} reference was not durably persisted; refusing further Stripe work`);
+  }
+}
+
 async function validateInvoice(args: {
   invoice: any;
   invoiceId: string;
@@ -129,6 +154,13 @@ export async function settleStandaloneThresholdInvoice(params: SettleStandaloneI
     { upsert: true, new: true },
   );
   if (!event) throw new Error("Could not create BillingEvent");
+  assertEventIdentity({
+    event,
+    customerId: params.customerId,
+    normalizedEmail,
+    userId: params.userId,
+    bucket: params.bucket,
+  });
   const wasCharging = String(event.status) === "charging";
   if ((event as any).needsManualReview === true) {
     throw new Error("BillingEvent requires manual review; refusing automatic Stripe work");
@@ -165,10 +197,11 @@ export async function settleStandaloneThresholdInvoice(params: SettleStandaloneI
     );
     invoiceId = String(invoice.id || "");
     if (!invoiceId) throw new Error("Stripe did not return an invoice id");
-    await BillingEvent.updateOne(
+    const persistedInvoice = await BillingEvent.updateOne(
       { _id: eventId, status: "charging" },
       { $set: { stripeInvoiceId: invoiceId, updatedAt: new Date() } },
     );
+    assertReferencePersisted(persistedInvoice, "invoice");
   }
 
   if (!invoiceItemId) {
@@ -186,10 +219,11 @@ export async function settleStandaloneThresholdInvoice(params: SettleStandaloneI
     );
     invoiceItemId = String(item.id || "");
     if (!invoiceItemId) throw new Error("Stripe did not return an invoice item id");
-    await BillingEvent.updateOne(
+    const persistedItem = await BillingEvent.updateOne(
       { _id: eventId, status: "charging" },
       { $set: { stripeInvoiceItemId: invoiceItemId, updatedAt: new Date() } },
     );
+    assertReferencePersisted(persistedItem, "invoice_item");
   }
 
   let invoice = await stripe.invoices.retrieve(invoiceId);

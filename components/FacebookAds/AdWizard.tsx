@@ -221,6 +221,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [result, setResult] = useState<any>(null);
   const [regenerateAttempts, setRegenerateAttempts] = useState(0);
   const [dailyBudget, setDailyBudget] = useState(25);
+  const [performanceGoal, setPerformanceGoal] = useState<"LEAD_GENERATION" | "QUALITY_LEAD">("LEAD_GENERATION");
+  const [datasetConfigured, setDatasetConfigured] = useState(false);
   const [variantCount, setVariantCount] = useState(3);
   const [drafts, setDrafts] = useState<any[]>([]);
   const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
@@ -261,13 +263,22 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     })();
   }, [leadType]);
 
-  const checkMetaHealth = async () => {
+  useEffect(() => {
+    fetch("/api/meta/status")
+      .then((response) => response.json())
+      .then((data) => setDatasetConfigured(Boolean(data?.qualityOptimizationReady)))
+      .catch(() => setDatasetConfigured(false));
+  }, []);
+
+  const checkMetaHealth = async (force = false) => {
     setCheckingMetaHealth(true);
     try {
       const params = new URLSearchParams();
       if (leadType) params.set("leadType", leadType);
       if (selectedMetaPageId) params.set("pageId", selectedMetaPageId);
       if (selectedMetaAdAccountId) params.set("adAccountId", selectedMetaAdAccountId);
+      params.set("campaignType", campaignType);
+      if (force) params.set("force", "true");
       const response = await fetch(`/api/meta/health?${params.toString()}`);
       const json = await response.json().catch(() => ({}));
       const nextHealth = {
@@ -295,7 +306,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   useEffect(() => {
     if (!leadType) return;
     checkMetaHealth();
-  }, [leadType, selectedMetaPageId, selectedMetaAdAccountId]);
+  }, [leadType, campaignType, selectedMetaPageId, selectedMetaAdAccountId]);
 
   const resetGeneratedAd = () => {
     setDraft(null);
@@ -392,7 +403,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     setResult(null);
 
     try {
-      const health = await checkMetaHealth();
+      const health = await checkMetaHealth(true);
       if (!health.ok) {
         throw new Error(health.reason);
       }
@@ -443,6 +454,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           variationType: currentDraft.variationType,
           uniquenessFingerprint: currentDraft.uniquenessFingerprint,
           vendorStyleTag: currentDraft.vendorStyleTag,
+          displayAmount: currentDraft.displayAmount,
           landingPageConfig: currentDraft.landingPageConfig,
         });
       }
@@ -460,6 +472,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           campaignTypeLabel,
           campaignName,
           dailyBudgetCents: Math.max(500, Math.round(Number(dailyBudget) * 100)),
+          performanceGoal,
           primaryText: selectedDraft.primaryText,
           headline: selectedDraft.headline,
           description: selectedDraft.description || "",
@@ -656,6 +669,18 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	          {dailyBudget < 5 && (
 	            <p className="text-xs text-rose-400 mt-2">Minimum budget is $5/day.</p>
 	          )}
+	          <div className="mt-5">
+	            <label className="text-xs text-gray-400 block mb-2">Performance goal</label>
+	            <select
+	              value={performanceGoal}
+	              onChange={(event) => setPerformanceGoal(event.target.value as "LEAD_GENERATION" | "QUALITY_LEAD")}
+	              className="rounded-lg border border-white/10 bg-[#111827] px-3 py-2 text-white"
+	            >
+	              <option value="LEAD_GENERATION">Maximize leads (default)</option>
+	              {datasetConfigured && <option value="QUALITY_LEAD">Maximize conversion leads</option>}
+	            </select>
+	            {!datasetConfigured && <p className="text-xs text-gray-500 mt-2">Conversion-leads optimization unlocks after CAPI is enabled and Meta receives a recent qualified CRM event.</p>}
+	          </div>
 	          <div className="mt-6 border-t border-white/10 pt-5">
             <p className="text-white font-semibold mb-1">How many ad versions do you want to test?</p>
             <p className="text-sm text-gray-400 mb-4">

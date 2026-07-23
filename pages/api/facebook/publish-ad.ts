@@ -16,6 +16,29 @@ import { validateStates } from "@/lib/facebook/guardrails";
 import { validateLaunchInput } from "@/pages/api/facebook/validate-launch";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
 import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
+import { buildLaunchFingerprint, requireDailyBudgetCents } from "@/lib/facebook/launchFingerprint";
+import { verifyMetaAdset } from "@/lib/facebook/metaAdsetVerification";
+import { claimLaunchCampaign, releaseLaunchCampaignClaim } from "@/lib/facebook/claimLaunchCampaign";
+import { signHostedAttributionToken } from "@/lib/facebook/hostedAttribution";
+import MetaClaimRegistry from "@/models/MetaClaimRegistry";
+import MetaClaimApproval, { COVECRM_PLATFORM_CLAIM_SCOPE } from "@/models/MetaClaimApproval";
+import {
+  buildLandingPageSnapshot,
+  applyTenantClaimApprovals,
+  DEFAULT_META_CLAIMS,
+  ensureDefaultMetaClaims,
+  evaluateCreativeClaims,
+  requiredQualifierTextsForCreative,
+} from "@/lib/facebook/claimsRegistry";
+import { writeImmutableMetaLaunchArchive } from "@/lib/facebook/archiveMetaLaunch";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
+import {
+  claimNativeLeadFormTemplate,
+  failNativeLeadFormTemplate,
+  finalizeNativeLeadFormTemplate,
+  verifyNativeLeadFormQualitySettings,
+  type NativeLeadFormSpecification,
+} from "@/lib/facebook/metaLeadFormTemplate";
 
 export const config = {
   api: {
@@ -111,7 +134,7 @@ async function uploadMetaAdImageFromDataUrl(
   imageParams.set("name", imageName);
   imageParams.set("access_token", accessToken);
 
-  const imageResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountId}/adimages`, {
+  const imageResp = await fetch(metaGraphUrl(`act_${adAccountId}/adimages`), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: imageParams.toString(),
@@ -172,6 +195,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     publicAgentProfile,
     complianceProfile,
     funnelType,
+    performanceGoal,
   } = req.body as {
     leadType?: string;
     campaignName?: string;
@@ -199,6 +223,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       uniquenessFingerprint?: string;
       vendorStyleTag?: string;
       creativeArchetype?: string;
+      displayAmount?: string;
       landingPageConfig?: Record<string, any>;
     }>;
     creativeArchetype?: string;
@@ -223,6 +248,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     publicAgentProfile?: Record<string, string>;
     complianceProfile?: Record<string, string>;
     funnelType?: string;
+    performanceGoal?: "LEAD_GENERATION" | "QUALITY_LEAD";
   };
 
   const audienceSegment = String((req.body as any).audienceSegment || "standard").trim();
@@ -241,9 +267,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!headline || String(headline).trim().length < 3) {
     return res.status(400).json({ error: "headline is required (min 3 chars)" });
   }
-  const budgetCents = Number(dailyBudgetCents) || 0;
-  if (budgetCents < 500) {
-    return res.status(400).json({ error: "dailyBudgetCents must be >= 500 ($5.00/day minimum)" });
+  let budgetCents = 0;
+  try {
+    budgetCents = requireDailyBudgetCents(dailyBudgetCents);
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || "Invalid dailyBudgetCents" });
   }
   let normalizedLicensedStates: string[] = [];
   try {
@@ -265,7 +293,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const userEmail = String(session.user.email).toLowerCase();
     const user = await User.findOne({ email: userEmail })
-      .select("_id email name firstName lastName agentPhone numbers metaAccessToken metaSystemUserToken metaPageAccessToken metaAdAccountId metaPageId metaPageName metaInstagramId metaLeadTypeAssets")
+      .select("_id email name firstName lastName agentPhone numbers metaAccessToken metaSystemUserToken metaPageAccessToken metaAdAccountId metaPageId metaPageName metaInstagramId metaLeadTypeAssets metaDatasetId")
       .lean();
     if (!user) {
       return res.status(404).json({ error: "User account not found" });
@@ -301,6 +329,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       phone: publicAgentProfile?.phone,
       email: (user as any).email,
     });
+    // CoveCRM owns and hosts the lead experience. Do not make agents complete a
+    // second advertising profile before they can publish: prefer their optional
+    // profile, then the connected Meta Page identity, then a neutral label.
+    const advertiserBusinessName = String(
+      publicAgentProfile?.businessName || resolvedPageName || agentContact.name || "Independent Insurance Agent"
+    ).trim();
+    const advertiserDisplayName = String(
+      agentContact.name || resolvedPageName || advertiserBusinessName || "Licensed Insurance Agent"
+    ).trim();
+    const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://www.covecrm.com").replace(/\/$/, "");
+    const resolvedPrivacyUrl = String(complianceProfile?.privacyUrl || `${appUrl}/legal/privacy`).trim();
+    const resolvedTermsUrl = String(complianceProfile?.termsUrl || `${appUrl}/legal/terms`).trim();
 
     const safeName = String(campaignName).trim();
     const normalizedDrafts = Array.isArray(drafts) && drafts.length > 0
@@ -356,6 +396,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const storedDrafts = normalizedDrafts.map(stripRenderedCreativeData);
     const storedImageUrl = String(imageUrl || normalizedDrafts[0]?.imageUrl || "").trim();
+    const launchFingerprint = buildLaunchFingerprint({
+      adAccountId: resolvedAdAccountId,
+      pageId: resolvedPageId,
+      leadType,
+      audienceSegment,
+      campaignType,
+      licensedStates: normalizedLicensedStates,
+      dailyBudgetCents: budgetCents,
+      funnelType,
+      performanceGoal,
+      nativeFormSchemaVersion: campaignType === "native_form" ? "insurance-native-v1" : "",
+      creatives: normalizedDrafts,
+    });
 
     // Build auto-hosted funnel content.
     // For winner-supported lead types: use the winner landing page config passed from generate-ad.
@@ -399,7 +452,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       winningFamilyId: winningFamilyId || "",
       variationType: variationType || "",
       uniquenessFingerprint: uniquenessFingerprint || "",
+      qualifierTexts: [] as string[],
     };
+
+    // Compliance gate runs before CRM folder creation or any Meta object creation.
+    // Qualifiers are derived from registered claims and then verified against the
+    // same landing-page fields consumed by /f/[id], not a detached flag.
+    let registeredClaims: any[];
+    if (process.env.NODE_ENV === "test") {
+      registeredClaims = DEFAULT_META_CLAIMS as any[];
+    } else {
+      await ensureDefaultMetaClaims();
+      const [baseClaims, tenantApprovals] = await Promise.all([
+        MetaClaimRegistry.find({}).lean() as any,
+        MetaClaimApproval.find({
+          userEmail: { $in: [COVECRM_PLATFORM_CLAIM_SCOPE, userEmail] },
+          revokedAt: null,
+        }).lean() as any,
+      ]);
+      // Apply the platform approval first; a narrower tenant approval can
+      // override it when one intentionally exists.
+      const orderedApprovals = [...(tenantApprovals as any[])].sort((a, b) => {
+        const aPlatform = a.userEmail === COVECRM_PLATFORM_CLAIM_SCOPE ? 0 : 1;
+        const bPlatform = b.userEmail === COVECRM_PLATFORM_CLAIM_SCOPE ? 0 : 1;
+        return aPlatform - bPlatform;
+      });
+      registeredClaims = applyTenantClaimApprovals(baseClaims as any[], orderedApprovals);
+    }
+    const creativeClaimText = normalizedDrafts.map((draft) => [
+      draft?.primaryText,
+      draft?.headline,
+      draft?.description,
+    ].map(String).join("\n")).join("\n");
+    funnelData.qualifierTexts = requiredQualifierTextsForCreative(creativeClaimText, registeredClaims as any);
+    const baseDisclaimerCore = String(complianceProfile?.disclaimerText || "").trim() ||
+      "Availability varies by state and carrier. This is a no-obligation review with a licensed insurance agent. Products, rates, and eligibility are subject to carrier underwriting and policy terms.";
+    const governmentDisclaimer = audienceSegment === "veteran" || leadType === "veteran"
+      ? "This is not affiliated with or endorsed by the U.S. Department of Veterans Affairs, the U.S. military, or any government agency."
+      : "";
+    const baseDisclaimer = [baseDisclaimerCore, governmentDisclaimer].filter(Boolean).join(" ");
+    const landingPageSnapshot = buildLandingPageSnapshot({
+      ...funnelData,
+      disclaimerText: baseDisclaimer,
+    });
+    const claimEvaluation = evaluateCreativeClaims({
+      creativeText: creativeClaimText,
+      leadType: String(leadType),
+      states: normalizedLicensedStates,
+      landingPageSnapshot,
+      claims: registeredClaims as any,
+    });
 
     // 1. Ensure CRM folder exists — convention: "FB: {campaignName}"
     //    This matches what the webhook uses for lead routing.
@@ -443,20 +545,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const folderId = folder._id;
 
-    // 2. Create or update FBLeadCampaign (upsert by userEmail + campaignName to avoid duplicates)
-    const campaign = await FBLeadCampaign.findOneAndUpdate(
-      { userEmail, campaignName: safeName },
-      {
-        $setOnInsert: {
+    // 2. Atomically claim the exact canonical launch. Display names are cosmetic and
+    //    deliberately excluded from idempotency so same-name launches cannot collide.
+    const { campaign, launchClaimToken } = await claimLaunchCampaign({
+      campaignModel: FBLeadCampaign,
+      userEmail,
+      launchFingerprint,
+      setOnInsert: {
           userId: (user as any)._id,
           status: "setup",
           plan: "manager",
-        },
-        $set: {
+      },
+      set: {
+          campaignName: safeName,
           leadType,
           audienceSegment,
           campaignType,
-          dailyBudget: Math.round(budgetCents / 100),
+          performanceGoal: performanceGoal === "QUALITY_LEAD" ? "QUALITY_LEAD" : "LEAD_GENERATION",
+          nativeFormConfiguration: campaignType === "native_form" ? {
+            schemaVersion: "insurance-native-v1",
+            formMode: "HIGHER_INTENT",
+            flexibleDelivery: false,
+            smsVerification: true,
+          } : {
+            schemaVersion: "",
+            formMode: "",
+            flexibleDelivery: false,
+            smsVerification: false,
+          },
+          attributionVersion: "signed-v1",
+          dailyBudget: budgetCents / 100,
           folderId,
           facebookPageId: resolvedPageId,
           facebookPageName: resolvedPageName,
@@ -469,8 +587,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           borderStateBehavior: borderStateBehavior === "allow_with_warning" ? "allow_with_warning" : "block",
           stateRestrictionNoticeAccepted: true,
           publicAgentProfile: {
-            displayName: agentContact.name,
-            businessName: String(publicAgentProfile?.businessName || "").trim(),
+            displayName: advertiserDisplayName,
+            businessName: advertiserBusinessName,
             phone: agentContact.phone,
             stateLabel: normalizedLicensedStates.join(", "),
             logoUrl: String(publicAgentProfile?.logoUrl || "").trim(),
@@ -478,13 +596,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           },
           complianceProfile: {
             disclaimerText:
-              String(complianceProfile?.disclaimerText || "").trim() ||
-              "Availability varies by state and carrier. This is a no-obligation review with a licensed agent.",
+              baseDisclaimer,
             consentText:
               String(complianceProfile?.consentText || "").trim() ||
               "By submitting, you agree to be contacted by phone, text/SMS, or email by a licensed insurance agent, including through automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase.",
-            privacyUrl: String(complianceProfile?.privacyUrl || "").trim(),
-            termsUrl: String(complianceProfile?.termsUrl || "").trim(),
+            privacyUrl: resolvedPrivacyUrl,
+            termsUrl: resolvedTermsUrl,
           },
           leadSheetType: sheetType,
           expectedSheetHeaders: getCanonicalHeaders(sheetType),
@@ -505,10 +622,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             funnelData,
             drafts: storedDrafts,
           }),
-        },
       },
-      { upsert: true, new: true }
-    );
+    });
 
     let metaCampaignId = "";
     let metaAdsetId = "";
@@ -521,6 +636,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       imageUrl: string;
       metaAdId: string;
       metaCreativeId: string;
+      creativeFamily: string;
+      destinationUrl: string;
       status: string;
     }> = [];
     let metaPublishStatus: "not_attempted" | "skipped_missing_meta_connection" | "success" | "failed" = "not_attempted";
@@ -540,24 +657,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const isAlreadyPublished = campaignType === "native_form"
         ? !!(metaCampaignId && metaAdsetId && metaFormId && metaAdId)
         : !!(metaCampaignId && metaAdsetId && metaAdId);
-      if (isAlreadyPublished) {
-        return res.status(200).json({
-          ok: true,
-          alreadyPublished: true,
-          message: "Campaign was already published to Meta. Reusing existing Meta campaign assets.",
-          campaignId: String(campaign._id),
-          folderId: String(folderId),
-          folderName,
-          campaignName: safeName,
-          leadType,
-          metaCampaignId,
-          metaAdsetId,
-          metaFormId,
-          metaAdId,
-          ads: Array.isArray((campaign as any).ads) ? (campaign as any).ads : [],
-          adCount: Array.isArray((campaign as any).ads) ? (campaign as any).ads.length : 1,
-        });
-      }
 
       const metaHealth = await checkMetaWriteReadiness({
         user: fullUser,
@@ -565,10 +664,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         accessToken,
         pageId: pageIdFinal,
         adAccountId: adAccountIdFinal,
+        requireLeadAdsEligibility: campaignType === "native_form",
+        force: true,
       });
       if (!metaHealth.ok) {
         await FBLeadCampaign.updateOne(
-          { _id: campaign._id },
+          { _id: campaign._id, userEmail },
           {
             $set: {
               metaPublishStatus: "failed",
@@ -578,6 +679,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             },
           }
         ).catch(() => {});
+        await releaseLaunchCampaignClaim({
+          campaignModel: FBLeadCampaign,
+          campaignId: campaign._id,
+          userEmail,
+          launchClaimToken,
+        }).catch(() => {});
         return res.status(400).json({
           ok: false,
           error: metaHealth.reason,
@@ -596,7 +703,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         campaignParams.set("is_adset_budget_sharing_enabled", "false");
         campaignParams.set("access_token", accessToken);
 
-        const metaCampaignResp = await fetch(`https://graph.facebook.com/v21.0/act_${adAccountIdFinal}/campaigns`, {
+        const metaCampaignResp = await fetch(metaGraphUrl(`act_${adAccountIdFinal}/campaigns`), {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: campaignParams.toString(),
@@ -608,7 +715,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         metaCampaignId = String(metaCampaignJson.id);
         await FBLeadCampaign.findOneAndUpdate(
-          { _id: campaign._id },
+          { _id: campaign._id, userEmail },
           { $set: { metaCampaignId, facebookCampaignId: metaCampaignId, metaLastPublishAttemptAt: new Date() } }
         );
       }
@@ -627,7 +734,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         adsetParams.set("destination_type", campaignType === "native_form" ? "ON_AD" : "WEBSITE");
         adsetParams.set("access_token", accessToken);
 
-        const metaAdsetResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/adsets`, {
+        const metaAdsetResp = await fetch(metaGraphUrl(`act_${adAccountIdFinal}/adsets`), {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: adsetParams.toString(),
@@ -639,9 +746,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         metaAdsetId = String(metaAdsetJson.id);
         await FBLeadCampaign.findOneAndUpdate(
-          { _id: campaign._id },
+          { _id: campaign._id, userEmail },
           { $set: { metaAdsetId, metaLastPublishAttemptAt: new Date() } }
         );
+      }
+
+      await verifyMetaAdset({
+        metaAdsetId,
+        accessToken,
+        expectedDailyBudgetCents: lockedStructure.adSet.daily_budget,
+        expectedTargeting: lockedStructure.adSet.targeting,
+      });
+
+      if (isAlreadyPublished) {
+        await releaseLaunchCampaignClaim({
+          campaignModel: FBLeadCampaign,
+          campaignId: campaign._id,
+          userEmail,
+          launchClaimToken,
+        });
+        return res.status(200).json({
+          ok: true,
+          alreadyPublished: true,
+          verifiedMetaAdset: true,
+          message: "Exact launch already exists and its live Meta ad set matches the requested budget and regions.",
+          campaignId: String(campaign._id),
+          folderId: String(folderId),
+          folderName,
+          campaignName: safeName,
+          leadType,
+          metaCampaignId,
+          metaAdsetId,
+          metaFormId,
+          metaAdId,
+          ads: Array.isArray((campaign as any).ads) ? (campaign as any).ads : [],
+          adCount: Array.isArray((campaign as any).ads) ? (campaign as any).ads.length : 1,
+        });
       }
 
       if (campaignType !== "hosted_funnel" && campaignType !== "hosted_funnel_otp") {
@@ -650,12 +790,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const questions: Array<Record<string, any>> = [
           { type: "FULL_NAME" },
           { type: "CUSTOM", label: leadSpecificQ.label, key: leadSpecificQ.key },
-          { type: "CUSTOM", label: "Best time for a licensed agent to call?", key: "best_call_time" },
           { type: "PHONE" },
           { type: "EMAIL" },
           { type: "CUSTOM", label: "Age", key: "age" },
           { type: "CUSTOM", label: "State", key: "state" },
-          { type: "CUSTOM", label: "Who would be your beneficiary?", key: "beneficiary" },
         ];
 
         const storedComplianceProfile = (campaign as any).complianceProfile || {};
@@ -663,7 +801,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           storedComplianceProfile.disclaimerText ||
           complianceProfile?.disclaimerText ||
           "Availability varies by state and carrier. This is a no-obligation review with a licensed agent."
-        ).trim();
+        ).trim() + (funnelData.qualifierTexts.length ? `\n${funnelData.qualifierTexts.join("\n")}` : "");
         const storedConsentText = String(
           storedComplianceProfile.consentText ||
           complianceProfile?.consentText ||
@@ -672,7 +810,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const privacyUrl = String(
           storedComplianceProfile.privacyUrl ||
           complianceProfile?.privacyUrl ||
-          "https://www.covecrm.com/privacy"
+          resolvedPrivacyUrl
         ).trim();
         // Meta Instant Forms support privacy_policy and custom_disclaimer.
         // There is no separate supported termsUrl field here, so termsUrl stays stored internally on FBLeadCampaign.
@@ -691,18 +829,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ],
         };
 
+        const formName = `${safeName} Insurance Lead Form`;
+        const followUpActionUrl = `${appUrl}/insurance-request-received`;
+        const nativeFormSpecification: NativeLeadFormSpecification = {
+          schemaVersion: "insurance-native-v1",
+          leadType: String(leadType),
+          audienceSegment,
+          questions,
+          privacyPolicy: { url: privacyUrl || "https://www.covecrm.com/legal/privacy", link_text: "Privacy Policy" },
+          customDisclaimer,
+          followUpActionUrl,
+          formMode: "HIGHER_INTENT",
+          flexibleDelivery: false,
+          smsVerification: true,
+        };
+        const formClaim = await claimNativeLeadFormTemplate({
+          userEmail,
+          pageId: pageIdFinal,
+          formName,
+          specification: nativeFormSpecification,
+        });
+        if (formClaim.reused) {
+          metaFormId = formClaim.formId;
+          const pageAccessToken = String((user as any)?.metaPageAccessToken || "").trim();
+          await verifyNativeLeadFormQualitySettings({
+            formId: metaFormId,
+            accessToken: pageAccessToken || accessToken,
+            formUrl: (formId) => metaGraphUrl(formId),
+          });
+          await FBLeadCampaign.findOneAndUpdate(
+            { _id: campaign._id, userEmail },
+            { $set: { metaFormId, metaFormFingerprint: formClaim.fingerprint, metaLastPublishAttemptAt: new Date() } }
+          );
+        } else {
         const metaFormParams = new URLSearchParams();
-        metaFormParams.set("name", `${safeName} Lead Form ${Date.now()}`);
+        metaFormParams.set("name", formName);
         metaFormParams.set("locale", "en_US");
-        metaFormParams.set("privacy_policy", JSON.stringify({ url: privacyUrl || "https://www.covecrm.com/privacy", link_text: "Privacy Policy" }));
+        metaFormParams.set("privacy_policy", JSON.stringify(nativeFormSpecification.privacyPolicy));
         metaFormParams.set("custom_disclaimer", JSON.stringify(customDisclaimer));
-        metaFormParams.set("follow_up_action_url", "https://www.covecrm.com/thank-you");
+        metaFormParams.set("follow_up_action_url", followUpActionUrl);
         metaFormParams.set("questions", JSON.stringify(questions));
+        metaFormParams.set("is_optimized_for_quality", "true");
+        metaFormParams.set("is_phone_sms_verify_enabled", "true");
         // Prefer page access token for page-scoped leadgen_forms endpoint
         const pageAccessToken = String((user as any)?.metaPageAccessToken || "").trim();
         metaFormParams.set("access_token", pageAccessToken || accessToken);
 
-        const metaFormResp = await fetch(`https://graph.facebook.com/v19.0/${pageIdFinal}/leadgen_forms`, {
+        const metaFormResp = await fetch(metaGraphUrl(`${pageIdFinal}/leadgen_forms`), {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: metaFormParams.toString(),
@@ -710,22 +883,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const metaFormJson = await metaFormResp.json();
 
         if (!metaFormResp.ok || !metaFormJson?.id) {
-          throw new Error(`Meta lead form create failed: ${JSON.stringify(metaFormJson)}`);
+          const formError = new Error(`Meta lead form create failed: ${JSON.stringify(metaFormJson)}`);
+          await failNativeLeadFormTemplate({
+            userEmail,
+            pageId: pageIdFinal,
+            fingerprint: formClaim.fingerprint,
+            claimToken: formClaim.claimToken,
+            error: formError,
+          }).catch(() => {});
+          throw formError;
         }
         metaFormId = String(metaFormJson.id);
+        try {
+          await verifyNativeLeadFormQualitySettings({
+            formId: metaFormId,
+            accessToken: pageAccessToken || accessToken,
+            formUrl: (formId) => metaGraphUrl(formId),
+          });
+        } catch (verificationError) {
+          await failNativeLeadFormTemplate({
+            userEmail,
+            pageId: pageIdFinal,
+            fingerprint: formClaim.fingerprint,
+            claimToken: formClaim.claimToken,
+            error: verificationError,
+          }).catch(() => {});
+          throw verificationError;
+        }
+        await finalizeNativeLeadFormTemplate({
+          userEmail,
+          pageId: pageIdFinal,
+          fingerprint: formClaim.fingerprint,
+          claimToken: formClaim.claimToken,
+          formId: metaFormId,
+        });
         await FBLeadCampaign.findOneAndUpdate(
-          { _id: campaign._id },
-          { $set: { metaFormId, metaLastPublishAttemptAt: new Date() } }
+          { _id: campaign._id, userEmail },
+          { $set: { metaFormId, metaFormFingerprint: formClaim.fingerprint, metaLastPublishAttemptAt: new Date() } }
         );
+        }
       }
       } // end native_form-only block
-        const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://www.covecrm.com").replace(/\/$/, "");
         const instantFormDisplayUrl = appUrl || "https://www.covecrm.com";
         const funnelUrl = `${appUrl}/f/${String((campaign as any)._id)}`;
         publishedAds = [];
 
         for (let index = 0; index < normalizedDrafts.length; index++) {
           const currentDraft = normalizedDrafts[index] || {};
+          const variantId = String(currentDraft.uniquenessFingerprint || `variant_${index + 1}`);
+          const creativeFamily = String(currentDraft.winningFamilyId || currentDraft.creativeArchetype || "");
           let currentImageUrl = String(
             currentDraft.renderedCreativeDataUrl ||
             currentDraft.imageUrl ||
@@ -745,7 +951,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               )
             : "";
 
-          const resolvedAdLink = campaignType === "native_form" ? instantFormDisplayUrl : funnelUrl;
+          const attributionToken = campaignType === "native_form"
+            ? ""
+            : signHostedAttributionToken({
+                campaignId: String((campaign as any)._id),
+                variantId,
+                creativeFamily,
+              });
+          const trackedFunnelUrl = new URL(funnelUrl);
+          if (attributionToken) trackedFunnelUrl.searchParams.set("cat", attributionToken);
+          trackedFunnelUrl.searchParams.set("utm_source", "meta");
+          trackedFunnelUrl.searchParams.set("utm_medium", "paid_social");
+          trackedFunnelUrl.searchParams.set("utm_campaign", String((campaign as any)._id));
+          trackedFunnelUrl.searchParams.set("utm_content", variantId);
+          const resolvedAdLink = campaignType === "native_form" ? instantFormDisplayUrl : trackedFunnelUrl.toString();
           const objectStorySpec: Record<string, any> = {
             page_id: pageIdFinal,
             link_data: {
@@ -773,7 +992,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 })(),
                 value: campaignType === "native_form"
                   ? { lead_gen_form_id: metaFormId }
-                  : { link: funnelUrl },
+                  : { link: resolvedAdLink },
               },
             },
           };
@@ -788,9 +1007,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const creativeParams = new URLSearchParams();
           creativeParams.set("name", `${safeName} Creative ${index + 1}`);
           creativeParams.set("object_story_spec", JSON.stringify(objectStorySpec));
+          creativeParams.set("degrees_of_freedom_spec", JSON.stringify({
+            creative_features_spec: {
+              multi_advertiser_ads: { enroll_status: "OPT_OUT" },
+              standard_enhancements: { enroll_status: "OPT_OUT" },
+            },
+          }));
           creativeParams.set("access_token", accessToken);
 
-          const metaCreativeResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/adcreatives`, {
+          const metaCreativeResp = await fetch(metaGraphUrl(`act_${adAccountIdFinal}/adcreatives`), {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: creativeParams.toString(),
@@ -809,7 +1034,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           adParams.set("status", "PAUSED");
           adParams.set("access_token", accessToken);
 
-          const metaAdResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/ads`, {
+          const metaAdResp = await fetch(metaGraphUrl(`act_${adAccountIdFinal}/ads`), {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: adParams.toString(),
@@ -824,24 +1049,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!metaAdId) {
             metaAdId = createdMetaAdId;
             await FBLeadCampaign.findOneAndUpdate(
-              { _id: campaign._id },
+              { _id: campaign._id, userEmail },
               { $set: { metaAdId, metaLastPublishAttemptAt: new Date() } }
             );
           }
           publishedAds.push({
-            variantId: String(currentDraft.uniquenessFingerprint || `variant_${index + 1}`),
+            variantId,
             variationType: String(currentDraft.variationType || ""),
             headline: String(currentDraft.headline || headline || ""),
             imageUrl: String(currentDraft.imageUrl || ""),
             metaAdId: createdMetaAdId,
             metaCreativeId: creativeId,
+            creativeFamily,
+            destinationUrl: resolvedAdLink,
             status: "PAUSED",
           });
         }
 
         const now = new Date();
-        await FBLeadCampaign.updateOne(
-          { _id: campaign._id },
+        await writeImmutableMetaLaunchArchive({
+              userEmail,
+              campaignId: campaign._id,
+              launchFingerprint,
+              leadType,
+              licensedStates: normalizedLicensedStates,
+              adCopy: normalizedDrafts.map((draft) => ({
+                primaryText: String(draft?.primaryText || ""),
+                headline: String(draft?.headline || ""),
+                description: String(draft?.description || ""),
+                cta: String(draft?.cta || ""),
+                variantId: String(draft?.uniquenessFingerprint || ""),
+                creativeFamily: String(draft?.winningFamilyId || draft?.creativeArchetype || ""),
+              })),
+              images: normalizedDrafts.map((draft, index) => ({
+                variantId: String(draft?.uniquenessFingerprint || `variant_${index + 1}`),
+                dataUrl: String(draft?.renderedCreativeDataUrl || draft?.imageUrl || ""),
+              })),
+              landingPageSnapshot,
+              qualifierTexts: funnelData.qualifierTexts,
+              claims: claimEvaluation.matchedClaims.map((claim: any) => ({
+                claimText: claim.claimText,
+                classification: claim.classification,
+                version: claim.version,
+                approvedBy: claim.approvedBy,
+              })),
+              destinationUrls: publishedAds.map((ad) => ad.destinationUrl),
+              metaObjectIds: {
+                campaignId: metaCampaignId,
+                adsetId: metaAdsetId,
+                formId: metaFormId,
+                ads: publishedAds.map((ad) => ({ adId: ad.metaAdId, creativeId: ad.metaCreativeId })),
+              },
+              archivedAt: now,
+        });
+        const finalizedCampaign = await FBLeadCampaign.findOneAndUpdate(
+          { _id: campaign._id, userEmail, launchClaimToken },
           {
             $set: {
               metaCampaignId,
@@ -855,9 +1117,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               metaLastPublishAttemptAt: now,
               metaLastPublishSuccessAt: now,
               metaObjectHealth: "paused_on_meta",
+              launchClaimToken: "",
+              launchClaimedAt: null,
             },
-          }
+          },
+          { new: true }
         );
+        if (!finalizedCampaign) throw new Error("Launch claim was lost before Meta publish finalization");
 
         metaPublishStatus = "success";
     } catch (err: any) {
@@ -874,13 +1140,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Persist publish diagnostics for non-success outcomes
     if (metaPublishStatus !== "success") {
       await FBLeadCampaign.updateOne(
-        { _id: campaign._id },
+        { _id: campaign._id, userEmail },
         {
           $set: {
             metaPublishStatus,
             metaPublishError: metaError || "",
             metaLastPublishAttemptAt: new Date(),
             metaObjectHealth: "sync_failed",
+            launchClaimToken: "",
+            launchClaimedAt: null,
           },
         }
       ).catch((e: any) => console.warn("[publish-ad] diagnostics update failed:", e?.message));

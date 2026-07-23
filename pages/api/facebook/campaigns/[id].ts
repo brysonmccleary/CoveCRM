@@ -7,6 +7,8 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
+import { assertCampaignComplianceCurrent } from "@/lib/facebook/assertCampaignComplianceCurrent";
 
 async function updateMetaObjectStatus(
   objectId: string,
@@ -17,7 +19,7 @@ async function updateMetaObjectStatus(
   const metaParams = new URLSearchParams();
   metaParams.set("status", status);
   metaParams.set("access_token", accessToken);
-  const metaResp = await fetch(`https://graph.facebook.com/v21.0/${objectId}`, {
+  const metaResp = await fetch(metaGraphUrl(objectId), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: metaParams.toString(),
@@ -106,6 +108,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
+      if (requestedMetaStatus === "ACTIVE") {
+        try {
+          await assertCampaignComplianceCurrent({ campaign, userEmail: session.user.email });
+        } catch (error: any) {
+          return res.status(400).json({ error: error?.message || "Campaign compliance approval is not current" });
+        }
+      }
+
       try {
         if (requestedMetaStatus === "ACTIVE") {
           await updateMetaObjectStatus(metaAdsetId, "ACTIVE", accessToken, "adset");
@@ -180,7 +190,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const budgetParams = new URLSearchParams();
           budgetParams.set("daily_budget", String(budgetCents));
           budgetParams.set("access_token", budgetToken);
-          const budgetResp = await fetch(`https://graph.facebook.com/v19.0/${metaAdsetId}`, {
+          const budgetResp = await fetch(metaGraphUrl(metaAdsetId), {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: budgetParams.toString(),
@@ -236,7 +246,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
           if (metaHealth.ok) {
             await fetch(
-              `https://graph.facebook.com/v19.0/${(campaign as any).metaCampaignId}`,
+              metaGraphUrl((campaign as any).metaCampaignId),
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },

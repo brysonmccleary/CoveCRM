@@ -7,6 +7,7 @@ export const META_REGION_MAP: Record<string, string> = {
   CO: "3848",
   CT: "3849",
   DE: "3850",
+  DC: "3851",
   FL: "3852",
   GA: "3853",
   HI: "3854",

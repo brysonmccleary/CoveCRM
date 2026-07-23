@@ -383,6 +383,7 @@ export default function LeadProfileDial() {
   const [editingLabel, setEditingLabel] = useState<string>("");
   const [editingValue, setEditingValue] = useState<string>("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [fieldEditingEnabled, setFieldEditingEnabled] = useState(false);
 
   const formatPhone = (phone = "") => {
     const clean = String(phone).replace(/\D/g, "");
@@ -1115,24 +1116,29 @@ export default function LeadProfileDial() {
     editable?: boolean;
   }) => {
     const v = String(value || "").trim();
-    const canEdit = !!fieldKey && editable;
+    const canEdit = fieldEditingEnabled && !!fieldKey && editable;
 
-    return (
+    const content = (
+      <>
+        <p className="flex items-start justify-between gap-3 text-sm text-white">
+          <strong className="shrink-0 text-gray-300">{label}</strong>
+          <span className="min-w-0 break-words text-right text-white">{v || "—"}</span>
+        </p>
+        <hr className="my-2 border-gray-700/70" />
+      </>
+    );
+
+    return canEdit ? (
       <button
         type="button"
-        onClick={() => {
-          if (!canEdit) return;
-          openEditor(fieldKey!, label, value);
-        }}
-        className="w-full text-left"
+        onClick={() => openEditor(fieldKey!, label, value)}
+        className="w-full rounded px-1 text-left transition hover:bg-white/5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        aria-label={`Edit ${label}`}
       >
-        <p className="text-sm text-white">
-          <strong>{label}:</strong>{" "}
-          <span className="text-white">{v || "—"}</span>
-          {canEdit ? <span className="text-gray-500 text-xs ml-2">Edit</span> : null}
-        </p>
-        <hr className="border-gray-700 my-1" />
+        {content}
       </button>
+    ) : (
+      <div className="px-1">{content}</div>
     );
   };
 
@@ -1188,18 +1194,33 @@ export default function LeadProfileDial() {
   // ---------- Render ----------
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
-      <Sidebar />
+      <Sidebar collapsed />
 
       {/* LEFT */}
-      <div className="w-[360px] p-4 border-r border-gray-800 bg-[#1e293b] overflow-y-auto">
+      <div className="w-[330px] shrink-0 overflow-y-auto border-r border-gray-800 bg-[#1e293b] p-4 xl:w-[360px]">
         {/* VERIFICATION MARKER: search this in prod to confirm correct build */}
         <div className="hidden">LEAD_INFO_LEFT_PANEL_DIALSESSION_STYLE_V2</div>
 
         <div className="mb-3">
-          <h2 className="text-xl font-bold">{leadName}</h2>
+          <div className="flex items-start justify-between gap-3">
+            <h2 className="text-xl font-bold">{leadName}</h2>
+            <button
+              type="button"
+              onClick={() => setFieldEditingEnabled((enabled) => !enabled)}
+              className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-semibold transition ${
+                fieldEditingEnabled
+                  ? "border-blue-500 bg-blue-600 text-white"
+                  : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"
+              }`}
+            >
+              {fieldEditingEnabled ? "Done" : "Edit profile"}
+            </button>
+          </div>
 
           <div className="mt-1 space-y-1">
-            <div className="text-xs text-gray-400">Click fields to edit live.</div>
+            <div className="text-xs text-gray-400">
+              {fieldEditingEnabled ? "Select a field to edit it." : "Contact details and lead context."}
+            </div>
 
             <div className="text-xs text-gray-300 flex flex-wrap gap-x-3 gap-y-1">
               <span>
@@ -1232,15 +1253,35 @@ export default function LeadProfileDial() {
         {/* ✅ Removed the inner black “card/box” entirely — render like Dial Session */}
         <div>
           {leadInfoRows.length ? (
-            leadInfoRows.map((r) => (
-              <LeadInfoRow
-                key={`${r.label}-${r.key}`}
-                label={r.label}
-                value={r.value}
-                fieldKey={r.key}
-                editable={r.editable}
-              />
-            ))
+            <>
+              {leadInfoRows.slice(0, 8).map((r) => (
+                <LeadInfoRow
+                  key={`${r.label}-${r.key}`}
+                  label={r.label}
+                  value={r.value}
+                  fieldKey={r.key}
+                  editable={r.editable}
+                />
+              ))}
+              {leadInfoRows.length > 8 && (
+                <details className="mt-3 rounded-lg border border-white/10 bg-[#0f172a]/40 p-3">
+                  <summary className="cursor-pointer text-sm font-semibold text-gray-300">
+                    Additional details ({leadInfoRows.length - 8})
+                  </summary>
+                  <div className="mt-3">
+                    {leadInfoRows.slice(8).map((r) => (
+                      <LeadInfoRow
+                        key={`${r.label}-${r.key}`}
+                        label={r.label}
+                        value={r.value}
+                        fieldKey={r.key}
+                        editable={r.editable}
+                      />
+                    ))}
+                  </div>
+                </details>
+              )}
+            </>
           ) : (
             <div className="text-sm text-gray-400 py-2">No lead fields found.</div>
           )}
@@ -1530,7 +1571,7 @@ export default function LeadProfileDial() {
             )}
           </div>
 
-          <div className="mt-4 flex items-center gap-2">
+          <div className="mt-4 flex items-center justify-between gap-2">
             <button
               onClick={() => {
                 try {
@@ -1539,14 +1580,25 @@ export default function LeadProfileDial() {
                   if (typeof window !== "undefined") window.location.replace(LEADS_URL);
                 }
               }}
-              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
+              className="rounded border border-white/10 bg-white/10 px-4 py-2 text-white hover:bg-white/20"
             >
               Back to Leads
             </button>
-            <button type="button" onClick={() => setDeleteConfirmOpen(true)} disabled={!lead?.id}
-              className="bg-gray-800 hover:bg-gray-700 border border-red-500/40 text-red-400 hover:text-red-300 px-4 py-2 rounded disabled:opacity-50">
-              Delete Lead
-            </button>
+            <details className="relative">
+              <summary className="cursor-pointer list-none rounded px-3 py-2 text-sm text-gray-400 hover:bg-white/5 hover:text-white">
+                More actions
+              </summary>
+              <div className="absolute bottom-full right-0 z-20 mb-2 w-40 rounded-lg border border-white/10 bg-[#111827] p-1 shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmOpen(true)}
+                  disabled={!lead?.id}
+                  className="w-full rounded px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                >
+                  Delete lead
+                </button>
+              </div>
+            </details>
           </div>
         </div>
       </div>

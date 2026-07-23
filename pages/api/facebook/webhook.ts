@@ -20,6 +20,7 @@ import { trackLeadSourceStat } from "@/lib/leads/trackLeadSourceStat";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { buildLeadSheetPayload } from "@/lib/facebook/sheets/mapLeadToSheetRow";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
 
 const FB_APP_SECRET = process.env.FB_APP_SECRET || "";
 
@@ -66,7 +67,7 @@ async function fetchLeadFromGraph(
 ): Promise<Record<string, string>> {
   if (!accessToken) return {};
   try {
-    const url = `https://graph.facebook.com/v19.0/${leadgenId}`;
+    const url = metaGraphUrl(leadgenId);
     const res = await axios.get(url, {
       params: {
         fields: "field_data,created_time,ad_id,form_id",

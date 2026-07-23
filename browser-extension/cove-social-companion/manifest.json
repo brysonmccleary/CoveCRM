@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "CoveCRM Social Companion",
+  "version": "0.1.0",
+  "description": "Runs recipient-locked CoveCRM recruiting actions in the user's signed-in browser.",
+  "permissions": ["alarms", "storage", "tabs", "windows"],
+  "host_permissions": [
+    "https://www.covecrm.com/*",
+    "http://localhost/*",
+    "https://www.linkedin.com/*",
+    "https://linkedin.com/*",
+    "https://www.instagram.com/*",
+    "https://instagram.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "CoveCRM Social Companion",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.covecrm.com/*",
+        "http://localhost/*"
+      ],
+      "js": ["bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.linkedin.com/*",
+        "https://linkedin.com/*",
+        "https://www.instagram.com/*",
+        "https://instagram.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 import axios from "axios";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBAdIntelligence from "@/models/FBAdIntelligence";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
 
 const LEAD_TYPE_QUERIES: Record<string, string[]> = {
   final_expense: [
@@ -163,7 +164,7 @@ export async function scanAdLibraryForLeadType(leadType: string): Promise<AdPatt
     // Try official Graph API
     for (const query of queries.slice(0, 1)) {
       try {
-        const url = new URL("https://graph.facebook.com/v19.0/ads_archive");
+        const url = new URL(metaGraphUrl("ads_archive"));
         url.searchParams.set("access_token", token);
         url.searchParams.set("ad_type", "ALL");
         url.searchParams.set("ad_reached_countries", '["US"]');

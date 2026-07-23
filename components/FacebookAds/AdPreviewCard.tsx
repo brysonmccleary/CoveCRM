@@ -371,7 +371,7 @@ const LAYOUTS_BY_LEAD_TYPE: Record<string, LayoutFamily[]> = {
   veteran: ["patriotic_badge", "amount_hero", "quiz_card", "split_panel", "checklist_first", "poster_stack", "advisory_notice", "benefit_grid", "age_selector", "patriotic_notice", "premium_dark_gold"],
   trucker: ["split_panel", "dark_response", "selector_grid", "report_card", "messenger_prompt", "poster_stack", "mobile_native", "trucker_highway", "age_selector", "price_table", "premium_dark_gold"],
   mortgage_protection: ["selector_grid", "comparison_table", "premium_card", "split_panel", "mobile_native", "report_card", "quiz_card", "price_table", "homeowner_table", "benefit_grid", "patriotic_notice"],
-  final_expense: ["premium_card", "checklist_first", "quiz_card", "advisory_notice", "comparison_table", "dark_response", "trust_medical", "price_table", "age_selector", "benefit_grid", "patriotic_notice"],
+  final_expense: ["amount_hero", "premium_card", "checklist_first", "quiz_card", "advisory_notice", "comparison_table", "dark_response", "trust_medical", "price_table", "age_selector", "benefit_grid", "patriotic_notice"],
   iul: ["premium_card", "report_card", "split_panel", "trust_medical", "mobile_native", "checklist_first", "clean_white_diagram", "premium_dark_gold", "benefit_grid", "price_table"],
 };
 
@@ -385,6 +385,20 @@ const IA_BY_LEAD_TYPE: Record<string, IaFamily[]> = {
 
 function pickSeeded<T>(values: T[], seed: number, salt: string): T {
   return values[hashString(`${seed}:${salt}`) % values.length];
+}
+
+const EXPLICIT_LAYOUT_BY_FAMILY_ID: Record<string, LayoutFamily> = {
+  fe_senior_benefit_card: "amount_hero",
+};
+
+export function resolveCreativeLayoutFamily(draft: any, leadType: string, seed: number, variantIndex: number): LayoutFamily {
+  const explicitLayout = EXPLICIT_LAYOUT_BY_FAMILY_ID[cleanText(draft?.winningFamilyId)];
+  if (explicitLayout) return explicitLayout;
+  return pickSeeded(
+    LAYOUTS_BY_LEAD_TYPE[leadType] || LAYOUTS_BY_LEAD_TYPE.final_expense,
+    seed + variantIndex * 11,
+    "layout"
+  );
 }
 
 function clampCopy(value: string, maxLength: number): string {
@@ -512,7 +526,7 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
   const seed = hashString(getVariationSeed(draft, leadType));
   const variantIndex = pickVisualVariant(draft, leadType, VISUAL_VARIANT_COUNT);
   const palette = getPalettes(leadType)[variantIndex % getPalettes(leadType).length];
-  const layoutFamily = pickSeeded(LAYOUTS_BY_LEAD_TYPE[leadType] || LAYOUTS_BY_LEAD_TYPE.final_expense, seed + variantIndex * 11, "layout");
+  const layoutFamily = resolveCreativeLayoutFamily(draft, leadType, seed, variantIndex);
   const iaFamily = pickSeeded(IA_BY_LEAD_TYPE[leadType] || IA_BY_LEAD_TYPE.final_expense, seed + variantIndex * 17, "ia");
   const densityStyle = pickSeeded<DensityStyle>(["compact", "balanced", "roomy"], seed + variantIndex, "density");
   const typographyStyle = pickSeeded<TypographyStyle>(["condensed_poster", "premium_clean", "utility_ui", "aggressive_response", "trust_editorial", "modern_minimal"], seed + variantIndex, "type");
@@ -551,7 +565,7 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     bullets: overlay.benefitBullets.slice(0, 3),
     cta: clampCopy(overlay.ctaStrip || "Learn more ->", 42),
     eyebrow: getLeadEyebrow(leadType, iaFamily),
-    amount: (overlay.buttonLabels.find((label) => label.includes("$")) || (leadType === "veteran" ? "$50,000" : "")),
+    amount: cleanText(draft?.displayAmount) || overlay.buttonLabels.find((label) => label.includes("$")) || (leadType === "veteran" ? "$50,000" : ""),
     backgroundUrl: getCreativeBackground(draft, leadType),
     layoutFamily,
     iaFamily,

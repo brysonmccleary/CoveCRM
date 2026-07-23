@@ -1,7 +1,7 @@
 // lib/meta/retrieveLead.ts
 // Retrieve a lead from the Meta Graph API using a leadgen_id
 
-const META_GRAPH_BASE = "https://graph.facebook.com/v19.0";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
 
 export interface MetaLeadData {
   leadgenId: string;
@@ -49,7 +49,7 @@ export async function retrieveMetaLead(
     throw new Error("[retrieveMetaLead] No Meta access token configured");
   }
 
-  const url = new URL(`${META_GRAPH_BASE}/${leadgenId}`);
+  const url = new URL(metaGraphUrl(leadgenId));
   url.searchParams.set("access_token", token);
   url.searchParams.set(
     "fields",

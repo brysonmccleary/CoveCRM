@@ -9,6 +9,8 @@ import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 import CampaignActionLog from "@/models/CampaignActionLog";
 import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
+import { assertCampaignComplianceCurrent } from "@/lib/facebook/assertCampaignComplianceCurrent";
 
 type ActionType = "PAUSE" | "RESUME" | "SCALE" | "DECREASE" | "FIX" | "DUPLICATE_TEST" | "SET_BUDGET";
 
@@ -209,6 +211,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({ error: "Campaign not found" });
   }
 
+  if (["RESUME", "SCALE", "DUPLICATE_TEST"].includes(String(actionType))) {
+    try {
+      await assertCampaignComplianceCurrent({ campaign, userEmail: email });
+    } catch (error: any) {
+      return res.status(400).json({ error: error?.message || "Campaign compliance approval is not current" });
+    }
+  }
+
   const accessToken = String(user.metaSystemUserToken || user.metaAccessToken || "").trim();
   const isDryRun = dryRun === true;
   if (!accessToken && !isDryRun && !metaMockMode) {
@@ -358,7 +368,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       params.set("status", "PAUSED");
       params.set("access_token", accessToken);
 
-      const resp = await fetch(`https://graph.facebook.com/v19.0/${campaign.metaCampaignId}`, {
+      const resp = await fetch(metaGraphUrl(campaign.metaCampaignId), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params.toString(),
@@ -387,7 +397,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       params.set("daily_budget", String(Math.round(newBudget * 100)));
       params.set("access_token", accessToken);
 
-      const resp = await fetch(`https://graph.facebook.com/v19.0/${campaign.metaAdsetId}`, {
+      const resp = await fetch(metaGraphUrl(campaign.metaAdsetId), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params.toString(),
@@ -418,7 +428,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       params.set("status", "ACTIVE");
       params.set("access_token", accessToken);
 
-      const resp = await fetch(`https://graph.facebook.com/v19.0/${campaign.metaCampaignId}`, {
+      const resp = await fetch(metaGraphUrl(campaign.metaCampaignId), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params.toString(),
@@ -452,7 +462,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       params.set("daily_budget", String(Math.round(newBudget * 100)));
       params.set("access_token", accessToken);
 
-      const resp = await fetch(`https://graph.facebook.com/v19.0/${campaign.metaAdsetId}`, {
+      const resp = await fetch(metaGraphUrl(campaign.metaAdsetId), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params.toString(),
@@ -480,7 +490,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       params.set("daily_budget", String(Math.round(newBudget * 100)));
       params.set("access_token", accessToken);
 
-      const resp = await fetch(`https://graph.facebook.com/v19.0/${campaign.metaAdsetId}`, {
+      const resp = await fetch(metaGraphUrl(campaign.metaAdsetId), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params.toString(),
@@ -517,7 +527,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         copyParams.set("daily_budget", String(Math.round(newBudget * 100)));
       }
 
-      const copyResp = await fetch(`https://graph.facebook.com/v19.0/${campaign.metaAdsetId}/copies`, {
+      const copyResp = await fetch(metaGraphUrl(`${campaign.metaAdsetId}/copies`), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: copyParams.toString(),
@@ -538,7 +548,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const budgetParams = new URLSearchParams();
         budgetParams.set("daily_budget", String(Math.round(newBudget * 100)));
         budgetParams.set("access_token", accessToken);
-        const budgetResp = await fetch(`https://graph.facebook.com/v19.0/${copiedAdsetId}`, {
+        const budgetResp = await fetch(metaGraphUrl(copiedAdsetId), {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: budgetParams.toString(),
@@ -555,7 +565,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const pauseParams = new URLSearchParams();
         pauseParams.set("status", "PAUSED");
         pauseParams.set("access_token", accessToken);
-        const pauseResp = await fetch(`https://graph.facebook.com/v19.0/${campaign.metaAdsetId}`, {
+        const pauseResp = await fetch(metaGraphUrl(campaign.metaAdsetId), {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: pauseParams.toString(),
@@ -593,7 +603,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         copyParams.set("daily_budget", String(Math.round(newBudget * 100)));
       }
 
-      const copyResp = await fetch(`https://graph.facebook.com/v19.0/${campaign.metaCampaignId}/copies`, {
+      const copyResp = await fetch(metaGraphUrl(`${campaign.metaCampaignId}/copies`), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: copyParams.toString(),
@@ -630,7 +640,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const pauseParams = new URLSearchParams();
         pauseParams.set("status", "PAUSED");
         pauseParams.set("access_token", accessToken);
-        const pauseResp = await fetch(`https://graph.facebook.com/v19.0/${campaign.metaCampaignId}`, {
+        const pauseResp = await fetch(metaGraphUrl(campaign.metaCampaignId), {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: pauseParams.toString(),

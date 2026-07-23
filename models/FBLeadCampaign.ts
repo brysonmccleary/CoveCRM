@@ -22,6 +22,21 @@ const FBLeadCampaignSchema = new Schema(
       default: "hosted_funnel",
     },
     campaignName: { type: String, required: true },
+    performanceGoal: {
+      type: String,
+      enum: ["LEAD_GENERATION", "QUALITY_LEAD"],
+      default: "LEAD_GENERATION",
+    },
+    nativeFormConfiguration: {
+      schemaVersion: { type: String, default: "" },
+      formMode: { type: String, enum: ["", "HIGHER_INTENT"], default: "" },
+      flexibleDelivery: { type: Boolean, default: false },
+      smsVerification: { type: Boolean, default: false },
+    },
+    launchFingerprint: { type: String, default: "" },
+    launchClaimToken: { type: String, default: "" },
+    launchClaimedAt: { type: Date, default: null },
+    attributionVersion: { type: String, default: "", index: true },
     status: {
       type: String,
       enum: ["setup", "active", "paused", "cancelled"],
@@ -145,6 +160,7 @@ const FBLeadCampaignSchema = new Schema(
     // Meta object IDs (publish output)
     metaAdId: { type: String, default: "" },
     metaFormId: { type: String, default: "" },
+    metaFormFingerprint: { type: String, default: "", index: true },
     ads: {
       type: [
         new Schema(
@@ -155,6 +171,8 @@ const FBLeadCampaignSchema = new Schema(
             imageUrl: { type: String, default: "" },
             metaAdId: { type: String, default: "" },
             metaCreativeId: { type: String, default: "" },
+            creativeFamily: { type: String, default: "" },
+            destinationUrl: { type: String, default: "" },
             status: { type: String, default: "" },
             spend: { type: Number, default: 0 },
             leads: { type: Number, default: 0 },
@@ -227,6 +245,10 @@ const FBLeadCampaignSchema = new Schema(
 
 FBLeadCampaignSchema.index({ userId: 1, status: 1 });
 FBLeadCampaignSchema.index({ userId: 1, leadType: 1 });
+FBLeadCampaignSchema.index(
+  { userEmail: 1, launchFingerprint: 1 },
+  { unique: true, partialFilterExpression: { launchFingerprint: { $gt: "" } } }
+);
 
 export type FBLeadCampaign = InferSchemaType<typeof FBLeadCampaignSchema>;
 export default (models.FBLeadCampaign as mongoose.Model<FBLeadCampaign>) ||

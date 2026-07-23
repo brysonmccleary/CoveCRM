@@ -7,6 +7,7 @@ import CRMOutcome from "@/models/CRMOutcome";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
 import Lead from "@/models/Lead";
 import { scoreAdPerformance } from "./scoreAdPerformance";
+import { enqueueMetaLifecycleEventSafely, MetaLifecycleEventName } from "@/lib/meta/capi";
 
 // Disposition → outcome field mapping
 function dispositionToIncrement(disposition: string): Record<string, number> | null {
@@ -34,6 +35,17 @@ function dispositionToIncrement(disposition: string): Record<string, number> | n
   return null;
 }
 
+export function dispositionToMetaLifecycleEvent(disposition: string): MetaLifecycleEventName | null {
+  const d = disposition.toLowerCase().trim().replace(/_/g, " ");
+  if (["contacted", "contact made", "reached"].includes(d)) return "Contacted";
+  if (["qualified", "interested", "lead qualified"].includes(d)) return "Qualified";
+  if (["booked appointment", "booked", "appointment booked", "scheduled"].includes(d)) return "AppointmentBooked";
+  if (["showed", "appointment showed", "sat"].includes(d)) return "AppointmentShowed";
+  if (["sold", "sale"].includes(d)) return "Sale";
+  if (["policy issued", "issued", "placed"].includes(d)) return "PolicyIssued";
+  return null;
+}
+
 /**
  * Called after a lead disposition is set.
  * Finds whether this lead came from an FB campaign, then updates CRMOutcome.
@@ -47,8 +59,17 @@ export async function trackOutcomeFromDisposition(
 
     const isSaleDisposition = ["sold", "sale"].includes(disposition.toLowerCase().trim());
 
+    const ownedLead = await Lead.findById(leadId)
+      .select("userEmail revenuePending Email email Phone metaLeadEventId metaAdId metaCreativeId metaVariantId metaCreativeFamily metaFbc metaFbp metaCampaignId")
+      .lean();
+    const userEmail = String((ownedLead as any)?.userEmail || "").toLowerCase();
+    if (!ownedLead || !userEmail) {
+      console.warn("[trackCRMOutcome] lead owner missing — outcome not tracked", { leadId, disposition });
+      return;
+    }
+
     // Find the FB lead entry linked to this CRM lead
-    const fbEntry = await FBLeadEntry.findOne({ crmLeadId: leadId }).lean();
+    const fbEntry = await FBLeadEntry.findOne({ crmLeadId: leadId, userEmail }).lean();
     if (!fbEntry) {
       // Normal and expected for the vast majority of dispositions (most leads aren't FB-sourced),
       // so stay quiet in general — but a "Sold" disposition with no FBLeadEntry at all means this
@@ -66,22 +87,22 @@ export async function trackOutcomeFromDisposition(
       return;
     }
 
-    const campaign = await FBLeadCampaign.findById(campaignId).lean();
+    const campaign = await FBLeadCampaign.findOne({ _id: campaignId, userEmail }).lean();
     if (!campaign) {
       console.warn("[trackCRMOutcome] ATTRIBUTION LOSS: campaign no longer exists — outcome not tracked", { leadId, disposition, campaignId: String(campaignId) });
       return;
     }
 
     const increment = dispositionToIncrement(disposition);
-    if (!increment) return;
+    const lifecycleEvent = dispositionToMetaLifecycleEvent(disposition);
+    if (!increment && !lifecycleEvent) return;
 
     // A "Sold" disposition with revenuePending=true (premium not entered yet — see
     // disposition-lead.ts's enforcement) must not count as a sale until a real premium lands.
     // record-sale.ts calls this function directly once the premium is recorded, at which point
     // revenuePending will already be false and this check passes through normally.
-    if (increment.sales) {
-      const lead = await Lead.findById(leadId).select("revenuePending").lean();
-      if ((lead as any)?.revenuePending) {
+    if (increment?.sales) {
+      if ((ownedLead as any)?.revenuePending) {
         console.info("[trackCRMOutcome] Sale deferred — premium pending", { leadId, campaignId: String(campaignId) });
         return;
       }
@@ -89,7 +110,11 @@ export async function trackOutcomeFromDisposition(
 
     const today = new Date().toISOString().split("T")[0];
     const userId = (campaign as any).userId;
-    const userEmail = (campaign as any).userEmail;
+    const leadEventId = String((fbEntry as any).leadEventId || (ownedLead as any).metaLeadEventId || "");
+    const metaAdId = String((fbEntry as any).metaAdId || (ownedLead as any).metaAdId || "");
+    const metaCreativeId = String((fbEntry as any).metaCreativeId || (ownedLead as any).metaCreativeId || "");
+    const variantId = String((fbEntry as any).variantId || (ownedLead as any).metaVariantId || "");
+    const creativeFamily = String((fbEntry as any).creativeFamily || (ownedLead as any).metaCreativeFamily || "");
 
     // NOTE: no revenue estimate is added here. The flat per-lead-type guess that used to live here
     // was never real money — real revenue is agent-entered via the Sale modal
@@ -99,13 +124,13 @@ export async function trackOutcomeFromDisposition(
 
     // Build $inc object
     const incFields: Record<string, number> = {};
-    for (const [k, v] of Object.entries(increment)) {
+    for (const [k, v] of Object.entries(increment || {})) {
       incFields[k] = v;
     }
 
     // Upsert CRMOutcome — one record per (campaignId, userId, date)
-    await CRMOutcome.findOneAndUpdate(
-      { campaignId, userId, date: today },
+    if (increment) await CRMOutcome.findOneAndUpdate(
+      { campaignId, userId, userEmail, date: today, metaAdId, creativeFamily },
       {
         $inc: incFields,
         $setOnInsert: {
@@ -114,14 +139,19 @@ export async function trackOutcomeFromDisposition(
           userEmail,
           date: today,
           leadId,
+          leadEventId,
+          metaAdId,
+          metaCreativeId,
+          variantId,
+          creativeFamily,
         },
       },
       { upsert: true, new: true }
     );
 
     // Also upsert AdMetricsDaily so it becomes the full-funnel daily source of truth
-    await AdMetricsDaily.findOneAndUpdate(
-      { campaignId, date: today },
+    if (increment) await AdMetricsDaily.findOneAndUpdate(
+      { campaignId, userEmail, date: today },
       {
         $inc: incFields,
         $setOnInsert: {
@@ -135,9 +165,27 @@ export async function trackOutcomeFromDisposition(
     );
 
     // Re-score campaign (async, non-blocking in case it's slow)
-    scoreAdPerformance(String(campaignId)).catch((err) => {
-      console.warn("[trackCRMOutcome] re-score failed:", err?.message);
-    });
+    if (increment) {
+      scoreAdPerformance(String(campaignId)).catch((err) => {
+        console.warn("[trackCRMOutcome] re-score failed:", err?.message);
+      });
+    }
+    if (lifecycleEvent && leadEventId) {
+      await enqueueMetaLifecycleEventSafely({
+        userEmail,
+        leadId,
+        leadEventId,
+        eventName: lifecycleEvent,
+        email: String((ownedLead as any).email || (ownedLead as any).Email || ""),
+        phone: String((ownedLead as any).Phone || ""),
+        fbc: String((ownedLead as any).metaFbc || ""),
+        fbp: String((ownedLead as any).metaFbp || ""),
+        metaCampaignId: String((ownedLead as any).metaCampaignId || (campaign as any).metaCampaignId || ""),
+        metaAdId,
+        metaCreativeId,
+        creativeFamily,
+      }, undefined, (err) => console.warn("[trackCRMOutcome] CAPI queue failed (non-blocking):", err?.message));
+    }
   } catch (err: any) {
     console.error("[trackCRMOutcome] error:", err?.message);
     // Non-fatal — never throw from here

@@ -132,10 +132,6 @@ export default function FacebookOnboardingFlow({
         />
       )}
 
-      <PageIdentityCard page={displayPageIdentity} />
-
-      <LaunchReadinessCard readiness={readiness} />
-
       <section className="rounded-3xl border border-white/10 bg-[#0f172a] p-5 shadow-2xl shadow-black/20 sm:p-7">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -201,9 +197,13 @@ export default function FacebookOnboardingFlow({
         </div>
       </section>
 
+      <PageIdentityCard page={displayPageIdentity} />
+
+      <LaunchReadinessCard readiness={readiness} />
+
       <section className="space-y-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Step 4</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Step 3</p>
           <h2 className="mt-1 text-2xl font-bold text-white">Choose lead type and budget</h2>
           <p className="mt-2 text-sm text-gray-400">
             CoveCRM generates the ad, creates the business campaign, and keeps it paused until you activate it.

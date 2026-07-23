@@ -34,6 +34,7 @@ type CampaignPerf = {
 };
 
 type Bucket = ExtractedGlobalPattern & {
+  stateCode: string;
   campaignIds: any[];
   totalCampaigns: number;
   totalSpend: number;
@@ -164,11 +165,13 @@ export async function recomputeGlobalPatterns(
   const campaigns = await FBLeadCampaign.find({
     leadType: { $exists: true, $ne: "" },
     status: { $in: ["active", "paused", "setup"] },
+    attributionVersion: "signed-v1",
+    metaLastPublishSuccessAt: { $gte: new Date(process.env.META_ATTRIBUTION_V1_CUTOFF || "2026-07-14T00:00:00.000Z") },
   })
     .sort({ updatedAt: -1 })
     .limit(options.limit || 5000)
     .select(
-      "_id leadType notes totalSpend totalLeads cpl appointments sales costPerAppointment costPerSale contactRate closeRate appointmentRate frequency optOutRate badNumberRate creativeFatigue performanceScore status updatedAt"
+      "_id leadType licensedStates ads attributionVersion metaLastPublishSuccessAt totalSpend totalLeads cpl appointments sales costPerAppointment costPerSale contactRate closeRate appointmentRate frequency optOutRate badNumberRate creativeFatigue performanceScore status updatedAt"
     )
     .lean();
 
@@ -177,19 +180,42 @@ export async function recomputeGlobalPatterns(
   const buckets = new Map<string, Bucket>();
 
   for (const campaign of campaigns as any[]) {
-    const extracted = extractPatternFromCampaign(campaign);
-    if (!extracted) {
+    const extractedBase = extractPatternFromCampaign(campaign);
+    if (!extractedBase) {
       summary.skipped += 1;
       continue;
     }
 
-    const perf = campaignPerf(campaign, perfMap.get(String(campaign._id)) || ({} as CampaignPerf));
-    if (perf.leads < (options.minLeadForLearning ?? 1) && perf.spend < 5) {
+    const campaignPerformance = campaignPerf(campaign, perfMap.get(String(campaign._id)) || ({} as CampaignPerf));
+    if (campaignPerformance.leads < (options.minLeadForLearning ?? 1) && campaignPerformance.spend < 5) {
       summary.skipped += 1;
       continue;
     }
 
-    const key = `${extracted.leadType}:${extracted.patternFingerprint}`;
+    const stateCodes = Array.from(new Set((campaign.licensedStates || []).map((state: any) => String(state).toUpperCase()).filter(Boolean))) as string[];
+    const familyIds = Array.from(new Set((campaign.ads || []).map((ad: any) => String(ad.creativeFamily || "").trim()).filter(Boolean))) as string[];
+    if (!familyIds.length && extractedBase.winningFamilyId) familyIds.push(extractedBase.winningFamilyId);
+    if (!stateCodes.length || !familyIds.length) {
+      summary.skipped += 1;
+      continue;
+    }
+    for (const stateCode of stateCodes) for (const winningFamilyId of familyIds) {
+    const familyAd = (campaign.ads || []).find((ad: any) => String(ad.creativeFamily || "") === winningFamilyId);
+    const familyCount = Math.max(1, familyIds.length);
+    const perf: CampaignPerf = familyAd ? {
+      ...campaignPerformance,
+      spend: num(familyAd.spend) || campaignPerformance.spend / familyCount,
+      leads: num(familyAd.leads) || campaignPerformance.leads / familyCount,
+      appointments: num(familyAd.appointmentsBooked) || campaignPerformance.appointments / familyCount,
+      sales: num(familyAd.sales) || campaignPerformance.sales / familyCount,
+    } : campaignPerformance;
+    const extracted = {
+      ...extractedBase,
+      stateCode,
+      winningFamilyId,
+      patternFingerprint: `anon:${extractedBase.leadType}:${stateCode}:${winningFamilyId}`,
+    };
+    const key = `${extracted.leadType}:${stateCode}:${winningFamilyId}`;
     const weight = Math.min(6, Math.max(0.2, Math.log1p(perf.leads) + Math.log1p(perf.spend) / 3)) *
       recencyWeight(campaign.updatedAt);
     const existing = buckets.get(key);
@@ -240,6 +266,7 @@ export async function recomputeGlobalPatterns(
       status: campaign.status,
     });
     buckets.set(key, bucket);
+    }
   }
 
   const seenKeys: string[] = [];
@@ -279,27 +306,9 @@ export async function recomputeGlobalPatterns(
 
     const update = {
       leadType: bucket.leadType,
+      stateCode: bucket.stateCode,
       sourceType: bucket.sourceType,
       winningFamilyId: bucket.winningFamilyId,
-      variationType: bucket.variationType,
-      vendorStyleTag: bucket.vendorStyleTag,
-      creativeArchetype: bucket.creativeArchetype,
-      pageType: bucket.pageType,
-      hookType: bucket.hookType,
-      bodyAngle: bucket.bodyAngle,
-      ctaStyle: bucket.ctaStyle,
-      buttonStyle: bucket.buttonStyle,
-      colorDirection: bucket.colorDirection,
-      headlineTemplate: bucket.headlineTemplate,
-      primaryTextTemplate: bucket.primaryTextTemplate,
-      imagePromptStyle: bucket.imagePromptStyle,
-      offerType: bucket.offerType,
-      emotionalAngle: bucket.emotionalAngle,
-      audienceAngle: bucket.audienceAngle,
-      qualifierAngle: bucket.qualifierAngle,
-      trustAngle: bucket.trustAngle,
-      benefitFocus: bucket.benefitFocus,
-      urgencyAngle: bucket.urgencyAngle,
       complianceFlags: bucket.complianceFlags,
       totalCampaigns: bucket.totalCampaigns,
       totalSpend: Number(bucket.totalSpend.toFixed(2)),
@@ -320,8 +329,10 @@ export async function recomputeGlobalPatterns(
       confidenceScore: scored.confidenceScore,
       sampleSizeScore: scored.sampleSizeScore,
       status: scored.status,
-      generationHints: buildGenerationHints(bucket.hintSources),
-      sampledCampaignIds: bucket.campaignIds.slice(0, 50),
+      generationHints: {
+        preferredHeadlinePatterns: [], preferredPrimaryTextPatterns: [], preferredButtonLabels: [],
+        preferredBenefitBullets: [], preferredImageStyleNotes: [], preferredHooks: [], antiPatterns: [],
+      },
       lastSeenAt: bucket.lastSeenAt,
       ...(scored.status === "winner" ? { lastPromotedAt: new Date() } : {}),
     };
@@ -335,7 +346,17 @@ export async function recomputeGlobalPatterns(
 
     await FBGlobalAdPattern.updateOne(
       { patternFingerprint: bucket.patternFingerprint, leadType: bucket.leadType },
-      { $set: update, $setOnInsert: { createdAt: new Date() } },
+      {
+        $set: update,
+        $setOnInsert: { createdAt: new Date() },
+        $unset: {
+          variationType: 1, vendorStyleTag: 1, creativeArchetype: 1, pageType: 1, hookType: 1,
+          bodyAngle: 1, ctaStyle: 1, buttonStyle: 1, colorDirection: 1, headlineTemplate: 1,
+          primaryTextTemplate: 1, imagePromptStyle: 1, offerType: 1, emotionalAngle: 1,
+          audienceAngle: 1, qualifierAngle: 1, trustAngle: 1, benefitFocus: 1, urgencyAngle: 1,
+          sampledCampaignIds: 1,
+        },
+      },
       { upsert: true }
     );
     if (before) summary.patternsUpdated += 1;

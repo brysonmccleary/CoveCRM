@@ -5,7 +5,7 @@ import { Socket } from "socket.io-client";
 
 export type InboxMode = "sms" | "email";
 
-interface Conversation {
+export interface Conversation {
   _id: string;
   name: string;
   phone: string;
@@ -76,7 +76,7 @@ export default function InboxSidebar({
   onModeChange,
   showEmailToggle = true,
 }: {
-  onSelect: (id: string) => void;
+  onSelect: (id: string, conversation: Conversation) => void;
   selectedId: string | null;
   socket?: Socket | null;
   mode: InboxMode;
@@ -85,8 +85,22 @@ export default function InboxSidebar({
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<"all" | "unread">("all");
 
   const timeZone = useMemo(() => getAgentTimeZone(), []);
+  const visibleConversations = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return conversations.filter((conversation) => {
+      if (filter === "unread" && !conversation.unread && !(conversation.unreadCount && conversation.unreadCount > 0)) {
+        return false;
+      }
+      if (!normalizedQuery) return true;
+      return [conversation.name, conversation.phone, conversation.lastMessage]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalizedQuery));
+    });
+  }, [conversations, filter, query]);
 
   const fetchConversations = async () => {
     setLoading(true);
@@ -126,7 +140,7 @@ export default function InboxSidebar({
   }, [socket, mode]);
 
   return (
-    <div className="w-[350px] bg-[#1e293b] h-full flex flex-col border-r border-gray-800">
+    <div className="flex h-full w-full flex-col border-r border-gray-800 bg-[#1e293b]">
       {/* SMS / Email toggle */}
       {showEmailToggle && (
         <div className="flex items-center gap-1 px-3 pt-3 pb-2">
@@ -153,27 +167,59 @@ export default function InboxSidebar({
         </div>
       )}
 
+      <div className="space-y-2 border-b border-gray-800 px-3 pb-3 pt-3">
+        <label className="sr-only" htmlFor="conversation-search">Search conversations</label>
+        <input
+          id="conversation-search"
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search conversations…"
+          className="w-full rounded-lg border border-gray-700 bg-[#0f172a] px-3 py-2 text-sm text-white placeholder:text-gray-500 focus:border-blue-500 focus:outline-none"
+        />
+        <div className="flex items-center gap-1" aria-label="Conversation filters">
+          {(["all", "unread"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setFilter(option)}
+              aria-pressed={filter === option}
+              className={`rounded-full px-3 py-1 text-xs font-semibold capitalize transition ${
+                filter === option ? "bg-blue-600 text-white" : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              {option}
+            </button>
+          ))}
+          <span className="ml-auto text-xs text-gray-500">{visibleConversations.length}</span>
+        </div>
+      </div>
+
       <div className="flex-1 overflow-y-auto">
         {loading && (
           <div className="p-4 text-gray-400 text-center">Loading…</div>
         )}
-        {!loading && conversations.length === 0 && (
+        {!loading && visibleConversations.length === 0 && (
           <div className="p-4 text-gray-400 text-center">
-            No {mode === "email" ? "email threads" : "conversations"} yet
+            {query || filter === "unread"
+              ? "No conversations match this view."
+              : `No ${mode === "email" ? "email threads" : "conversations"} yet`}
           </div>
         )}
 
-        {conversations.map((conv) => {
+        {visibleConversations.map((conv) => {
           const isActive = selectedId === conv._id;
           const stamp = formatListStampIMessage(conv.lastMessageTime, timeZone);
 
           return (
-            <div
+            <button
+              type="button"
               key={conv._id}
-              onClick={() => onSelect(conv._id)}
-              className={`cursor-pointer px-4 py-3 transition-colors duration-150 ${
+              onClick={() => onSelect(conv._id, conv)}
+              className={`block w-full px-4 py-3 text-left transition-colors duration-150 ${
                 isActive ? "bg-[#334155] rounded-r-md" : "hover:bg-[#2d3b53]"
               }`}
+              aria-current={isActive ? "true" : undefined}
             >
               <div className="flex justify-between items-center mb-1">
                 <div className="font-semibold text-white truncate max-w-[220px]">
@@ -183,10 +229,15 @@ export default function InboxSidebar({
                   {stamp}
                 </div>
               </div>
-              <div className="text-sm text-gray-300 truncate">
-                {conv.lastMessage}
+              <div className="flex items-center gap-2">
+                {(conv.unread || (conv.unreadCount && conv.unreadCount > 0)) && (
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" aria-label="Unread" />
+                )}
+                <div className="truncate text-sm text-gray-300">
+                  {conv.lastMessage || "No messages yet"}
+                </div>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>

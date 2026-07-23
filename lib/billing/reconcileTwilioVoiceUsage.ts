@@ -1,4 +1,5 @@
 import BillingMeterHealth from "@/models/BillingMeterHealth";
+import BillingEvent from "@/models/BillingEvent";
 import Call from "@/models/Call";
 import TwilioVoiceUsageCandidate from "@/models/TwilioVoiceUsageCandidate";
 import User from "@/models/User";
@@ -44,6 +45,7 @@ export function isBillableTwilioVoiceChild(call: any) {
 
 export async function ensureTwilioVoiceBillingIndexes() {
   await Promise.all([
+    BillingEvent.createIndexes(),
     BillingMeterHealth.init(),
     TwilioVoiceUsageCandidate.init(),
   ]);

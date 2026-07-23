@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { hasRecentMetaQualitySignal, isCapiEnabled } from "@/lib/meta/capi";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
@@ -13,8 +14,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await mongooseConnect();
 
   const user = await User.findOne({ email: session.user.email.toLowerCase() })
-    .select("metaAccessToken metaAdAccountId metaPageId metaPageName metaTokenExpiresAt metaLastWebhookAt metaLastInsightSyncAt")
+    .select("metaAccessToken metaAdAccountId metaPageId metaPageName metaTokenExpiresAt metaLastWebhookAt metaLastInsightSyncAt metaDatasetId metaCapiEnabled")
     .lean() as any;
+
+  const capiConfigured = !!(user?.metaDatasetId && user?.metaCapiEnabled && isCapiEnabled());
+  const qualityOptimizationReady = capiConfigured
+    ? await hasRecentMetaQualitySignal(String(session.user.email))
+    : false;
 
   return res.status(200).json({
     connected: !!(user?.metaAccessToken || user?.metaAdAccountId || user?.metaPageId),
@@ -24,5 +30,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     tokenExpiresAt: user?.metaTokenExpiresAt || null,
     lastWebhookAt: user?.metaLastWebhookAt || null,
     lastInsightSyncAt: user?.metaLastInsightSyncAt || null,
+    datasetConfigured: !!user?.metaDatasetId,
+    capiConfigured,
+    qualityOptimizationReady,
   });
 }

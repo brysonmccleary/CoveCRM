@@ -23,6 +23,7 @@ export type WinningAdFamily = {
   disabled?: boolean;
   format: AdFormat;
   visualDirection: string;
+  displayAmount?: string;
   copyBlueprint: {
     headlinePool: string[];
     hookPool: string[];
@@ -87,6 +88,7 @@ export type GeneratedWinningAd = {
   uniquenessFingerprint: string;
   complianceNotes: string[];
   vendorStyleTag: string;
+  displayAmount?: string;
 };
 
 function clampVariantCount(value: any): number {
@@ -307,6 +309,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     priority: 2,
     format: "benefit_stack",
     visualDirection: "Senior-friendly final expense direct-response layout, dark gold benefit stack, large coverage amount panel, no lifestyle photography",
+    displayAmount: "$50,000",
     copyBlueprint: {
       headlinePool: [
         "Coverage Up To $50,000",
@@ -2145,6 +2148,7 @@ function buildVariant(
     uniquenessFingerprint: fingerprint,
     complianceNotes: family.compliance.notes,
     vendorStyleTag: family.vendorStyleTag,
+    displayAmount: family.displayAmount,
   };
 }
 

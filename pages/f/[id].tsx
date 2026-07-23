@@ -9,7 +9,7 @@ import User from "@/models/User";
 import { getFunnelTemplate, FunnelStep } from "@/lib/facebook/funnels/funnelTemplates";
 import { US_STATES, isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
-import { buildLeadGenerationSenderName } from "@/lib/a2p/flowSelection";
+import { buildHostedConsentText } from "@/lib/facebook/hostedConsent";
 
 // ── Validation helpers ─────────────────────────────────────────────────────────
 
@@ -44,6 +44,7 @@ interface FunnelData {
   benefitBullets: string[];
   ctaStrip: string;
   imageUrl: string;
+  qualifierTexts?: string[];
   publicAgentProfile?: PublicAgentProfile;
   complianceProfile?: ComplianceProfile;
   licensedStates: string[];
@@ -55,25 +56,6 @@ interface Props {
   funnelData: FunnelData | null;
   webhookKey?: string;
   notFound?: boolean;
-}
-
-function getLeadTypeLabel(leadType: string, audienceSegment?: string): string {
-  const compositeKey =
-    audienceSegment && audienceSegment !== "standard"
-      ? `${leadType}_${audienceSegment}`
-      : leadType;
-  const labels: Record<string, string> = {
-    final_expense: "Final Expense",
-    mortgage_protection: "Mortgage Protection",
-    iul: "IUL",
-    veteran: "Veteran Life Insurance",
-    trucker: "Trucker Life Insurance",
-    mortgage_protection_veteran: "Veteran Mortgage Protection",
-    iul_veteran: "Veteran IUL",
-    mortgage_protection_trucker: "Trucker Mortgage Protection",
-    iul_trucker: "Trucker IUL",
-  };
-  return labels[compositeKey] || labels[leadType] || "Insurance";
 }
 
 const DISCLAIMER_TEXT =
@@ -315,6 +297,23 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
     setSubmitting(true);
     setSubmitError("");
     try {
+      const browserUrl = new URL(window.location.href);
+      const cookieMap = Object.fromEntries(
+        document.cookie.split(";").map((part) => {
+          const separator = part.indexOf("=");
+          if (separator < 0) return [part.trim(), ""];
+          return [part.slice(0, separator).trim(), decodeURIComponent(part.slice(separator + 1))];
+        })
+      );
+      const fbclid = String(browserUrl.searchParams.get("fbclid") || "");
+      const fbc = String(cookieMap._fbc || (fbclid ? `fb.1.${Date.now()}.${fbclid}` : ""));
+      const utm = {
+        source: String(browserUrl.searchParams.get("utm_source") || ""),
+        medium: String(browserUrl.searchParams.get("utm_medium") || ""),
+        campaign: String(browserUrl.searchParams.get("utm_campaign") || ""),
+        content: String(browserUrl.searchParams.get("utm_content") || ""),
+        term: String(browserUrl.searchParams.get("utm_term") || ""),
+      };
       const r = await fetch(`/api/facebook/funnel-submit?key=${encodeURIComponent(webhookKey)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -329,6 +328,11 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
           selectedOption: answers.coverage || answers.mortgageAmount || "",
           smsConsentGiven,
           smsConsentText: smsConsentLabel,
+          attributionToken: String(browserUrl.searchParams.get("cat") || ""),
+          fbclid,
+          fbc,
+          fbp: String(cookieMap._fbp || ""),
+          utm,
           answers: finalAnswers,
           stateRestrictionWarning: false,
           stateOutsidePrimaryLicensedArea: false,
@@ -359,13 +363,14 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   const agent = funnelData.publicAgentProfile || {};
   const agentName = agent.displayName?.trim() || "";
   const businessName = agent.businessName?.trim() || "";
-  const consentSenderName = buildLeadGenerationSenderName({ agentName, businessName });
-  const leadTypeLabel = getLeadTypeLabel(funnelData.leadType, funnelData.audienceSegment);
   const isA2PComplianceStub = funnelData.funnelVersion === "a2p-compliance-stub";
-
-  const smsConsentLabel = isA2PComplianceStub
-    ? `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to my inquiry. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. Consent is not required to submit this request or purchase any product.`
-    : `Yes, I agree to receive SMS messages from ${consentSenderName} about my ${leadTypeLabel} request. Messages may include quote discussions, appointment scheduling, application follow-up, customer support, and responses to my inquiry. Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help. I also agree that a licensed agent may contact me at the phone number I provide via telephone calls, including calls made using artificial or prerecorded voice and AI-assisted voice technology. By checking this box and submitting this form, I agree to the communications described above.`;
+  const smsConsentLabel = buildHostedConsentText({
+    agentName,
+    businessName,
+    leadType: funnelData.leadType,
+    audienceSegment: funnelData.audienceSegment,
+    complianceOnly: isA2PComplianceStub,
+  });
 
   const renderStep = (step: FunnelStep) => {
     // ── Consent step: show full TCPA text + single submit button ────────────
@@ -763,6 +768,11 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
           <p style={{ marginTop: 20, fontSize: 11, color: theme.muted, lineHeight: 1.5, textAlign: "center", opacity: 0.7 }}>
             {compliance.disclaimerText?.trim() || DISCLAIMER_TEXT}
           </p>
+          {Array.isArray(funnelData.qualifierTexts) && funnelData.qualifierTexts.map((qualifier) => (
+            <p key={qualifier} style={{ marginTop: 4, fontSize: 10, color: theme.muted, lineHeight: 1.45, textAlign: "center", opacity: 0.68 }}>
+              {qualifier}
+            </p>
+          ))}
           {(compliance.privacyUrl || compliance.termsUrl) && (
             <p style={{ textAlign: "center", fontSize: 11, marginTop: 4 }}>
               {compliance.privacyUrl && <a href={compliance.privacyUrl} style={{ color: theme.accent }}>Privacy Policy</a>}
@@ -910,6 +920,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
       benefitBullets: Array.isArray(safeConfig?.benefitBullets) ? safeConfig.benefitBullets.map(String).slice(0, 4) : [],
       ctaStrip: String(safeConfig?.ctaStrip || "Submit Request"),
       imageUrl: String(safeConfig?.imageUrl || ""),
+      qualifierTexts: Array.isArray(safeConfig?.qualifierTexts) ? safeConfig.qualifierTexts.map(String) : [],
       publicAgentProfile: {
         displayName: agentContact.name,
         businessName: String(campaign.publicAgentProfile?.businessName || ""),

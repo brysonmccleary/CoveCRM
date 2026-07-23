@@ -9,6 +9,15 @@ import Message from "../models/Message";
 import CallLog from "../models/CallLog";
 import BillingEvent from "../models/BillingEvent";
 import UsageAccrualLedger from "../models/UsageAccrualLedger";
+import RecruitingCloudAccount from "../models/RecruitingCloudAccount";
+import RecruitingCompanionJob from "../models/RecruitingCompanionJob";
+import RecruitingDiscoveryJob from "../models/RecruitingDiscoveryJob";
+import RecruitingGrowthSnapshot from "../models/RecruitingGrowthSnapshot";
+import MetaLeadFormTemplate from "../models/MetaLeadFormTemplate";
+import MetaCAPIEvent from "../models/MetaCAPIEvent";
+import FBLeadCampaign from "../models/FBLeadCampaign";
+import MetaClaimRegistry from "../models/MetaClaimRegistry";
+import MetaClaimApproval from "../models/MetaClaimApproval";
 
 type AnyIndex = {
   name?: string;
@@ -152,6 +161,27 @@ export async function ensureBillingIndexes(col: any = UsageAccrualLedger.collect
   console.log("✅ ensured BillingEvent idempotency index");
 }
 
+export async function ensureRecruitingCloudIndexes() {
+  await Promise.all([
+    RecruitingCloudAccount.createIndexes(),
+    RecruitingCompanionJob.createIndexes(),
+    RecruitingDiscoveryJob.createIndexes(),
+    RecruitingGrowthSnapshot.createIndexes(),
+  ]);
+  console.log("✅ ensured hosted recruiting lease and idempotency indexes");
+}
+
+export async function ensureMetaInsuranceIndexes() {
+  await Promise.all([
+    MetaLeadFormTemplate.createIndexes(),
+    MetaCAPIEvent.createIndexes(),
+    FBLeadCampaign.createIndexes(),
+    MetaClaimRegistry.createIndexes(),
+    MetaClaimApproval.createIndexes(),
+  ]);
+  console.log("✅ ensured Meta insurance launch, form, CAPI, and claim indexes");
+}
+
 export async function main() {
   const uri = process.env.MONGODB_URI || process.env.MONGODB_URL || "";
   if (!uri) {
@@ -164,6 +194,8 @@ export async function main() {
   await ensureMessageIndexes();
   await ensureCallLogIndexes();
   await ensureBillingIndexes();
+  await ensureRecruitingCloudIndexes();
+  await ensureMetaInsuranceIndexes();
 
   console.log("🎉 All indexes ensured.");
   process.exit(0);

@@ -1,8 +1,8 @@
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
 
-const META_GRAPH_BASE = "https://graph.facebook.com/v19.0";
 const HEALTH_CACHE_MS = 6 * 60 * 60 * 1000;
 const HEALTH_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
@@ -16,6 +16,8 @@ export type MetaHealthStatus =
   | "missingLeadAdsEligibility"
   | "missingPage"
   | "missingAdAccount"
+  | "securityVerificationRequired"
+  | "missingBusinessInformation"
   | "cooldown"
   | "error";
 
@@ -39,6 +41,7 @@ type HealthInput = {
   pageId?: string;
   adAccountId?: string;
   requireRecentSuccess?: boolean;
+  requireLeadAdsEligibility?: boolean;
   force?: boolean;
 };
 
@@ -50,6 +53,8 @@ const BLOCKING_STATUSES = new Set<MetaHealthStatus>([
   "missingLeadAdsEligibility",
   "missingPage",
   "missingAdAccount",
+  "securityVerificationRequired",
+  "missingBusinessInformation",
   "cooldown",
 ]);
 
@@ -116,6 +121,26 @@ export function classifyMetaHealthError(error: unknown): {
     };
   }
 
+  if (code === "3858385" || text.includes("recent activity") || text.includes("login location") || text.includes("authenticate your account")) {
+    return {
+      status: "securityVerificationRequired",
+      reconnectNeeded: false,
+      cooldown: true,
+      reason: "Meta requires account authentication because of recent security activity before ads can run.",
+      fixUrl: "https://business.facebook.com/accountquality",
+    };
+  }
+
+  if (text.includes("business information") || text.includes("legal business name") || text.includes("business address")) {
+    return {
+      status: "missingBusinessInformation",
+      reconnectNeeded: false,
+      cooldown: true,
+      reason: "Add the ad account's legal business name and address in Meta before launching ads.",
+      fixUrl: "https://business.facebook.com/settings/ad-accounts",
+    };
+  }
+
   if (text.includes("lead ads terms") || text.includes("leadgen") || text.includes("lead ads tos")) {
     return {
       status: "missingLeadAdsEligibility",
@@ -149,6 +174,8 @@ function fixUrlForStatus(status: MetaHealthStatus) {
   if (status === "missingPaymentMethod") return "https://business.facebook.com/billing";
   if (status === "missingLeadAdsEligibility") return "https://www.facebook.com/ads/leadgen/tos";
   if (status === "accountDisabled") return "https://business.facebook.com/accountquality";
+  if (status === "securityVerificationRequired") return "https://business.facebook.com/accountquality";
+  if (status === "missingBusinessInformation") return "https://business.facebook.com/settings/ad-accounts";
   if (status === "missingPage") return "https://www.facebook.com/pages/create";
   return undefined;
 }
@@ -242,7 +269,7 @@ function cachedHealth(user: any, now: Date): MetaHealthResult | null {
 }
 
 async function graphGet(path: string, accessToken: string, fields?: string) {
-  const url = new URL(`${META_GRAPH_BASE}/${path.replace(/^\//, "")}`);
+  const url = new URL(metaGraphUrl(path));
   url.searchParams.set("access_token", accessToken);
   if (fields) url.searchParams.set("fields", fields);
   const resp = await fetch(url.toString());
@@ -354,7 +381,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
     const adAccounts = await graphGet(
       "me/adaccounts",
       accessToken,
-      "id,name,account_id,account_status,disable_reason,currency,timezone_name,amount_spent,balance"
+      "id,name,account_id,account_status,disable_reason,currency,timezone_name,amount_spent,balance,business{id,name,verification_status}"
     );
     const accountFromList = (Array.isArray(adAccounts?.data) ? adAccounts.data : []).find((account: any) => {
       const raw = String(account?.account_id || account?.id || "").replace(/^act_/, "");
@@ -380,7 +407,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
     const account = await graphGet(
       `act_${adAccountId}`,
       accessToken,
-      "account_status,disable_reason,currency,timezone_name,amount_spent,balance"
+      "account_status,disable_reason,currency,timezone_name,amount_spent,balance,business{id,name,verification_status}"
     );
     const statusCode = Number(account?.account_status ?? accountFromList?.account_status ?? 0);
     const disableReason = Number(account?.disable_reason ?? accountFromList?.disable_reason ?? 0);
@@ -404,22 +431,45 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
       return result;
     }
 
-    // Proactive Lead Ads TOS check — non-fatal; surface warning without blocking publish
-    let leadAdsTosAccepted = true;
-    try {
-      const tosResp = await graphGet(`${pageId}/leadgen_tos_acceptance`, accessToken);
-      // If the user has not accepted TOS, the response either errors or returns empty data
-      if (tosResp?.data !== undefined && (!Array.isArray(tosResp.data) || tosResp.data.length === 0)) {
-        leadAdsTosAccepted = false;
+    // Hosted CoveCRM funnels do not use Meta Instant Forms, so Lead Ads Terms
+    // must never block them. Keep this check only for an explicit native form.
+    if (input.requireLeadAdsEligibility !== false) {
+      let leadAdsTosAccepted = true;
+      try {
+        const tosResp = await graphGet(`${pageId}/leadgen_tos_acceptance`, accessToken);
+        // If the user has not accepted TOS, the response either errors or returns empty data
+        if (tosResp?.data !== undefined && (!Array.isArray(tosResp.data) || tosResp.data.length === 0)) {
+          leadAdsTosAccepted = false;
+        }
+      } catch {
+        // Not all users/pages return TOS acceptance — skip, don't fail health check
       }
-    } catch {
-      // Not all users/pages return TOS acceptance — skip, don't fail health check
+
+      if (!leadAdsTosAccepted) {
+        const result: MetaHealthResult = {
+          ok: false,
+          status: "missingLeadAdsEligibility",
+          reason: "Accept Meta Lead Ads Terms before launching lead ads.",
+          fixUrl: "https://www.facebook.com/ads/leadgen/tos",
+          checkedAt: now,
+          account,
+          page,
+        };
+        await updateUserHealth(user, {
+          metaReconnectNeeded: false,
+          metaHealthStatus: result.status,
+          lastMetaHealthError: result.reason,
+          metaHealthCooldownUntil: new Date(now.getTime() + HEALTH_COOLDOWN_MS),
+          metaLastHealthCheckAt: now,
+        });
+        return result;
+      }
     }
 
     const update = {
       metaReconnectNeeded: false,
       metaHealthStatus: "healthy",
-      lastMetaHealthError: leadAdsTosAccepted ? "" : "Lead Ads Terms of Service may not be accepted. Visit https://www.facebook.com/ads/leadgen/tos before publishing.",
+      lastMetaHealthError: "",
       metaHealthCooldownUntil: null,
       metaLastHealthCheckAt: now,
       metaLastSuccessfulHealthCheckAt: now,
@@ -428,9 +478,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
     return {
       ok: true,
       status: "healthy",
-      reason: leadAdsTosAccepted
-        ? "Facebook setup is ready."
-        : "Facebook setup is ready, but Lead Ads Terms of Service may not be accepted. Accept them at facebook.com/ads/leadgen/tos before publishing.",
+      reason: "Facebook setup is ready.",
       checkedAt: now,
       lastSuccessfulHealthCheckAt: now,
       account,

@@ -6,6 +6,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { metaGraphUrl } from "@/lib/meta/graphApi";
 
 const META_APP_ID = process.env.META_APP_ID || "";
 const META_APP_SECRET = process.env.META_APP_SECRET || "";
@@ -39,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const redirectUri = `${BASE_URL}/api/meta/callback`;
 
   try {
-    const tokenUrl = new URL("https://graph.facebook.com/v19.0/oauth/access_token");
+    const tokenUrl = new URL(metaGraphUrl("oauth/access_token"));
     tokenUrl.searchParams.set("client_id", META_APP_ID);
     tokenUrl.searchParams.set("client_secret", META_APP_SECRET);
     tokenUrl.searchParams.set("redirect_uri", redirectUri);
@@ -55,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const shortLivedToken = tokenData.access_token;
 
-    const llUrl = new URL("https://graph.facebook.com/v19.0/oauth/access_token");
+    const llUrl = new URL(metaGraphUrl("oauth/access_token"));
     llUrl.searchParams.set("grant_type", "fb_exchange_token");
     llUrl.searchParams.set("client_id", META_APP_ID);
     llUrl.searchParams.set("client_secret", META_APP_SECRET);
@@ -68,7 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const expiresIn = llData.expires_in || 5184000;
     const tokenExpiresAt = new Date(Date.now() + expiresIn * 1000);
 
-    const pagesUrl = new URL("https://graph.facebook.com/v19.0/me/accounts");
+    const pagesUrl = new URL(metaGraphUrl("me/accounts"));
     pagesUrl.searchParams.set("access_token", longLivedToken);
     pagesUrl.searchParams.set("fields", "id,name,access_token,instagram_business_account{id}");
 
@@ -80,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await mongooseConnect();
 
     // fetch ad accounts
-    const adAccountsUrl = new URL("https://graph.facebook.com/v19.0/me/adaccounts");
+    const adAccountsUrl = new URL(metaGraphUrl("me/adaccounts"));
     adAccountsUrl.searchParams.set("access_token", longLivedToken);
 
     const adResp = await fetch(adAccountsUrl.toString());
@@ -116,7 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (firstPage?.id && firstPage?.access_token) {
       try {
         const subResp = await fetch(
-          `https://graph.facebook.com/v19.0/${firstPage.id}/subscribed_apps`,
+          metaGraphUrl(`${firstPage.id}/subscribed_apps`),
           {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },

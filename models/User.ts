@@ -325,6 +325,10 @@ export interface IUser {
   metaPageName?: string;
   metaInstagramId?: string;
   metaAdAccountId?: string;
+  metaDatasetId?: string;
+  metaCapiAdAccountId?: string;
+  metaCapiEnabled?: boolean;
+  metaCapiDailyCap?: number;
   metaLeadTypeAssets?: {
     [leadType: string]: {
       pageId?: string;
@@ -686,6 +690,10 @@ const UserSchema = new Schema<IUser>({
   metaPageName: { type: String, default: "" },
   metaInstagramId: { type: String, default: "" },
   metaAdAccountId: { type: String, default: "" },
+  metaDatasetId: { type: String, default: "" },
+  metaCapiAdAccountId: { type: String, default: "" },
+  metaCapiEnabled: { type: Boolean, default: false },
+  metaCapiDailyCap: { type: Number, default: 1000, min: 1, max: 100000 },
   metaLeadTypeAssets: {
     type: Map,
     of: new Schema(
@@ -721,6 +729,8 @@ const UserSchema = new Schema<IUser>({
       "missingLeadAdsEligibility",
       "missingPage",
       "missingAdAccount",
+      "securityVerificationRequired",
+      "missingBusinessInformation",
       "cooldown",
       "error",
     ],

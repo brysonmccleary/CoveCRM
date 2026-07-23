@@ -18,6 +18,7 @@ const GenerationHintsSchema = new Schema(
 const FBGlobalAdPatternSchema = new Schema(
   {
     leadType: { type: String, required: true, index: true },
+    stateCode: { type: String, default: "", index: true },
     sourceType: { type: String, default: "facebook_lead", index: true },
     winningFamilyId: { type: String, default: "" },
     variationType: { type: String, default: "" },

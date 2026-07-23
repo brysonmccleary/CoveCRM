@@ -136,7 +136,6 @@ const CalendarPanel = ({ showBanner }: { showBanner: boolean }) => (
       <CalendarBookings />
     </div>
     <div>
-      <h2 className="text-xl font-semibold mb-2">Book a New Appointment</h2>
       <BookingForm />
     </div>
   </div>
@@ -620,19 +619,10 @@ function DashboardOverview() {
   };
 
   return (
-    <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12, background: "#0b1220", minHeight: "100vh" }}>
+    <div className="flex min-h-screen flex-col gap-3 bg-[#0b1220] px-3 py-4 sm:px-5">
 
       {/* ── TOP BAR ── */}
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        background: "#24324a",
-        border: "1px solid rgba(255,255,255,0.1)",
-        borderRadius: 10,
-        padding: "10px 14px",
-        gap: 12,
-      }}>
+      <div className="flex flex-col gap-3 rounded-[10px] border border-white/10 bg-[#24324a] p-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
         <div style={{ background: "#0b1220", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: 4, display: "flex", gap: 3 }}>
           {([{ id: "dial" as const, label: "📞 Dial Overview" }]).map((option) => (
             <button
@@ -682,7 +672,7 @@ function DashboardOverview() {
       {view === "dial" && (
         <>
           {/* ── KPI CARDS ── */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+          <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-4">
             {dialCards.map((c) => (
               <div
                 key={c.label}
@@ -790,6 +780,8 @@ function DashboardOverview() {
                     const connectH = maxDials > 0 ? Math.max(3, ((point.connects || 0) / maxDials) * usableHeight) : 3;
                     const label = point.label || point.date || "";
                     const shortLabel = label.length > 6 ? label.slice(-5) : label;
+                    const showAxisLabel =
+                      range !== "last30" || idx === 0 || idx === dailySeries.length - 1 || idx % 5 === 0;
                     return (
                       <div
                         key={idx}
@@ -847,7 +839,7 @@ function DashboardOverview() {
                           transform: "translateX(-50%)",
                           whiteSpace: "nowrap",
                         }}>
-                          {shortLabel}
+                          {showAxisLabel ? shortLabel : ""}
                         </span>
                       </div>
                     );

@@ -8,6 +8,23 @@ import IncomingCallBanner from "@/components/IncomingCallBanner"; // ← NEW
 import Link from "next/link";
 import { useRouter } from "next/router";
 import SupportChatModal from "@/components/SupportChatModal";
+import {
+  FaBullhorn,
+  FaCalendarAlt,
+  FaChevronDown,
+  FaChevronRight,
+  FaCog,
+  FaComments,
+  FaFolderOpen,
+  FaHome,
+  FaPhoneAlt,
+  FaRobot,
+  FaSignOutAlt,
+  FaChartLine,
+  FaUsers,
+} from "react-icons/fa";
+import { HiOutlineSparkles } from "react-icons/hi2";
+import type { IconType } from "react-icons";
 
 const ADMIN_EMAIL = "bryson.mccleary1@gmail.com";
 
@@ -25,28 +42,47 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [unreadCount, setUnreadCount] = useState(0);
   const [nudges, setNudges] = useState<Nudge[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const isAdmin = session?.user?.email?.toLowerCase() === ADMIN_EMAIL;
 
-  const links = [
-    { name: "Home", path: "/dashboard?tab=home" },
-    { name: "Folders", path: "/dashboard?tab=leads" },
-    { name: "Drip Campaigns", path: "/dashboard?tab=drip-campaigns" },
-    { name: "Conversations", path: "/dashboard?tab=conversations" },
-    { name: "Calendar", path: "/dashboard?tab=calendar" },
-    { name: "Numbers", path: "/dashboard?tab=numbers" },
-    ...(isAdmin ? [{ name: "FB Leads", path: "/facebook-leads" }] : []),
-    // gated below
-    { name: "Team", path: "/team" },
-    { name: "Settings", path: "/dashboard?tab=settings" },
-    ...(isAdmin ? [
-      { name: "Recruiting", path: "/recruiting" },
-      { name: "Admin: AI Copilot", path: "/admin/ai-copilot" },
-      { name: "Admin: Prospecting", path: "/admin/prospecting" },
-      { name: "Admin: Site Intelligence", path: "/admin/site-intelligence" },
-    ] : []),
+  type NavItem = { name: string; path: string; icon: IconType };
+  const navGroups: { label: string; items: NavItem[] }[] = [
+    {
+      label: "CRM",
+      items: [
+        { name: "Home", path: "/dashboard?tab=home", icon: FaHome },
+        { name: "Folders", path: "/dashboard?tab=leads", icon: FaFolderOpen },
+        { name: "Calendar", path: "/dashboard?tab=calendar", icon: FaCalendarAlt },
+      ],
+    },
+    {
+      label: "Communication",
+      items: [
+        { name: "Conversations", path: "/dashboard?tab=conversations", icon: FaComments },
+        { name: "Drip Campaigns", path: "/dashboard?tab=drip-campaigns", icon: HiOutlineSparkles },
+        { name: "Numbers", path: "/dashboard?tab=numbers", icon: FaPhoneAlt },
+      ],
+    },
+    {
+      label: "Workspace",
+      items: [
+        ...(isAdmin ? [{ name: "FB Leads", path: "/facebook-leads", icon: FaBullhorn }] : []),
+        { name: "Team", path: "/team", icon: FaUsers },
+        { name: "Settings", path: "/dashboard?tab=settings", icon: FaCog },
+      ],
+    },
   ];
+
+  const adminLinks: NavItem[] = isAdmin
+    ? [
+        { name: "Recruiting", path: "/recruiting", icon: FaUsers },
+        { name: "Social Insights", path: "/recruiting/insights", icon: FaChartLine },
+        { name: "AI Copilot", path: "/admin/ai-copilot", icon: FaRobot },
+        { name: "Site Intelligence", path: "/admin/site-intelligence", icon: FaBullhorn },
+      ]
+    : [];
 
   const fetchUnread = async () => {
     try {
@@ -106,29 +142,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     };
   }, [session?.user?.email]);
 
-  const badge = (count: number) =>
-    count > 0 && (
-      <span className="ml-2 text-xs font-bold bg-red-600 text-white rounded-full px-2 py-0.5">
-        {count > 99 ? "99+" : count}
-      </span>
-    );
-
-  const NAV_ICONS: Record<string, string> = {
-    "Home": "🏠",
-    "Folders": "📁",
-    "Drip Campaigns": "📧",
-    "Conversations": "💬",
-    "Calendar": "📅",
-    "Numbers": "📞",
-    "FB Leads": "📣",
-    "Team": "👥",
-    "Settings": "⚙️",
-    "Recruiting": "🎯",
-    "Admin: AI Copilot": "🤖",
-    "Admin: Prospecting": "🔍",
-    "Admin: Site Intelligence": "📊",
-  };
-
   const isActivePath = (path: string) => {
     if (router.asPath === path) return true;
     if (path.startsWith("/dashboard?tab=")) {
@@ -149,16 +162,47 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return "dashboard";
   })();
 
+  useEffect(() => {
+    if (adminLinks.some((link) => isActivePath(link.path))) setAdminOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.asPath]);
+
+  const renderNavLink = (link: NavItem) => {
+    const active = isActivePath(link.path);
+    const Icon = link.icon;
+    return (
+      <Link
+        key={link.name}
+        href={link.path}
+        title={link.name}
+        aria-current={active ? "page" : undefined}
+        className={`group relative flex min-h-10 items-center justify-center gap-3 rounded-lg border-l-2 px-3 text-sm font-semibold transition lg:justify-start ${
+          active
+            ? "border-blue-600 bg-[#1a2535] text-slate-100"
+            : "border-transparent text-slate-400 hover:bg-[#1e2d45] hover:text-slate-100"
+        }`}
+      >
+        <Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+        <span className="hidden min-w-0 flex-1 truncate lg:block">{link.name}</span>
+        {link.name === "Conversations" && unreadCount > 0 && (
+          <span
+            className="absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white lg:static lg:text-xs"
+            aria-label={`${unreadCount} unread conversations`}
+          >
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        )}
+      </Link>
+    );
+  };
+
   return (
     <div className="flex min-h-screen text-white">
       {/* Incoming Call Banner overlay (fixed; safe anywhere) */}
 
-      <div
-        className="p-4 bg-[#0f172a] flex flex-col justify-between border-r border-[#1e293b]"
-        style={{ width: 240, minWidth: 240, flexShrink: 0 }}
-      >
+      <aside className="sticky top-0 flex h-screen w-[72px] shrink-0 flex-col justify-between overflow-y-auto border-r border-[#1e293b] bg-[#0f172a] px-2 py-4 lg:w-[240px] lg:p-4">
         <div>
-          <div className="flex items-center gap-2 mb-6">
+          <div className="mb-6 flex items-center justify-center gap-2 lg:justify-start">
             <Image
               src="/logo.png"
               alt="Cove CRM Logo"
@@ -167,49 +211,45 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               className="rounded"
               priority
             />
-            <h1 className="text-xl font-bold text-white">Cove CRM</h1>
+            <h1 className="hidden text-xl font-bold text-white lg:block">Cove CRM</h1>
           </div>
-          <nav className="space-y-1">
-            {links.map((link) => (
-              <a
-                key={link.name}
-                href={link.path}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "6px 12px",
-                  borderRadius: 8,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: isActivePath(link.path) ? "#f1f5f9" : "#cbd5e1",
-                  textDecoration: "none",
-                  transition: "background 0.15s",
-                  borderLeft: isActivePath(link.path) ? "2px solid #2563eb" : "2px solid transparent",
-                  paddingLeft: isActivePath(link.path) ? 10 : 12,
-                  background: isActivePath(link.path) ? "#1a2535" : "transparent",
-                }}
-                onMouseEnter={(e) => { if (!isActivePath(link.path)) e.currentTarget.style.background = "#1e2d45"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = isActivePath(link.path) ? "#1a2535" : "transparent"; }}
-              >
-                <span style={{ fontSize: 15, width: 20, textAlign: "center", flexShrink: 0 }}>
-                  {NAV_ICONS[link.name] || "•"}
-                </span>
-                <span>{link.name}</span>
-                {link.name === "Conversations" && unreadCount > 0 && badge(unreadCount)}
-              </a>
+          <nav className="space-y-4" aria-label="Main navigation">
+            {navGroups.map((group) => (
+              <div key={group.label}>
+                <div className="mb-1 hidden px-3 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-600 lg:block">
+                  {group.label}
+                </div>
+                <div className="space-y-1">{group.items.map(renderNavLink)}</div>
+              </div>
             ))}
+
+            {adminLinks.length > 0 && (
+              <div className="border-t border-white/5 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setAdminOpen((open) => !open)}
+                  className="flex min-h-10 w-full items-center justify-center gap-3 rounded-lg px-3 text-sm font-semibold text-slate-400 transition hover:bg-[#1e2d45] hover:text-slate-100 lg:justify-start"
+                  aria-expanded={adminOpen}
+                >
+                  <FaCog aria-hidden="true" className="h-4 w-4 shrink-0" />
+                  <span className="hidden flex-1 text-left lg:block">Admin</span>
+                  <span className="hidden lg:block">{adminOpen ? <FaChevronDown /> : <FaChevronRight />}</span>
+                </button>
+                {adminOpen && <div className="mt-1 space-y-1 lg:pl-2">{adminLinks.map(renderNavLink)}</div>}
+              </div>
+            )}
           </nav>
         </div>
         <div className="mt-6 space-y-3">
           <button
             type="button"
             onClick={() => setHelpOpen(true)}
-            className="w-full rounded-xl border border-white/10 bg-gradient-to-r from-[#7c3aed] to-[#6366f1] px-4 py-3 text-left text-sm font-semibold text-white shadow-lg transition hover:opacity-95"
+            className="flex h-10 w-full items-center justify-center rounded-xl border border-white/10 bg-gradient-to-r from-[#7c3aed] to-[#6366f1] px-2 text-sm font-semibold text-white shadow-lg transition hover:opacity-95 lg:h-auto lg:justify-start lg:px-4 lg:py-3 lg:text-left"
+            aria-label="Ask Assistant"
           >
             <div className="flex items-start gap-3">
-              <span className="text-base leading-none">✨</span>
-              <div className="min-w-0">
+              <HiOutlineSparkles className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <div className="hidden min-w-0 lg:block">
                 <div>Ask Assistant</div>
                 <div className="mt-0.5 text-xs font-medium text-white/75">
                   AI help, support, and answers
@@ -223,17 +263,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               onClick={() => signOut({ callbackUrl: "/auth/signin" })}
               className="block px-1 text-left text-sm text-red-400 transition hover:text-red-300"
             >
-              Log Out
+              <span className="hidden lg:inline">Log Out</span>
+              <FaSignOutAlt className="h-4 w-4 lg:hidden" aria-hidden="true" />
             </button>
           </div>
         </div>
-      </div>
+      </aside>
 
       <main
         className="flex-1 overflow-y-auto flex flex-col"
         style={{ backgroundColor: "#1e293b", color: "#ffffff" }}
       >
-        <div className="px-6 py-8 flex-1">
+        <div className="flex-1 px-3 py-5 sm:px-5 lg:px-6 lg:py-8">
           {children}
         </div>
       </main>

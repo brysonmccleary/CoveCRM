@@ -236,6 +236,7 @@ export default function LeadsPanel() {
   const [deleteFolderTarget, setDeleteFolderTarget] = useState<any | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [openFolderMenu, setOpenFolderMenu] = useState<string | null>(null);
+  const [folderSettingsId, setFolderSettingsId] = useState<string | null>(null);
   const [aiToggleErrors, setAiToggleErrors] = useState<Record<string, boolean>>({});
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [renameFolderName, setRenameFolderName] = useState("");
@@ -1235,7 +1236,7 @@ export default function LeadsPanel() {
                     ) : (
                       <span className="truncate text-sm font-semibold text-white">{folder.name}</span>
                     )}
-                    {renamingFolderId !== String(folder._id) && (
+                    {folderSettingsId === String(folder._id) && renamingFolderId !== String(folder._id) && (
                       <span
                         role="button"
                         tabIndex={0}
@@ -1282,6 +1283,26 @@ export default function LeadsPanel() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${
+                      folder.aiFirstCallEnabled
+                        ? "border-green-700/60 bg-green-900/30 text-green-300"
+                        : "border-slate-600 bg-slate-900/60 text-gray-400"
+                    }`}>
+                      {folder.aiFirstCallEnabled ? "AI calling on" : "AI calling off"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFolderSettingsId(folderSettingsId === String(folder._id) ? null : String(folder._id));
+                      }}
+                      className="rounded-lg border border-white/10 bg-slate-900/60 px-3 py-1.5 text-xs font-semibold text-gray-300 transition hover:bg-slate-800 hover:text-white"
+                      aria-expanded={folderSettingsId === String(folder._id)}
+                    >
+                      {folderSettingsId === String(folder._id) ? "Hide settings" : "Settings"}
+                    </button>
+                    {folderSettingsId === String(folder._id) && (
+                      <>
                     <select
                       value={folder.aiScriptKey || "default"}
                       onClick={(e) => e.stopPropagation()}
@@ -1344,6 +1365,8 @@ export default function LeadsPanel() {
                     </span>
                     {aiToggleErrors[folder._id] && (
                       <span className="text-xs font-semibold text-red-400">Save failed</span>
+                    )}
+                      </>
                     )}
 
                     <div className="relative">

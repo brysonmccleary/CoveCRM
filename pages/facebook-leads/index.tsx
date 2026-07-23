@@ -45,6 +45,15 @@ interface FBCampaign {
   metaAdsetId?: string | null;
   metaLastSyncedAt?: string | null;
   licensedStates?: string[];
+  landingPageConfig?: {
+    imageUrl?: string;
+  };
+  ads?: Array<{
+    variantId?: string;
+    headline?: string;
+    imageUrl?: string;
+    status?: string;
+  }>;
 }
 
 interface FBLeadEntryRow {
@@ -1623,6 +1632,45 @@ function AIManagerWidget() {
 
 // ── Section D: Campaign Dashboard ─────────────────────────────────────────────
 
+type PerformanceMetric = {
+  label: string;
+  value: string | number;
+};
+
+function PerformanceGroup({
+  title,
+  metrics,
+  accentClass,
+}: {
+  title: string;
+  metrics: PerformanceMetric[];
+  accentClass: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-xl border border-white/10 bg-[#0f172a]/80 p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <span className={`h-1.5 w-1.5 rounded-full ${accentClass}`} aria-hidden="true" />
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">{title}</p>
+      </div>
+      <div
+        className="grid divide-x divide-white/10"
+        style={{ gridTemplateColumns: `repeat(${metrics.length}, minmax(0, 1fr))` }}
+      >
+        {metrics.map((metric) => (
+          <div key={metric.label} className="min-w-0 px-3 first:pl-0 last:pr-0">
+            <p className="min-h-7 text-[10px] leading-tight text-gray-500" title={metric.label}>
+              {metric.label}
+            </p>
+            <p className="mt-1 truncate text-lg font-semibold tabular-nums text-white" title={String(metric.value)}>
+              {metric.value}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CampaignCard({
   campaign,
   onUpdate,
@@ -1639,6 +1687,7 @@ function CampaignCard({
   const [deleting, setDeleting] = useState(false);
   const [showManage, setShowManage] = useState(false);
   const [exportingCSV, setExportingCSV] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
 
   // Update Stats inline form
   const [showStatsForm, setShowStatsForm] = useState(false);
@@ -1667,6 +1716,19 @@ function CampaignCard({
     : 0;
 
   const cplBenchmark = CPL_BENCHMARKS[campaign.leadType] ?? 20;
+  const campaignImageUrl =
+    campaign.ads?.find((ad) => ad.imageUrl?.trim())?.imageUrl?.trim() ||
+    campaign.landingPageConfig?.imageUrl?.trim() ||
+    "";
+  const appointments = Number(campaign.appointments || 0);
+  const campaignSales = Number(campaign.sales || 0);
+  const costPerAppointment = Number(campaign.costPerAppointment || 0) ||
+    (campaign.totalSpend > 0 && appointments > 0 ? campaign.totalSpend / appointments : 0);
+  const costPerSale = Number(campaign.costPerSale || 0) ||
+    (campaign.totalSpend > 0 && campaignSales > 0 ? campaign.totalSpend / campaignSales : 0);
+  const campaignRoas = campaign.totalSpend > 0 && Number(campaign.totalGrossRevenue || 0) > 0
+    ? Number(campaign.totalGrossRevenue || 0) / campaign.totalSpend
+    : 0;
   type AlertColor = "red" | "yellow" | "green";
   let aiAlert: { color: AlertColor; message: string } | null = null;
   if (campaign.totalSpend > 50 && campaign.totalLeads === 0) {
@@ -1848,10 +1910,35 @@ function CampaignCard({
 
   return (
     <>
-      <div className="bg-[#1e293b] border border-gray-700 rounded-xl p-5 space-y-4">
-        <div className="flex items-start justify-between">
-          <div>
-            <h3 className="font-bold text-white text-lg">{campaign.campaignName}</h3>
+      <div className="space-y-4 rounded-2xl border border-white/10 bg-[#1e293b] p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 gap-4">
+            {campaignImageUrl && !imageFailed ? (
+              <a
+                href={campaignImageUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="group relative aspect-[4/5] w-24 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-[#0f172a] sm:w-28"
+                title="Open campaign creative"
+              >
+                <img
+                  src={campaignImageUrl}
+                  alt={`${campaign.campaignName} ad creative`}
+                  className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.03]"
+                  onError={() => setImageFailed(true)}
+                />
+                <span className="absolute inset-x-2 bottom-2 rounded-md bg-black/65 px-2 py-1 text-center text-[10px] font-medium text-white opacity-0 backdrop-blur transition group-hover:opacity-100">
+                  View creative
+                </span>
+              </a>
+            ) : (
+              <div className="flex aspect-[4/5] w-24 shrink-0 flex-col items-center justify-center rounded-xl border border-dashed border-white/15 bg-[#0f172a]/70 px-2 text-center sm:w-28">
+                <span className="text-xl" aria-hidden="true">🖼️</span>
+                <span className="mt-1 text-[10px] leading-tight text-gray-500">Creative preview unavailable</span>
+              </div>
+            )}
+            <div className="min-w-0 pt-0.5">
+            <h3 className="text-lg font-bold text-white">{campaign.campaignName}</h3>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               <span className="bg-blue-900/50 text-blue-300 text-xs px-2 py-0.5 rounded">
                 {LEAD_TYPE_LABEL[campaign.leadType] ?? campaign.leadType}
@@ -1875,6 +1962,12 @@ function CampaignCard({
               ) : campaign.googleSheetUrl ? (
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-900/30 text-yellow-300 border border-yellow-700/30">Sheet — Needs Validation</span>
               ) : null}
+            </div>
+            <p className="mt-3 max-w-xl text-xs leading-relaxed text-gray-500">
+              ${Number(campaign.dailyBudget || 0).toLocaleString()}/day
+              {campaign.licensedStates?.length ? ` · ${campaign.licensedStates.length} licensed states` : ""}
+              {campaign.createdAt ? ` · Created ${new Date(campaign.createdAt).toLocaleDateString()}` : ""}
+            </p>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -1917,18 +2010,37 @@ function CampaignCard({
           </div>
         )}
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            { label: "Total Leads", value: campaign.totalLeads },
-            { label: "Total Spend", value: `$${campaign.totalSpend.toFixed(2)}` },
-            { label: "CPL", value: campaign.cpl > 0 ? `$${campaign.cpl.toFixed(2)}` : "—" },
-            { label: "Clicks", value: campaign.totalClicks },
-          ].map((stat) => (
-            <div key={stat.label} className="bg-[#0f172a] rounded-lg p-3 text-center">
-              <p className="text-xs text-gray-400">{stat.label}</p>
-              <p className="text-lg font-bold text-white">{stat.value}</p>
-            </div>
-          ))}
+        <div className="grid gap-3 xl:grid-cols-[1fr_1.25fr_1.2fr]">
+          <PerformanceGroup
+            title="Acquisition"
+            accentClass="bg-blue-400"
+            metrics={[
+              { label: "Spend", value: campaign.totalSpend > 0 ? `$${campaign.totalSpend.toFixed(2)}` : "—" },
+              { label: "Leads", value: campaign.totalLeads.toLocaleString() },
+              { label: "CPL", value: campaign.cpl > 0 ? `$${campaign.cpl.toFixed(2)}` : "—" },
+              { label: "Clicks", value: campaign.totalClicks.toLocaleString() },
+            ]}
+          />
+          <PerformanceGroup
+            title="Conversion"
+            accentClass="bg-violet-400"
+            metrics={[
+              { label: "Booked", value: appointments.toLocaleString() },
+              { label: "Cost / Appt", value: costPerAppointment > 0 ? `$${costPerAppointment.toFixed(0)}` : "—" },
+              { label: "Sales", value: campaignSales.toLocaleString() },
+              { label: "Cost / Sale", value: costPerSale > 0 ? `$${costPerSale.toFixed(0)}` : "—" },
+            ]}
+          />
+          <PerformanceGroup
+            title="Revenue"
+            accentClass="bg-emerald-400"
+            metrics={[
+              { label: "Total AP", value: fmt$(Number(campaign.totalAnnualPremium || 0)) },
+              { label: "Gross Rev", value: fmt$(Number(campaign.totalGrossRevenue || 0)) },
+              { label: "Advance Rev", value: fmt$(Number(campaign.totalAdvanceRevenue || 0)) },
+              { label: "ROAS", value: campaignRoas > 0 ? `${campaignRoas.toFixed(2)}x` : "—" },
+            ]}
+          />
         </div>
 
         {/* Inline AI alert banner */}
@@ -2304,29 +2416,44 @@ function HubMetricsRow({ campaigns }: { campaigns: FBCampaign[] }) {
   const cpl = leads > 0 && spend > 0 ? spend / leads : 0;
   const roas = spend > 0 && grossRevenue > 0 ? grossRevenue / spend : 0;
 
-  const cards = [
-    { label: "Spend", value: spend > 0 ? `$${spend.toFixed(2)}` : "—" },
-    { label: "Leads", value: leads.toLocaleString() },
-    { label: "CPL", value: cpl > 0 ? `$${cpl.toFixed(2)}` : "—" },
-    { label: "Booked", value: booked.toLocaleString() },
-    { label: "Cost / Appt", value: totalCostPerAppt > 0 ? `$${totalCostPerAppt.toFixed(0)}` : "—" },
-    { label: "Sales", value: sales.toLocaleString() },
-    { label: "Cost / Sale", value: totalCostPerSale > 0 ? `$${totalCostPerSale.toFixed(0)}` : "—" },
-    { label: "Total AP", value: fmt$(totalAP) },
-    { label: "Gross Rev", value: fmt$(grossRevenue) },
-    { label: "Advance Rev", value: fmt$(advanceRevenue) },
-    { label: "ROAS", value: roas > 0 ? `${roas.toFixed(2)}x` : "—" },
-  ];
-
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11">
-      {cards.map((card) => (
-        <div key={card.label} className="rounded-xl border border-white/10 bg-[#0f172a] p-3 text-center">
-          <p className="text-xs uppercase tracking-wide text-gray-400 leading-tight">{card.label}</p>
-          <p className="mt-1 text-lg font-bold text-white">{card.value}</p>
-        </div>
-      ))}
-    </div>
+    <section aria-labelledby="performance-overview-heading" className="space-y-3">
+      <div>
+        <h2 id="performance-overview-heading" className="text-base font-semibold text-white">Performance overview</h2>
+        <p className="mt-0.5 text-xs text-gray-500">Acquisition, conversion, and revenue across all campaigns.</p>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-[0.9fr_1.15fr_1.15fr]">
+        <PerformanceGroup
+          title="Acquisition"
+          accentClass="bg-blue-400"
+          metrics={[
+            { label: "Spend", value: spend > 0 ? `$${spend.toFixed(2)}` : "—" },
+            { label: "Leads", value: leads.toLocaleString() },
+            { label: "CPL", value: cpl > 0 ? `$${cpl.toFixed(2)}` : "—" },
+          ]}
+        />
+        <PerformanceGroup
+          title="Conversion"
+          accentClass="bg-violet-400"
+          metrics={[
+            { label: "Booked", value: booked.toLocaleString() },
+            { label: "Cost / Appt", value: totalCostPerAppt > 0 ? `$${totalCostPerAppt.toFixed(0)}` : "—" },
+            { label: "Sales", value: sales.toLocaleString() },
+            { label: "Cost / Sale", value: totalCostPerSale > 0 ? `$${totalCostPerSale.toFixed(0)}` : "—" },
+          ]}
+        />
+        <PerformanceGroup
+          title="Revenue"
+          accentClass="bg-emerald-400"
+          metrics={[
+            { label: "Total AP", value: fmt$(totalAP) },
+            { label: "Gross Rev", value: fmt$(grossRevenue) },
+            { label: "Advance Rev", value: fmt$(advanceRevenue) },
+            { label: "ROAS", value: roas > 0 ? `${roas.toFixed(2)}x` : "—" },
+          ]}
+        />
+      </div>
+    </section>
   );
 }
 
@@ -2356,6 +2483,7 @@ export default function FacebookLeadsPage() {
   const [campaignFilter, setCampaignFilter] = useState<string>("");
   const [selectedLeadType, setSelectedLeadType] = useState<string>("final_expense");
   const [metaNotice, setMetaNotice] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [hubTab, setHubTab] = useState<"setup" | "campaigns" | "leads">("setup");
   const metaQueryHandled = useRef(false);
 
   useEffect(() => {
@@ -2418,6 +2546,27 @@ export default function FacebookLeadsPage() {
   return (
     <DashboardLayout>
       <div className="mx-auto max-w-6xl space-y-8 p-4 sm:p-6">
+        <div className="sticky top-0 z-30 -mx-2 flex gap-1 rounded-xl border border-white/10 bg-[#111827]/95 p-1.5 shadow-xl backdrop-blur sm:mx-0">
+          {([
+            { id: "setup", label: "Setup" },
+            { id: "campaigns", label: "Campaigns" },
+            { id: "leads", label: "Lead Feed" },
+          ] as const).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setHubTab(item.id)}
+              aria-pressed={hubTab === item.id}
+              className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition sm:flex-none ${
+                hubTab === item.id
+                  ? "bg-blue-600 text-white"
+                  : "text-gray-400 hover:bg-white/5 hover:text-white"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
         {metaNotice && (
           <div
             className={`flex items-start justify-between gap-4 rounded-xl border p-4 text-sm ${
@@ -2436,11 +2585,15 @@ export default function FacebookLeadsPage() {
             </button>
           </div>
         )}
-        <FacebookOnboardingFlow
-          selectedLeadType={selectedLeadType}
-          onLeadTypeChange={setSelectedLeadType}
-        />
+        {hubTab === "setup" && (
+          <FacebookOnboardingFlow
+            selectedLeadType={selectedLeadType}
+            onLeadTypeChange={setSelectedLeadType}
+          />
+        )}
 
+        {hubTab === "campaigns" && (
+          <>
         <section className="rounded-2xl border border-blue-500/20 bg-[#0f172a] p-5 shadow-lg sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -2505,7 +2658,10 @@ export default function FacebookLeadsPage() {
         <section className="space-y-3">
           <AIManagerWidget />
         </section>
+          </>
+        )}
 
+        {hubTab === "leads" && (
         <section className="space-y-3">
           <div>
             <h2 className="text-lg font-bold text-white">📋 Lead Feed</h2>
@@ -2513,6 +2669,7 @@ export default function FacebookLeadsPage() {
           </div>
           <LeadFeed />
         </section>
+        )}
       </div>
     </DashboardLayout>
   );

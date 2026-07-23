@@ -4,6 +4,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
+import { metaDialogUrl } from "@/lib/meta/graphApi";
 
 const META_APP_ID = process.env.META_APP_ID || "";
 const BASE_URL = (
@@ -35,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const userId = String((session.user as any).id || session.user.email);
 
-  const oauthUrl = new URL("https://www.facebook.com/v19.0/dialog/oauth");
+  const oauthUrl = new URL(metaDialogUrl("dialog/oauth"));
   oauthUrl.searchParams.set("client_id", META_APP_ID);
   oauthUrl.searchParams.set("redirect_uri", redirectUri);
   oauthUrl.searchParams.set("scope", scope);

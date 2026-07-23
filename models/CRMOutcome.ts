@@ -8,6 +8,11 @@ const CRMOutcomeSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     userEmail: { type: String, required: true, index: true },
     leadId: { type: Schema.Types.ObjectId, ref: "Lead" },
+    leadEventId: { type: String, default: "", index: true },
+    metaAdId: { type: String, default: "", index: true },
+    metaCreativeId: { type: String, default: "" },
+    variantId: { type: String, default: "", index: true },
+    creativeFamily: { type: String, default: "", index: true },
     date: { type: String, required: true }, // "YYYY-MM-DD"
 
     // Disposition outcome counts
@@ -29,6 +34,7 @@ const CRMOutcomeSchema = new Schema(
 
 CRMOutcomeSchema.index({ campaignId: 1, date: 1 });
 CRMOutcomeSchema.index({ userId: 1, date: 1 });
+CRMOutcomeSchema.index({ userEmail: 1, campaignId: 1, date: 1, metaAdId: 1, creativeFamily: 1 });
 
 export type CRMOutcome = InferSchemaType<typeof CRMOutcomeSchema>;
 export default (models.CRMOutcome as mongoose.Model<CRMOutcome>) ||

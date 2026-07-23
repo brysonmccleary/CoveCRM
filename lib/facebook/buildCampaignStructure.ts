@@ -1,5 +1,6 @@
 import { buildMetaStateTargeting } from "@/lib/facebook/geo/metaTargeting";
 import { validateStates } from "@/lib/facebook/guardrails";
+import { requireDailyBudgetCents } from "@/lib/facebook/launchFingerprint";
 
 export type CampaignStructureCreative = {
   primaryText: string;
@@ -14,7 +15,7 @@ export type CampaignStructureCreative = {
 // Interest names for audience segments. IDs must be verified via the Meta API's
 // /search?type=adinterest endpoint before use. Names alone may be resolved by Meta
 // but ID-based targeting is more reliable.
-// TODO: call GET https://graph.facebook.com/v19.0/search?type=adinterest&q=<name>&access_token=<token>
+// TODO: call the centrally versioned Meta Graph /search?type=adinterest endpoint
 // to obtain verified numeric interest IDs for each name before production use.
 const AUDIENCE_SEGMENT_INTERESTS: Record<string, { name: string }[]> = {
   veteran: [
@@ -39,6 +40,7 @@ export function buildCampaignStructure(input: {
   dailyBudgetCents: number;
   creatives: CampaignStructureCreative[];
   audienceSegment?: string;
+  performanceGoal?: "LEAD_GENERATION" | "QUALITY_LEAD";
 }) {
   const licensedStates = validateStates(input.licensedStates);
   const creatives = (Array.isArray(input.creatives) ? input.creatives : [])
@@ -71,12 +73,14 @@ export function buildCampaignStructure(input: {
     },
     adSet: {
       name: `${String(input.campaignName || "").trim()} Ad Set`,
-      daily_budget: Math.max(500, Math.round(Number(input.dailyBudgetCents) || 0)),
-      optimization_goal: "LEAD_GENERATION",
+      daily_budget: requireDailyBudgetCents(input.dailyBudgetCents),
+      optimization_goal: input.performanceGoal === "QUALITY_LEAD" ? "QUALITY_LEAD" : "LEAD_GENERATION",
       billing_event: "IMPRESSIONS",
       bid_strategy: "LOWEST_COST_WITHOUT_CAP",
       status: "PAUSED",
       targeting: segmentTargeting,
+      // Feed-only until a dedicated 1080x1920 asset is supplied via asset_feed_spec.
+      // TODO(meta-stories): add placement-specific Stories/Reels creative before enabling those positions.
     },
     ads: creatives.map((creative, index) => ({
       name: `${String(input.campaignName || "").trim()} Ad ${index + 1}`,

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>CoveCRM Social Companion</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>CoveCRM Social Companion</h1>
+      <p id="status" class="status">Loading…</p>
+      <section id="pairing" hidden>
+        <label>CoveCRM URL<input id="apiBase" value="https://www.covecrm.com" /></label>
+        <label>One-time pairing code<input id="pairingCode" maxlength="12" autocomplete="off" /></label>
+        <label class="agreement">
+          <input id="consent" type="checkbox" />
+          <span>I authorize CoveCRM to run the recruiting actions I configure while this companion is enabled. I understand it operates in my signed-in browser, may send messages and engagement actions, never needs my social password or login code, and can be paused at any time.</span>
+        </label>
+        <button id="pair">Pair companion</button>
+      </section>
+      <section id="controls" hidden>
+        <p id="companionLabel"></p>
+        <label class="switch"><input id="enabled" type="checkbox" /><span>Run queued actions on this browser</span></label>
+        <button id="poll" class="secondary">Check queue now</button>
+        <p class="fineprint">Recruiting runs in a dedicated minimized browser window and never changes your active tab. Keep LinkedIn and Instagram signed in normally; CoveCRM never receives those credentials or sessions.</p>
+      </section>
+      <p id="error" class="error"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

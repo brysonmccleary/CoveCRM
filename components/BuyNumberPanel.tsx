@@ -213,6 +213,11 @@ export default function BuyNumberPanel() {
       {error && <p className="text-red-600">Error: {error}</p>}
 
       <h3 className="text-lg font-semibold mt-4">Available Numbers</h3>
+      {!loading && availableNumbers.length === 0 && (
+        <div className="rounded-lg border border-dashed border-white/10 bg-[#0f172a]/40 px-4 py-5 text-sm text-gray-400">
+          Enter a three-digit area code to search for numbers available to purchase.
+        </div>
+      )}
       <ul className="space-y-2">
         {availableNumbers.map((num) => (
           <li key={num.phoneNumber} className="flex justify-between items-center border p-2 rounded">
@@ -320,17 +325,28 @@ export default function BuyNumberPanel() {
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={() => handleSelectDelete(num)}
-                  className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded cursor-pointer"
-                >
-                  Delete
-                </button>
+                <details className="relative">
+                  <summary className="cursor-pointer list-none rounded border border-white/10 bg-[#1e293b] px-2 py-1 text-sm text-gray-300 hover:bg-[#2d3f55]">
+                    Actions
+                  </summary>
+                  <div className="absolute right-0 z-20 mt-2 w-40 rounded-lg border border-white/10 bg-[#0f172a] p-1 shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectDelete(num)}
+                      className="w-full rounded px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10"
+                    >
+                      Release number
+                    </button>
+                  </div>
+                </details>
               </div>
             </div>
             <div className="text-sm text-gray-600 mt-1">
               <p>
-                Status: <span className="capitalize">{num.subscriptionStatus}</span>
+                Status:{" "}
+                <span className="capitalize" title={num.subscriptionStatus === "unknown" ? "Billing status is not currently available." : undefined}>
+                  {num.subscriptionStatus === "unknown" ? "Status unavailable" : num.subscriptionStatus}
+                </span>
               </p>
               {num.nextBillingDate && (
                 <p>Next Billing: {new Date(num.nextBillingDate).toLocaleDateString()}</p>
