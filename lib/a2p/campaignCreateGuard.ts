@@ -67,15 +67,34 @@ async function listCampaigns(client: any, messagingServiceSid: string) {
   return (await client.messaging.v1.services(messagingServiceSid).usAppToPerson.list({ limit: 50 })) || [];
 }
 
-function buildCampaignUpdatePayload(createPayload: any) {
+function buildCampaignUpdateRequestData(createPayload: any) {
   return {
-    description: createPayload.description,
-    messageFlow: createPayload.messageFlow,
-    messageSamples: createPayload.messageSamples,
-    hasEmbeddedLinks: createPayload.hasEmbeddedLinks,
-    hasEmbeddedPhone: createPayload.hasEmbeddedPhone,
-    ageGated: createPayload.ageGated,
-    directLending: createPayload.directLending,
+    Description: createPayload.description,
+    MessageFlow: createPayload.messageFlow,
+    MessageSamples: createPayload.messageSamples,
+    HasEmbeddedLinks: createPayload.hasEmbeddedLinks,
+    HasEmbeddedPhone: createPayload.hasEmbeddedPhone,
+    AgeGated: createPayload.ageGated,
+    DirectLending: createPayload.directLending,
+    PrivacyPolicyUrl: createPayload.privacyPolicyUrl,
+    TermsAndConditionsUrl: createPayload.termsAndConditionsUrl,
+  };
+}
+
+function buildCampaignCreateRequestData(createPayload: any) {
+  return {
+    BrandRegistrationSid: createPayload.brandRegistrationSid,
+    Description: createPayload.description,
+    MessageFlow: createPayload.messageFlow,
+    MessageSamples: createPayload.messageSamples,
+    UsAppToPersonUsecase: createPayload.usAppToPersonUsecase,
+    HasEmbeddedLinks: createPayload.hasEmbeddedLinks,
+    HasEmbeddedPhone: createPayload.hasEmbeddedPhone,
+    SubscriberOptIn: createPayload.subscriberOptIn,
+    AgeGated: createPayload.ageGated,
+    DirectLending: createPayload.directLending,
+    PrivacyPolicyUrl: createPayload.privacyPolicyUrl,
+    TermsAndConditionsUrl: createPayload.termsAndConditionsUrl,
   };
 }
 
@@ -85,10 +104,12 @@ async function updateExistingCampaign(args: {
   campaignSid: string;
   createPayload: any;
 }): Promise<GuardResult> {
-  const updated = await args.client.messaging.v1
-    .services(args.messagingServiceSid)
-    .usAppToPerson(args.campaignSid)
-    .update(buildCampaignUpdatePayload(args.createPayload));
+  const updated = await args.client.messaging.v1.update({
+    uri: `/Services/${args.messagingServiceSid}/Compliance/Usa2p/${args.campaignSid}`,
+    method: "post",
+    data: buildCampaignUpdateRequestData(args.createPayload),
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+  });
 
   const sid = campaignSidOf(updated) || args.campaignSid;
   return {
@@ -215,7 +236,12 @@ export async function ensureA2PCampaignWithoutDuplicateCreate(args: {
     messagingServiceSid,
     brandSid,
   });
-  const created = await client.messaging.v1.services(messagingServiceSid).usAppToPerson.create(createPayload);
+  const created = await client.messaging.v1.create({
+    uri: `/Services/${messagingServiceSid}/Compliance/Usa2p`,
+    method: "post",
+    data: buildCampaignCreateRequestData(createPayload),
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+  });
   return {
     campaign: created,
     campaignSid: campaignSidOf(created),

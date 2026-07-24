@@ -227,12 +227,10 @@ function buildMessageFlow(args: BuildA2PCampaignPayloadArgs): string {
     urls,
   );
 
-  let flow = ensureDisclosureText(interpolated);
+  const flow = ensureDisclosureText(interpolated);
 
   const linkLines: string[] = [];
   appendLineIfMissing(linkLines, flow, "Opt-in", urls.optInUrl);
-  appendLineIfMissing(linkLines, flow, "Terms", urls.tosUrl);
-  appendLineIfMissing(linkLines, flow, "Privacy", urls.privacyUrl);
 
   return clampMessageFlow(flow, linkLines);
 }
