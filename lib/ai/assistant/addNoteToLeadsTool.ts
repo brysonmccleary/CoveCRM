@@ -7,6 +7,7 @@ import { Types } from "mongoose";
 import Lead from "@/models/Lead";
 import { type QueryLeadsArgs } from "./queryLeadsTool";
 import { resolveLeadIds } from "./resolveLeadIds";
+import { sanitizeLeadNoteForDisplay } from "@/lib/leads/noteVisibility";
 
 export const ADD_NOTE_TO_LEADS_TOOL_DEF = {
   type: "function" as const,
@@ -45,7 +46,7 @@ export async function runAddNoteToLeadsTool(userEmail: string, args: AddNoteToLe
   const email = String(userEmail || "").toLowerCase();
   if (!email) return { updated: 0, error: "Unauthorized" };
 
-  const note = String(args?.note || "").trim();
+  const note = sanitizeLeadNoteForDisplay(args?.note);
   if (!note) return { updated: 0, error: "note text is required" };
 
   const leadIds = await resolveLeadIds(email, args);

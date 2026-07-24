@@ -6,6 +6,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+import { sanitizeLeadNoteForDisplay } from "@/lib/leads/noteVisibility";
 
 /**
  * POST /api/leads/add-note
@@ -52,7 +53,11 @@ export default async function handler(
   }
 
   // Light validation/sanitization
-  const clean = text.replace(/\s+/g, " ").trim().slice(0, 2000); // cap at 2k chars
+  const clean = sanitizeLeadNoteForDisplay(text).replace(/\s+/g, " ").trim().slice(0, 2000); // cap at 2k chars
+  if (!clean) {
+    res.status(400).json({ message: "Note contains no visible content" });
+    return;
+  }
   const now = new Date();
 
   try {

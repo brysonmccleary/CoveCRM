@@ -610,24 +610,6 @@ export default async function handler(
                   (lead as any).history = existingHistory;
                 }
 
-                const appendLine = `[AI Dialer] Voicemail detected (AMD) • CallSid=${CallSid} • AnsweredBy=${AnsweredBy || "machine"}`;
-                const existingNotes =
-                  ((lead as any).notes as string | undefined) ||
-                  ((lead as any).Notes as string | undefined) ||
-                  "";
-
-                const alreadyInNotes =
-                  typeof existingNotes === "string" && existingNotes.includes(`CallSid=${CallSid}`);
-
-                if (!alreadyInNotes) {
-                  const combined =
-                    existingNotes && existingNotes.trim().length > 0
-                      ? `${existingNotes}\n${appendLine}`
-                      : appendLine;
-                  (lead as any).notes = combined;
-                  (lead as any).Notes = combined;
-                }
-
                 (lead as any).updatedAt = now;
                 await lead.save();
               }
@@ -878,26 +860,6 @@ export default async function handler(
               if (!alreadyHasEntry) {
                 existingHistory.push(historyEntry);
                 (lead as any).history = existingHistory;
-              }
-
-              // Notes append behavior (also idempotent)
-              const appendLine = `[AI Dialer fallback] CallSid=${CallSid} • outcome=${outcomeToLog} • ${statusBits}`;
-              const existingNotes =
-                ((lead as any).notes as string | undefined) ||
-                ((lead as any).Notes as string | undefined) ||
-                "";
-
-              const alreadyInNotes =
-                typeof existingNotes === "string" &&
-                existingNotes.includes(`CallSid=${CallSid}`);
-
-              if (!alreadyInNotes) {
-                const combined =
-                  existingNotes && existingNotes.trim().length > 0
-                    ? `${existingNotes}\n${appendLine}`
-                    : appendLine;
-                (lead as any).notes = combined;
-                (lead as any).Notes = combined;
               }
 
               (lead as any).updatedAt = now;

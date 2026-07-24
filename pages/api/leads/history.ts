@@ -8,6 +8,7 @@ import Lead from "@/models/Lead";
 import Message from "@/models/Message";
 import Call from "@/models/Call";
 import { Types } from "mongoose";
+import { sanitizeLeadNoteForDisplay } from "@/lib/leads/noteVisibility";
 
 type ApiEvent =
   | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
@@ -129,7 +130,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!h) continue;
       const t = String(h.type || "").toLowerCase();
       if (t === "note") {
-        events.push({ type: "note", id: `${leadDoc._id}-hist-${String(h._id || Math.random())}`, date: coerceDateISO(h.timestamp), text: h.message || "" });
+        const text = sanitizeLeadNoteForDisplay(h.message);
+        if (text) {
+          events.push({ type: "note", id: `${leadDoc._id}-hist-${String(h._id || Math.random())}`, date: coerceDateISO(h.timestamp), text });
+        }
       } else if (t === "disposition") {
         events.push({ type: "status", id: `${leadDoc._id}-hist-${String(h._id || Math.random())}`, date: coerceDateISO(h.timestamp), to: h.message || "Updated" });
       }
@@ -139,12 +143,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // --- Embedded transcripts as notes (legacy) ---
   if (Array.isArray(leadDoc.callTranscripts)) {
     for (const t of leadDoc.callTranscripts) {
-      events.push({
-        type: "note",
-        id: `${leadDoc._id}-tx-${(t?.createdAt && new Date(t.createdAt).getTime()) || Math.random()}`,
-        date: coerceDateISO(t?.createdAt),
-        text: t?.text || "",
-      });
+      const text = sanitizeLeadNoteForDisplay(t?.text);
+      if (text) {
+        events.push({
+          type: "note",
+          id: `${leadDoc._id}-tx-${(t?.createdAt && new Date(t.createdAt).getTime()) || Math.random()}`,
+          date: coerceDateISO(t?.createdAt),
+          text,
+        });
+      }
     }
   }
 

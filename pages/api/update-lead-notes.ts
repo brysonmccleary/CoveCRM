@@ -4,6 +4,7 @@ import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import LeadModel from "@/models/Lead"; // ✅ Make sure you have this model
 import mongoose from "mongoose";
+import { sanitizeLeadNoteForDisplay } from "@/lib/leads/noteVisibility";
 
 export default async function handler(
   req: NextApiRequest,
@@ -25,12 +26,17 @@ export default async function handler(
     return res.status(400).json({ message: "Missing 'leadId' or 'notes'" });
   }
 
+  const cleanNotes = sanitizeLeadNoteForDisplay(notes);
+  if (!cleanNotes) {
+    return res.status(400).json({ message: "Notes contain no visible content" });
+  }
+
   try {
     await dbConnect();
 
     const result = await LeadModel.updateOne(
       { _id: new mongoose.Types.ObjectId(leadId), user: userEmail },
-      { $set: { Notes: notes } },
+      { $set: { Notes: cleanNotes } },
     );
 
     if (result.matchedCount === 0) {

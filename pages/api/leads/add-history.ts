@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
+import { sanitizeLeadNoteForDisplay } from "@/lib/leads/noteVisibility";
 
 /**
  * POST /api/leads/add-history
@@ -34,6 +35,14 @@ export default async function handler(
       .json({ message: "Missing leadId, type, or message" });
   }
 
+  const cleanMessage =
+    String(type).toLowerCase() === "note"
+      ? sanitizeLeadNoteForDisplay(message)
+      : String(message).trim();
+  if (!cleanMessage) {
+    return res.status(400).json({ message: "Note contains no visible content" });
+  }
+
   try {
     await dbConnect();
 
@@ -50,7 +59,7 @@ export default async function handler(
     lead.history = lead.history || [];
     lead.history.push({
       type,
-      message,
+      message: cleanMessage,
       userEmail: requesterEmail,
       timestamp: new Date(),
       meta: meta || {},

@@ -3,6 +3,7 @@ import { stopRingback } from "@/utils/ringAudio";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
+import { sanitizeLeadNoteForDisplay } from "@/lib/leads/noteVisibility";
 import toast from "react-hot-toast";
 import SaleModal from "@/components/SaleModal";
 import dynamic from "next/dynamic";
@@ -125,6 +126,8 @@ type HistoryEvent =
       outcome?: string;
       recordingId?: string;
     };
+
+type DisplayNote = { id: string; text: string; date: string };
 
 type UICampaign = {
   _id: string;
@@ -360,7 +363,7 @@ export default function LeadProfileDial() {
   const [resolvedId, setResolvedId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [historyLines, setHistoryLines] = useState<string[]>([]);
-  const [noteLines, setNoteLines] = useState<string[]>([]);
+  const [noteLines, setNoteLines] = useState<DisplayNote[]>([]);
   const [showNoteComposer, setShowNoteComposer] = useState(false);
   const [memoryProfile, setMemoryProfile] = useState<LeadMemoryProfileView | null>(null);
   const [calls, setCalls] = useState<CallRow[]>([]);
@@ -455,12 +458,13 @@ export default function LeadProfileDial() {
       if (!r.ok) throw new Error(j?.message || "Failed to load history");
 
       const lines: string[] = [];
-      const savedNotes: string[] = [];
+      const savedNotes: DisplayNote[] = [];
       (j.events || []).forEach((ev: HistoryEvent) => {
         if (ev.type === "note") {
-          const noteLine = `${ev.text} • ${fmtDateTime(ev.date)}`;
-          savedNotes.push(noteLine);
-          lines.push(`📝 ${noteLine}`);
+          const text = sanitizeLeadNoteForDisplay(ev.text);
+          if (!text) return;
+          savedNotes.push({ id: ev.id, text, date: ev.date });
+          lines.push(`📝 ${text} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "sms") {
           const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
           const status = ev.status ? ` • ${ev.status}` : "";
@@ -632,19 +636,25 @@ export default function LeadProfileDial() {
   }, [latestOverviewCall]);
 
   const handleSaveNote = async () => {
-    if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
+    const cleanNote = sanitizeLeadNoteForDisplay(notes);
+    if (!cleanNote || !lead?.id) return toast.error("❌ Cannot save an empty note");
     try {
       const r = await fetch("/api/leads/add-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id, type: "note", message: notes.trim() }),
+        body: JSON.stringify({ leadId: lead.id, type: "note", message: cleanNote }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         throw new Error(j?.message || "Failed to save note");
       }
-      const savedNote = `${notes.trim()} • ${new Date().toLocaleString()}`;
-      setHistoryLines((prev) => [`📝 ${savedNote}`, ...prev]);
+      const savedAt = new Date();
+      const savedNote: DisplayNote = {
+        id: `local-${savedAt.getTime()}`,
+        text: cleanNote,
+        date: savedAt.toISOString(),
+      };
+      setHistoryLines((prev) => [`📝 ${savedNote.text} • ${fmtDateTime(savedNote.date)}`, ...prev]);
       setNoteLines((prev) => [savedNote, ...prev]);
       setNotes("");
       setShowNoteComposer(false);
@@ -1216,7 +1226,7 @@ export default function LeadProfileDial() {
     }
   };
 
-  const legacyLeadNote = String(lead?.notes || lead?.Notes || "").trim();
+  const legacyLeadNote = sanitizeLeadNoteForDisplay(lead?.notes || lead?.Notes || "");
   const visibleLegacyLeadNote = /^source\s*:/i.test(legacyLeadNote) ? "" : legacyLeadNote;
   const savedNoteCount = noteLines.length + (visibleLegacyLeadNote ? 1 : 0);
 
@@ -1671,7 +1681,7 @@ export default function LeadProfileDial() {
               <button
                 type="button"
                 onClick={handleSaveNote}
-                disabled={!notes.trim() || !lead?.id}
+                disabled={!sanitizeLeadNoteForDisplay(notes) || !lead?.id}
                 className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Save Note
@@ -1689,9 +1699,12 @@ export default function LeadProfileDial() {
               <p className="mt-2 text-[11px] text-gray-500">Lead note</p>
             </div>
           )}
-          {noteLines.map((note, index) => (
-            <article key={`${note}-${index}`} className="rounded-xl border border-white/10 bg-[#111827] p-3">
-              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-200">{note}</p>
+          {noteLines.map((note) => (
+            <article key={note.id} className="rounded-xl border border-white/10 bg-[#111827] p-3">
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-200">{note.text}</p>
+              <time dateTime={note.date} className="mt-2 block text-[11px] text-gray-500">
+                {fmtDateTime(note.date)}
+              </time>
             </article>
           ))}
           {savedNoteCount === 0 && (

@@ -549,7 +549,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const nextOutcome: AllowedOutcome =
       (normalizedOutcome as any) ?? prevOutcome ?? "unknown";
 
-    // Build the overview block ONCE (used for both recording + lead notes)
+    // Build the overview block for the call recording only. Lead notes are
+    // customer-facing and must never contain dialer metadata or Call SIDs.
     const overviewBlock = buildCallOverviewBlock({
       callSid,
       outcome: nextOutcome,
@@ -829,24 +830,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!alreadyHasEntry) {
             existingHistory.push(historyEntry);
             (lead as any).history = existingHistory;
-          }
-
-          const existingNotes =
-            ((lead as any).notes as string | undefined) ||
-            ((lead as any).Notes as string | undefined) ||
-            "";
-
-          const alreadyHasMarker =
-            typeof existingNotes === "string" && existingNotes.includes(marker);
-
-          if (!alreadyHasMarker) {
-            const combined =
-              existingNotes && existingNotes.trim().length > 0
-                ? `${existingNotes}\n\n${overviewBlock}`
-                : overviewBlock;
-
-            (lead as any).notes = combined;
-            (lead as any).Notes = combined;
           }
 
           (lead as any).updatedAt = now;
