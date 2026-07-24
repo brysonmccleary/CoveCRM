@@ -47,51 +47,7 @@ type A2PStatusView = {
   description?: string;
 };
 
-// Twilio / TCR-approved use cases (the common ones first)
-type UseCaseCode =
-  | "LOW_VOLUME"
-  | "MIXED"
-  | "MARKETING"
-  | "CUSTOMER_CARE"
-  | "ACCOUNT_NOTIFICATION"
-  | "2FA"
-  | "DELIVERY_NOTIFICATION"
-  | "FRAUD_ALERT"
-  | "HIGHER_EDUCATION"
-  | "POLLING_VOTING"
-  | "PUBLIC_SERVICE_ANNOUNCEMENT"
-  | "SECURITY_ALERT"
-  | "AGENTS_FRANCHISES"
-  | "CHARITY"
-  | "K12_EDUCATION"
-  | "PROXY"
-  | "EMERGENCY";
-
-const COMMON_USECASES: { value: UseCaseCode; label: string }[] = [
-  { value: "LOW_VOLUME", label: "Low Volume (mixed)" },
-  { value: "MIXED", label: "Mixed" },
-  { value: "MARKETING", label: "Marketing / Promotions" },
-  { value: "CUSTOMER_CARE", label: "Customer Care / Support" },
-  { value: "ACCOUNT_NOTIFICATION", label: "Account Notifications" },
-  { value: "2FA", label: "2FA / OTP" },
-];
-
-const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
-  { value: "DELIVERY_NOTIFICATION", label: "Delivery Notifications" },
-  { value: "FRAUD_ALERT", label: "Fraud / Spend Alerts" },
-  { value: "HIGHER_EDUCATION", label: "Higher Education" },
-  { value: "POLLING_VOTING", label: "Polling / Voting (non-political)" },
-  {
-    value: "PUBLIC_SERVICE_ANNOUNCEMENT",
-    label: "Public Service Announcement",
-  },
-  { value: "SECURITY_ALERT", label: "Security Alerts" },
-  { value: "AGENTS_FRANCHISES", label: "Agents / Franchises (special)" },
-  { value: "CHARITY", label: "Charity 501(c)(3) (special)" },
-  { value: "K12_EDUCATION", label: "K-12 Education (special)" },
-  { value: "PROXY", label: "Proxy / P2P App (special)" },
-  { value: "EMERGENCY", label: "Emergency (special)" },
-];
+const LOCKED_USE_CASE = "LOW_VOLUME" as const;
 
 const US_STATE_CODES = [
   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
@@ -298,9 +254,6 @@ export default function A2PVerificationForm() {
   const [contactFirstName, setContactFirstName] = useState("");
   const [contactLastName, setContactLastName] = useState("");
   const [contactTitle, setContactTitle] = useState("");
-
-  // ---------- Campaign type ----------
-  const [usecase, setUsecase] = useState<UseCaseCode>("LOW_VOLUME");
 
   // ---------- Sample Messages ----------
   const initialSampleMessages = buildLeadGenerationSampleMessages();
@@ -618,8 +571,8 @@ export default function A2PVerificationForm() {
         contactFirstName: contactFirstName.trim(),
         contactLastName: contactLastName.trim(),
         contactTitle: contactTitle.trim(), // optional; backend defaults to "Owner"
-        usecaseCode: usecase,
-        useCase: usecase,
+        usecaseCode: LOCKED_USE_CASE,
+        useCase: LOCKED_USE_CASE,
         sampleMessages: allMessages,
         sampleMessage1: msg1,
         sampleMessage2: msg2,
@@ -1022,28 +975,15 @@ export default function A2PVerificationForm() {
       <div className="space-y-1">
         <label className="text-sm text-gray-500">Campaign Type</label>
         <select
-          className="border p-2 rounded w-full bg-white text-black"
-          value={usecase}
-          onChange={(e) => setUsecase(e.target.value as UseCaseCode)}
+          className="w-full cursor-not-allowed rounded border bg-white p-2 text-black opacity-80"
+          value={LOCKED_USE_CASE}
+          disabled
+          aria-label="Campaign Type — Low Volume (mixed), locked"
         >
-          <optgroup label="Common">
-            {COMMON_USECASES.map((u) => (
-              <option key={u.value} value={u.value}>
-                {u.label}
-              </option>
-            ))}
-          </optgroup>
-          <optgroup label="Advanced / Special">
-            {ADVANCED_SPECIAL.map((u) => (
-              <option key={u.value} value={u.value}>
-                {u.label}
-              </option>
-            ))}
-          </optgroup>
+          <option value={LOCKED_USE_CASE}>Low Volume (mixed)</option>
         </select>
         <p className="text-xs text-gray-500">
-          “Low Volume (mixed)” is suitable for most small businesses sending a mix of conversational,
-          marketing, and informational messages at modest volumes.
+          Low Volume (mixed) is the required Cove CRM default and cannot be changed.
         </p>
       </div>
 
