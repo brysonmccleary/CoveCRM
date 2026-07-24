@@ -286,7 +286,14 @@ function flattenDisplayFields(lead: any) {
 }
 
 function labelFromKey(k: string) {
-  return String(k || "").replace(/_/g, " ").trim();
+  const key = String(k || "").trim();
+  if (normalizeKey(key) === "campaignname") return "Campaign";
+  return key
+    .replace(/_/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (character) => character.toUpperCase());
 }
 /* ---------------------------------------- */
 
@@ -353,6 +360,8 @@ export default function LeadProfileDial() {
   const [resolvedId, setResolvedId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [historyLines, setHistoryLines] = useState<string[]>([]);
+  const [noteLines, setNoteLines] = useState<string[]>([]);
+  const [showNoteComposer, setShowNoteComposer] = useState(false);
   const [memoryProfile, setMemoryProfile] = useState<LeadMemoryProfileView | null>(null);
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [histLoading, setHistLoading] = useState(false);
@@ -446,9 +455,12 @@ export default function LeadProfileDial() {
       if (!r.ok) throw new Error(j?.message || "Failed to load history");
 
       const lines: string[] = [];
+      const savedNotes: string[] = [];
       (j.events || []).forEach((ev: HistoryEvent) => {
         if (ev.type === "note") {
-          lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
+          const noteLine = `${ev.text} • ${fmtDateTime(ev.date)}`;
+          savedNotes.push(noteLine);
+          lines.push(`📝 ${noteLine}`);
         } else if (ev.type === "sms") {
           const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
           const status = ev.status ? ` • ${ev.status}` : "";
@@ -466,6 +478,7 @@ export default function LeadProfileDial() {
       });
 
       setHistoryLines(lines);
+      setNoteLines(savedNotes);
     } catch (e) {
       console.error(e);
     } finally {
@@ -630,8 +643,11 @@ export default function LeadProfileDial() {
         const j = await r.json().catch(() => ({}));
         throw new Error(j?.message || "Failed to save note");
       }
-      setHistoryLines((prev) => [`📝 ${notes.trim()} • ${new Date().toLocaleString()}`, ...prev]);
+      const savedNote = `${notes.trim()} • ${new Date().toLocaleString()}`;
+      setHistoryLines((prev) => [`📝 ${savedNote}`, ...prev]);
+      setNoteLines((prev) => [savedNote, ...prev]);
       setNotes("");
+      setShowNoteComposer(false);
       toast.success("✅ Note saved!");
     } catch (e: any) {
       toast.error(e?.message || "Failed to save note");
@@ -797,7 +813,7 @@ export default function LeadProfileDial() {
     pushField("Status", ["Status", "status"]);
 
     pushField("DOB", ["DOB", "Date Of Birth", "Birthday", "birthdate", "Birth Date", "Date of birth"]);
-    pushField("Age", ["Age", "age"]);
+    pushField("Age", ["Age", "age"], (value) => value === "0" ? "—" : value);
 
     pushField("Street Address", ["Street Address", "street", "street address", "Address", "address", "Address 1"]);
     pushField("City", ["City", "city"]);
@@ -806,7 +822,11 @@ export default function LeadProfileDial() {
 
     pushField("Mortgage Amount", ["Mortgage Amount", "mortgage amount", "Mortgage Balance", "mortgage balance", "Mortgage", "mortgage"]);
     pushField("Mortgage Payment", ["Mortgage Payment", "mortgage payment"]);
-    pushField("Coverage Amount", ["Coverage Amount", "coverageAmount", "coverage", "How Much Coverage Do You Need?"]);
+    pushField(
+      "Coverage Amount",
+      ["Coverage Amount", "coverageAmount", "coverage", "How Much Coverage Do You Need?"],
+      (value) => value === "0" ? "—" : value,
+    );
 
     pushField("Lender", ["Lender", "lender"]);
     pushField("County", ["County", "county"]);
@@ -1027,6 +1047,10 @@ export default function LeadProfileDial() {
     }
   }, [resolvedId, lead]);
 
+  useEffect(() => {
+    loadActiveForLead();
+  }, [loadActiveForLead]);
+
   const campaignNameById = useCallback(
     (id: string) => campaigns.find((c) => String(c._id) === String(id))?.name || id,
     [campaigns],
@@ -1070,6 +1094,7 @@ export default function LeadProfileDial() {
       setEnrollOpen(false);
       setSelectedCampaignId("");
       setStartAtLocal("");
+      await loadActiveForLead();
     } catch (e: any) {
       toast.error(e?.message || "Enrollment failed");
     } finally {
@@ -1096,6 +1121,7 @@ export default function LeadProfileDial() {
         `🔖 Status: Removed from ${campaignNameById(removeCampaignId)} • ${new Date().toLocaleString()}`,
         ...prev,
       ]);
+      await loadActiveForLead();
     } catch (e: any) {
       toast.error(e?.message || "Failed to remove");
     } finally {
@@ -1190,14 +1216,21 @@ export default function LeadProfileDial() {
     }
   };
 
+  const legacyLeadNote = String(lead?.notes || lead?.Notes || "").trim();
+  const visibleLegacyLeadNote = /^source\s*:/i.test(legacyLeadNote) ? "" : legacyLeadNote;
+  const savedNoteCount = noteLines.length + (visibleLegacyLeadNote ? 1 : 0);
+
 
   // ---------- Render ----------
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar collapsed />
 
+      <main className="min-w-0 flex-1">
+      <div className="grid min-h-[calc(100vh-1px)] grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(280px,320px)] xl:grid-cols-[minmax(300px,360px)_minmax(0,1fr)_minmax(300px,380px)]">
+
       {/* LEFT */}
-      <div className="w-[330px] shrink-0 overflow-y-auto border-r border-gray-800 bg-[#1e293b] p-4 xl:w-[360px]">
+      <div className="overflow-y-auto border-b border-gray-800 bg-[#1e293b] p-4 md:col-span-2 xl:col-span-1 xl:border-b-0 xl:border-r">
         {/* VERIFICATION MARKER: search this in prod to confirm correct build */}
         <div className="hidden">LEAD_INFO_LEFT_PANEL_DIALSESSION_STYLE_V2</div>
 
@@ -1289,10 +1322,13 @@ export default function LeadProfileDial() {
       </div>
 
       {/* CENTER */}
-      <div className="flex-1 p-6 bg-[#0f172a] border-r border-gray-800 flex flex-col min-h-0">
-        <div className="max-w-3xl flex flex-col min-h-0 flex-1">
+      <div className="flex min-h-0 flex-col border-b border-gray-800 bg-[#0f172a] p-5 sm:p-6 xl:border-b-0 xl:border-r">
+        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-lg font-bold">Add a Note</h3>
+            <div>
+              <h3 className="text-lg font-bold">Lead Workspace</h3>
+              <p className="text-xs text-gray-400">Call, text, update disposition, and review activity.</p>
+            </div>
             {folderId ? (
               <div className="flex items-center gap-2">
                 <button
@@ -1317,18 +1353,8 @@ export default function LeadProfileDial() {
             ) : null}
           </div>
 
-          <div className="rounded-lg mb-2 bg-[#0f172a] border border-white/10">
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              className="w-full p-3 text-white rounded bg-transparent border-none focus:outline-none"
-              rows={3}
-              placeholder="Type notes here..."
-            />
-          </div>
-
           {/* Call row (NO /dial-session) */}
-          <div className="flex items-center gap-2 mb-2 flex-wrap">
+          <div className="mt-4 flex items-center gap-2 mb-2 flex-wrap">
             <select
               value={selectedFromNumber}
               onChange={(e) => setSelectedFromNumber(e.target.value)}
@@ -1378,32 +1404,29 @@ export default function LeadProfileDial() {
             </span>
           </div>
 
-          {/* Actions row (moved down one row) */}
+          {/* Drip actions */}
           <div className="flex items-center gap-2 mb-4 flex-wrap">
-            <button
-              onClick={handleSaveNote}
-              className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md"
-            >
-              Save Note
-            </button>
-
-            <button
-              type="button"
-              onClick={openEnrollModal}
-              disabled={!lead?.id}
-              className="text-sm bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 px-3 py-1.5 rounded-md"
-            >
-              Enroll in Drip
-            </button>
-
-            <button
-              type="button"
-              onClick={openUnenrollModal}
-              disabled={!lead?.id}
-              className="text-sm bg-rose-600 hover:bg-rose-700 text-white disabled:opacity-50 px-3 py-1.5 rounded-md"
-            >
-              Remove from Drip
-            </button>
+            {activeDripsLoading ? (
+              <span className="text-xs text-gray-500">Checking drip enrollment…</span>
+            ) : activeDripIds.length > 0 ? (
+              <button
+                type="button"
+                onClick={openUnenrollModal}
+                disabled={!lead?.id}
+                className="text-sm bg-rose-600 hover:bg-rose-700 text-white disabled:opacity-50 px-3 py-1.5 rounded-md"
+              >
+                Remove from Drip
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={openEnrollModal}
+                disabled={!lead?.id}
+                className="text-sm bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 px-3 py-1.5 rounded-md"
+              >
+                Enroll in Drip
+              </button>
+            )}
           </div>
 
           {showSmsPanel && lead?._id && (
@@ -1559,7 +1582,7 @@ export default function LeadProfileDial() {
             {histLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
           </div>
 
-          <div className="bg-[#0b1220] border border-white/10 rounded p-3 h-[260px] overflow-y-auto">
+          <div className="max-h-[320px] min-h-[120px] overflow-y-auto rounded border border-white/10 bg-[#0b1220] p-3">
             {historyLines.length === 0 ? (
               <p className="text-gray-400">No interactions yet.</p>
             ) : (
@@ -1603,24 +1626,111 @@ export default function LeadProfileDial() {
         </div>
       </div>
 
-      {/* RIGHT */}
-      <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
-        {calls.length > 0 && (
-          <p className="text-xs text-gray-500 mb-2 shrink-0">
-            {calls.length} recording{calls.length !== 1 ? "s" : ""} on file
-          </p>
-        )}
-        <div className="max-h-[500px] overflow-y-auto">
-          {lead?.id ? (
-            <CallPanelClose
-              leadId={lead.id}
-              userHasAI={userHasAI}
-              defaultFromNumber={process.env.NEXT_PUBLIC_DEFAULT_FROM as string | undefined}
-              onOpenCall={(callId) => router.push(`/calls/${callId}`)}
-            />
-          ) : null}
+      {/* RIGHT: NOTES */}
+      <aside className="flex min-h-0 flex-col bg-[#0b1220] p-4 sm:p-5" aria-labelledby="lead-notes-heading">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 id="lead-notes-heading" className="text-lg font-bold">Notes</h3>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {savedNoteCount} saved note{savedNoteCount === 1 ? "" : "s"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowNoteComposer((open) => !open)}
+            className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-500"
+          >
+            {showNoteComposer ? "Cancel" : "+ Add Note"}
+          </button>
         </div>
+
+        {showNoteComposer && (
+          <div className="mt-4 rounded-xl border border-blue-500/30 bg-blue-500/5 p-3">
+            <label htmlFor="lead-note" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-blue-200">
+              New note
+            </label>
+            <textarea
+              id="lead-note"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="min-h-28 w-full resize-y rounded-lg border border-white/10 bg-[#0f172a] p-3 text-sm text-white outline-none transition placeholder:text-gray-600 focus:border-blue-500"
+              placeholder="Type a note about this lead..."
+              autoFocus
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setNotes("");
+                  setShowNoteComposer(false);
+                }}
+                className="rounded-md px-3 py-1.5 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveNote}
+                disabled={!notes.trim() || !lead?.id}
+                className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Save Note
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 flex-1 space-y-2 overflow-y-auto pr-1">
+          {visibleLegacyLeadNote && (
+            <div className="rounded-xl border border-white/10 bg-[#111827] p-3">
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-200">
+                {visibleLegacyLeadNote}
+              </p>
+              <p className="mt-2 text-[11px] text-gray-500">Lead note</p>
+            </div>
+          )}
+          {noteLines.map((note, index) => (
+            <article key={`${note}-${index}`} className="rounded-xl border border-white/10 bg-[#111827] p-3">
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-200">{note}</p>
+            </article>
+          ))}
+          {savedNoteCount === 0 && (
+            <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center">
+              <p className="text-sm text-gray-400">No notes yet</p>
+              <p className="mt-1 text-xs text-gray-600">Add context, follow-up details, or reminders here.</p>
+            </div>
+          )}
+        </div>
+      </aside>
       </div>
+
+      {/* CALLS & RECORDINGS */}
+      <section className="border-t border-gray-800 bg-[#0b1220] px-4 py-5 sm:px-6" aria-labelledby="lead-recordings-heading">
+        <div className="mx-auto max-w-7xl">
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h3 id="lead-recordings-heading" className="text-lg font-bold">Calls &amp; Recordings</h3>
+              <p className="mt-0.5 text-xs text-gray-500">Call history and playable recordings for this lead.</p>
+            </div>
+            {calls.length > 0 && (
+              <p className="text-xs text-gray-500">
+                {calls.length} call{calls.length === 1 ? "" : "s"} on file
+              </p>
+            )}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-[#0f172a] p-3 sm:p-4">
+            {lead?.id ? (
+              <CallPanelClose
+                leadId={lead.id}
+                userHasAI={userHasAI}
+                defaultFromNumber={process.env.NEXT_PUBLIC_DEFAULT_FROM as string | undefined}
+                onOpenCall={(callId) => router.push(`/calls/${callId}`)}
+              />
+            ) : null}
+          </div>
+        </div>
+      </section>
+      </main>
 
       {/* ✅ Live Edit Modal */}
       {editingKey ? (

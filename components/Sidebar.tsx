@@ -4,6 +4,24 @@ import { useEffect, useRef, useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import Image from "next/image";
 import { connectAndJoin } from "@/lib/socketClient";
+import SupportChatModal from "@/components/SupportChatModal";
+import {
+  FaBullhorn,
+  FaCalendarAlt,
+  FaChartLine,
+  FaChevronDown,
+  FaChevronRight,
+  FaCog,
+  FaComments,
+  FaFolderOpen,
+  FaHome,
+  FaPhoneAlt,
+  FaRobot,
+  FaSignOutAlt,
+  FaUsers,
+} from "react-icons/fa";
+import { HiOutlineSparkles } from "react-icons/hi2";
+import type { IconType } from "react-icons";
 
 const EXPERIMENTAL_ADMIN = "bryson.mccleary1@gmail.com";
 
@@ -23,6 +41,44 @@ export default function Sidebar({ collapsed = false }: SidebarProps) {
   const [pendingActionConfirmation, setPendingActionConfirmation] = useState<{ toolName: string; token: string } | null>(null);
   const isAdmin = (session?.user?.email ?? "").toLowerCase() === EXPERIMENTAL_ADMIN;
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [adminOpen, setAdminOpen] = useState(false);
+
+  type CollapsedNavItem = { name: string; path: string; icon: IconType };
+  const collapsedNavGroups: { label: string; items: CollapsedNavItem[] }[] = [
+    {
+      label: "CRM",
+      items: [
+        { name: "Home", path: "/dashboard?tab=home", icon: FaHome },
+        { name: "Folders", path: "/dashboard?tab=leads", icon: FaFolderOpen },
+        { name: "Calendar", path: "/dashboard?tab=calendar", icon: FaCalendarAlt },
+      ],
+    },
+    {
+      label: "Communication",
+      items: [
+        { name: "Conversations", path: "/dashboard?tab=conversations", icon: FaComments },
+        { name: "Drip Campaigns", path: "/dashboard?tab=drip-campaigns", icon: HiOutlineSparkles },
+        { name: "Numbers", path: "/dashboard?tab=numbers", icon: FaPhoneAlt },
+      ],
+    },
+    {
+      label: "Workspace",
+      items: [
+        ...(isAdmin ? [{ name: "FB Leads", path: "/facebook-leads", icon: FaBullhorn }] : []),
+        { name: "Team", path: "/team", icon: FaUsers },
+        { name: "Settings", path: "/dashboard?tab=settings", icon: FaCog },
+      ],
+    },
+  ];
+
+  const collapsedAdminLinks: CollapsedNavItem[] = isAdmin
+    ? [
+        { name: "Recruiting", path: "/recruiting", icon: FaUsers },
+        { name: "Social Insights", path: "/recruiting/insights", icon: FaChartLine },
+        { name: "AI Copilot", path: "/admin/ai-copilot", icon: FaRobot },
+        { name: "Site Intelligence", path: "/admin/site-intelligence", icon: FaBullhorn },
+      ]
+    : [];
 
   const fetchUnread = async () => {
     try {
@@ -81,6 +137,51 @@ export default function Sidebar({ collapsed = false }: SidebarProps) {
     return router.pathname === href;
   };
 
+  useEffect(() => {
+    if (collapsedAdminLinks.some((link) => isActiveHref(link.path))) setAdminOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.asPath]);
+
+  const pageContext = (() => {
+    const tab = String((router.query as any)?.tab || "").trim().toLowerCase();
+    if (tab === "leads" || router.pathname.startsWith("/lead")) return "leads_page";
+    if (tab === "conversations") return "inbox";
+    if (tab === "numbers") return "numbers";
+    if (tab === "settings") return "settings";
+    if (tab === "calendar") return "calendar";
+    if (router.pathname.includes("facebook")) return "facebook_ads";
+    return "dashboard";
+  })();
+
+  const renderCollapsedNavLink = (link: CollapsedNavItem) => {
+    const active = isActiveHref(link.path);
+    const Icon = link.icon;
+    return (
+      <Link
+        key={link.name}
+        href={link.path}
+        title={link.name}
+        aria-label={link.name}
+        aria-current={active ? "page" : undefined}
+        className={`group relative flex min-h-10 items-center justify-center rounded-lg border-l-2 px-3 text-sm font-semibold transition ${
+          active
+            ? "border-blue-600 bg-[#1a2535] text-slate-100"
+            : "border-transparent text-slate-400 hover:bg-[#1e2d45] hover:text-slate-100"
+        }`}
+      >
+        <Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+        {link.name === "Conversations" && unreadCount > 0 && (
+          <span
+            className="absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white"
+            aria-label={`${unreadCount} unread conversations`}
+          >
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        )}
+      </Link>
+    );
+  };
+
   const getNavStyle = (href: string) => {
     const active = isActiveHref(href);
     return {
@@ -111,6 +212,81 @@ export default function Sidebar({ collapsed = false }: SidebarProps) {
   };
 
   const navIconStyle = { fontSize: 15, width: 20, textAlign: "center" as const, flexShrink: 0 };
+
+  if (collapsed) {
+    return (
+      <>
+        <aside className="sticky top-0 flex h-screen w-[72px] shrink-0 flex-col justify-between overflow-y-auto border-r border-[#1e293b] bg-[#0f172a] px-2 py-4">
+          <div>
+            <div className="mb-6 flex items-center justify-center">
+              <Image
+                src="/logo.png"
+                alt="Cove CRM Logo"
+                width={32}
+                height={32}
+                className="rounded"
+                priority
+              />
+            </div>
+            <nav className="space-y-4" aria-label="Main navigation">
+              {collapsedNavGroups.map((group) => (
+                <div key={group.label} className="space-y-1">
+                  {group.items.map(renderCollapsedNavLink)}
+                </div>
+              ))}
+
+              {collapsedAdminLinks.length > 0 && (
+                <div className="border-t border-white/5 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setAdminOpen((open) => !open)}
+                    className="flex min-h-10 w-full items-center justify-center rounded-lg px-3 text-sm font-semibold text-slate-400 transition hover:bg-[#1e2d45] hover:text-slate-100"
+                    aria-label="Admin"
+                    aria-expanded={adminOpen}
+                    title="Admin"
+                  >
+                    <FaCog aria-hidden="true" className="h-4 w-4 shrink-0" />
+                    <span className="sr-only">{adminOpen ? <FaChevronDown /> : <FaChevronRight />}</span>
+                  </button>
+                  {adminOpen && <div className="mt-1 space-y-1">{collapsedAdminLinks.map(renderCollapsedNavLink)}</div>}
+                </div>
+              )}
+            </nav>
+          </div>
+
+          <div className="mt-6 space-y-3">
+            <button
+              type="button"
+              onClick={() => setAssistantOpen(true)}
+              className="flex h-10 w-full items-center justify-center rounded-xl border border-white/10 bg-gradient-to-r from-[#7c3aed] to-[#6366f1] px-2 text-sm font-semibold text-white shadow-lg transition hover:opacity-95"
+              aria-label="Ask Assistant"
+              title="Ask Assistant"
+            >
+              <HiOutlineSparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
+            </button>
+
+            <div className="border-t border-white/5 pt-4">
+              <button
+                type="button"
+                onClick={() => signOut({ callbackUrl: "/auth/signin" })}
+                className="mx-auto block px-1 text-left text-sm text-red-400 transition hover:text-red-300"
+                aria-label="Log out and return to Home"
+                title="Log Out"
+              >
+                <FaSignOutAlt className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <SupportChatModal
+          isOpen={assistantOpen}
+          onClose={() => setAssistantOpen(false)}
+          pageContext={pageContext}
+        />
+      </>
+    );
+  }
 
   return (
     <div className={`bg-[#0f172a] text-white ${collapsed ? "w-14 px-2 py-4" : "w-60 p-4"} min-h-screen flex flex-col justify-between`}>
