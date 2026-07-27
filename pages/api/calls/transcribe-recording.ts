@@ -5,10 +5,14 @@ import Call from "@/models/Call";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import UserModel from "@/models/User";
 import AISettings from "@/models/AISettings";
+import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { getUserByEmail } from "@/models/User";
 import { trackUsage } from "@/lib/billing/trackUsage";
+import { generateCallCoachReport } from "@/lib/ai/generateCallCoachReport";
+import { enabledCallAnalysis } from "@/lib/ai/callAnalysisSettings";
+import { requireAI } from "@/lib/billing/requireAI";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 
@@ -50,6 +54,12 @@ type Resp =
         costCents: number;
         processed: boolean;
       };
+      coaching?: {
+        ok: boolean;
+        skipped?: boolean;
+        reason?: string;
+        error?: string;
+      };
       skipped?: boolean;
       reason?: string;
     }
@@ -85,6 +95,14 @@ async function loadInsightUsage(userEmail: string) {
     .select("aiInsightMinutesUsed aiInsightCostCents")
     .lean();
   return formatInsightUsage(user);
+}
+
+async function loadLeadName(leadId: unknown): Promise<string | undefined> {
+  if (!leadId) return undefined;
+  const lead: any = await (Lead as any).findById(leadId).select("name fullName firstName lastName").lean().catch(() => null);
+  if (!lead) return undefined;
+  const name = String(lead.name || lead.fullName || [lead.firstName, lead.lastName].filter(Boolean).join(" ")).trim();
+  return name || undefined;
 }
 
 async function markAndBillInsightsOnce(args: {
@@ -628,7 +646,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     let settings: any = null;
     if (callUserEmail) {
       settings = await AISettings.findOne({ userEmail: callUserEmail }).lean();
-      if (settings?.aiCallOverviewEnabled === false) {
+    }
+    const analysis = enabledCallAnalysis(settings);
+    if (!analysis.overview && !analysis.coaching) {
+      return res.status(200).json({
+        ok: true,
+        callId: String(call._id),
+        callSid: String(call.callSid || ""),
+        transcribedAt: new Date().toISOString(),
+        transcriptChars: String(call.transcript || "").length,
+        overviewReady: !!call.aiOverviewReady,
+        aiInsightUsage: callUserEmail ? await loadInsightUsage(callUserEmail) : undefined,
+        skipped: true,
+        reason: "call_analysis_disabled",
+      });
+    }
+    if (callUserEmail) {
+      const entitlement = await requireAI(callUserEmail, { allowOwnerBypass: true });
+      if (!entitlement.ok) {
         return res.status(200).json({
           ok: true,
           callId: String(call._id),
@@ -636,33 +671,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           transcribedAt: new Date().toISOString(),
           transcriptChars: String(call.transcript || "").length,
           overviewReady: !!call.aiOverviewReady,
-          aiInsightUsage: await loadInsightUsage(callUserEmail),
           skipped: true,
-          reason: "ai_call_overview_disabled",
+          reason: "ai_not_entitled",
         });
       }
     }
+    const coachingLeadName = analysis.coaching ? await loadLeadName(call.leadId) : undefined;
 
     const alreadyHasOverview =
       call.aiOverviewReady === true && call.aiOverview && typeof call.aiOverview === "object";
     const alreadyHasTranscript = isNonEmptyString(call.transcript);
 
-    // Idempotency: if already done, skip
-    if (alreadyHasOverview && alreadyHasTranscript) {
+    // Idempotency: reuse the transcript and overview while still allowing a
+    // newly enabled coaching toggle to fill in a missing coaching report.
+    if (alreadyHasTranscript && (alreadyHasOverview || !analysis.overview)) {
+      const coaching = analysis.coaching && callUserEmail
+        ? await generateCallCoachReport(String(call._id), callUserEmail, coachingLeadName)
+        : undefined;
       return res.status(200).json({
         ok: true,
         callId: String(call._id),
         callSid: String(call.callSid || ""),
         transcribedAt: new Date().toISOString(),
         transcriptChars: String(call.transcript || "").length,
-        overviewReady: true,
+        overviewReady: !!call.aiOverviewReady,
         aiInsightUsage: callUserEmail ? await loadInsightUsage(callUserEmail) : undefined,
+        coaching,
         skipped: true,
         reason: "already_done",
       });
     }
 
-    if (!isNonEmptyString(call.recordingUrl) && !isNonEmptyString(call.recordingSid)) {
+    if (!alreadyHasTranscript && !isNonEmptyString(call.recordingUrl) && !isNonEmptyString(call.recordingSid)) {
       return res.status(400).json({
         ok: false,
         message: "Call has no recordingUrl/recordingSid yet (recording not ready).",
@@ -677,16 +717,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       // non-blocking
     }
 
-    const audio = await fetchRecordingAudio({
-      recordingUrl: call.recordingUrl,
-      recordingSid: call.recordingSid,
-      userEmail: call.userEmail,
-    });
-
-    const transcriptText = await transcribeWithOpenAI({
-      audio: audio.buffer,
-      contentType: audio.contentType,
-    });
+    let transcriptText = alreadyHasTranscript ? String(call.transcript).trim() : "";
+    if (!transcriptText) {
+      const audio = await fetchRecordingAudio({
+        recordingUrl: call.recordingUrl,
+        recordingSid: call.recordingSid,
+        userEmail: call.userEmail,
+      });
+      transcriptText = await transcribeWithOpenAI({
+        audio: audio.buffer,
+        contentType: audio.contentType,
+      });
+    }
 
     // Save transcript ONLY if empty (don’t overwrite anything existing)
     if (!alreadyHasTranscript) {
@@ -694,12 +736,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
 
     // Generate structured overview (same schema UI reads)
-    const overview = await generateCallOverview({
-      transcript: transcriptText,
-      durationSeconds,
-      isVoicemail: call.isVoicemail === true,
-      direction: isNonEmptyString(call.direction) ? String(call.direction) : undefined,
-    });
+    const overview = analysis.overview
+      ? await generateCallOverview({
+          transcript: transcriptText,
+          durationSeconds,
+          isVoicemail: call.isVoicemail === true,
+          direction: isNonEmptyString(call.direction) ? String(call.direction) : undefined,
+        })
+      : null;
 
     let aiInsightsBilled: { minutes: number; costCents: number; processed: boolean } | undefined;
     if (overview) {
@@ -709,11 +753,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       };
       call.aiOverviewReady = true;
       call.aiProcessing = "done";
-    } else {
+    } else if (analysis.overview) {
       call.aiProcessing = "error";
+    } else {
+      call.aiProcessing = "done";
     }
 
     await call.save();
+
+    const coaching = analysis.coaching && callUserEmail
+      ? await generateCallCoachReport(String(call._id), callUserEmail, coachingLeadName)
+      : undefined;
 
     if (overview && callUserEmail) {
       aiInsightsBilled = await markAndBillInsightsOnce({
@@ -741,6 +791,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       overviewReady: !!call.aiOverviewReady,
       aiInsightUsage: callUserEmail ? await loadInsightUsage(callUserEmail) : undefined,
       aiInsightsBilled,
+      coaching,
     });
   } catch (err: any) {
     console.error("[calls/transcribe-recording] error:", err?.message || err);

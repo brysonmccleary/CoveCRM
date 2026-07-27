@@ -14,6 +14,7 @@ import {
 } from "@/lib/recruiting/cloud/discovery-sources";
 import { enabledActionsForPlatform, normalizePlatformActionSettings } from "@/lib/recruiting/action-settings";
 import { assertPlanAllowsCampaign, normalizeRecruitingPlan } from "@/lib/recruiting/plans";
+import { DEFAULT_DAILY_DM_LIMIT, parseDailyDmLimit } from "@/lib/recruiting/dm-settings";
 
 const ALLOWED_EXAMPLES = new Set(["athletes", "insurance agents", "d2d sales", "car sales", "realtors", "fitness coaches", "entrepreneurs"]);
 
@@ -36,7 +37,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const engagementAudience = ["everyone", "women", "men"].includes(String(req.body?.engagementAudience))
       ? String(req.body.engagementAudience)
       : "everyone";
-    const dailyLimit = Math.min(50, Math.max(1, Math.floor(Number(req.body?.dailyLimit || 20))));
+    let dailyLimit: number;
+    try { dailyLimit = parseDailyDmLimit(req.body?.dailyLimit ?? DEFAULT_DAILY_DM_LIMIT); }
+    catch (error) { throw new RecruitingPublicError("CAMPAIGN_INPUT_INVALID", error instanceof Error ? error.message : undefined); }
     const platformActionSettings = normalizePlatformActionSettings(req.body?.platformActionSettings);
     const planKey = normalizeRecruitingPlan(req.body?.planKey);
     const actions = [...new Set(platforms.flatMap((platform) => enabledActionsForPlatform(platformActionSettings, platform)))];

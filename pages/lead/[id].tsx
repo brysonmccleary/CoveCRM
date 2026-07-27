@@ -10,6 +10,7 @@ import dynamic from "next/dynamic";
 import ChatThread from "@/components/messages/ChatThread";
 import { getSocket } from "@/lib/socketClient";
 import { getNumberState } from "@/lib/twilio/localPresence";
+import CallCoachReport from "@/components/CallCoachReport";
 
 
 import { useInlineLeadCall } from "@/lib/dial/useInlineLeadCall";
@@ -360,7 +361,6 @@ export default function LeadProfileDial() {
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [histLoading, setHistLoading] = useState(false);
   const [callsLoading, setCallsLoading] = useState(false);
-  const [generatingOverview, setGeneratingOverview] = useState(false);
   const [showSmsPanel, setShowSmsPanel] = useState(false);
 
   const userHasAI = true;
@@ -527,27 +527,6 @@ export default function LeadProfileDial() {
     }
   }, [resolvedId]);
 
-    const generateOverviewForCall = useCallback(async (callId: string) => {
-    const id = String(callId || "").trim();
-    if (!id) return;
-    try {
-      setGeneratingOverview(true);
-      const r = await fetch("/api/calls/transcribe-recording", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ callId: id }),
-      });
-      const j = await r.json().catch(() => ({} as any));
-      if (!r.ok) throw new Error(j?.message || "Failed to generate overview");
-      await loadCalls();
-      try { toast.success("✅ Overview generated"); } catch {}
-    } catch (e: any) {
-      try { toast.error(e?.message || "Failed to generate overview"); } catch {}
-    } finally {
-      setGeneratingOverview(false);
-    }
-  }, [loadCalls]);
-
   useEffect(() => {
     loadCalls();
   }, [loadCalls]);
@@ -586,6 +565,11 @@ export default function LeadProfileDial() {
       }) || null
     );
   }, [calls]);
+
+  const latestRecordedCall = useMemo(() => calls
+    .slice()
+    .sort((a, b) => new Date(b.startedAt || b.completedAt || 0).getTime() - new Date(a.startedAt || a.completedAt || 0).getTime())
+    .find((call) => call.hasRecording || call.recordingUrl) || null, [calls]);
 
 
   const closeOverview = useMemo(() => {
@@ -1490,22 +1474,11 @@ export default function LeadProfileDial() {
                 >
                   Refresh
                 </button>
-                {latestCallNeedingOverview ? (
-                  <button
-                    type="button"
-                    onClick={() => generateOverviewForCall(String((latestCallNeedingOverview as any)?.id || ""))}
-                    disabled={generatingOverview}
-                    className="text-xs px-2 py-1 rounded bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/20 text-emerald-200 disabled:opacity-50"
-                  >
-                    {generatingOverview ? "Generating…" : "Generate Overview"}
-                  </button>
-                ) : null}
-
               </div>
             </div>
 
             {!latestOverviewCall ? (
-              <p className="text-gray-400 text-sm">No AI call overview yet for this lead.</p>
+              <p className="text-gray-400 text-sm">{latestCallNeedingOverview ? "The latest recording is being processed automatically when AI Call Insights is enabled." : "No AI call overview yet for this lead."}</p>
             ) : !closeOverview ? (
               <p className="text-gray-400 text-sm">AI call found, but overview data is missing.</p>
             ) : (
@@ -1562,6 +1535,8 @@ export default function LeadProfileDial() {
               </div>
             )}
           </div>
+
+          {latestRecordedCall ? <CallCoachReport callId={String(latestRecordedCall.id)} /> : null}
 
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold mb-2">Interaction History</h3>

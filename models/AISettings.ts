@@ -14,7 +14,8 @@ const AISettingsSchema = new Schema(
     aiInboundVoiceKey: { type: String, default: "" },
     aiInboundScriptKey: { type: String, default: "" },
     aiCallOverviewEnabled: { type: Boolean, default: true },
-    aiCallCoachingEnabled: { type: Boolean, default: true },
+    // Coaching is separately billed and must be explicitly enabled by the user.
+    aiCallCoachingEnabled: { type: Boolean, default: false },
     liveTransferEnabled: { type: Boolean, default: false },
     liveTransferPhone: { type: String, default: "" },
     // Review-request automation (on "Sold" disposition) — off by default

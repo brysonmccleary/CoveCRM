@@ -1,6 +1,6 @@
 // components/CallCoachReport.tsx
 // Sandwich-method AI Call Coach Report component
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type ScoreBreakdown = {
   opening: number;
@@ -130,57 +130,32 @@ function ObjectionCard({ item, index }: { item: ObjectionItem; index: number }) 
 
 export default function CallCoachReport({
   callId,
-  leadName,
-  userHasAI,
 }: {
   callId: string;
-  leadName?: string;
-  userHasAI?: boolean;
 }) {
   const [report, setReport] = useState<Report | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [generating, setGenerating] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
-    if (loaded || loading) return;
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    try {
-      const r = await fetch(`/api/calls/coach-report?callId=${encodeURIComponent(callId)}`, { cache: "no-store" });
-      const j = await r.json();
-      if (j.report) setReport(j.report);
-    } catch {
-      // silent — will show generate button
-    } finally {
-      setLoading(false);
-      setLoaded(true);
-    }
-  }
-
-  if (!loaded && !loading) load();
-
-  async function generate() {
-    setGenerating(true);
-    setError(null);
-    try {
-      const r = await fetch("/api/calls/coach-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ callId, leadName }),
+    setReport(null);
+    fetch(`/api/calls/coach-report?callId=${encodeURIComponent(callId)}`, { cache: "no-store" })
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || "Failed to load coaching report.");
+        if (!cancelled) setReport(body.report || null);
+      })
+      .catch((caught) => {
+        if (!cancelled) setError(caught instanceof Error ? caught.message : "Failed to load coaching report.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
-      const j = await r.json();
-      if (j.report) setReport(j.report);
-      else setError(j.error || "Failed to generate report.");
-    } catch {
-      setError("Network error. Please try again.");
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  // AI Coaching is available to all users — userHasAI gate removed
+    return () => { cancelled = true; };
+  }, [callId]);
 
   const BREAKDOWN_LABELS: [keyof ScoreBreakdown, string][] = [
     ["opening", "Opening"],
@@ -217,44 +192,26 @@ export default function CallCoachReport({
             </span>
           )}
         </div>
-        {loaded && !report && !generating && (
-          <button
-            onClick={generate}
-            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg font-medium transition"
-          >
-            Generate Coach Report
-          </button>
-        )}
-        {report && (
-          <button
-            onClick={generate}
-            disabled={generating}
-            className="px-3 py-1.5 bg-white/10 hover:bg-white/15 text-gray-300 text-xs rounded-lg transition"
-          >
-            {generating ? "Regenerating..." : "Regenerate"}
-          </button>
-        )}
+        <span className="text-xs text-gray-500">Automatic</span>
       </div>
 
-      {(loading || generating) && (
+      {loading && (
         <div className="px-5 py-8 text-center text-gray-400 text-sm">
-          {generating ? "Generating your coaching report…" : "Loading…"}
+          Loading…
         </div>
       )}
 
-      {error && !generating && (
+      {error && !loading && (
         <div className="px-5 py-4 text-red-400 text-sm">{error}</div>
       )}
 
-      {loaded && !report && !loading && !generating && !error && (
+      {!report && !loading && !error && (
         <div className="px-5 py-6 text-center text-gray-400 text-sm">
-          No coaching report yet.{" "}
-          <button onClick={generate} className="text-blue-400 hover:underline">Generate one now</button>{" "}
-          to get AI feedback on this call.
+          No coaching report yet. When AI Call Coaching is enabled, eligible recorded calls are processed automatically.
         </div>
       )}
 
-      {report && !loading && !generating && (
+      {report && !loading && (
         <div className="p-5 space-y-6">
           {/* Overall Score */}
           <div className="flex items-center gap-5">
@@ -359,7 +316,7 @@ export default function CallCoachReport({
             <div className="rounded-xl bg-blue-600/10 border border-blue-500/20 px-4 py-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-xs text-blue-400 font-semibold uppercase tracking-wider">
-                  Your Next Step{leadName ? ` — when you call ${leadName} back, say:` : ""}
+                  Your Next Step{report.leadName ? ` — when you call ${report.leadName} back, say:` : ""}
                 </div>
                 <CopyButton text={report.nextStepRecommendation} />
               </div>

@@ -269,9 +269,18 @@ export default function AISettingsPanel() {
             />
           </SettingRow>
 
-          <div className="py-4 text-sm text-gray-400">
-            AI sales coaching is disabled. Call insights remain available for operational call summaries.
-          </div>
+          <SettingRow
+            label="AI Call Coaching"
+            description="Automatically generates a coaching report after eligible recorded calls. $0.02/min, rounded up, for regular calls of at least one minute."
+            locked={aiLocked}
+          >
+            <Toggle
+              label="AI Call Coaching"
+              checked={settings.aiCallCoachingEnabled === true}
+              onChange={(v) => save({ aiCallCoachingEnabled: v })}
+              disabled={saving || aiLocked}
+            />
+          </SettingRow>
 
           <div className="py-4 text-xs text-gray-400">
             <p className="font-medium text-gray-300">AI Call Insights: $0.02/min</p>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GetServerSideProps } from "next";
 import Link from "next/link";
 import { getServerSession } from "next-auth/next";
@@ -10,6 +10,13 @@ import { ACTION_OPTIONS, DEFAULT_PLATFORM_ACTION_SETTINGS, type PlatformActionSe
 import { recruitingErrorMessage } from "@/lib/recruiting/public-errors";
 import type { SocialPlatform } from "@/lib/recruiting/social/types";
 import { RECRUITING_PLANS, type RecruitingPlanKey } from "@/lib/recruiting/plans";
+import {
+  DEFAULT_DAILY_DM_LIMIT,
+  FIRST_NAME_MESSAGE_TOKEN,
+  insertMessageToken,
+  MAX_DAILY_DM_LIMIT,
+  MIN_DAILY_DM_LIMIT,
+} from "@/lib/recruiting/dm-settings";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 
 type CloudAccount = {
@@ -41,6 +48,7 @@ const platformCopy = {
 } as const;
 
 export default function RecruitingPage() {
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const [accounts, setAccounts] = useState<CloudAccount[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignOverview[]>([]);
   const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
@@ -60,7 +68,7 @@ export default function RecruitingPage() {
     discoverySourceTypes: [] as DiscoverySourceType[],
     location: "",
     message: "",
-    dailyLimit: 20,
+    dailyLimit: DEFAULT_DAILY_DM_LIMIT,
     engagementAudience: "everyone" as "everyone" | "women" | "men",
     platformActionSettings: structuredClone(DEFAULT_PLATFORM_ACTION_SETTINGS) as PlatformActionSettings,
   });
@@ -267,6 +275,18 @@ export default function RecruitingPage() {
     }));
   };
 
+  const insertFirstName = () => {
+    const input = messageInputRef.current;
+    const start = input?.selectionStart ?? form.message.length;
+    const end = input?.selectionEnd ?? start;
+    const inserted = insertMessageToken(form.message, FIRST_NAME_MESSAGE_TOKEN, start, end);
+    setForm((current) => ({ ...current, message: inserted.message }));
+    window.requestAnimationFrame(() => {
+      messageInputRef.current?.focus();
+      messageInputRef.current?.setSelectionRange(inserted.caret, inserted.caret);
+    });
+  };
+
   return (
     <DashboardLayout>
       <div className="mx-auto max-w-5xl space-y-6 pb-16 text-white">
@@ -342,10 +362,10 @@ export default function RecruitingPage() {
         </section>
 
         <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl"><div className="flex items-start gap-4"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold">3</span><div className="w-full space-y-4">
-          <div><h2 className="text-lg font-semibold">{dmEnabled ? "Choose exactly what CoveCRM sends" : "DM automation is off"}</h2><p className="mt-1 text-sm text-slate-400">{dmEnabled ? <>Use <span className="font-mono text-indigo-300">{"{{firstName}}"}</span> for the person’s first name. CoveCRM does not rewrite this message.</> : "CoveCRM will only perform the enabled growth actions. You can turn DMs on for either platform above."}</p></div>
-          {dmEnabled && <><textarea className={`${inputClass} min-h-32 resize-y`} maxLength={500} value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="Type the exact DM you want sent…" />
+          <div><h2 className="text-lg font-semibold">{dmEnabled ? "Choose exactly what CoveCRM sends" : "DM automation is off"}</h2><p className="mt-1 text-sm text-slate-400">{dmEnabled ? "Write the exact message. Use the button below to personalize it with the person’s first name." : "CoveCRM will only perform the enabled growth actions. You can turn DMs on for either platform above."}</p></div>
+          {dmEnabled && <><div><button type="button" onClick={insertFirstName} className="rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-2 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/20">+ Add first name</button></div><textarea ref={messageInputRef} className={`${inputClass} min-h-32 resize-y`} maxLength={500} value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="Type the exact DM you want sent…" />
           <div className="flex items-center justify-between text-xs text-slate-500"><span>Exact approved message only</span><span>{form.message.length}/500</span></div>
-          <label className="block text-xs font-medium text-slate-300">Maximum DMs per platform per day<input type="number" min={1} max={50} className={`${inputClass} mt-1 max-w-36`} value={form.dailyLimit} onChange={(event) => setForm({ ...form, dailyLimit: Number(event.target.value) })} /><span className="mt-2 block font-normal text-slate-500">DMs stop at this limit. Paced engagement can continue between 8:00 AM and 9:00 PM in your timezone.</span></label></>}
+          <label className="block text-xs font-medium text-slate-300">Maximum DMs per platform per day<input type="number" min={MIN_DAILY_DM_LIMIT} max={MAX_DAILY_DM_LIMIT} className={`${inputClass} mt-1 max-w-36`} value={form.dailyLimit} onChange={(event) => setForm({ ...form, dailyLimit: Number(event.target.value) })} /><span className="mt-2 block font-normal text-slate-500">CoveCRM stops at 50 per platform per day. Instagram does not publish a guaranteed safe daily DM number, and platform enforcement can vary. Paced engagement can continue between 8:00 AM and 9:00 PM in your timezone.</span></label></>}
         </div></div></section>
 
         <div className="rounded-2xl border border-indigo-400/20 bg-gradient-to-r from-indigo-600/20 to-violet-600/10 p-6"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="text-lg font-semibold">Start the cloud agent</h2><p className="mt-1 text-sm text-slate-400">After starting, you can close CoveCRM and turn off your computer. If a platform logs out, every action stops until you reconnect.</p></div><button type="button" onClick={() => void startRecruiting()} disabled={Boolean(busy) || !selectedAccountsReady} className="rounded-xl bg-indigo-500 px-6 py-3 text-sm font-bold shadow-lg hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40">{busy === "launch" ? "Starting…" : "Start recruiting"}</button></div></div>

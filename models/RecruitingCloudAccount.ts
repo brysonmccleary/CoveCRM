@@ -1,4 +1,5 @@
 import mongoose, { InferSchemaType, Schema, model, models } from "mongoose";
+import { DEFAULT_DAILY_DM_LIMIT, MAX_DAILY_DM_LIMIT, MIN_DAILY_DM_LIMIT } from "@/lib/recruiting/dm-settings";
 
 const RecruitingCloudAccountSchema = new Schema(
   {
@@ -17,7 +18,7 @@ const RecruitingCloudAccountSchema = new Schema(
     consentAcceptedAt: { type: Date, required: true, immutable: true },
     region: { type: String, enum: ["us-west-2", "us-east-1"], default: "us-west-2", immutable: true },
     timeZone: { type: String, default: "America/Phoenix", trim: true },
-    dailyDmLimit: { type: Number, min: 1, max: 50, default: 20 },
+    dailyDmLimit: { type: Number, min: MIN_DAILY_DM_LIMIT, max: MAX_DAILY_DM_LIMIT, default: DEFAULT_DAILY_DM_LIMIT },
     profileUrl: { type: String, default: "", trim: true },
     lastAuthenticatedAt: { type: Date, default: null },
     lastCheckedAt: { type: Date, default: null },

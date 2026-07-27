@@ -15,6 +15,7 @@ const ALLOWED_FIELDS = [
   "aiNewLeadCallEnabled",
   "aiDialSessionEnabled",
   "aiCallOverviewEnabled",
+  "aiCallCoachingEnabled",
   "businessHoursOnly",
   "businessHoursStart",
   "businessHoursEnd",
@@ -83,7 +84,7 @@ export default async function handler(
     for (const field of ALLOWED_FIELDS) {
       if (field in (req.body || {})) update[field] = req.body[field];
     }
-    for (const field of ["reviewRequestEnabled", "missedCallTextBackEnabled"]) {
+    for (const field of ["aiCallOverviewEnabled", "aiCallCoachingEnabled", "reviewRequestEnabled", "missedCallTextBackEnabled"]) {
       if (field in update && typeof update[field] !== "boolean") {
         return res.status(400).json({ ok: false, error: `${field} must be a boolean` });
       }

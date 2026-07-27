@@ -17,10 +17,6 @@ const RAW_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || ""
 const BASE_URL = RAW_BASE || "";
 const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-const CALL_AI_SUMMARY_ENABLED =
-  (process.env.CALL_AI_SUMMARY_ENABLED || "").toLowerCase() === "1" ||
-  (process.env.CALL_AI_SUMMARY_ENABLED || "").toLowerCase() === "true";
-
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 
 function candidateUrls(path: string): string[] {
@@ -292,10 +288,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ---- AI gate
     if (RecordingStatus === "completed" && recordingUrl) {
       try {
-        const user =
-          (userEmail && (await User.findOne({ email: userEmail }))) || null;
         const gate = userEmail ? await requireAI(String(userEmail).toLowerCase(), { allowOwnerBypass: true }) : { ok: false, status: 404, error: "User not found" };
-        const aiAllowed = CALL_AI_SUMMARY_ENABLED && gate.ok;
+        const aiAllowed = gate.ok;
 
 
         if (aiAllowed) {
