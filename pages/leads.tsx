@@ -7,6 +7,7 @@ import LeadPreviewPanel from "@/components/LeadPreviewPanel";
 import SaleModal from "@/components/SaleModal";
 import toast from "react-hot-toast";
 import { getNumberState } from "@/lib/twilio/localPresence";
+import { ensureMicrophoneAccess, microphoneErrorMessage } from "@/lib/telephony/microphoneAccess";
 
 function formatPhoneNumber(phone: string): string {
   const d = (phone || "").replace(/\D/g, "");
@@ -392,9 +393,9 @@ export default function LeadsPage() {
     }
 
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      alert("Microphone access is required to start dialing!");
+      await ensureMicrophoneAccess();
+    } catch (error) {
+      alert(microphoneErrorMessage(error));
       return;
     }
 

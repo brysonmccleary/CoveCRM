@@ -5,8 +5,10 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { metaDialogUrl } from "@/lib/meta/graphApi";
+import { createMetaOauthState } from "@/lib/meta/oauthState";
 
 const META_APP_ID = process.env.META_APP_ID || "";
+const META_APP_SECRET = process.env.META_APP_SECRET || "";
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
@@ -20,8 +22,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
-  if (!META_APP_ID) {
-    return res.status(500).json({ error: "META_APP_ID not configured" });
+  if (!META_APP_ID || !META_APP_SECRET) {
+    return res.status(500).json({ error: "Facebook connection is temporarily unavailable" });
   }
 
   const redirectUri = `${BASE_URL}/api/meta/callback`;
@@ -31,6 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     "business_management",
     "pages_read_engagement",
     "pages_show_list",
+    "pages_manage_metadata",
     "leads_retrieval",
   ].join(",");
 
@@ -40,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   oauthUrl.searchParams.set("client_id", META_APP_ID);
   oauthUrl.searchParams.set("redirect_uri", redirectUri);
   oauthUrl.searchParams.set("scope", scope);
-  oauthUrl.searchParams.set("state", encodeURIComponent(userId));
+  oauthUrl.searchParams.set("state", createMetaOauthState(userId, META_APP_SECRET));
   oauthUrl.searchParams.set("response_type", "code");
 
   return res.redirect(oauthUrl.toString());

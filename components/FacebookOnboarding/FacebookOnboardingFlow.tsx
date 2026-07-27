@@ -1,230 +1,272 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import AdWizard from "@/components/FacebookAds/AdWizard";
-import MetaConnectPanel from "@/components/MetaConnectPanel";
 import FacebookTrustIntro from "./FacebookTrustIntro";
-import LaunchReviewStep from "./LaunchReviewStep";
-import LaunchReadinessCard, { type LaunchReadiness } from "./LaunchReadinessCard";
 import NoPageGuidedSetup from "./NoPageGuidedSetup";
-import PageIdentityCard, { type PageIdentity } from "./PageIdentityCard";
 
 type FacebookOnboardingFlowProps = {
   selectedLeadType: string;
   onLeadTypeChange: (leadType: string) => void;
 };
 
-type FacebookStatus = {
-  connected?: boolean;
-  pageName?: string;
-  pageId?: string;
+type ConnectedPage = {
+  id: string;
+  name: string;
+  pictureUrl?: string;
+  category?: string;
+  link?: string;
 };
 
-type ConnectedPage = PageIdentity & {
-  id?: string;
-  selected?: boolean;
-};
+type AdAccount = { accountId: string; name: string; status?: number };
 
 export default function FacebookOnboardingFlow({
   selectedLeadType,
   onLeadTypeChange,
 }: FacebookOnboardingFlowProps) {
-  const [status, setStatus] = useState<FacebookStatus | null>(null);
-  const [connectedPages, setConnectedPages] = useState<ConnectedPage[]>([]);
-  const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
-  const [refreshingPages, setRefreshingPages] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [selectedPage, setSelectedPage] = useState<ConnectedPage | null>(null);
+  const [selectedAdAccount, setSelectedAdAccount] = useState<AdAccount | null>(null);
+  const [pages, setPages] = useState<ConnectedPage[]>([]);
+  const [adAccounts, setAdAccounts] = useState<AdAccount[]>([]);
+  const [refreshing, setRefreshing] = useState(true);
+  const [awaitingNewPage, setAwaitingNewPage] = useState(false);
+  const [showPageSetup, setShowPageSetup] = useState(false);
+  const [showCreatePageSetup, setShowCreatePageSetup] = useState(false);
+  const [selectingPageId, setSelectingPageId] = useState("");
+  const [setupError, setSetupError] = useState("");
+  const knownPageIds = useRef<string[]>([]);
 
-  const loadFacebookDisplayState = useCallback(async () => {
-    setRefreshingPages(true);
+  const refreshSetup = useCallback(async (options?: {
+    preferNewPage?: boolean;
+    pageId?: string;
+    adAccountId?: string;
+  }) => {
+    setRefreshing(true);
+    setSetupError("");
     try {
-      const statusResponse = await fetch("/api/meta/sync-insights");
-      const data = statusResponse.ok ? await statusResponse.json() : null;
-      if (!data) return;
-
-      const nextStatus = {
-        connected: Boolean(data.connected),
-        pageName: data.pageName || "",
-        pageId: data.pageId || "",
-      };
-      setStatus(nextStatus);
-
-      if (nextStatus.connected) {
-        const pagesResponse = await fetch("/api/meta/pages");
-        const pagesData = pagesResponse.ok ? await pagesResponse.json() : null;
-        const pages = Array.isArray(pagesData?.pages) ? pagesData.pages : [];
-        setConnectedPages(pages);
-      } else {
-        setConnectedPages([]);
+      const response = await fetch("/api/meta/refresh-setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leadType: selectedLeadType,
+          preferNewPage: options?.preferNewPage === true,
+          knownPageIds: knownPageIds.current,
+          pageId: options?.pageId,
+          adAccountId: options?.adAccountId,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "Facebook could not be refreshed right now.");
+      setConnected(Boolean(data?.connected));
+      setPages(Array.isArray(data?.pages) ? data.pages : []);
+      setAdAccounts(Array.isArray(data?.adAccounts) ? data.adAccounts : []);
+      setSelectedPage(data?.page || null);
+      setSelectedAdAccount(data?.adAccount || null);
+      if (data?.page && options?.preferNewPage && !knownPageIds.current.includes(String(data.page.id))) {
+        setAwaitingNewPage(false);
+        setShowPageSetup(false);
       }
-    } catch {
-      setStatus(null);
-      setConnectedPages([]);
+      return data;
+    } catch (error: any) {
+      setSetupError(error?.message || "Facebook could not be refreshed right now.");
+      return null;
     } finally {
-      setRefreshingPages(false);
+      setRefreshing(false);
     }
-  }, []);
+  }, [selectedLeadType]);
 
   useEffect(() => {
-    let mounted = true;
-    async function loadInitialDisplayState() {
-      if (mounted) {
-        await loadFacebookDisplayState();
-      }
-    }
+    refreshSetup();
+  }, [refreshSetup]);
 
-    loadInitialDisplayState();
-
+  useEffect(() => {
+    if (!awaitingNewPage) return;
+    const checkForPage = () => refreshSetup({ preferNewPage: true });
+    const interval = window.setInterval(checkForPage, 4000);
+    window.addEventListener("focus", checkForPage);
     return () => {
-      mounted = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", checkForPage);
     };
-  }, [loadFacebookDisplayState]);
+  }, [awaitingNewPage, refreshSetup]);
 
-  const usablePages = connectedPages.filter((page) => Boolean(page.name?.trim()));
-  const selectedPage =
-    usablePages.find((page) => page.selected) ||
-    usablePages.find((page) => String(page.id || "") === String(status?.pageId || "")) ||
-    null;
-  const pageIdentity: PageIdentity | null =
-    selectedPage ||
-    (status?.pageName ? { name: status.pageName } : null);
-  const needsPageGuidance = Boolean(status?.connected) && (!selectedPage || usablePages.length === 0);
-  const displayPageIdentity = needsPageGuidance ? null : pageIdentity;
-  const readinessItems = [
-    {
-      key: "facebook",
-      label: "Facebook connected",
-      ready: Boolean(status?.connected),
-      missingText: "Continue with Facebook to connect your account.",
-    },
-    {
-      key: "page",
-      label: "Business Page selected",
-      ready: Boolean(displayPageIdentity?.name?.trim()),
-      missingText: "Choose a business Page before launch.",
-    },
-    {
-      key: "lead-type",
-      label: "Lead type selected",
-      ready: Boolean(selectedLeadType),
-      missingText: "Choose the type of leads you want.",
-    },
-    {
-      key: "paused",
-      label: "Campaign will launch paused",
-      ready: true,
-    },
-  ];
-  const readiness: LaunchReadiness = {
-    ready: readinessItems.every((item) => item.ready),
-    items: readinessItems,
-    missing: readinessItems
-      .filter((item) => !item.ready)
-      .map((item) => item.missingText || item.label),
+  const openPageCreator = () => {
+    knownPageIds.current = pages.map((page) => page.id);
+    setAwaitingNewPage(true);
+    window.open("https://www.facebook.com/pages/create", "_blank", "noopener,noreferrer");
   };
+
+  const selectPage = async (pageId: string) => {
+    setSelectingPageId(pageId);
+    const data = await refreshSetup({ pageId });
+    if (String(data?.page?.id || "") === pageId) {
+      setShowPageSetup(false);
+      setShowCreatePageSetup(false);
+    }
+    setSelectingPageId("");
+  };
+
+  const facebookReady = Boolean(connected && selectedPage && selectedAdAccount);
+  const needsPageSetup = connected && !selectedPage;
 
   return (
     <div className="space-y-7">
-      <FacebookTrustIntro connected={Boolean(status?.connected)} />
+      <FacebookTrustIntro connected={connected} />
 
-      {needsPageGuidance && (
+      {!connected && !refreshing && (
+        <section className="rounded-3xl border border-blue-500/20 bg-[#0f172a] p-6">
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Step 1</p>
+          <h2 className="mt-1 text-2xl font-bold text-white">Connect Facebook</h2>
+          <p className="mt-2 text-sm text-gray-400">Sign in once so CoveCRM can find your Page and ad account.</p>
+          <button
+            type="button"
+            onClick={() => { window.location.href = "/api/meta/connect"; }}
+            className="mt-5 inline-flex min-h-12 items-center justify-center rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white hover:bg-blue-500"
+          >
+            Continue with Facebook
+          </button>
+        </section>
+      )}
+
+      {(needsPageSetup || showCreatePageSetup) && (
         <NoPageGuidedSetup
-          onRefreshPages={loadFacebookDisplayState}
-          onAlreadyHavePage={() => setShowAdvancedSetup(true)}
-          refreshing={refreshingPages}
+          onRefreshPages={() => refreshSetup({ preferNewPage: true })}
+          onOpenPageCreator={openPageCreator}
+          pages={pages}
+          onSelectPage={selectPage}
+          refreshing={refreshing || awaitingNewPage}
+          selectedLeadType={selectedLeadType}
         />
       )}
 
-      <section className="rounded-3xl border border-white/10 bg-[#0f172a] p-5 shadow-2xl shadow-black/20 sm:p-7">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Step 1</p>
-            <h2 className="mt-1 text-2xl font-bold text-white">Connect Facebook and choose your page</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
-              Connect Facebook, choose the Facebook Page customers will see, then choose the Ad Account to run ads from.
-            </p>
+      {connected && selectedPage && showPageSetup && !showCreatePageSetup && (
+        <section className="rounded-3xl border border-blue-500/25 bg-[#0f172a] p-5 sm:p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Choose your Facebook Page</p>
+              <h2 className="mt-1 text-xl font-bold text-white">Which Page should customers see?</h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPageSetup(false)}
+              className="text-sm font-semibold text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
           </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            {pages.map((page) => {
+              const isSelected = page.id === selectedPage.id;
+              const isSaving = selectingPageId === page.id;
+              return (
+                <button
+                  key={page.id}
+                  type="button"
+                  onClick={() => selectPage(page.id)}
+                  disabled={Boolean(selectingPageId)}
+                  className={`flex min-h-20 items-center gap-3 rounded-2xl border p-4 text-left transition disabled:cursor-wait disabled:opacity-60 ${
+                    isSelected
+                      ? "border-emerald-400/40 bg-emerald-500/10"
+                      : "border-white/10 bg-white/[0.04] hover:border-blue-400/40 hover:bg-blue-500/10"
+                  }`}
+                >
+                  {page.pictureUrl ? (
+                    <div
+                      aria-hidden="true"
+                      className="h-12 w-12 shrink-0 rounded-xl bg-cover bg-center"
+                      style={{ backgroundImage: `url(${page.pictureUrl})` }}
+                    />
+                  ) : (
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 font-bold text-blue-100">
+                      {page.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-white">{page.name}</p>
+                    <p className={`mt-1 text-xs ${isSelected ? "text-emerald-300" : "text-blue-300"}`}>
+                      {isSaving ? "Saving..." : isSelected ? "Currently selected" : "Select this Page"}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
           <button
             type="button"
-            onClick={() => setShowAdvancedSetup((current) => !current)}
-            className="min-h-10 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-gray-200 transition hover:bg-white/10"
+            onClick={() => setShowCreatePageSetup(true)}
+            className="mt-4 min-h-11 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-gray-200 hover:bg-white/10"
           >
-            {showAdvancedSetup ? "Hide connection details" : "Connection details"}
+            Create a different Facebook Page
           </button>
-        </div>
+        </section>
+      )}
 
-        <div className="mt-5">
-          {showAdvancedSetup ? (
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-              <MetaConnectPanel leadType={selectedLeadType} />
-            </div>
-          ) : status?.connected ? (
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm font-semibold text-white">Facebook is connected</p>
-                <p className="mt-1 text-xs text-gray-400">
-                  {displayPageIdentity?.name ? `Business page selected: ${displayPageIdentity.name}` : "Choose a business Page before launching ads."}
-                </p>
-                {!displayPageIdentity?.name && (
-                  <p className="mt-2 text-xs font-medium text-amber-300">
-                    Already have a Page? Click Review page and select it. Need one? Create it directly on Facebook, then return and refresh.
-                  </p>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowAdvancedSetup(true)}
-                className="min-h-10 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-500"
-              >
-                Review page
-              </button>
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-blue-500/20 bg-blue-950/20 p-5">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <p className="text-base font-semibold text-white">No Facebook business page connected yet</p>
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-blue-100/80">
-                    Continue with Facebook, then choose the Facebook Page customers will see and the Ad Account to run ads from.
-                  </p>
+      {connected && selectedPage && !showPageSetup && !showCreatePageSetup && (
+        <section className="rounded-3xl border border-emerald-500/25 bg-emerald-950/20 p-5 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              {selectedPage.pictureUrl ? (
+                <div
+                  aria-hidden="true"
+                  className="h-12 w-12 rounded-xl bg-cover bg-center"
+                  style={{ backgroundImage: `url(${selectedPage.pictureUrl})` }}
+                />
+              ) : (
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 font-bold text-emerald-100">
+                  {selectedPage.name.charAt(0).toUpperCase()}
                 </div>
-                <a
-                  href="/api/meta/connect"
-                  className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-500"
-                >
-                  Continue with Facebook
-                </a>
+              )}
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Facebook ready</p>
+                <p className="mt-1 font-semibold text-white">{selectedPage.name}</p>
               </div>
             </div>
-          )}
-        </div>
-      </section>
-
-      <PageIdentityCard page={displayPageIdentity} />
-
-      <LaunchReadinessCard readiness={readiness} />
-
-      <section className="space-y-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Step 3</p>
-          <h2 className="mt-1 text-2xl font-bold text-white">Choose lead type and budget</h2>
-          <p className="mt-2 text-sm text-gray-400">
-            CoveCRM generates the ad, creates the business campaign, and keeps it paused until you activate it.
-          </p>
-        </div>
-        {!readiness.ready && (
-          <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100/90">
-            <p className="font-semibold text-amber-50">Not ready to launch yet</p>
-            <p className="mt-1">
-              Finish the missing setup items above before using the launch controls. Your campaign will still launch paused first for review.
-            </p>
+            <button
+              type="button"
+              onClick={() => setShowPageSetup(true)}
+              className="text-sm font-semibold text-gray-400 underline decoration-white/20 underline-offset-4 hover:text-white"
+            >
+              Change Page
+            </button>
           </div>
-        )}
-        <AdWizard onLeadTypeChange={onLeadTypeChange} />
-      </section>
+        </section>
+      )}
 
-      <LaunchReviewStep
-        page={displayPageIdentity}
-        leadType={selectedLeadType}
-        readiness={readiness}
-      />
+      {connected && selectedPage && !selectedAdAccount && adAccounts.length > 1 && (
+        <section className="rounded-3xl border border-white/10 bg-[#0f172a] p-5">
+          <h2 className="text-lg font-bold text-white">Choose where Facebook bills your ads</h2>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {adAccounts.map((account) => (
+              <button
+                key={account.accountId}
+                type="button"
+                onClick={() => refreshSetup({ adAccountId: account.accountId })}
+                className="rounded-xl border border-white/10 bg-white/5 p-3 text-left text-sm font-semibold text-white hover:bg-white/10"
+              >
+                {account.name || `Ad account ${account.accountId}`}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {setupError && (
+        <div className="rounded-2xl border border-amber-500/25 bg-amber-950/20 p-4 text-sm text-amber-100">
+          {setupError} <button type="button" onClick={() => refreshSetup()} className="font-semibold underline">Try again</button>
+        </div>
+      )}
+
+      {facebookReady && (
+        <section className="space-y-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Step 2</p>
+            <h2 className="mt-1 text-2xl font-bold text-white">Build and launch your ad</h2>
+            <p className="mt-2 text-sm text-gray-400">Choose the lead type, states, and budget. CoveCRM handles the Meta setup.</p>
+          </div>
+          <AdWizard onLeadTypeChange={onLeadTypeChange} />
+        </section>
+      )}
     </div>
   );
 }

@@ -54,7 +54,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const adAccountId = leadTypeAssets?.adAccountId || user.metaAdAccountId || "";
 
     return res.status(200).json({
-      connected: !!(user.metaAdAccountId && (user.metaAccessToken || user.metaSystemUserToken)),
+      connected: !!(user.metaAccessToken || user.metaSystemUserToken),
       pageId,
       pageName,
       adAccountId,

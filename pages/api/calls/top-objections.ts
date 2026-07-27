@@ -13,9 +13,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
-  await mongooseConnect();
-
   const userEmail = session.user.email.toLowerCase();
+  const salesCoachingDisabled: boolean = true;
+  if (salesCoachingDisabled) {
+    return res.status(200).json({ objections: [], disabled: true, message: "Sales coaching is disabled." });
+  }
+
+  await mongooseConnect();
   const range = (req.query.range as string) || "7days";
 
   const now = new Date();

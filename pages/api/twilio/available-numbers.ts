@@ -89,6 +89,10 @@ const areaCodeCityMap: Record<string, string> = {
   "985": "Houma",
 };
 
+const stateNames: Record<string, string> = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA", colorado: "CO", connecticut: "CT", delaware: "DE", florida: "FL", georgia: "GA", hawaii: "HI", idaho: "ID", illinois: "IL", indiana: "IN", iowa: "IA", kansas: "KS", kentucky: "KY", louisiana: "LA", maine: "ME", maryland: "MD", massachusetts: "MA", michigan: "MI", minnesota: "MN", mississippi: "MS", missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV", "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY", "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK", oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC", "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT", virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI", wyoming: "WY",
+};
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -97,22 +101,30 @@ export default async function handler(
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  const { country = "US", areaCode } = req.query;
+  const { country = "US", areaCode, state, query } = req.query;
+  const search = String(query || areaCode || state || "").trim();
+  const normalizedAreaCode = /^\d{3}$/.test(search) ? search : "";
+  const normalizedState = normalizedAreaCode
+    ? ""
+    : (stateNames[search.toLowerCase()] || search.toUpperCase());
 
-  if (!areaCode) {
-    return res.status(400).json({ message: "Missing area code" });
+  if (!normalizedAreaCode && !normalizedState) {
+    return res.status(400).json({ message: "Choose a state or enter an area code" });
   }
 
-  const areaCodeNum = Number(String(areaCode).replace(/\D/g, ""));
-  if (!Number.isInteger(areaCodeNum) || areaCodeNum < 200 || areaCodeNum > 999) {
+  const areaCodeNum = normalizedAreaCode ? Number(normalizedAreaCode) : undefined;
+  if (areaCodeNum !== undefined && (!Number.isInteger(areaCodeNum) || areaCodeNum < 200 || areaCodeNum > 999)) {
     return res.status(400).json({ message: "Invalid area code" });
+  }
+  if (normalizedState && !/^[A-Z]{2}$/.test(normalizedState)) {
+    return res.status(400).json({ message: "Invalid state" });
   }
 
   try {
     const numbers = await twilioClient
       .availablePhoneNumbers(country as string)
       .local.list({
-        areaCode: areaCodeNum, // must be a number
+        ...(areaCodeNum !== undefined ? { areaCode: areaCodeNum } : { inRegion: normalizedState }),
         smsEnabled: true,
         voiceEnabled: true,
         limit: 10,

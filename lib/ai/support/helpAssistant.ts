@@ -30,6 +30,24 @@ const MAX_SUPPORT_CONTEXT_CHARS = 7000;
 const MAX_PAGE_CONTEXT_CHARS = 160;
 const MAX_USER_MESSAGE_CHARS = 1200;
 
+function selectRelevantKnowledgeDocs(message: string, docs: any[]) {
+  const queryTerms = String(message || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((term) => term.length >= 3);
+  return [...(Array.isArray(docs) ? docs : [])]
+    .map((doc) => {
+      const searchable = [doc?.title, ...(Array.isArray(doc?.tags) ? doc.tags : []), doc?.content]
+        .join(" ")
+        .toLowerCase();
+      const score = queryTerms.reduce((total, term) => total + (searchable.includes(term) ? 1 : 0), 0);
+      return { doc, score };
+    })
+    .sort((a, b) => b.score - a.score || new Date(b.doc?.updatedAt || 0).getTime() - new Date(a.doc?.updatedAt || 0).getTime())
+    .slice(0, MAX_KNOWLEDGE_DOCS)
+    .map((entry) => entry.doc);
+}
+
 const SUPPORT_TOOL_DEFS = [
   { name: "getTwilioStatus", description: "Inspect Twilio and phone-number setup for the tenant." },
   { name: "getA2PStatus", description: "Inspect A2P registration and messaging readiness." },
@@ -516,8 +534,11 @@ function buildGeneralDeterministicAnswer(
   pageContext?: string
 ) {
   const lower = String(message || "").toLowerCase();
-  if (/(who should i call|who do i call|who should i follow up with|who is hottest|top leads|best lead)/i.test(lower)) {
-    return buildWhoToCallAnswer(supportContext);
+  if (/(who should i call|who do i call|who should i follow up with|who is hottest|top leads|best lead|lead ranking|lead priority|recommend.*lead|sales advice|sales coach|call coaching|what should i say|objection handling|rebuttal|how do i close|closing technique|pitch advice|sales script)/i.test(lower)) {
+    return "I can help with CoveCRM setup, troubleshooting, account status, and how to use a feature. I don’t provide sales strategy, lead rankings, call coaching, scripts, closing advice, or objection handling.";
+  }
+  if (/(microphone|\bmic\b|audio input|can.t hear me|permission to use.*audio)/i.test(lower)) {
+    return "Let’s fix the microphone before you call again: 1) click the site-controls icon beside the CoveCRM address and set Microphone to Allow; 2) reload CoveCRM; 3) make sure the correct input is selected in your computer sound settings; 4) quit Zoom, Teams, FaceTime, or any other app that may be using the mic; 5) start the call again. On Safari, also use Safari > Settings for This Website > Microphone. If it still fails, send the browser name and the exact error you see.";
   }
   if (/(can i send texts|can i text|texting|send sms|sms working)/i.test(lower)) {
     return buildCanISendTextsAnswer(supportContext, toolResults);
@@ -621,7 +642,7 @@ export async function runHelpAssistant({
 
     const [loadedSupportContext, knowledgeDocs] = await Promise.all([
       buildSupportContext(userEmail).catch(() => null),
-      SupportKnowledgeDoc.find({}).sort({ updatedAt: -1 }).limit(MAX_KNOWLEDGE_DOCS).lean().catch(() => []),
+      SupportKnowledgeDoc.find({}).sort({ updatedAt: -1 }).limit(30).lean().catch(() => []),
     ]);
 
     supportContext = loadedSupportContext || {
@@ -652,14 +673,18 @@ export async function runHelpAssistant({
     const apiKey = process.env.OPENAI_API_KEY;
     let answer = "";
 
-    if (apiKey) {
+    const salesAdviceRequest = /(who should i call|who do i call|who should i follow up with|who is hottest|top leads|best lead|lead ranking|lead priority|recommend.*lead|sales advice|sales coach|call coaching|what should i say|objection handling|rebuttal|how do i close|closing technique|pitch advice|sales script)/i.test(String(content || ""));
+    const microphoneRequest = /(microphone|\bmic\b|audio input|can.t hear me|permission to use.*audio)/i.test(String(content || ""));
+    if (salesAdviceRequest || microphoneRequest) {
+      answer = buildGeneralDeterministicAnswer(content, supportContext, toolResults, pageContext);
+    } else if (apiKey) {
       const client = new OpenAI({ apiKey });
       let response: any = null;
       const promptPayload = buildPromptPayload({
         message: content,
         pageContext,
         supportContext,
-        knowledgeDocs,
+        knowledgeDocs: selectRelevantKnowledgeDocs(content, knowledgeDocs),
         history: Array.isArray(conversation?.messages) ? conversation.messages : [],
       });
 
@@ -683,11 +708,7 @@ export async function runHelpAssistant({
                 "You can inspect the user's CRM account, leads, folders, messaging setup, and AI status.",
                 "",
                 "Behavior rules:",
-                "- When the user asks who to call, who is hottest, which lead is most interested, who to follow up with, or anything lead-related, use REAL lead data from supportContext.leadAssistant and/or the getLeadAssistantSnapshot tool.",
-                "- Prefer specific lead names with short reasons like aiPriorityScore, recent updates, folder, or status.",
-                "- If there are multiple strong candidates, rank them.",
-                "- If the user asks for counts, use the real totals from leadAssistant when available.",
-                "- Do NOT recommend call scripts, SMS scripts, rebuttals, or sales talk tracks unless the user explicitly asks for a script.",
+                "- Do not provide sales strategy, lead rankings, call coaching, scripts, closing advice, or objection handling. Politely state that you can help with product setup and troubleshooting instead.",
                 "- Do NOT fall back to generic coaching if real account data is available.",
                 "- Be concise, practical, and assistant-like.",
                 "- For operational issues, still diagnose clearly and step by step when needed.",

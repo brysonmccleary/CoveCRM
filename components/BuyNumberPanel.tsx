@@ -53,12 +53,11 @@ interface CallHealth {
 }
 
 export default function BuyNumberPanel() {
-  const [areaCode, setAreaCode] = useState("");
+  const [search, setSearch] = useState("");
   const [availableNumbers, setAvailableNumbers] = useState<AvailableNumber[]>([]);
   const [ownedNumbers, setOwnedNumbers] = useState<TwilioNumber[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [confirming, setConfirming] = useState(false);
   const [selectedNumber, setSelectedNumber] = useState<AvailableNumber | null>(null);
   const [deleteConfirming, setDeleteConfirming] = useState(false);
   const [numberToDelete, setNumberToDelete] = useState<TwilioNumber | null>(null);
@@ -104,10 +103,11 @@ export default function BuyNumberPanel() {
   }, []);
 
   const fetchAvailableNumbers = async () => {
-    if (!areaCode) return;
+    if (!search.trim()) return;
     setLoading(true);
+    setError("");
     try {
-      const res = await axios.get(`/api/twilio/available-numbers?areaCode=${areaCode}`);
+      const res = await axios.get(`/api/twilio/available-numbers?query=${encodeURIComponent(search.trim())}`);
       setAvailableNumbers(res.data.numbers);
     } catch (err) {
       console.error("Error fetching available numbers", err);
@@ -118,8 +118,7 @@ export default function BuyNumberPanel() {
   };
 
   const handleSelectNumber = (num: AvailableNumber) => {
-    setSelectedNumber(num);
-    setConfirming(true);
+    setSelectedNumber((current) => current?.phoneNumber === num.phoneNumber ? null : num);
   };
 
   const handleSelectDelete = (num: TwilioNumber) => {
@@ -130,9 +129,8 @@ export default function BuyNumberPanel() {
   const handleBuyNumber = async () => {
     if (!selectedNumber) return;
 
-    // Immediately close the popup so they can't double-click / re-trigger
+    // Clear the selected result immediately so it cannot be double-purchased.
     const numberToBuy = selectedNumber;
-    setConfirming(false);
     setSelectedNumber(null);
 
     setLoading(true);
@@ -142,7 +140,9 @@ export default function BuyNumberPanel() {
       await fetchOwnedNumbers();
       await fetchDefaultNumber();
       await fetchCallHealth();
-      alert(`Successfully purchased ${numberToBuy.phoneNumber}`);
+      // Return the user to their owned numbers instead of leaving a stale search list open.
+      setAvailableNumbers([]);
+      setSearch("");
     } catch (err: any) {
       console.error("Error purchasing number", err);
       setError(purchaseBlockMessage(err?.response?.data));
@@ -196,16 +196,17 @@ export default function BuyNumberPanel() {
   return (
     <div className="p-4 border border-black dark:border-white rounded space-y-4 relative">
       <h2 className="text-xl font-bold">Buy a New Phone Number</h2>
+      <p className="text-sm text-gray-400">Enter an area code, state abbreviation, or state name. Calling is ready as soon as you purchase a number.</p>
       <input
-        value={areaCode}
-        onChange={(e) => setAreaCode(e.target.value)}
-        placeholder="Enter area code (e.g., 415)"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Area code, state, or abbreviation (e.g., 415, CA, California)"
         className="border border-black dark:border-white p-2 rounded w-full"
       />
       <button
         onClick={fetchAvailableNumbers}
         className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-        disabled={loading || !areaCode}
+        disabled={loading || !search.trim()}
       >
         {loading ? "Loading..." : "Search Available Numbers"}
       </button>
@@ -215,7 +216,7 @@ export default function BuyNumberPanel() {
       <h3 className="text-lg font-semibold mt-4">Available Numbers</h3>
       {!loading && availableNumbers.length === 0 && (
         <div className="rounded-lg border border-dashed border-white/10 bg-[#0f172a]/40 px-4 py-5 text-sm text-gray-400">
-          Enter a three-digit area code to search for numbers available to purchase.
+          Choose a state or enter a three-digit area code to search for numbers available to purchase.
         </div>
       )}
       <ul className="space-y-2">
@@ -227,12 +228,22 @@ export default function BuyNumberPanel() {
                 {num.city}, {num.state}
               </p>
             </div>
-            <button
-              onClick={() => handleSelectNumber(num)}
-              className="bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded cursor-pointer"
-            >
-              Buy
-            </button>
+            {selectedNumber?.phoneNumber === num.phoneNumber ? (
+              <button
+                onClick={handleBuyNumber}
+                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded cursor-pointer disabled:opacity-60"
+                disabled={loading}
+              >
+                {loading ? "Purchasing..." : "Confirm $1.15/mo"}
+              </button>
+            ) : (
+              <button
+                onClick={() => handleSelectNumber(num)}
+                className="bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded cursor-pointer"
+              >
+                Buy
+              </button>
+            )}
           </li>
         ))}
       </ul>
@@ -364,35 +375,6 @@ export default function BuyNumberPanel() {
           </li>
         ))}
       </ul>
-
-      {/* Confirm Purchase Modal */}
-      {confirming && selectedNumber && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
-          <div className="bg-white text-black p-6 rounded shadow-lg space-y-4 max-w-sm w-full">
-            <h2 className="text-lg font-bold">Confirm Number Purchase</h2>
-            <p>Number: {formatPhoneNumber(selectedNumber.phoneNumber)}</p>
-            <p>
-              Location: {selectedNumber.city}, {selectedNumber.state}
-            </p>
-            <p>Price: $1.15/month</p>
-            <div className="flex space-x-4 mt-4">
-              <button
-                className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded cursor-pointer disabled:opacity-60"
-                onClick={handleBuyNumber}
-                disabled={loading}
-              >
-                {loading ? "Purchasing..." : "Confirm Purchase"}
-              </button>
-              <button
-                className="bg-gray-400 hover:bg-gray-500 text-black px-4 py-2 rounded cursor-pointer"
-                onClick={() => setConfirming(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Confirm Delete Modal */}
       {deleteConfirming && numberToDelete && (

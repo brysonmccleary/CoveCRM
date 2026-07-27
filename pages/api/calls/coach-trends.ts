@@ -13,6 +13,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userEmail = session?.user?.email ? String(session.user.email).toLowerCase() : null;
   if (!userEmail) return res.status(401).json({ error: "Unauthorized" });
 
+  return res.status(200).json({ ok: true, disabled: true, totalCoached: 0, reports: [], averages: null, topObjection: null, scoreTrend: [] });
+
   await mongooseConnect();
 
   const reports = await CallCoachReport.find({ userEmail })

@@ -25,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       estimatedCostDollars: Number((Number((user as any)?.aiInsightCostCents || 0) / 100).toFixed(2)),
       lastResetAt: (user as any)?.aiInsightLastResetAt || null,
     };
-    return res.status(200).json({ settings: settings || {}, aiInsightUsage });
+    return res.status(200).json({ settings: { ...(settings || {}), aiCallCoachingEnabled: false }, aiInsightUsage });
   }
 
   if (req.method === "POST") {
@@ -41,7 +41,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       "aiDialSessionEnabled",
       "aiDialerTranscriptsEnabled",
       "aiCallOverviewEnabled",
-      "aiCallCoachingEnabled",
       "liveTransferEnabled",
       "liveTransferPhone",
       "newLeadCallDelayMinutes",
@@ -58,6 +57,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const key of allowed) {
       if (key in req.body) update[key] = req.body[key];
     }
+    // Sales coaching is intentionally unavailable even if a legacy client sends it.
+    update.aiCallCoachingEnabled = false;
 
     for (const key of ["reviewRequestEnabled", "missedCallTextBackEnabled"]) {
       if (key in update && typeof update[key] !== "boolean") {

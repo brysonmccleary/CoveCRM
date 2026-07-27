@@ -4,9 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
-import AISettings from "@/models/AISettings";
 import { getUserByEmail } from "@/models/User";
-import { generateCallCoachReport } from "@/lib/ai/generateCallCoachReport";
 
 function asString(v: string | string[] | undefined) {
   if (!v) return "";
@@ -52,12 +50,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!call) {
       return res.status(200).json({ ok: true, call: null });
-    }
-
-    const settings: any = await AISettings.findOne({ userEmail: String(call.userEmail || requesterEmail).toLowerCase() }).lean();
-    if (settings?.aiCallCoachingEnabled === true) {
-      // Fire-and-forget: generate coach report if not already done
-      generateCallCoachReport(String(call._id), requesterEmail).catch(() => {});
     }
 
     return res.status(200).json({

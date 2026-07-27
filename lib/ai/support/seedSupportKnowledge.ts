@@ -3,6 +3,20 @@ import SupportKnowledgeDoc from "@/models/SupportKnowledgeDoc";
 
 const SUPPORT_DOCS = [
   {
+    title: "Microphone and browser calling",
+    category: "calling",
+    tags: ["microphone", "mic", "permission", "browser", "speaker", "audio", "call"],
+    content:
+      "Before a browser call, CoveCRM checks microphone access. To fix microphone issues: use the browser site-controls icon beside the CoveCRM address and set Microphone to Allow, reload CoveCRM, select the correct microphone in computer sound settings, and quit Zoom, Teams, FaceTime, or other apps that may be using it. Safari users should also check Safari > Settings for This Website > Microphone. CoveCRM will explain whether permission was blocked, no device was found, or another app is using the device.",
+  },
+  {
+    title: "Getting started with calls",
+    category: "calling",
+    tags: ["first call", "getting started", "number", "call", "dialer", "setup"],
+    content:
+      "For a first call: buy or select a voice-capable number in Numbers, test the microphone when prompted, import or add a lead with a valid phone number, then start a call from the lead or dial session. A purchased number can make calls right away. Texting may remain unavailable until A2P registration is approved.",
+  },
+  {
     title: "How to connect Facebook",
     category: "integrations",
     tags: ["facebook", "meta", "lead ads", "integration"],
@@ -42,7 +56,7 @@ const SUPPORT_DOCS = [
     category: "messaging",
     tags: ["numbers", "twilio", "buy", "phone number"],
     content:
-      "Numbers are managed from the numbers screen. A tenant must have a valid Twilio setup and at least one active number for calling or SMS workflows. If sending fails, confirm the number exists and is usable for the current flow.",
+      "Numbers are managed from the Numbers screen. Search by US state or a specific three-digit area code, select a result, then click Confirm on that same result to purchase it. Calling is ready after a successful purchase; texting may remain unavailable until A2P registration is approved. If sending fails, confirm the number exists and is usable for the current flow.",
   },
   {
     title: "Importing leads",

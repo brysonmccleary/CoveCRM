@@ -17,6 +17,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
+  return res.status(410).json({
+    error: "AI sales-content generation is disabled. CoveCRM can still help you create and run campaigns you write or configure.",
+  });
+
   if (!process.env.OPENAI_API_KEY) {
     return res.status(200).json({ error: "AI requires OPENAI_API_KEY." });
   }
@@ -28,14 +32,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     stepCount?: number;
   };
 
-  if (!scenario || !scenario.trim()) {
+  if (!scenario || !String(scenario).trim()) {
     return res.status(400).json({ error: "scenario is required" });
   }
 
   const count = Math.min(Math.max(Number(stepCount) || 5, 3), 10);
 
   const userPrompt = `Build a ${type} drip campaign for this lead scenario:
-${scenario.trim()}
+${String(scenario).trim()}
 
 Return a JSON object:
 {

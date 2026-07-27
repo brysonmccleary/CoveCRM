@@ -7,6 +7,8 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { metaGraphUrl } from "@/lib/meta/graphApi";
+import { chooseSetupAdAccount, chooseSetupPage, mapMetaAdAccounts, mapMetaPages } from "@/lib/meta/setupAssets";
+import { verifyMetaOauthState } from "@/lib/meta/oauthState";
 
 const META_APP_ID = process.env.META_APP_ID || "";
 const META_APP_SECRET = process.env.META_APP_SECRET || "";
@@ -20,7 +22,7 @@ const BASE_URL = (
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
-  const { code, error: oauthError } = req.query as { code?: string; error?: string };
+  const { code, error: oauthError, state } = req.query as { code?: string; error?: string; state?: string };
 
   if (oauthError) {
     console.warn("[meta/callback] OAuth error:", oauthError);
@@ -37,6 +39,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const userEmail = session.user.email.toLowerCase();
+  const expectedState = String((session.user as any).id || session.user.email);
+  if (!verifyMetaOauthState(String(state || ""), expectedState, META_APP_SECRET)) {
+    return res.redirect(`${BASE_URL}/facebook-leads?meta=error&reason=invalid_state`);
+  }
   const redirectUri = `${BASE_URL}/api/meta/callback`;
 
   try {
@@ -71,23 +77,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const pagesUrl = new URL(metaGraphUrl("me/accounts"));
     pagesUrl.searchParams.set("access_token", longLivedToken);
-    pagesUrl.searchParams.set("fields", "id,name,access_token,instagram_business_account{id}");
+    pagesUrl.searchParams.set("fields", "id,name,access_token,category,link,tasks,picture.type(large){url},instagram_business_account{id}");
 
     const pagesResp = await fetch(pagesUrl.toString());
     const pagesData = await pagesResp.json() as any;
-    const pages = pagesData?.data || [];
-    const firstPage = pages[0];
+    const pages = mapMetaPages(pagesData?.data);
 
     await mongooseConnect();
+    const existingUser = await User.findOne({ email: userEmail }).lean() as any;
+    const selectedPage = chooseSetupPage(pages, String(existingUser?.metaPageId || ""));
 
     // fetch ad accounts
     const adAccountsUrl = new URL(metaGraphUrl("me/adaccounts"));
     adAccountsUrl.searchParams.set("access_token", longLivedToken);
+    adAccountsUrl.searchParams.set("fields", "id,name,account_id,account_status,currency");
 
     const adResp = await fetch(adAccountsUrl.toString());
     const adData = await adResp.json() as any;
 
-    const firstAd = adData?.data?.[0];
+    const adAccounts = mapMetaAdAccounts(adData?.data);
+    const selectedAdAccount = chooseSetupAdAccount(adAccounts, String(existingUser?.metaAdAccountId || ""));
 
     await User.updateOne(
       { email: userEmail },
@@ -99,31 +108,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           metaHealthStatus: "unknown",
           lastMetaHealthError: "",
           metaHealthCooldownUntil: null,
-          ...(firstAd?.account_id && {
-            metaAdAccountId: firstAd.account_id,
+          ...(selectedAdAccount?.accountId && {
+            metaAdAccountId: selectedAdAccount.accountId,
           }),
-          ...(firstPage?.id && {
-            metaPageId: String(firstPage.id),
-            metaPageName: String(firstPage.name || ""),
+          ...(selectedPage?.id && {
+            metaPageId: selectedPage.id,
+            metaPageName: selectedPage.name,
           }),
-          ...(firstPage?.access_token && {
-            metaPageAccessToken: String(firstPage.access_token),
+          ...(selectedPage?.accessToken && {
+            metaPageAccessToken: selectedPage.accessToken,
           }),
         },
       }
     );
 
     // Subscribe page to leadgen webhook field
-    if (firstPage?.id && firstPage?.access_token) {
+    if (selectedPage?.id && selectedPage?.accessToken) {
       try {
         const subResp = await fetch(
-          metaGraphUrl(`${firstPage.id}/subscribed_apps`),
+          metaGraphUrl(`${selectedPage.id}/subscribed_apps`),
           {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: new URLSearchParams({
               subscribed_fields: "leadgen",
-              access_token: String(firstPage.access_token),
+              access_token: selectedPage.accessToken,
             }).toString(),
           }
         );

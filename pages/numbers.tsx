@@ -152,7 +152,7 @@ function NumbersPage() {
       <div className="p-4 space-y-6">
         <h1 className="text-2xl font-bold">Manage Numbers</h1>
 
-        <NumberPurchasePanel />
+        <NumberPurchasePanel onPurchased={fetchAll} />
 
         <div>
           <h2 className="text-lg font-semibold mt-6 mb-3">Your Numbers</h2>
@@ -169,7 +169,7 @@ function NumbersPage() {
                 const isDefault = defaultId === numId;
                 return (
                   <li
-                    key={number.id}
+                    key={numId}
                     className="bg-[#0f172a] border border-white/10 p-4 rounded-xl flex items-center justify-between gap-4"
                   >
                     <div>

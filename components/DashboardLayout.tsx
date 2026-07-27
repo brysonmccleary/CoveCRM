@@ -8,6 +8,7 @@ import IncomingCallBanner from "@/components/IncomingCallBanner"; // ← NEW
 import Link from "next/link";
 import { useRouter } from "next/router";
 import SupportChatModal from "@/components/SupportChatModal";
+import DarkModeToggle from "@/components/DarkModeToggle";
 import {
   FaBullhorn,
   FaCalendarAlt,
@@ -197,10 +198,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   };
 
   return (
-    <div className="flex min-h-screen text-white">
+    <div className="cove-app-shell flex min-h-screen text-[color:var(--cove-text)]">
       {/* Incoming Call Banner overlay (fixed; safe anywhere) */}
 
-      <aside className="sticky top-0 flex h-screen w-[72px] shrink-0 flex-col justify-between overflow-y-auto border-r border-[#1e293b] bg-[#0f172a] px-2 py-4 lg:w-[240px] lg:p-4">
+      <aside className="cove-app-sidebar sticky top-0 flex h-screen w-[72px] shrink-0 flex-col justify-between overflow-y-auto border-r px-2 py-4 lg:w-[240px] lg:p-4">
         <div>
           <div className="mb-6 flex items-center justify-center gap-2 lg:justify-start">
             <Image
@@ -258,7 +259,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           </button>
 
-          <div className="pt-4 border-t border-white/5">
+          <div className="space-y-3 border-t border-white/5 pt-4">
+            <div className="hidden lg:block"><DarkModeToggle /></div>
             <button
               onClick={() => signOut({ callbackUrl: "/auth/signin" })}
               className="block px-1 text-left text-sm text-red-400 transition hover:text-red-300"
@@ -270,10 +272,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
 
-      <main
-        className="flex-1 overflow-y-auto flex flex-col"
-        style={{ backgroundColor: "#1e293b", color: "#ffffff" }}
-      >
+      <main className="cove-app-main flex flex-1 flex-col overflow-y-auto">
         <div className="flex-1 px-3 py-5 sm:px-5 lg:px-6 lg:py-8">
           {children}
         </div>

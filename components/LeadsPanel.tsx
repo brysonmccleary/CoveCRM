@@ -9,6 +9,7 @@ import { getNumberState } from "@/lib/twilio/localPresence";
 import { SYSTEM_FOLDERS, isSystemFolderName } from "@/lib/systemFolders";
 import ImportLeadsChooser from "./ImportLeadsChooser";
 import { LEAD_TYPES } from "@/lib/leads/leadTypes";
+import { ensureMicrophoneAccess, microphoneErrorMessage } from "@/lib/telephony/microphoneAccess";
 
 function formatPhoneNumber(phone: string): string {
   const d = (phone || "").replace(/\D/g, "");
@@ -418,9 +419,9 @@ export default function LeadsPanel() {
     }
 
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      alert("Microphone access is required to start dialing!");
+      await ensureMicrophoneAccess();
+    } catch (error) {
+      alert(microphoneErrorMessage(error));
       return;
     }
 

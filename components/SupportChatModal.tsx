@@ -12,6 +12,13 @@ type SupportMessage = {
   createdAt?: string;
 };
 
+const STARTER_QUESTIONS = [
+  "Help me set up my microphone",
+  "How do I buy a phone number?",
+  "How do I import leads?",
+  "Why can’t I send texts?",
+];
+
 function labelForPageContext(pageContext: string) {
   const key = String(pageContext || "").trim();
   if (!key) return "dashboard";
@@ -118,8 +125,20 @@ export default function SupportChatModal({
 
         <div className="h-[420px] overflow-y-auto px-5 py-4 space-y-3">
           {messages.length === 0 ? (
-            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm text-gray-300">
-              Ask a support question. The assistant can inspect your account setup and explain what to check next.
+            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm text-gray-300 space-y-3">
+              <p>Ask a support question. I can inspect your account setup and give you the next steps.</p>
+              <div className="flex flex-wrap gap-2">
+                {STARTER_QUESTIONS.map((question) => (
+                  <button
+                    key={question}
+                    type="button"
+                    onClick={() => setInput(question)}
+                    className="rounded-full border border-white/15 bg-[#1e293b] px-3 py-1.5 text-xs text-gray-200 hover:bg-[#2d3f55]"
+                  >
+                    {question}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             messages.map((message, idx) => (

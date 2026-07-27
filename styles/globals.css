@@ -4,13 +4,18 @@
 /* ── Base tokens ───────────────────────────────────────────── */
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #172033;
 
   /* Cove brand (from DashboardLayout + cards) */
-  --cove-bg-dark:  #0f172a; /* sidebar */
-  --cove-bg:       #1e293b; /* main area */
-  --cove-card:     #111D35; /* card panels */
+  --cove-bg-dark:  #eef4ff; /* sidebar */
+  --cove-bg:       #f7f9fc; /* main area */
+  --cove-card:     #ffffff; /* card panels */
   --cove-accent:   #3B82F6; /* accent blue */
+  --cove-text: #172033;
+  --cove-muted: #475569;
+  --cove-border: #cbd5e1;
+  --cove-surface: #ffffff;
+  --cove-surface-hover: #eff6ff;
 }
 
 @theme inline {
@@ -30,6 +35,11 @@ html.dark {
     --cove-bg:       #1e293b;
     --cove-card:     #111D35;
     --cove-accent:   #3B82F6;
+    --cove-text: #f8fafc;
+    --cove-muted: #94a3b8;
+    --cove-border: rgba(255,255,255,0.16);
+    --cove-surface: #111D35;
+    --cove-surface-hover: #1e293b;
 }
 
 /* ── Global base styles ────────────────────────────────────── */
@@ -37,6 +47,84 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+html { color-scheme: light; }
+html.dark { color-scheme: dark; }
+
+/* Application shell: these are the only shared surfaces every signed-in page
+   receives, so they must never rely on the operating system's native defaults. */
+.cove-app-sidebar {
+  background: var(--cove-bg-dark);
+  border-color: var(--cove-border);
+}
+
+.cove-app-main {
+  background: var(--cove-bg);
+  color: var(--cove-text);
+}
+
+/*
+  The CRM predates a shared token system and contains many dark-only utility
+  classes. These scoped fallbacks keep existing screens readable in light mode
+  while components are migrated to tokens. They deliberately apply only inside
+  the authenticated app shell so marketing and embedded landing pages keep
+  their authored visual treatments.
+*/
+html:not(.dark) .cove-app-shell [class~="bg-[#0f172a]"],
+html:not(.dark) .cove-app-shell [class~="bg-[#1e293b]"],
+html:not(.dark) .cove-app-shell [class~="bg-[#020617]"],
+html:not(.dark) .cove-app-shell [class~="bg-[#0b1220]"],
+html:not(.dark) .cove-app-shell [class~="bg-[#111827]"],
+html:not(.dark) .cove-app-shell [class~="bg-[#111D35]"],
+html:not(.dark) .cove-app-shell [class~="bg-[#111d35]"],
+html:not(.dark) .cove-app-shell [class~="bg-[#334155]"],
+html:not(.dark) .cove-app-shell [class~="bg-[#1a2535]"],
+html:not(.dark) .cove-app-shell [class~="bg-[#1e2d45]"],
+html:not(.dark) .cove-app-shell .bg-gray-700,
+html:not(.dark) .cove-app-shell .bg-gray-800,
+html:not(.dark) .cove-app-shell .bg-gray-900,
+html:not(.dark) .cove-app-shell .bg-slate-700,
+html:not(.dark) .cove-app-shell .bg-slate-800,
+html:not(.dark) .cove-app-shell .bg-slate-900 {
+  background-color: var(--cove-card) !important;
+}
+
+html:not(.dark) .cove-app-shell [class*="bg-white/"],
+html:not(.dark) .cove-app-shell [class*="bg-slate-900/"] {
+  background-color: #f1f5f9 !important;
+}
+
+html:not(.dark) .cove-app-shell [class*="border-white/"] {
+  border-color: var(--cove-border) !important;
+}
+
+html:not(.dark) .cove-app-shell .text-white,
+html:not(.dark) .cove-app-shell .text-slate-100,
+html:not(.dark) .cove-app-shell .text-gray-100,
+html:not(.dark) .cove-app-shell .text-gray-200,
+html:not(.dark) .cove-app-shell .text-gray-300 {
+  color: var(--cove-text) !important;
+}
+
+html:not(.dark) .cove-app-shell .text-gray-400,
+html:not(.dark) .cove-app-shell .text-slate-400,
+html:not(.dark) .cove-app-shell .text-gray-500,
+html:not(.dark) .cove-app-shell .text-slate-500,
+html:not(.dark) .cove-app-shell .text-gray-600,
+html:not(.dark) .cove-app-shell .text-slate-600 {
+  color: var(--cove-muted) !important;
+}
+
+/* Preserve legibility for text placed on semantic action colors. */
+html:not(.dark) .cove-app-shell .bg-blue-500.text-white,
+html:not(.dark) .cove-app-shell .bg-blue-600.text-white,
+html:not(.dark) .cove-app-shell .bg-indigo-600.text-white,
+html:not(.dark) .cove-app-shell .bg-emerald-600.text-white,
+html:not(.dark) .cove-app-shell .bg-red-600.text-white,
+html:not(.dark) .cove-app-shell .bg-purple-600.text-white,
+html:not(.dark) .cove-app-shell .bg-gradient-to-r.text-white {
+  color: #ffffff !important;
 }
 
 /* ✅ Highlight today with green border only (no fill) */

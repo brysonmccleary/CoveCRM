@@ -10,6 +10,7 @@ import React, {
 } from "react";
 // IMPORTANT: install the SDK once:  npm i @twilio/voice-sdk
 import { Device } from "@twilio/voice-sdk";
+import { ensureMicrophoneAccess, microphoneErrorMessage } from "@/lib/telephony/microphoneAccess";
 
 type SoftphoneCtx = {
   ready: boolean;
@@ -266,7 +267,9 @@ export default function SoftphoneProvider({ children }: Props) {
 
         await dev.register();
       } catch (e) {
-        console.error("Softphone init failed:", e);
+        // Voice availability must not turn unrelated CRM screens into a runtime error.
+        // Calling controls remain unavailable until a token can be issued.
+        console.warn("Softphone init unavailable:", e);
       }
     })();
     return () => {
@@ -283,6 +286,9 @@ export default function SoftphoneProvider({ children }: Props) {
     const dev = deviceRef.current;
     if (!dev) throw new Error("Voice device not ready");
     if (!toE164 || !fromTwilio) throw new Error("Missing To/From");
+    // This is intentionally here (not only in UI buttons) so every outbound caller
+    // gets the same just-in-time microphone check.
+    await ensureMicrophoneAccess();
 
     const To = normalizeE164(toE164);
     const From = normalizeE164(fromTwilio);
@@ -306,6 +312,7 @@ export default function SoftphoneProvider({ children }: Props) {
     try {
       const call = incomingCall;
       if (!call) return;
+      await ensureMicrophoneAccess();
       const detail = (event as CustomEvent | undefined)?.detail || {};
       // If agent is on an active SoftphoneProvider-tracked call, hang it up first.
       // voiceClient conference cleanup is handled by the inbound-direct hook in dial-session.
@@ -329,7 +336,11 @@ export default function SoftphoneProvider({ children }: Props) {
       };
       try { call.on?.("disconnect", onEnd); } catch {}
       try { call.on?.("cancel", onEnd); } catch {}
-    } catch {}
+    } catch (error) {
+      const message = microphoneErrorMessage(error);
+      try { window.dispatchEvent(new CustomEvent("crm:microphone:error", { detail: { message } })); } catch {}
+      alert(message);
+    }
   }, [incomingCall, activeCall]);
 
   const decline = useCallback(() => {

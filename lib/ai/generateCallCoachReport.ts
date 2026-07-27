@@ -106,6 +106,11 @@ export async function generateCallCoachReport(
   userEmail: string,
   leadName?: string
 ): Promise<{ ok: boolean; report?: any; error?: string; skipped?: boolean; reason?: string }> {
+  // Product policy: CoveCRM does not generate sales coaching or recommendations.
+  // Keep the function as a safe no-op for legacy callers while preventing model usage.
+  return { ok: true, skipped: true, reason: "sales_coaching_disabled" };
+
+  /* c8 ignore start -- retained legacy implementation for existing report history. */
   await mongooseConnect();
 
   // Don't regenerate if already exists
@@ -315,4 +320,5 @@ Return this exact JSON structure:
     console.error("[generateCallCoachReport] DB error:", dbErr?.message);
     return { ok: false, error: "Failed to save report" };
   }
+  /* c8 ignore stop */
 }

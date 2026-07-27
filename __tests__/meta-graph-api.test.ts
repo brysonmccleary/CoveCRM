@@ -12,7 +12,7 @@ describe("central Meta Graph API version", () => {
     expect(() => getMetaGraphVersion({ META_GRAPH_VERSION: "latest" } as NodeJS.ProcessEnv)).toThrow(/vNN\.N/);
   });
 
-  it("requires an intentional version choice in production", () => {
-    expect(() => getMetaGraphVersion({ NODE_ENV: "production" } as NodeJS.ProcessEnv)).toThrow(/explicitly configured/);
+  it("uses the safe pinned default in production when configuration is absent", () => {
+    expect(getMetaGraphVersion({ NODE_ENV: "production" } as NodeJS.ProcessEnv)).toBe("v21.0");
   });
 });
