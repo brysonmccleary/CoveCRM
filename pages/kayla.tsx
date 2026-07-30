@@ -177,7 +177,7 @@ export default function KaylaPage() {
         <link rel="canonical" href="https://www.covecrm.com/kayla" />
       </Head>
 
-      <main className="min-h-screen bg-[#020617] text-slate-100">
+      <main className="cove-app-shell min-h-screen bg-[#020617] text-slate-100">
         <section className="relative overflow-hidden bg-gradient-to-b from-[#020617] via-[#0b1225] to-[#020617] text-white">
           <div className="absolute inset-0">
             <div className="absolute left-1/2 top-0 h-[30rem] w-[52rem] -translate-x-1/2 rounded-full bg-blue-600/16 blur-3xl" />

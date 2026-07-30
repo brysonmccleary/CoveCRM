@@ -18,10 +18,17 @@ const RecruitingCloudAccountSchema = new Schema(
     consentAcceptedAt: { type: Date, required: true, immutable: true },
     region: { type: String, enum: ["us-west-2", "us-east-1"], default: "us-west-2", immutable: true },
     timeZone: { type: String, default: "America/Phoenix", trim: true },
+    // Stable residential-proxy geolocation for this account; set at connect and
+    // reused for every session so the account never appears to change location.
+    proxyGeolocation: { type: Schema.Types.Mixed, default: null },
     dailyDmLimit: { type: Number, min: MIN_DAILY_DM_LIMIT, max: MAX_DAILY_DM_LIMIT, default: DEFAULT_DAILY_DM_LIMIT },
     profileUrl: { type: String, default: "", trim: true },
     lastAuthenticatedAt: { type: Date, default: null },
     lastCheckedAt: { type: Date, default: null },
+    // Consecutive "appears signed out" readings. A single blip backs off and
+    // retries; only a confirmed repeat forces the customer to reconnect, so a
+    // transient page hiccup never drops a healthy persistent session.
+    signedOutStrikes: { type: Number, default: 0 },
     lastActionAt: { type: Date, default: null },
     lastRecipientLock: { type: String, default: null },
     lastAlertSentAt: { type: Date, default: null },

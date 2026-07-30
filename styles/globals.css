@@ -1,6 +1,14 @@
 /* /styles/globals.css */
 @import "tailwindcss";
 
+/* Tailwind v4 ignores the JS `darkMode: 'class'` setting, so `dark:` utilities
+   default to the OS prefers-color-scheme media query. That fights the app's own
+   light/dark toggle (the `.dark` class on <html>): with the OS in dark mode,
+   every `dark:` class fires even when the user picked light mode, turning boxes
+   dark and text invisible. This binds `dark:` to the `.dark` class instead, so
+   the whole app follows the in-app toggle in both directions. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ── Base tokens ───────────────────────────────────────────── */
 :root {
   --background: #ffffff;
@@ -13,9 +21,17 @@
   --cove-accent:   #3B82F6; /* accent blue */
   --cove-text: #172033;
   --cove-muted: #475569;
-  --cove-border: #cbd5e1;
+  --cove-border: #94a3b8; /* visible card outline in light mode */
+  --cove-border-strong: #475569; /* emphasized outline (folders, key panels) */
   --cove-surface: #ffffff;
   --cove-surface-hover: #eff6ff;
+  /* Semantic text tokens: high-contrast in LIGHT mode. Used for inline colored
+     wording (status text, badges, callouts) so it stays readable in both themes. */
+  --cove-info: #1d4ed8;    /* blue-700  */
+  --cove-success: #15803d; /* green-700 */
+  --cove-warning: #b45309; /* amber-700 */
+  --cove-danger: #b91c1c;  /* red-700   */
+  --cove-purple: #7e22ce;  /* purple-700 */
 }
 
 @theme inline {
@@ -37,9 +53,16 @@ html.dark {
     --cove-accent:   #3B82F6;
     --cove-text: #f8fafc;
     --cove-muted: #94a3b8;
-    --cove-border: rgba(255,255,255,0.16);
+    --cove-border: rgba(255,255,255,0.22); /* visible card outline in dark mode */
+    --cove-border-strong: rgba(255,255,255,0.42);
     --cove-surface: #111D35;
     --cove-surface-hover: #1e293b;
+    /* Semantic text tokens: high-contrast in DARK mode (lighter shades). */
+    --cove-info: #60a5fa;    /* blue-400  */
+    --cove-success: #4ade80; /* green-400 */
+    --cove-warning: #fbbf24; /* amber-400 */
+    --cove-danger: #f87171;  /* red-400   */
+    --cove-purple: #c4b5fd;  /* purple-300 */
 }
 
 /* ── Global base styles ────────────────────────────────────── */
@@ -71,36 +94,109 @@ html.dark { color-scheme: dark; }
   the authenticated app shell so marketing and embedded landing pages keep
   their authored visual treatments.
 */
-html:not(.dark) .cove-app-shell [class~="bg-[#0f172a]"],
-html:not(.dark) .cove-app-shell [class~="bg-[#1e293b]"],
-html:not(.dark) .cove-app-shell [class~="bg-[#020617]"],
-html:not(.dark) .cove-app-shell [class~="bg-[#0b1220]"],
-html:not(.dark) .cove-app-shell [class~="bg-[#111827]"],
-html:not(.dark) .cove-app-shell [class~="bg-[#111D35]"],
-html:not(.dark) .cove-app-shell [class~="bg-[#111d35]"],
-html:not(.dark) .cove-app-shell [class~="bg-[#334155]"],
-html:not(.dark) .cove-app-shell [class~="bg-[#1a2535]"],
-html:not(.dark) .cove-app-shell [class~="bg-[#1e2d45]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#0f172a]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#1e293b]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#020617]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#0b1220]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#111827]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#111D35]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#111d35]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#334155]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#1a2535]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#1e2d45]"],
+/* additional dark navy/charcoal hexes used across app pages */
+html:not(.dark) .cove-app-shell [class*="bg-[#07101e]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#030d1f]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#081120]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#0b1225]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#1E2533]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#1F2937]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#1f2937]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#1c1c1c]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#2C3447]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#263348]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#24324a]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#2d3b53]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#2d3e52]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#2d3f55]"],
+html:not(.dark) .cove-app-shell [class*="bg-[#3e5068]"],
 html:not(.dark) .cove-app-shell .bg-gray-700,
 html:not(.dark) .cove-app-shell .bg-gray-800,
 html:not(.dark) .cove-app-shell .bg-gray-900,
+html:not(.dark) .cove-app-shell .bg-gray-950,
 html:not(.dark) .cove-app-shell .bg-slate-700,
 html:not(.dark) .cove-app-shell .bg-slate-800,
-html:not(.dark) .cove-app-shell .bg-slate-900 {
+html:not(.dark) .cove-app-shell .bg-slate-900,
+html:not(.dark) .cove-app-shell .bg-slate-950,
+html:not(.dark) .cove-app-shell .bg-zinc-700,
+html:not(.dark) .cove-app-shell .bg-zinc-800,
+html:not(.dark) .cove-app-shell .bg-zinc-900,
+html:not(.dark) .cove-app-shell .bg-zinc-950,
+html:not(.dark) .cove-app-shell .bg-neutral-700,
+html:not(.dark) .cove-app-shell .bg-neutral-800,
+html:not(.dark) .cove-app-shell .bg-neutral-900,
+html:not(.dark) .cove-app-shell .bg-neutral-950,
+html:not(.dark) .cove-app-shell .bg-black {
   background-color: var(--cove-card) !important;
 }
 
-html:not(.dark) .cove-app-shell [class*="bg-white/"],
-html:not(.dark) .cove-app-shell [class*="bg-slate-900/"] {
-  background-color: #f1f5f9 !important;
+/* The shell itself is commonly the dark-first element (for example the lead,
+   leads, and dial-session pages). Descendant selectors above intentionally do
+   not match that element, so reset the shell's own dark surface and inherited
+   white text explicitly. Without this, unclassed headings and loaded history
+   text inherit white onto the light cards beneath them. */
+html:not(.dark) .cove-app-shell[class*="bg-[#0f172a]"],
+html:not(.dark) .cove-app-shell[class*="bg-[#1e293b]"],
+html:not(.dark) .cove-app-shell[class*="bg-[#020617]"],
+html:not(.dark) .cove-app-shell[class*="bg-[#07101e]"],
+html:not(.dark) .cove-app-shell[class*="bg-[#1f2937]"],
+html:not(.dark) .cove-app-shell.bg-gray-700,
+html:not(.dark) .cove-app-shell.bg-gray-800,
+html:not(.dark) .cove-app-shell.bg-gray-900,
+html:not(.dark) .cove-app-shell.bg-slate-700,
+html:not(.dark) .cove-app-shell.bg-slate-800,
+html:not(.dark) .cove-app-shell.bg-slate-900 {
+  background-color: var(--cove-bg) !important;
 }
 
-html:not(.dark) .cove-app-shell [class*="border-white/"] {
+html:not(.dark) .cove-app-shell.text-white,
+html:not(.dark) .cove-app-shell[class*="text-white/"] {
+  color: var(--cove-text) !important;
+}
+
+/* Translucent dark surfaces become a light surface. bg-black/* is intentionally
+   excluded so modal scrims and overlays stay dark in light mode. */
+html:not(.dark) .cove-app-shell [class*="bg-white/"],
+html:not(.dark) .cove-app-shell [class*="bg-slate-800/"],
+html:not(.dark) .cove-app-shell [class*="bg-slate-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-slate-950/"],
+html:not(.dark) .cove-app-shell [class*="bg-gray-800/"],
+html:not(.dark) .cove-app-shell [class*="bg-gray-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-zinc-800/"],
+html:not(.dark) .cove-app-shell [class*="bg-zinc-900/"] {
+  background-color: #eef1f6 !important;
+  border-color: var(--cove-border);
+}
+/* Faint translucent-white buttons/chips need an actual edge to read as controls. */
+html:not(.dark) .cove-app-shell button[class*="bg-white/"],
+html:not(.dark) .cove-app-shell [role="button"][class*="bg-white/"] {
+  border: 1px solid var(--cove-border) !important;
+}
+
+html:not(.dark) .cove-app-shell [class*="border-white/"],
+html:not(.dark) .cove-app-shell .border-white,
+html:not(.dark) .cove-app-shell .border-slate-100,
+html:not(.dark) .cove-app-shell .border-slate-200,
+html:not(.dark) .cove-app-shell .border-gray-100,
+html:not(.dark) .cove-app-shell .border-gray-200 {
   border-color: var(--cove-border) !important;
 }
 
 html:not(.dark) .cove-app-shell .text-white,
+html:not(.dark) .cove-app-shell [class*="text-white/"],
 html:not(.dark) .cove-app-shell .text-slate-100,
+html:not(.dark) .cove-app-shell .text-slate-200,
+html:not(.dark) .cove-app-shell .text-slate-300,
 html:not(.dark) .cove-app-shell .text-gray-100,
 html:not(.dark) .cove-app-shell .text-gray-200,
 html:not(.dark) .cove-app-shell .text-gray-300 {
@@ -127,25 +223,189 @@ html:not(.dark) .cove-app-shell .bg-gradient-to-r.text-white {
   color: #ffffff !important;
 }
 
-/* ✅ Highlight today with green border only (no fill) */
-.rbc-today {
-  background-color: inherit !important;
-  border: 2px solid #22c55e !important; /* green-500 */
-  border-radius: 6px !important;
-  box-shadow: none !important;
+/* Solid brand-purple surfaces are actions or outbound chat bubbles. They need
+   white wording in light mode; dark text on #7c3aed falls below comfortable
+   paragraph contrast and was making SMS content hard to scan. */
+html:not(.dark) .cove-app-shell [class*="bg-[#7c3aed]"][class*="text-white"],
+html:not(.dark) .cove-app-shell .bg-purple-500.text-white,
+html:not(.dark) .cove-app-shell .bg-violet-500.text-white,
+html:not(.dark) .cove-app-shell .bg-violet-600.text-white,
+html:not(.dark) .cove-app-shell .bg-purple-700.text-white,
+html:not(.dark) .cove-app-shell .bg-violet-700.text-white {
+  color: #ffffff !important;
 }
 
-/* ✅ Make the number (e.g., "04") green */
+/* ── Visible card outlines (both themes) ──────────────────────────
+   Every remapped dark surface gets a real border so cards, folders,
+   and panels separate from the page instead of blending in. */
+html .cove-app-shell [class*="bg-[#"],
+html .cove-app-shell [class*="bg-slate-8"],
+html .cove-app-shell [class*="bg-slate-9"],
+html .cove-app-shell [class*="bg-gray-8"],
+html .cove-app-shell [class*="bg-gray-9"],
+html .cove-app-shell [class*="bg-zinc-8"],
+html .cove-app-shell [class*="bg-zinc-9"] {
+  border-color: var(--cove-border);
+}
+
+/* Dark hover backgrounds must not turn a light-mode element dark-on-dark.
+   Any hover that would go dark instead uses the standard light hover surface,
+   with readable text. Accent-colored hovers (e.g. purple buttons) are excluded. */
+html:not(.dark) .cove-app-shell [class*="hover:bg-slate-7"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-slate-8"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-slate-9"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-gray-7"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-gray-8"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-gray-9"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-zinc-7"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-zinc-8"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-zinc-9"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-[#0f172a]"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-[#1e293b]"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-[#1e2d45]"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-[#2d3f55]"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-[#2d3b53]"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-[#2d3e52]"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-[#3e5068]"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-[#263348]"]:hover,
+html:not(.dark) .cove-app-shell [class*="hover:bg-[#334155]"]:hover {
+  background-color: var(--cove-surface-hover) !important;
+  color: var(--cove-text) !important;
+}
+
+/* Blue/indigo info callouts: readable in light mode instead of pale-on-white. */
+html:not(.dark) .cove-app-shell [class*="bg-blue-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-blue-950/"],
+html:not(.dark) .cove-app-shell [class*="bg-indigo-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-indigo-950/"] {
+  background-color: #dbeafe !important; /* blue-100 */
+  border-color: #93c5fd !important; /* blue-300 */
+}
+html:not(.dark) .cove-app-shell .text-blue-100,
+html:not(.dark) .cove-app-shell .text-blue-200,
+html:not(.dark) .cove-app-shell .text-blue-300,
+html:not(.dark) .cove-app-shell .text-indigo-100,
+html:not(.dark) .cove-app-shell .text-indigo-200,
+html:not(.dark) .cove-app-shell .text-indigo-300 {
+  color: #1e40af !important; /* blue-800 */
+}
+
+/* Colored callouts (success / error / info / warning of every hue): pale
+   colored text on a light tint is unreadable in light mode. Darken pale
+   semantic text to a readable shade, and normalize translucent colored
+   backgrounds to a proper light tint — regardless of color. */
+html:not(.dark) .cove-app-shell .text-green-200,
+html:not(.dark) .cove-app-shell .text-green-300,
+html:not(.dark) .cove-app-shell .text-green-400,
+html:not(.dark) .cove-app-shell .text-green-500,
+html:not(.dark) .cove-app-shell .text-emerald-200,
+html:not(.dark) .cove-app-shell .text-emerald-300,
+html:not(.dark) .cove-app-shell .text-emerald-400,
+html:not(.dark) .cove-app-shell .text-emerald-500,
+html:not(.dark) .cove-app-shell .text-lime-300,
+html:not(.dark) .cove-app-shell .text-lime-400,
+html:not(.dark) .cove-app-shell .text-lime-500 { color: #15803d !important; }
+
+html:not(.dark) .cove-app-shell .text-red-200,
+html:not(.dark) .cove-app-shell .text-red-300,
+html:not(.dark) .cove-app-shell .text-red-400,
+html:not(.dark) .cove-app-shell .text-rose-200,
+html:not(.dark) .cove-app-shell .text-rose-300,
+html:not(.dark) .cove-app-shell .text-rose-400 { color: #b91c1c !important; }
+
+html:not(.dark) .cove-app-shell .text-purple-200,
+html:not(.dark) .cove-app-shell .text-purple-300,
+html:not(.dark) .cove-app-shell .text-purple-400,
+html:not(.dark) .cove-app-shell .text-violet-200,
+html:not(.dark) .cove-app-shell .text-violet-300,
+html:not(.dark) .cove-app-shell .text-violet-400,
+html:not(.dark) .cove-app-shell .text-fuchsia-300,
+html:not(.dark) .cove-app-shell .text-fuchsia-400 { color: #7e22ce !important; }
+
+html:not(.dark) .cove-app-shell .text-orange-200,
+html:not(.dark) .cove-app-shell .text-orange-300,
+html:not(.dark) .cove-app-shell .text-orange-400,
+html:not(.dark) .cove-app-shell .text-orange-500 { color: #c2410c !important; }
+
+html:not(.dark) .cove-app-shell .text-teal-300,
+html:not(.dark) .cove-app-shell .text-teal-400,
+html:not(.dark) .cove-app-shell .text-teal-500 { color: #0f766e !important; }
+
+html:not(.dark) .cove-app-shell .text-cyan-300,
+html:not(.dark) .cove-app-shell .text-cyan-400,
+html:not(.dark) .cove-app-shell .text-cyan-500,
+html:not(.dark) .cove-app-shell .text-sky-300,
+html:not(.dark) .cove-app-shell .text-sky-400 { color: #0e7490 !important; }
+
+html:not(.dark) .cove-app-shell .text-pink-200,
+html:not(.dark) .cove-app-shell .text-pink-300,
+html:not(.dark) .cove-app-shell .text-pink-400 { color: #be185d !important; }
+
+/* Translucent colored callout backgrounds → light tint of the same hue. */
+html:not(.dark) .cove-app-shell [class*="bg-green-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-green-950/"],
+html:not(.dark) .cove-app-shell [class*="bg-emerald-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-emerald-950/"] { background-color: #dcfce7 !important; border-color: #86efac !important; }
+html:not(.dark) .cove-app-shell [class*="bg-red-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-red-950/"],
+html:not(.dark) .cove-app-shell [class*="bg-rose-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-rose-950/"] { background-color: #fee2e2 !important; border-color: #fca5a5 !important; }
+html:not(.dark) .cove-app-shell [class*="bg-purple-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-purple-950/"],
+html:not(.dark) .cove-app-shell [class*="bg-violet-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-violet-950/"] { background-color: #f3e8ff !important; border-color: #d8b4fe !important; }
+html:not(.dark) .cove-app-shell [class*="bg-orange-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-orange-950/"] { background-color: #ffedd5 !important; border-color: #fdba74 !important; }
+html:not(.dark) .cove-app-shell [class*="bg-teal-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-cyan-900/"],
+html:not(.dark) .cove-app-shell [class*="bg-sky-900/"] { background-color: #cffafe !important; border-color: #67e8f9 !important; }
+
+/* Form controls: consistent, clearly-bordered inputs in light mode everywhere,
+   so settings pages and forms don't render as bare text floating on white. */
+html:not(.dark) .cove-app-shell input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+html:not(.dark) .cove-app-shell select,
+html:not(.dark) .cove-app-shell textarea {
+  background-color: #ffffff !important;
+  border: 1px solid var(--cove-border) !important;
+  color: var(--cove-text) !important;
+}
+html:not(.dark) .cove-app-shell input:focus,
+html:not(.dark) .cove-app-shell select:focus,
+html:not(.dark) .cove-app-shell textarea:focus {
+  border-color: var(--cove-accent) !important;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cove-accent) 22%, transparent);
+}
+html:not(.dark) .cove-app-shell input::placeholder,
+html:not(.dark) .cove-app-shell textarea::placeholder {
+  color: var(--cove-muted) !important;
+}
+
+/* Warning / caution callouts stay readable amber-on-light in light mode
+   instead of washing out to tan-on-tan. */
+html:not(.dark) .cove-app-shell [class*="bg-yellow-"][class*="/"],
+html:not(.dark) .cove-app-shell [class*="bg-amber-"][class*="/"],
+html:not(.dark) .cove-app-shell .bg-yellow-50,
+html:not(.dark) .cove-app-shell .bg-amber-50 {
+  background-color: #fef3c7 !important; /* amber-100 */
+  border-color: #f59e0b !important; /* amber-500 */
+}
+html:not(.dark) .cove-app-shell .text-yellow-100,
+html:not(.dark) .cove-app-shell .text-yellow-200,
+html:not(.dark) .cove-app-shell .text-yellow-300,
+html:not(.dark) .cove-app-shell .text-yellow-400,
+html:not(.dark) .cove-app-shell .text-amber-100,
+html:not(.dark) .cove-app-shell .text-amber-200,
+html:not(.dark) .cove-app-shell .text-amber-300,
+html:not(.dark) .cove-app-shell .text-amber-400 {
+  color: #92400e !important; /* amber-800 */
+}
+
+/* ✅ Make the number (e.g., "04") stand out on today */
 .rbc-today .rbc-button-link {
-  color: #22c55e !important; /* green-500 */
+  color: var(--cove-accent) !important;
   font-weight: bold !important;
   font-size: 1.05rem;
-}
-
-/* ✅ Dim the days from other months (outside current view) */
-.rbc-off-range-bg {
-  background-color: #000000 !important;
-  color: #4b5563 !important; /* gray-600 */
 }
 
 /* ✅ Pointer for assistant widget */

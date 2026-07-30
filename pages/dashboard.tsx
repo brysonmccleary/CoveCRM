@@ -350,9 +350,9 @@ function TopObjectionsWidget() {
   ];
 
   return (
-    <div style={{ background: "#111D35", border: "1px solid #1e2d45", borderRadius: 10, padding: "20px 22px" }}>
+    <div style={{ background: "var(--cove-card)", border: "1px solid var(--cove-border)", borderRadius: 10, padding: "20px 22px", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#E5E7EB", display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--cove-text)", display: "flex", alignItems: "center", gap: 6 }}>
           🚧 Top Objections
         </div>
         <div style={{ display: "flex", gap: 5 }}>
@@ -367,8 +367,8 @@ function TopObjectionsWidget() {
                 borderRadius: 20,
                 border: "none",
                 cursor: "pointer",
-                background: range === value ? "#2563eb" : "rgba(255,255,255,0.07)",
-                color: range === value ? "#fff" : "#6B7280",
+                background: range === value ? "#2563eb" : "var(--cove-surface-hover)",
+                color: range === value ? "#fff" : "var(--cove-muted)",
                 transition: "all 0.15s",
               }}
             >
@@ -379,9 +379,9 @@ function TopObjectionsWidget() {
       </div>
 
       {loading ? (
-        <p style={{ color: "#94a3b8", fontSize: 13 }}>Loading…</p>
+        <p style={{ color: "var(--cove-muted)", fontSize: 13 }}>Loading…</p>
       ) : objections.length === 0 ? (
-        <p style={{ color: "#374151", fontSize: 13 }}>
+        <p style={{ color: "var(--cove-muted)", fontSize: 13 }}>
           No objection data yet. Generate call overviews to track objections.
         </p>
       ) : (
@@ -406,10 +406,10 @@ function TopObjectionsWidget() {
                     #{idx + 1}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: "#F3F4F6", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: "var(--cove-text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {obj.objection}
                     </div>
-                    <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>
+                    <div style={{ fontSize: 11, color: "var(--cove-muted)", marginTop: 2 }}>
                       {obj.count} time{obj.count !== 1 ? "s" : ""}
                     </div>
                   </div>
@@ -423,7 +423,7 @@ function TopObjectionsWidget() {
                       onClick={() => setExpanded((prev) => ({ ...prev, [idx]: !prev[idx] }))}
                       style={{
                         fontSize: 11,
-                        color: "#60a5fa",
+                        color: "var(--cove-info)",
                         background: "rgba(96,165,250,0.1)",
                         border: "1px solid rgba(96,165,250,0.2)",
                         padding: "5px 12px",
@@ -447,8 +447,8 @@ function TopObjectionsWidget() {
                       padding: "10px 14px",
                     }}
                   >
-                    <p style={{ fontSize: 11, color: "#60a5fa", fontWeight: 600, marginBottom: 4 }}>Suggested Response</p>
-                    <p style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.6 }}>{obj.suggestedResponse}</p>
+                    <p style={{ fontSize: 11, color: "var(--cove-info)", fontWeight: 600, marginBottom: 4 }}>Suggested Response</p>
+                    <p style={{ fontSize: 12, color: "var(--cove-muted)", lineHeight: 1.6 }}>{obj.suggestedResponse}</p>
                   </div>
                 )}
               </div>
@@ -477,16 +477,16 @@ function LeadSourceROIWidget() {
   if (sources.length === 0) return null;
 
   return (
-    <div style={{ background: "#0d1520", borderRadius: 10, padding: "18px 22px", border: "1px solid rgba(255,255,255,0.06)" }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: "#E5E7EB", marginBottom: 14 }}>Lead Sources — Last 3 Months</div>
+    <div style={{ background: "var(--cove-card)", borderRadius: 10, padding: "18px 22px", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--cove-text)", marginBottom: 14 }}>Lead Sources — Last 3 Months</div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
-              <th style={{ color: "#6B7280", fontWeight: 500, paddingBottom: 9, textAlign: "left" }}>Source</th>
-              <th style={{ color: "#6B7280", fontWeight: 500, paddingBottom: 9, textAlign: "right" }}>Leads</th>
-              <th style={{ color: "#6B7280", fontWeight: 500, paddingBottom: 9, textAlign: "right" }}>Contacted</th>
-              <th style={{ color: "#6B7280", fontWeight: 500, paddingBottom: 9, textAlign: "right" }}>Booked</th>
+              <th style={{ color: "var(--cove-muted)", fontWeight: 500, paddingBottom: 9, textAlign: "left" }}>Source</th>
+              <th style={{ color: "var(--cove-muted)", fontWeight: 500, paddingBottom: 9, textAlign: "right" }}>Leads</th>
+              <th style={{ color: "var(--cove-muted)", fontWeight: 500, paddingBottom: 9, textAlign: "right" }}>Contacted</th>
+              <th style={{ color: "var(--cove-muted)", fontWeight: 500, paddingBottom: 9, textAlign: "right" }}>Booked</th>
             </tr>
           </thead>
           <tbody>
@@ -495,10 +495,10 @@ function LeadSourceROIWidget() {
               const contactRate = s.leadCount > 0 ? Math.round((s.contactedCount / s.leadCount) * 100) : 0;
               return (
                 <tr key={src} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                  <td style={{ padding: "9px 0", color: "#D1D5DB" }}>{SOURCE_LABELS[src] || src}</td>
-                  <td style={{ padding: "9px 0", textAlign: "right", color: "#D1D5DB" }}>{s.leadCount}</td>
-                  <td style={{ padding: "9px 0", textAlign: "right", color: "#fcd34d" }}>{s.contactedCount} ({contactRate}%)</td>
-                  <td style={{ padding: "9px 0", textAlign: "right", color: "#34d399" }}>{s.bookedCount}</td>
+                  <td style={{ padding: "9px 0", color: "var(--cove-text)" }}>{SOURCE_LABELS[src] || src}</td>
+                  <td style={{ padding: "9px 0", textAlign: "right", color: "var(--cove-text)" }}>{s.leadCount}</td>
+                  <td style={{ padding: "9px 0", textAlign: "right", color: "var(--cove-warning)" }}>{s.contactedCount} ({contactRate}%)</td>
+                  <td style={{ padding: "9px 0", textAlign: "right", color: "var(--cove-success)" }}>{s.bookedCount}</td>
                 </tr>
               );
             })}
@@ -619,11 +619,11 @@ function DashboardOverview() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col gap-3 bg-[#0b1220] px-3 py-4 sm:px-5">
+    <div className="flex min-h-screen flex-col gap-3 bg-[var(--cove-bg)] px-3 py-4 sm:px-5">
 
       {/* ── TOP BAR ── */}
-      <div className="flex flex-col gap-3 rounded-[10px] border border-white/10 bg-[#24324a] p-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
-        <div style={{ background: "#0b1220", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: 4, display: "flex", gap: 3 }}>
+      <div className="flex flex-col gap-3 rounded-[10px] border border-[color:var(--cove-border)] bg-[var(--cove-card)] p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-4">
+        <div style={{ background: "var(--cove-surface-hover)", border: "1px solid var(--cove-border)", borderRadius: 8, padding: 4, display: "flex", gap: 3 }}>
           {([{ id: "dial" as const, label: "📞 Dial Overview" }]).map((option) => (
             <button
               key={option.id}
@@ -637,7 +637,7 @@ function DashboardOverview() {
                 border: "none",
                 cursor: "pointer",
                 background: view === option.id ? "#2563eb" : "transparent",
-                color: view === option.id ? "#fff" : "#9CA3AF",
+                color: view === option.id ? "#fff" : "var(--cove-muted)",
               }}
             >
               {option.label}
@@ -656,10 +656,10 @@ function DashboardOverview() {
                 fontSize: 12,
                 fontWeight: range === opt ? 600 : 500,
                 border: "1px solid",
-                borderColor: range === opt ? "transparent" : "#374151",
+                borderColor: range === opt ? "transparent" : "var(--cove-border)",
                 cursor: "pointer",
-                background: range === opt ? "#2563eb" : "rgba(255,255,255,0.05)",
-                color: range === opt ? "#fff" : "#9CA3AF",
+                background: range === opt ? "#2563eb" : "var(--cove-surface)",
+                color: range === opt ? "#fff" : "var(--cove-muted)",
                 transition: "all 0.15s",
               }}
             >
@@ -677,8 +677,8 @@ function DashboardOverview() {
               <div
                 key={c.label}
                 style={{
-                  background: "#111D35",
-                  border: "1px solid rgba(255,255,255,0.06)",
+                  background: "var(--cove-card)",
+                  border: "1px solid var(--cove-border)",
                   borderRadius: 10,
                   padding: "16px 18px",
                   display: "flex",
@@ -686,12 +686,13 @@ function DashboardOverview() {
                   alignItems: "center",
                   justifyContent: "center",
                   gap: 5,
+                  boxShadow: "0 1px 2px rgba(15,23,42,0.04)",
                 }}
               >
-                <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#6B7280" }}>
+                <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--cove-muted)" }}>
                   {c.label}
                 </div>
-                <div style={{ fontSize: 28, fontWeight: 700, color: "#F9FAFB", lineHeight: 1 }}>
+                <div style={{ fontSize: 28, fontWeight: 700, color: "var(--cove-text)", lineHeight: 1 }}>
                   {c.value}
                 </div>
               </div>
@@ -699,28 +700,28 @@ function DashboardOverview() {
           </div>
 
           {/* ── CALL PERFORMANCE CHART — full width ── */}
-          <div style={{ background: "#111D35", borderRadius: 10, padding: "20px 22px", border: "1px solid rgba(255,255,255,0.06)" }}>
+          <div style={{ background: "var(--cove-card)", borderRadius: 10, padding: "20px 22px", border: "1px solid var(--cove-border)", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#E5E7EB", display: "flex", alignItems: "center", gap: 7 }}>
-                <FaPhoneAlt style={{ color: "#F472B6", fontSize: 12 }} />
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--cove-text)", display: "flex", alignItems: "center", gap: 7 }}>
+                <FaPhoneAlt style={{ color: "var(--cove-danger)", fontSize: 12 }} />
                 {`Call Performance — ${range === "today" ? "Today" : range === "last30" ? "Last 30 Days" : "Last 7 Days"}`}
               </div>
               <div style={{ display: "flex", gap: 14 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
                   <div style={{ width: 10, height: 10, borderRadius: 2, background: "#3B82F6" }} />
-                  <span style={{ color: "#3B82F6" }}>Dials</span>
+                  <span style={{ color: "var(--cove-info)" }}>Dials</span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
                   <div style={{ width: 10, height: 10, borderRadius: 2, background: "#F97316" }} />
-                  <span style={{ color: "#F97316" }}>Connects</span>
+                  <span style={{ color: "var(--cove-warning)" }}>Connects</span>
                 </div>
               </div>
             </div>
 
             {loading ? (
-              <p style={{ color: "#94a3b8", fontSize: 13 }}>Loading chart...</p>
+              <p style={{ color: "var(--cove-muted)", fontSize: 13 }}>Loading chart...</p>
             ) : dailySeries.length === 0 ? (
-              <p style={{ color: "#374151", fontSize: 13 }}>No data for this period.</p>
+              <p style={{ color: "var(--cove-muted)", fontSize: 13 }}>No data for this period.</p>
             ) : (
               <div style={{ position: "relative" }} onMouseLeave={() => setTooltip(null)}>
                 {/* Floating tooltip */}
@@ -730,21 +731,21 @@ function DashboardOverview() {
                       position: "fixed",
                       top: tooltip.y - 80,
                       left: tooltip.x - 70,
-                      background: "#1A2B45",
-                      border: "1px solid #2d4060",
+                      background: "var(--cove-surface-hover)",
+                      border: "1px solid var(--cove-border)",
                       borderRadius: 8,
                       padding: "9px 14px",
                       fontSize: 12,
-                      color: "#E5E7EB",
+                      color: "var(--cove-text)",
                       zIndex: 9999,
                       pointerEvents: "none",
                       whiteSpace: "nowrap",
-                      boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
+                      boxShadow: "0 8px 24px rgba(15,23,42,0.12)",
                     }}
                   >
-                    <div style={{ fontWeight: 600, marginBottom: 5, color: "#fff", fontSize: 11 }}>{tooltip.label}</div>
-                    <div style={{ color: "#3B82F6", marginBottom: 2 }}>📞 {tooltip.dials} dials</div>
-                    <div style={{ color: "#F97316" }}>🤝 {tooltip.connects} connects</div>
+                    <div style={{ fontWeight: 600, marginBottom: 5, color: "var(--cove-text)", fontSize: 11 }}>{tooltip.label}</div>
+                    <div style={{ color: "var(--cove-info)", marginBottom: 2 }}>📞 {tooltip.dials} dials</div>
+                    <div style={{ color: "var(--cove-warning)" }}>🤝 {tooltip.connects} connects</div>
                   </div>
                 )}
 
@@ -768,7 +769,7 @@ function DashboardOverview() {
                         left: 0, right: 0,
                         bottom: 26 + (i / 4) * (chartHeight - 26),
                         height: 1,
-                        background: i === 0 ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)",
+                        background: i === 0 ? "rgba(71,85,105,0.24)" : "rgba(71,85,105,0.10)",
                         pointerEvents: "none",
                       }}
                     />
@@ -831,7 +832,7 @@ function DashboardOverview() {
                         </div>
                         <span style={{
                           fontSize: 9,
-                          color: "#4B5563",
+                          color: "var(--cove-muted)",
                           textAlign: "center",
                           position: "absolute",
                           bottom: 0,
@@ -854,23 +855,23 @@ function DashboardOverview() {
 
           {/* ── UPCOMING APPOINTMENTS ── */}
           <div>
-            <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#374151", marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--cove-muted)", marginBottom: 8 }}>
               Upcoming Appointments
             </div>
             <div
               style={{
-                background: "#0B1220",
-                border: "1px solid rgba(255,255,255,0.04)",
+                background: "var(--cove-card)",
+                border: "1px solid var(--cove-border)",
                 borderRadius: 10,
                 padding: appointmentsLoading || appointments.length === 0 ? 0 : 2,
               }}
             >
               {appointmentsLoading ? (
-                <div style={{ padding: "14px 16px", fontSize: 13, color: "#94A3B8" }}>
+                <div style={{ padding: "14px 16px", fontSize: 13, color: "var(--cove-muted)" }}>
                   Loading appointments...
                 </div>
               ) : appointments.length === 0 ? (
-                <div style={{ padding: "14px 16px", fontSize: 13, color: "#6B7280" }}>
+                <div style={{ padding: "14px 16px", fontSize: 13, color: "var(--cove-muted)" }}>
                   No upcoming appointments
                 </div>
               ) : (
@@ -890,7 +891,7 @@ function DashboardOverview() {
                         flex: "0 0 160px",
                         width: 160,
                         height: 126,
-                        background: "#111D35",
+                        background: "var(--cove-card)",
                         border: "1px solid rgba(255,255,255,0.06)",
                         borderRadius: 10,
                         overflow: "hidden",
@@ -911,7 +912,7 @@ function DashboardOverview() {
                           borderRadius: 7,
                           border: "1px solid rgba(52,211,153,0.28)",
                           background: "rgba(16,185,129,0.14)",
-                          color: "#6EE7B7",
+                          color: "var(--cove-success)",
                           display: "inline-flex",
                           alignItems: "center",
                           justifyContent: "center",
@@ -940,7 +941,7 @@ function DashboardOverview() {
                       >
                         <div
                           style={{
-                            color: "#F8FAFC",
+                            color: "var(--cove-text)",
                             fontSize: 14,
                             fontWeight: 700,
                             lineHeight: 1.25,
@@ -952,7 +953,7 @@ function DashboardOverview() {
                         >
                           {appointment.displayName || "Unknown Lead"}
                         </div>
-                        <div style={{ color: "#CBD5E1", fontSize: 12, lineHeight: 1.25 }}>
+                        <div style={{ color: "var(--cove-text)", fontSize: 12, lineHeight: 1.25 }}>
                           {formatAppointmentTime(appointment.appointmentTime)}
                         </div>
                         {appointment.folderName ? (
@@ -960,7 +961,7 @@ function DashboardOverview() {
                             style={{
                               border: "1px solid rgba(96,165,250,0.25)",
                               background: "rgba(96,165,250,0.1)",
-                              color: "#93C5FD",
+                              color: "var(--cove-info)",
                               borderRadius: 999,
                               padding: "2px 8px",
                               fontSize: 10,
@@ -978,7 +979,7 @@ function DashboardOverview() {
                         <div
                           style={{
                             marginTop: "auto",
-                            color: "#94A3B8",
+                            color: "var(--cove-muted)",
                             fontSize: 11,
                             lineHeight: 1.2,
                             maxWidth: "100%",
@@ -1009,7 +1010,7 @@ function DashboardOverview() {
               <div
                 key={c.label}
                 style={{
-                  background: "#111D35",
+                  background: "var(--cove-card)",
                   border: "1px solid rgba(255,255,255,0.06)",
                   borderRadius: 10,
                   padding: "16px 18px",
@@ -1020,10 +1021,10 @@ function DashboardOverview() {
                   gap: 5,
                 }}
               >
-                <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#6B7280" }}>
+                <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--cove-muted)" }}>
                   {c.label}
                 </div>
-                <div style={{ fontSize: 28, fontWeight: 700, color: "#F9FAFB", lineHeight: 1 }}>
+                <div style={{ fontSize: 28, fontWeight: 700, color: "var(--cove-text)", lineHeight: 1 }}>
                   {c.value}
                 </div>
               </div>

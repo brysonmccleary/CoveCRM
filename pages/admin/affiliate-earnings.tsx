@@ -40,7 +40,7 @@ export default function AdminAffiliateEarnings() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-[#1e293b] text-white p-8">
+    <div className="cove-app-shell min-h-screen bg-[#1e293b] text-white p-8">
       <h1 className="text-3xl font-bold mb-6">
         Affiliate Earnings (Admin View)
       </h1>

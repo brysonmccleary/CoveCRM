@@ -49,6 +49,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         createdAt: campaign.createdAt,
         prospects,
         actions,
+        // Current settings so the customer's Edit panel can pre-fill without a second request.
+        settings: {
+          planKey: campaign.planKey,
+          audienceDescription: campaign.audienceDescription || "",
+          location: campaign.location || "",
+          examples: campaign.examples || [],
+          message: campaign.openingMessage || "",
+          engagementAudience: campaign.engagementAudience || "everyone",
+          platformActionSettings: campaign.platformActionSettings,
+          seedAccounts: campaign.seedAccounts || [],
+          discoverySourceTypes: campaign.discoverySourceTypes || [],
+        },
         discovery: discovery.filter((job) => String(job.campaignId) === id).map((job) => ({
           platform: job.platform,
           status: job.status,

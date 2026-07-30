@@ -20,7 +20,10 @@ export const RECRUITING_PLANS = {
 export type RecruitingPlanKey = keyof typeof RECRUITING_PLANS;
 
 export function normalizeRecruitingPlan(value: unknown): RecruitingPlanKey {
-  return value === "growth" ? "growth" : "growth_recruiting";
+  // Fail closed: anything unrecognized gets the most restrictive plan, never
+  // the paid-DM tier. The plan must come from the billing record once Stripe
+  // checkout is wired up; until then this only bounds what a request can claim.
+  return value === "growth_recruiting" ? "growth_recruiting" : "growth";
 }
 
 export function assertPlanAllowsCampaign(planKey: RecruitingPlanKey, platforms: string[], dmEnabled: boolean) {

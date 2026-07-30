@@ -4,6 +4,26 @@ export const COMPANION_CONSENT_VERSION = "2026-07-16.1";
 export const PAIRING_TTL_MS = 15 * 60 * 1000;
 export const JOB_LEASE_MS = 5 * 60 * 1000;
 export const MIN_ACTION_INTERVAL_MS = 90 * 1000;
+export const ACTION_INTERVAL_JITTER_MS = 90 * 1000;
+
+// Persistent-session resilience. A one-time login is reused across every
+// hosted session via the persistent browser context, so customers should not
+// have to reconnect unless the platform genuinely ends the session. To avoid
+// forcing a needless re-login on a transient page blip, a signed-out reading
+// must repeat before it escalates to "reconnect required".
+export const SIGNED_OUT_STRIKE_LIMIT = 2;
+export const SUSPECTED_LOGOUT_RETRY_MS = 10 * 60 * 1000;
+
+export function nextSignedOutState(currentStrikes: unknown): { strikes: number; escalate: boolean } {
+  const strikes = Math.max(0, Math.floor(Number(currentStrikes) || 0)) + 1;
+  return strikes >= SIGNED_OUT_STRIKE_LIMIT ? { strikes: 0, escalate: true } : { strikes, escalate: false };
+}
+
+// A fixed cadence between actions is a robotic fingerprint. Each cooldown
+// check draws a fresh threshold in [90s, 180s) so spacing varies naturally.
+export function jitteredActionIntervalMs(): number {
+  return MIN_ACTION_INTERVAL_MS + Math.floor(Math.random() * ACTION_INTERVAL_JITTER_MS);
+}
 export const DEFAULT_DAILY_ACTION_LIMIT = 25;
 export const MAX_DAILY_ACTION_LIMIT = 50;
 export const ACTIVE_HOURS_START = 8;

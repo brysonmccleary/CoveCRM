@@ -15,6 +15,7 @@ import RecruitingCampaign from "@/models/RecruitingCampaign";
 import RecruitingCompanionJob from "@/models/RecruitingCompanionJob";
 import RecruitingProspect from "@/models/RecruitingProspect";
 import RecruitingSocialAction from "@/models/RecruitingSocialAction";
+import { maybeSendAutomationHealthAlert } from "./alerts";
 import type { DiscoveredCandidate } from "./automation";
 
 export async function completeHostedDiscovery(params: {
@@ -54,6 +55,17 @@ export async function completeHostedDiscovery(params: {
     qualifications = new Map(result.map((qualification) => [qualification.candidateId, qualification]));
   } catch {
     qualificationError = "Audience matching could not be completed.";
+    // Surface repeated qualification failures to the operator: while this
+    // persists every scan quietly produces zero prospects.
+    await RecruitingAuditEvent.create({
+      ownerEmail,
+      actorEmail: ownerEmail,
+      eventType: "discovery_qualification_failed",
+      entityType: "discovery_job",
+      entityId: `${discovery._id}:${Date.now()}`,
+      details: { platform, candidateCount: candidates.length },
+    }).catch(() => undefined);
+    await maybeSendAutomationHealthAlert("qualification_failures", platform).catch(() => undefined);
   }
 
   let accepted = 0;

@@ -19,8 +19,8 @@ export type HostedActionJob = {
   message: string;
 };
 
-function parseCompactCount(value: string): number | null {
-  const match = value.replace(/,/g, "").trim().match(/^(\d+(?:\.\d+)?)([kmb])?$/i);
+export function parseCompactCount(value: string): number | null {
+  const match = value.replace(/,/g, "").trim().match(/^(\d+(?:\.\d+)?)\s*([kmb])?$/i);
   if (!match) return null;
   const multiplier = match[2]?.toLowerCase() === "k" ? 1_000 : match[2]?.toLowerCase() === "m" ? 1_000_000 : match[2]?.toLowerCase() === "b" ? 1_000_000_000 : 1;
   const count = Math.round(Number(match[1]) * multiplier);

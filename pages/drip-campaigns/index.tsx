@@ -98,7 +98,7 @@ export default function DripCampaignsPanel() {
   };
 
   return (
-    <div className="flex min-h-screen bg-[#0f172a] text-white">
+    <div className="cove-app-shell flex min-h-screen bg-[#0f172a] text-white">
       <Sidebar />
       <div className="flex-1 p-6">
         <h1 className="text-2xl font-bold mb-4">Drip Campaigns</h1>

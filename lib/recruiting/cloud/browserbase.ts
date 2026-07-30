@@ -1,5 +1,6 @@
 import { chromium, type Browser, type Page } from "playwright-core";
 import type { SocialPlatform } from "@/lib/recruiting/social/types";
+import type { ProxyGeolocation } from "@/lib/recruiting/social/geo";
 
 const API_BASE = "https://api.browserbase.com/v1";
 const PLATFORM_URLS: Record<SocialPlatform, { login: string; home: string }> = {
@@ -36,6 +37,18 @@ export function hostedBrowserIsConfigured(): boolean {
     String(process.env.BROWSERBASE_API_KEY || "").trim()
     && String(process.env.BROWSERBASE_PROJECT_ID || "").trim(),
   );
+}
+
+// Residential proxying is ON by default and only disabled by an explicit
+// opt-out (local dev). Running social automation from Browserbase's datacenter
+// IPs is the single biggest ban signal, so this fails safe toward "proxied".
+export function hostedResidentialProxyEnabled(): boolean {
+  return String(process.env.RECRUITING_RESIDENTIAL_PROXY_ENABLED || "true").toLowerCase() !== "false";
+}
+
+function proxyConfiguration(geolocation?: ProxyGeolocation) {
+  if (!hostedResidentialProxyEnabled()) return {};
+  return { proxies: [{ type: "browserbase", geolocation: geolocation || { country: "US" } }] };
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -83,6 +96,7 @@ export async function createHostedSession(params: {
   keepAlive?: boolean;
   timeoutSeconds?: number;
   metadata?: Record<string, string>;
+  geolocation?: ProxyGeolocation;
 }): Promise<BrowserbaseSession> {
   const { projectId } = configuration();
   return request<BrowserbaseSession>("/sessions", {
@@ -92,6 +106,7 @@ export async function createHostedSession(params: {
       region: params.region,
       keepAlive: Boolean(params.keepAlive),
       timeout: Math.min(21_600, Math.max(60, params.timeoutSeconds || 300)),
+      ...proxyConfiguration(params.geolocation),
       browserSettings: {
         recordSession: false,
         logSession: false,
@@ -138,6 +153,7 @@ export async function startLoginSession(params: {
   platform: SocialPlatform;
   region: BrowserbaseRegion;
   ownerKey: string;
+  geolocation?: ProxyGeolocation;
 }): Promise<{ sessionId: string; liveViewUrl: string; expiresAt?: string }> {
   const session = await createHostedSession({
     contextId: params.contextId,
@@ -145,6 +161,7 @@ export async function startLoginSession(params: {
     keepAlive: true,
     timeoutSeconds: 3600,
     metadata: { purpose: "cove_social_login", platform: params.platform, owner: params.ownerKey },
+    geolocation: params.geolocation,
   });
   let browser: Browser | null = null;
   try {
@@ -180,7 +197,17 @@ export function pageAppearsSignedOut(platform: SocialPlatform, url: string, body
   ].some((phrase) => normalizedBody.includes(phrase));
 }
 
-export async function verifyLoginSessionDetails(sessionId: string, platform: SocialPlatform): Promise<{ authenticated: boolean; profileUrl: string }> {
+// The automation layer matches English control labels ("Message", "Connect",
+// "Follow", …). A non-English account UI would make every action fail with
+// control_missing, so unsupported languages are rejected at connect time with
+// an actionable message instead. Missing/empty lang attributes are allowed —
+// only an explicit non-English declaration blocks.
+export function isSupportedAutomationLanguage(lang: string): boolean {
+  const normalized = String(lang || "").trim().toLowerCase();
+  return !normalized || normalized === "en" || normalized.startsWith("en-");
+}
+
+export async function verifyLoginSessionDetails(sessionId: string, platform: SocialPlatform): Promise<{ authenticated: boolean; profileUrl: string; languageSupported: boolean }> {
   const session = await getHostedSession(sessionId);
   let browser: Browser | null = null;
   try {
@@ -191,11 +218,13 @@ export async function verifyLoginSessionDetails(sessionId: string, platform: Soc
       url: location.href,
       bodyText: document.body?.innerText || "",
       hasPasswordInput: Boolean(document.querySelector('input[type="password"]')),
+      lang: document.documentElement?.lang || "",
     }));
     const host = new URL(state.url).hostname.toLowerCase().replace(/^www\./, "");
     const expected = platform === "linkedin" ? "linkedin.com" : "instagram.com";
     const authenticated = host === expected && !pageAppearsSignedOut(platform, state.url, state.bodyText, state.hasPasswordInput);
-    if (!authenticated) return { authenticated: false, profileUrl: "" };
+    const languageSupported = isSupportedAutomationLanguage(state.lang);
+    if (!authenticated) return { authenticated: false, profileUrl: "", languageSupported };
     const profileUrl = await page.evaluate((selectedPlatform) => {
       const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'));
       const candidates = links.filter((link) => {
@@ -212,7 +241,7 @@ export async function verifyLoginSessionDetails(sessionId: string, platform: Soc
       const parsed = new URL(selected.href);
       return `${parsed.protocol}//${parsed.hostname.replace(/^www\./, "")}${parsed.pathname}`.replace(/\/$/, "");
     }, platform).catch(() => "");
-    return { authenticated: true, profileUrl };
+    return { authenticated: true, profileUrl, languageSupported };
   } finally {
     await browser?.close().catch(() => undefined);
   }
@@ -227,6 +256,7 @@ export async function withHostedPage<T>(params: {
   platform: SocialPlatform;
   region: BrowserbaseRegion;
   ownerKey: string;
+  geolocation?: ProxyGeolocation;
   task: (page: Page) => Promise<T>;
 }): Promise<T> {
   const session = await createHostedSession({
@@ -234,6 +264,7 @@ export async function withHostedPage<T>(params: {
     region: params.region,
     timeoutSeconds: 300,
     metadata: { purpose: "cove_social_worker", platform: params.platform, owner: params.ownerKey },
+    geolocation: params.geolocation,
   });
   let browser: Browser | null = null;
   try {

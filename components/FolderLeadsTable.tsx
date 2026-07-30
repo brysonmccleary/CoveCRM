@@ -77,10 +77,10 @@ function formatCreated(lead: any): string {
 const COL_BORDER = "1px solid rgba(63,63,70,0.7)";
 
 const selectStyle: React.CSSProperties = {
-  background: "#1e293b",
+  background: "var(--cove-surface-hover)",
   border: "1px solid #475569",
   borderRadius: 6,
-  color: "#e2e8f0",
+  color: "var(--cove-text)",
   padding: "8px 10px",
   fontSize: 14,
   height: 40,
@@ -200,7 +200,7 @@ export default function FolderLeadsTable({
     textAlign: "left",
     fontSize: 14,
     fontWeight: 600,
-    color: "#94a3b8",
+    color: "var(--cove-muted)",
     cursor: "pointer",
     userSelect: "none",
     whiteSpace: "nowrap",
@@ -234,7 +234,7 @@ export default function FolderLeadsTable({
             padding: "3px 10px",
             borderRadius: 10,
             border: "1px solid currentColor",
-            color: "#a78bfa",
+            color: "var(--cove-purple)",
             whiteSpace: "nowrap",
             lineHeight: "22px",
           }}
@@ -251,10 +251,10 @@ export default function FolderLeadsTable({
             minWidth: 180,
             maxWidth: 320,
             height: 40,
-            background: "#1e293b",
+            background: "var(--cove-surface-hover)",
             border: "1px solid #334155",
             borderRadius: 6,
-            color: "#e2e8f0",
+            color: "var(--cove-text)",
             padding: "0 12px",
             fontSize: 14,
           }}
@@ -265,10 +265,10 @@ export default function FolderLeadsTable({
           onChange={(e) => setAgingFilter(e.target.value as AgingFilter)}
           style={{
             height: 40,
-            background: "#1e293b",
+            background: "var(--cove-surface-hover)",
             border: "1px solid #334155",
             borderRadius: 6,
-            color: "#e2e8f0",
+            color: "var(--cove-text)",
             padding: "0 10px",
             fontSize: 14,
           }}
@@ -280,7 +280,7 @@ export default function FolderLeadsTable({
           <option value="cold">Cold (&gt; 7 days)</option>
         </select>
 
-        <span style={{ fontSize: 14, color: "#c4b5fd", whiteSpace: "nowrap", minWidth: 88 }}>
+        <span style={{ fontSize: 14, color: "var(--cove-purple)", whiteSpace: "nowrap", minWidth: 88 }}>
           {selectedLeads.length} selected
         </span>
 
@@ -319,7 +319,7 @@ export default function FolderLeadsTable({
               <option value="trucker_mortgage">Truckers Mortgage Protection</option>
               <option value="default">Default (Generic)</option>
             </select>
-            {savingScript && <span style={{ fontSize: 12, color: "#64748b" }}>Saving...</span>}
+            {savingScript && <span style={{ fontSize: 12, color: "var(--cove-muted)" }}>Saving...</span>}
           </div>
         )}
 
@@ -353,7 +353,7 @@ export default function FolderLeadsTable({
           <thead>
             <tr style={{ background: "rgba(0,0,0,0.3)" }}>
               <th style={{ ...thStyle, cursor: "default", whiteSpace: "nowrap" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontWeight: 600, color: "#94a3b8", fontSize: 14 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontWeight: 600, color: "var(--cove-muted)", fontSize: 14 }}>
                   <input
                     type="checkbox"
                     checked={selectAll}
@@ -428,7 +428,7 @@ export default function FolderLeadsTable({
                       style={{ cursor: "pointer", width: 15, height: 15 }}
                     />
                   </td>
-                  <td style={{ ...tdStyle, color: "#64748b" }}>{index + 1}</td>
+                  <td style={{ ...tdStyle, color: "var(--cove-muted)" }}>{index + 1}</td>
 
                   {showColFirstName && (
                     <td style={tdStyle}>
@@ -443,27 +443,27 @@ export default function FolderLeadsTable({
                   )}
 
                   {showColLastName && (
-                    <td style={{ ...tdStyle, color: "#cbd5e1" }}>
+                    <td style={{ ...tdStyle, color: "var(--cove-text)" }}>
                       {getLeadValue(lead, "lastName") || "-"}
                     </td>
                   )}
                   {showColPhone && (
-                    <td style={{ ...tdStyle, color: "#cbd5e1" }}>
+                    <td style={{ ...tdStyle, color: "var(--cove-text)" }}>
                       {getLeadValue(lead, "phone") || "-"}
                     </td>
                   )}
                   {showColEmail && (
-                    <td style={{ ...tdStyle, color: "#cbd5e1" }}>
+                    <td style={{ ...tdStyle, color: "var(--cove-text)" }}>
                       {getLeadValue(lead, "email") || "-"}
                     </td>
                   )}
                   {showColState && (
-                    <td style={{ ...tdStyle, color: "#cbd5e1" }}>
+                    <td style={{ ...tdStyle, color: "var(--cove-text)" }}>
                       {getLeadValue(lead, "state") || "-"}
                     </td>
                   )}
                   {showColAge && (
-                    <td style={{ ...tdStyle, color: "#cbd5e1" }}>
+                    <td style={{ ...tdStyle, color: "var(--cove-text)" }}>
                       {getLeadValue(lead, "age") ?? "-"}
                     </td>
                   )}
@@ -486,7 +486,7 @@ export default function FolderLeadsTable({
                     )}
                   </td>
 
-                  <td style={{ ...tdStyle, color: "#64748b", whiteSpace: "nowrap", borderRight: "none" }}>
+                  <td style={{ ...tdStyle, color: "var(--cove-muted)", whiteSpace: "nowrap", borderRight: "none" }}>
                     {formatCreated(lead)}
                   </td>
                 </tr>
@@ -496,7 +496,7 @@ export default function FolderLeadsTable({
               <tr>
                 <td
                   colSpan={12}
-                  style={{ padding: "24px 16px", textAlign: "center", color: "#64748b", fontSize: 14 }}
+                  style={{ padding: "24px 16px", textAlign: "center", color: "var(--cove-muted)", fontSize: 14 }}
                 >
                   {search || agingFilter !== "all" ? "No leads match the current filters." : "No leads."}
                 </td>

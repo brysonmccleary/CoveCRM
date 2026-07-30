@@ -123,7 +123,7 @@ export default function CreateFolderPanel() {
 
       {/* AI First-Call Settings */}
       <div style={{ borderTop: "1px solid #334155", marginTop: "12px", paddingTop: "12px" }}>
-        <p style={{ fontSize: "13px", fontWeight: 600, color: "#94a3b8", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        <p style={{ fontSize: "13px", fontWeight: 600, color: "var(--cove-muted)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
           AI First-Call
         </p>
 
@@ -132,25 +132,25 @@ export default function CreateFolderPanel() {
             type="checkbox"
             checked={aiFirstCallEnabled}
             onChange={(e) => setAiFirstCallEnabled(e.target.checked)}
-            style={{ width: "16px", height: "16px", accentColor: "#3b82f6" }}
+            style={{ width: "16px", height: "16px", accentColor: "var(--cove-info)" }}
           />
-          <span style={{ fontSize: "14px", color: "#e2e8f0" }}>Auto-call new leads in this folder</span>
+          <span style={{ fontSize: "14px", color: "var(--cove-text)" }}>Auto-call new leads in this folder</span>
         </label>
 
         {aiFirstCallEnabled && (
           <div style={{ marginLeft: "26px" }}>
-            <div style={{ backgroundColor: "#0f172a", border: "1px solid #f59e0b", borderRadius: "6px", padding: "10px 12px", marginBottom: "10px" }}>
-              <p style={{ fontSize: "12px", color: "#fbbf24", margin: 0, lineHeight: "1.5" }}>
+            <div style={{ backgroundColor: "var(--cove-card)", border: "1px solid #f59e0b", borderRadius: "6px", padding: "10px 12px", marginBottom: "10px" }}>
+              <p style={{ fontSize: "12px", color: "var(--cove-warning)", margin: 0, lineHeight: "1.5" }}>
                 ⚠️ This will only call <strong>new leads added after you enable this</strong>. To call existing leads already in this folder, use the AI Dial Session.
               </p>
             </div>
 
-            <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", fontSize: "13px", color: "#cbd5e1" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", fontSize: "13px", color: "var(--cove-text)" }}>
               <span>Call delay:</span>
               <select
                 value={aiFirstCallDelayMinutes}
                 onChange={(e) => setAiFirstCallDelayMinutes(Number(e.target.value))}
-                style={{ backgroundColor: "#1e293b", border: "1px solid #475569", borderRadius: "4px", color: "#e2e8f0", padding: "4px 8px", fontSize: "13px" }}
+                style={{ backgroundColor: "var(--cove-surface-hover)", border: "1px solid #475569", borderRadius: "4px", color: "var(--cove-text)", padding: "4px 8px", fontSize: "13px" }}
               >
                 <option value={0}>Immediately</option>
                 <option value={1}>1 minute</option>
@@ -161,16 +161,16 @@ export default function CreateFolderPanel() {
             </label>
 
             <div style={{ marginBottom: "8px" }}>
-              <label style={{ display: "block", fontSize: "13px", color: "#cbd5e1", marginBottom: "4px", fontWeight: 500 }}>
+              <label style={{ display: "block", fontSize: "13px", color: "var(--cove-text)", marginBottom: "4px", fontWeight: 500 }}>
                 AI Script / Lead Type
               </label>
-              <p style={{ fontSize: "11px", color: "#64748b", marginBottom: "6px", marginTop: 0 }}>
+              <p style={{ fontSize: "11px", color: "var(--cove-muted)", marginBottom: "6px", marginTop: 0 }}>
                 The AI will use this script for every lead in this folder.
               </p>
               <select
                 value={aiScriptKey}
                 onChange={(e) => setAiScriptKey(e.target.value)}
-                style={{ backgroundColor: "#0f172a", border: "1px solid #475569", borderRadius: "4px", color: "#e2e8f0", padding: "6px 8px", fontSize: "13px", width: "100%" }}
+                style={{ backgroundColor: "var(--cove-card)", border: "1px solid #475569", borderRadius: "4px", color: "var(--cove-text)", padding: "6px 8px", fontSize: "13px", width: "100%" }}
               >
                 <option value="mortgage_protection">Mortgage Protection</option>
                 <option value="final_expense">Final Expense</option>
@@ -185,12 +185,12 @@ export default function CreateFolderPanel() {
               </select>
             </div>
 
-            <label style={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "13px", color: "#cbd5e1", cursor: "pointer" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "13px", color: "var(--cove-text)", cursor: "pointer" }}>
               <input
                 type="checkbox"
                 checked={aiRealTimeOnly}
                 onChange={(e) => setAiRealTimeOnly(e.target.checked)}
-                style={{ width: "14px", height: "14px", accentColor: "#3b82f6" }}
+                style={{ width: "14px", height: "14px", accentColor: "var(--cove-info)" }}
               />
               <span>Real-time leads only (skip CSV imports)</span>
             </label>
@@ -200,12 +200,12 @@ export default function CreateFolderPanel() {
 
       {/* Tucked in below AI First-Call, styled to match — not a primary control */}
       <div style={{ borderTop: "1px solid #334155", marginTop: "12px", paddingTop: "12px" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#94a3b8" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "var(--cove-muted)" }}>
           <span>Default lead type for this folder</span>
           <select
             value={leadType}
             onChange={(e) => setLeadType(e.target.value)}
-            style={{ backgroundColor: "#0f172a", border: "1px solid #334155", borderRadius: "4px", color: "#cbd5e1", fontSize: "12px", padding: "3px 6px" }}
+            style={{ backgroundColor: "var(--cove-card)", border: "1px solid #334155", borderRadius: "4px", color: "var(--cove-text)", fontSize: "12px", padding: "3px 6px" }}
           >
             <option value="">None (default: Final Expense)</option>
             {LEAD_TYPES.map((type) => (
@@ -213,7 +213,7 @@ export default function CreateFolderPanel() {
             ))}
           </select>
         </label>
-        <p style={{ fontSize: "11px", color: "#64748b", margin: "4px 0 0" }}>
+        <p style={{ fontSize: "11px", color: "var(--cove-muted)", margin: "4px 0 0" }}>
           Applied to new leads imported into this folder that don't already have their own lead type.
         </p>
       </div>

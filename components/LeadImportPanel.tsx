@@ -41,7 +41,7 @@ const systemFields = [
 ];
 
 const surfaceStyle: React.CSSProperties = {
-  background: "#1e293b",
+  background: "var(--cove-surface-hover)",
   border: "1px solid rgba(255,255,255,0.09)",
 };
 
@@ -666,7 +666,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                             }}
                             className="rounded flex-1 text-slate-100"
                             style={{
-                              background: "#1e293b",
+                              background: "var(--cove-surface-hover)",
                               border: "1px solid rgba(255,255,255,0.09)",
                               padding: "8px 10px",
                             }}
@@ -692,7 +692,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                               placeholder="Custom field name"
                               className="rounded flex-1 text-slate-100"
                               style={{
-                                background: "#1e293b",
+                                background: "var(--cove-surface-hover)",
                                 border: "1px solid rgba(255,255,255,0.09)",
                                 padding: "8px 10px",
                               }}
@@ -763,7 +763,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                     isSkipped ? "opacity-45" : ""
                   }`}
                   style={{
-                    background: "#1e293b",
+                    background: "var(--cove-surface-hover)",
                     border: "1px solid rgba(255,255,255,0.09)",
                     padding: "12px",
                   }}
@@ -811,7 +811,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                         }}
                         className="rounded flex-1 text-slate-100"
                         style={{
-                          background: "#1e293b",
+                          background: "var(--cove-surface-hover)",
                           border: "1px solid rgba(255,255,255,0.09)",
                           padding: "8px 10px",
                         }}
@@ -837,7 +837,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                           placeholder="Custom field name"
                           className="rounded flex-1 text-slate-100"
                           style={{
-                            background: "#1e293b",
+                            background: "var(--cove-surface-hover)",
                             border: "1px solid rgba(255,255,255,0.09)",
                             padding: "8px 10px",
                           }}

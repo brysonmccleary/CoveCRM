@@ -22,6 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!account?.loginSessionId) return res.status(404).json({ code: "ACCOUNT_LOGIN_EXPIRED", error: RECRUITING_PUBLIC_MESSAGES.ACCOUNT_LOGIN_EXPIRED });
     const verification = await verifyLoginSessionDetails(account.loginSessionId, account.platform as any);
     if (!verification.authenticated) return res.status(409).json({ code: "ACCOUNT_LOGIN_NOT_FINISHED", error: RECRUITING_PUBLIC_MESSAGES.ACCOUNT_LOGIN_NOT_FINISHED });
+    if (!verification.languageSupported) return res.status(409).json({ code: "ACCOUNT_LANGUAGE_UNSUPPORTED", error: RECRUITING_PUBLIC_MESSAGES.ACCOUNT_LANGUAGE_UNSUPPORTED });
     await releaseHostedSession(account.loginSessionId).catch(() => undefined);
     account.status = "active";
     account.lastAuthenticatedAt = new Date();

@@ -32,7 +32,7 @@ const panel: React.CSSProperties = {
   boxSizing: "border-box",
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.12)",
-  background: "#0f172a",
+  background: "var(--cove-card)",
   color: "white",
   padding: 24,
   boxShadow: "0 24px 70px rgba(0,0,0,0.45)",
@@ -43,7 +43,7 @@ const card: React.CSSProperties = {
   textAlign: "left",
   borderRadius: 10,
   border: "1px solid rgba(255,255,255,0.14)",
-  background: "#1e293b",
+  background: "var(--cove-surface-hover)",
   color: "white",
   padding: 20,
   cursor: "pointer",
@@ -144,20 +144,20 @@ function ApiKeysPanel({
         <div>
           <button style={{ ...secondary, marginBottom: 12 }} onClick={onBack}>← Back</button>
           <h2 style={{ margin: 0, fontSize: 24 }}>API for Vendors</h2>
-          <p style={{ margin: "7px 0 0", color: "#94a3b8" }}>Choose the vendor and the folder where their leads should go.</p>
+          <p style={{ margin: "7px 0 0", color: "var(--cove-muted)" }}>Choose the vendor and the folder where their leads should go.</p>
         </div>
         <button style={secondary} onClick={onClose}>Close</button>
       </div>
 
       {newKey && (
-        <div style={{ marginTop: 20, padding: 16, borderRadius: 8, border: "1px solid #6b5b95", background: "#1e293b" }}>
+        <div style={{ marginTop: 20, padding: 16, borderRadius: 8, border: "1px solid #6b5b95", background: "var(--cove-surface-hover)" }}>
           <strong>Your key is ready. Copy it now—you won’t see it again.</strong>
-          <p style={{ color: "#94a3b8", margin: "8px 0 0" }}>The folder is already created. Send this key to your lead vendor and every new lead will automatically appear there.</p>
+          <p style={{ color: "var(--cove-muted)", margin: "8px 0 0" }}>The folder is already created. Send this key to your lead vendor and every new lead will automatically appear there.</p>
           <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-            <code style={{ flex: 1, minWidth: 260, padding: 10, borderRadius: 6, background: "#020617", overflowWrap: "anywhere" }}>{newKey}</code>
+            <code style={{ flex: 1, minWidth: 260, padding: 10, borderRadius: 6, background: "var(--cove-card)", overflowWrap: "anywhere" }}>{newKey}</code>
             <button style={primary} onClick={async () => { await navigator.clipboard.writeText(newKey); toast.success("API key copied"); }}>Copy</button>
           </div>
-          <div style={{ marginTop: 12, color: "#cbd5e1", lineHeight: 1.7 }}>
+          <div style={{ marginTop: 12, color: "var(--cove-text)", lineHeight: 1.7 }}>
             <div><strong>Endpoint:</strong> <code>{VENDOR_LEADS_ENDPOINT}</code></div>
             <div><strong>Method:</strong> POST</div>
             <div><strong>Authorization:</strong> Bearer API key or <code>x-api-key</code></div>
@@ -177,7 +177,7 @@ function ApiKeysPanel({
         </div>
       )}
 
-      <div style={{ marginTop: 22, padding: 18, borderRadius: 9, background: "#1e293b", border: "1px solid rgba(255,255,255,0.1)" }}>
+      <div style={{ marginTop: 22, padding: 18, borderRadius: 9, background: "var(--cove-surface-hover)", border: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontWeight: 700, marginBottom: 14 }}>Create a vendor key</div>
         <label style={{ display: "block", marginBottom: 6 }}>1. Who is sending you leads?</label>
         <input
@@ -189,7 +189,7 @@ function ApiKeysPanel({
           }}
           placeholder="Example: ABC Lead Company"
           maxLength={80}
-          style={{ width: "100%", boxSizing: "border-box", borderRadius: 7, border: "1px solid rgba(255,255,255,0.2)", background: "#0f172a", color: "white", padding: "10px 12px", marginBottom: 14 }}
+          style={{ width: "100%", boxSizing: "border-box", borderRadius: 7, border: "1px solid rgba(255,255,255,0.2)", background: "var(--cove-card)", color: "white", padding: "10px 12px", marginBottom: 14 }}
         />
         <label style={{ display: "block", marginBottom: 6 }}>2. What should their CoveCRM folder be called?</label>
         <input
@@ -200,13 +200,13 @@ function ApiKeysPanel({
           }}
           placeholder="Example: ABC Vendor Leads"
           maxLength={120}
-          style={{ width: "100%", boxSizing: "border-box", borderRadius: 7, border: "1px solid rgba(255,255,255,0.2)", background: "#0f172a", color: "white", padding: "10px 12px", marginBottom: 14 }}
+          style={{ width: "100%", boxSizing: "border-box", borderRadius: 7, border: "1px solid rgba(255,255,255,0.2)", background: "var(--cove-card)", color: "white", padding: "10px 12px", marginBottom: 14 }}
         />
         <label style={{ display: "block", marginBottom: 6 }}>3. What type of leads are these?</label>
         <select
           value={leadType}
           onChange={(event) => setLeadType(event.target.value)}
-          style={{ width: "100%", boxSizing: "border-box", borderRadius: 7, border: "1px solid rgba(255,255,255,0.2)", background: "#0f172a", color: "white", padding: "10px 12px", marginBottom: 14 }}
+          style={{ width: "100%", boxSizing: "border-box", borderRadius: 7, border: "1px solid rgba(255,255,255,0.2)", background: "var(--cove-card)", color: "white", padding: "10px 12px", marginBottom: 14 }}
         >
           <option value="">Select lead type</option>
           {LEAD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
@@ -215,22 +215,22 @@ function ApiKeysPanel({
       </div>
 
       <div style={{ marginTop: 20 }}>
-        {loading ? <p style={{ color: "#94a3b8" }}>Loading keys…</p> : keys.length === 0 ? <p style={{ color: "#94a3b8" }}>No API keys yet.</p> : keys.map((key) => (
+        {loading ? <p style={{ color: "var(--cove-muted)" }}>Loading keys…</p> : keys.length === 0 ? <p style={{ color: "var(--cove-muted)" }}>No API keys yet.</p> : keys.map((key) => (
           <div key={key._id} style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", padding: "14px 0", borderBottom: "1px solid rgba(255,255,255,0.1)", flexWrap: "wrap" }}>
             <div>
               <strong>{key.name}</strong>
-              <div style={{ color: "#94a3b8", marginTop: 4 }}><code>{key.keyPrefix}…</code>{key.revokedAt ? " · Revoked" : ""}</div>
-              <div style={{ color: "#94a3b8", marginTop: 4 }}>Leads go to: <strong>{key.folderName || `${key.name} Leads`}</strong>{!key.folderId ? " · Legacy key will bind automatically" : ""}</div>
-              <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Created {displayDate(key.createdAt)} · Last used {displayDate(key.lastUsedAt)}</div>
+              <div style={{ color: "var(--cove-muted)", marginTop: 4 }}><code>{key.keyPrefix}…</code>{key.revokedAt ? " · Revoked" : ""}</div>
+              <div style={{ color: "var(--cove-muted)", marginTop: 4 }}>Leads go to: <strong>{key.folderName || `${key.name} Leads`}</strong>{!key.folderId ? " · Legacy key will bind automatically" : ""}</div>
+              <div style={{ color: "var(--cove-muted)", fontSize: 13, marginTop: 4 }}>Created {displayDate(key.createdAt)} · Last used {displayDate(key.lastUsedAt)}</div>
             </div>
             {!key.revokedAt && <button style={secondary} onClick={() => void revoke(key)}>Revoke</button>}
           </div>
         ))}
       </div>
 
-      <div style={{ marginTop: 26, padding: 18, borderRadius: 9, background: "#1e293b", border: "1px solid rgba(255,255,255,0.1)" }}>
+      <div style={{ marginTop: 26, padding: 18, borderRadius: 9, background: "var(--cove-surface-hover)", border: "1px solid rgba(255,255,255,0.1)" }}>
         <h3 style={{ marginTop: 0 }}>What happens next?</h3>
-        <ol style={{ margin: 0, paddingLeft: 22, color: "#cbd5e1", lineHeight: 1.8 }}>
+        <ol style={{ margin: 0, paddingLeft: 22, color: "var(--cove-text)", lineHeight: 1.8 }}>
           <li>Create the key above.</li>
           <li>CoveCRM immediately creates and locks the destination folder.</li>
           <li>Copy the key and send it to your lead vendor.</li>
@@ -259,13 +259,13 @@ export default function ImportLeadsChooser({
         {showApiKeys ? <ApiKeysPanel onBack={() => setShowApiKeys(false)} onClose={onClose} onVendorConnectionCreated={onVendorConnectionCreated} /> : (
           <>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-              <div><h2 style={{ margin: 0, fontSize: 24 }}>Import Leads</h2><p style={{ color: "#94a3b8", marginBottom: 0 }}>Choose how leads should enter CoveCRM.</p></div>
+              <div><h2 style={{ margin: 0, fontSize: 24 }}>Import Leads</h2><p style={{ color: "var(--cove-muted)", marginBottom: 0 }}>Choose how leads should enter CoveCRM.</p></div>
               <button style={secondary} onClick={onClose}>Close</button>
             </div>
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 24 }}>
-              <button style={card} onClick={onCsv}><span style={{ display: "block", fontSize: 20, fontWeight: 700 }}>Import CSV</span><span style={{ display: "block", marginTop: 10, color: "#94a3b8", lineHeight: 1.5 }}>Upload a file, map its columns, and choose a destination folder.</span></button>
-              <button style={card} onClick={onGoogleSheets}><span style={{ display: "block", fontSize: 20, fontWeight: 700 }}>Connect Google Sheet</span><span style={{ display: "block", marginTop: 10, color: "#94a3b8", lineHeight: 1.5 }}>Send new spreadsheet rows to CoveCRM automatically.</span></button>
-              <button style={card} onClick={() => setShowApiKeys(true)}><span style={{ display: "block", fontSize: 20, fontWeight: 700 }}>API for Vendors</span><span style={{ display: "block", marginTop: 10, color: "#94a3b8", lineHeight: 1.5 }}>Create an API key for a lead vendor or custom integration.</span></button>
+              <button style={card} onClick={onCsv}><span style={{ display: "block", fontSize: 20, fontWeight: 700 }}>Import CSV</span><span style={{ display: "block", marginTop: 10, color: "var(--cove-muted)", lineHeight: 1.5 }}>Upload a file, map its columns, and choose a destination folder.</span></button>
+              <button style={card} onClick={onGoogleSheets}><span style={{ display: "block", fontSize: 20, fontWeight: 700 }}>Connect Google Sheet</span><span style={{ display: "block", marginTop: 10, color: "var(--cove-muted)", lineHeight: 1.5 }}>Send new spreadsheet rows to CoveCRM automatically.</span></button>
+              <button style={card} onClick={() => setShowApiKeys(true)}><span style={{ display: "block", fontSize: 20, fontWeight: 700 }}>API for Vendors</span><span style={{ display: "block", marginTop: 10, color: "var(--cove-muted)", lineHeight: 1.5 }}>Create an API key for a lead vendor or custom integration.</span></button>
             </div>
           </>
         )}

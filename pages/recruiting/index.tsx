@@ -29,6 +29,17 @@ type CloudAccount = {
 };
 
 type LoginView = { accountId: string; platform: SocialPlatform; liveViewUrl: string } | null;
+type CampaignSettings = {
+  planKey: RecruitingPlanKey;
+  audienceDescription: string;
+  location: string;
+  examples: string[];
+  message: string;
+  engagementAudience: "everyone" | "women" | "men";
+  platformActionSettings: PlatformActionSettings;
+  seedAccounts: string[];
+  discoverySourceTypes: DiscoverySourceType[];
+};
 type CampaignOverview = {
   id: string;
   name: string;
@@ -36,6 +47,7 @@ type CampaignOverview = {
   platforms: SocialPlatform[];
   prospects: number;
   createdAt: string;
+  settings?: CampaignSettings;
   actions: Array<{ platform: SocialPlatform; actionType: string; status: string; count: number }>;
   discovery: Array<{ platform: SocialPlatform; lastCompletedAt?: string | null; lastCandidateCount: number; nextScanAt?: string | null; needsAttention: boolean }>;
 };
@@ -60,6 +72,7 @@ export default function RecruitingPage() {
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [loginView, setLoginView] = useState<LoginView>(null);
   const [selectedExamples, setSelectedExamples] = useState<string[]>([]);
+  const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     platforms: ["instagram", "linkedin"] as SocialPlatform[],
     planKey: "growth_recruiting" as RecruitingPlanKey,
@@ -220,6 +233,61 @@ export default function RecruitingPage() {
     finally { setBusy(""); }
   };
 
+  const runningCampaign = campaigns[0];
+  const hasCampaign = Boolean(runningCampaign);
+  const showBuilder = !hasCampaign || editing;
+  const needsReconnect = accounts.some((account) => account.status === "reauth_required" || account.status === "connecting");
+
+  const beginEdit = () => {
+    const settings = runningCampaign?.settings;
+    if (!settings) { setError("Settings aren’t available to edit right now. Refresh and try again."); return; }
+    setForm({
+      platforms: runningCampaign.platforms,
+      planKey: settings.planKey,
+      audienceDescription: settings.audienceDescription,
+      seedAccounts: (settings.seedAccounts || []).join("\n"),
+      discoverySourceTypes: settings.discoverySourceTypes || [],
+      location: settings.location === "United States" ? "" : settings.location,
+      message: settings.message,
+      dailyLimit: accountFor(runningCampaign.platforms[0])?.dailyDmLimit ?? DEFAULT_DAILY_DM_LIMIT,
+      engagementAudience: settings.engagementAudience,
+      platformActionSettings: structuredClone(settings.platformActionSettings),
+    });
+    setSelectedExamples(examples.filter((chip) => (settings.examples || []).includes(chip.toLowerCase())));
+    setError(""); setSuccess("");
+    setEditing(true);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const saveEdits = async () => {
+    if (!runningCampaign) return;
+    setBusy("save"); setError(""); setSuccess("");
+    try {
+      const response = await fetch("/api/recruiting/update-campaign", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: runningCampaign.id,
+          audienceDescription: form.audienceDescription,
+          location: form.location,
+          examples: selectedExamples,
+          discoverySourceTypes: form.discoverySourceTypes,
+          seedAccounts: form.seedAccounts,
+          message: form.message,
+          platformActionSettings: form.platformActionSettings,
+          dailyLimit: form.dailyLimit,
+          engagementAudience: form.engagementAudience,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) { setError(recruitingErrorMessage(data, "CAMPAIGN_START_FAILED")); return; }
+      setSuccess("Your changes are saved and apply from now on. No one already contacted will be messaged again.");
+      setEditing(false);
+      await loadAccounts();
+    } catch { setError(recruitingErrorMessage(null, "CAMPAIGN_START_FAILED")); }
+    finally { setBusy(""); }
+  };
+
   const togglePlatform = (platform: SocialPlatform) => setForm((current) => {
     const selected = current.platforms.includes(platform);
     if (!selected && current.planKey === "growth") return { ...current, platforms: [platform] };
@@ -298,7 +366,8 @@ export default function RecruitingPage() {
         {(error || success) && <div role="status" className={`rounded-xl border px-4 py-3 text-sm ${error ? "border-amber-400/25 bg-amber-400/10 text-amber-100" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"}`}>{error || success}</div>}
 
         {campaigns.length > 0 && <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Agent activity</h2><p className="mt-1 text-sm text-slate-400">A simple view of who CoveCRM found and what it safely completed.</p></div><button type="button" onClick={() => void loadAccounts()} disabled={Boolean(busy)} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300">Refresh</button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Agent activity</h2><p className="mt-1 text-sm text-slate-400">A simple view of who CoveCRM found and what it safely completed.</p></div><div className="flex gap-2">{!editing && <button type="button" onClick={beginEdit} disabled={Boolean(busy)} className="rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-2 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/20">Edit settings</button>}<button type="button" onClick={() => void loadAccounts()} disabled={Boolean(busy)} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300">Refresh</button></div></div>
+          {editing && <div className="mt-3 rounded-xl border border-indigo-400/25 bg-indigo-500/10 px-4 py-3 text-xs text-indigo-100">You’re editing this campaign. Changes apply going forward — no one already contacted is messaged again. Scroll down, make your changes, then save.</div>}
           <div className="mt-4 grid gap-4">{campaigns.map((campaign) => {
             const completed = campaign.actions.filter((item) => item.status === "succeeded").reduce((sum, item) => sum + item.count, 0);
             const dms = campaign.actions.filter((item) => item.status === "succeeded" && item.actionType === "dm").reduce((sum, item) => sum + item.count, 0);
@@ -308,9 +377,9 @@ export default function RecruitingPage() {
           {recentActivity.length > 0 && <div className="mt-5"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recent activity</p><div className="mt-2 divide-y divide-white/5">{recentActivity.slice(0, 6).map((item, index) => <div key={`${item.platform}-${item.completedAt}-${index}`} className="flex items-center justify-between gap-3 py-3 text-xs"><div><span className="font-semibold text-slate-200">{item.displayName}</span><span className="text-slate-500"> · {platformCopy[item.platform].name} · {item.actionType.replace("_", " ")}</span></div><span className={item.status === "succeeded" ? "text-emerald-300" : item.status === "skipped" ? "text-slate-400" : "text-amber-300"}>{item.status === "succeeded" ? "Completed" : item.status === "skipped" ? "Safely skipped" : "Will retry or review"}</span></div>)}</div></div>}
         </section>}
 
-        <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl"><div><h2 className="text-lg font-semibold">Choose your plan</h2><p className="mt-1 text-sm text-slate-400">Pricing is locked into campaign permissions now; checkout remains hidden during the admin preview.</p></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{Object.values(RECRUITING_PLANS).map((plan) => <button type="button" key={plan.key} onClick={() => selectPlan(plan.key)} className={`rounded-xl border p-4 text-left ${form.planKey === plan.key ? "border-indigo-400 bg-indigo-500/15" : "border-white/10 bg-slate-950/40"}`}><div className="flex items-start justify-between gap-3"><div><p className="font-semibold">{plan.name}</p><p className="mt-1 text-xs leading-relaxed text-slate-400">{plan.description}</p></div><p className="whitespace-nowrap text-lg font-bold">${plan.monthlyPrice}<span className="text-xs font-normal text-slate-500">/mo</span></p></div></button>)}</div></section>
+        {showBuilder && !editing && <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl"><div><h2 className="text-lg font-semibold">Choose your plan</h2><p className="mt-1 text-sm text-slate-400">Pricing is locked into campaign permissions now; checkout remains hidden during the admin preview.</p></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{Object.values(RECRUITING_PLANS).map((plan) => <button type="button" key={plan.key} onClick={() => selectPlan(plan.key)} className={`rounded-xl border p-4 text-left ${form.planKey === plan.key ? "border-indigo-400 bg-indigo-500/15" : "border-white/10 bg-slate-950/40"}`}><div className="flex items-start justify-between gap-3"><div><p className="font-semibold">{plan.name}</p><p className="mt-1 text-xs leading-relaxed text-slate-400">{plan.description}</p></div><p className="whitespace-nowrap text-lg font-bold">${plan.monthlyPrice}<span className="text-xs font-normal text-slate-500">/mo</span></p></div></button>)}</div></section>}
 
-        <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl">
+        {(showBuilder || needsReconnect) && <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl">
           <div className="flex items-start gap-4">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold">1</span>
             <div className="w-full">
@@ -339,14 +408,14 @@ export default function RecruitingPage() {
               </div>
             </div>
           </div>
-        </section>
+        </section>}
 
         {loginView && <section className="overflow-hidden rounded-2xl border border-indigo-400/30 bg-slate-900 shadow-2xl">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4"><div><p className="font-semibold">Log into {platformCopy[loginView.platform].name}</p><p className="text-xs text-slate-400">Credentials go directly to {platformCopy[loginView.platform].name}. Complete any verification here.</p></div><button type="button" disabled={Boolean(busy)} onClick={() => void verifyLogin()} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold hover:bg-emerald-500 disabled:opacity-50">{busy === "verify" ? "Checking…" : "I’m logged in"}</button></div>
           <iframe title={`${platformCopy[loginView.platform].name} secure login`} src={loginView.liveViewUrl} sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals" allow="clipboard-read; clipboard-write" className="h-[650px] w-full bg-white" />
         </section>}
 
-        <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl">
+        {showBuilder && <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl">
           <div className="flex items-start gap-4"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold">2</span><div className="w-full space-y-4">
             <div><h2 className="text-lg font-semibold">Who do you want CoveCRM to find?</h2><p className="mt-1 text-sm text-slate-400">CoveCRM searches nationwide by default. Describe the experience, industry, and interests you want in normal language.</p></div>
             <div className="flex flex-wrap gap-2">{examples.map((example) => <button type="button" key={example} onClick={() => setSelectedExamples((current) => current.includes(example) ? current.filter((item) => item !== example) : [...current, example])} className={`rounded-full border px-3 py-2 text-xs font-medium ${selectedExamples.includes(example) ? "border-indigo-400 bg-indigo-500/20 text-indigo-100" : "border-white/10 bg-slate-950/40 text-slate-300"}`}>{example}</button>)}</div>
@@ -359,16 +428,18 @@ export default function RecruitingPage() {
             <div className="grid gap-3 sm:grid-cols-2">{(["instagram", "linkedin"] as SocialPlatform[]).filter((platform) => form.platforms.includes(platform)).map((platform) => <div key={platform} className="rounded-xl border border-white/10 bg-slate-950/40 p-4"><p className="text-sm font-semibold">{platformCopy[platform].name} actions</p><div className="mt-3 grid gap-2">{ACTION_OPTIONS[platform].map(({ action, label }) => { const locked = action === "dm" && form.planKey === "growth"; const enabled = Boolean((form.platformActionSettings[platform] as Record<string, boolean>)[action]); return <button type="button" key={action} disabled={locked} onClick={() => togglePlatformAction(platform, action)} className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-50 ${enabled ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-100" : "border-white/10 text-slate-500"}`}><span>{label}</span><span>{locked ? "Upgrade" : enabled ? "On" : "Off"}</span></button>; })}</div></div>)}</div>
             <div className="rounded-xl border border-indigo-400/20 bg-indigo-500/10 p-4 text-xs leading-relaxed text-slate-300"><p className="font-semibold text-indigo-200">How CoveCRM acts</p><p className="mt-1">High confidence: engage, follow on Instagram or connect on LinkedIn, then send the approved DM. Possible match: engage only. Weak, non-U.S., duplicate, followed, following, or previously messaged: skip the restricted action.</p></div>
           </div></div>
-        </section>
+        </section>}
 
-        <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl"><div className="flex items-start gap-4"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold">3</span><div className="w-full space-y-4">
+        {showBuilder && <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-6 shadow-xl"><div className="flex items-start gap-4"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-sm font-bold">3</span><div className="w-full space-y-4">
           <div><h2 className="text-lg font-semibold">{dmEnabled ? "Choose exactly what CoveCRM sends" : "DM automation is off"}</h2><p className="mt-1 text-sm text-slate-400">{dmEnabled ? "Write the exact message. Use the button below to personalize it with the person’s first name." : "CoveCRM will only perform the enabled growth actions. You can turn DMs on for either platform above."}</p></div>
           {dmEnabled && <><div><button type="button" onClick={insertFirstName} className="rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-2 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/20">+ Add first name</button></div><textarea ref={messageInputRef} className={`${inputClass} min-h-32 resize-y`} maxLength={500} value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="Type the exact DM you want sent…" />
           <div className="flex items-center justify-between text-xs text-slate-500"><span>Exact approved message only</span><span>{form.message.length}/500</span></div>
-          <label className="block text-xs font-medium text-slate-300">Maximum DMs per platform per day<input type="number" min={MIN_DAILY_DM_LIMIT} max={MAX_DAILY_DM_LIMIT} className={`${inputClass} mt-1 max-w-36`} value={form.dailyLimit} onChange={(event) => setForm({ ...form, dailyLimit: Number(event.target.value) })} /><span className="mt-2 block font-normal text-slate-500">CoveCRM stops at 50 per platform per day. Instagram does not publish a guaranteed safe daily DM number, and platform enforcement can vary. Paced engagement can continue between 8:00 AM and 9:00 PM in your timezone.</span></label></>}
-        </div></div></section>
+          <label className="block text-xs font-medium text-slate-300">Maximum DMs per platform per day<input type="number" min={MIN_DAILY_DM_LIMIT} max={MAX_DAILY_DM_LIMIT} className={`${inputClass} mt-1 max-w-36`} value={form.dailyLimit} onChange={(event) => setForm({ ...form, dailyLimit: Number(event.target.value) })} /><span className="mt-2 block font-normal text-slate-500">CoveCRM stops at 50 per platform per day. To protect newly connected accounts, DMs warm up automatically: up to 10/day in week one and 25/day in week two, then your full limit. Instagram does not publish a guaranteed safe daily DM number, and platform enforcement can vary. Paced engagement can continue between 8:00 AM and 9:00 PM in your timezone.</span></label></>}
+        </div></div></section>}
 
-        <div className="rounded-2xl border border-indigo-400/20 bg-gradient-to-r from-indigo-600/20 to-violet-600/10 p-6"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="text-lg font-semibold">Start the cloud agent</h2><p className="mt-1 text-sm text-slate-400">After starting, you can close CoveCRM and turn off your computer. If a platform logs out, every action stops until you reconnect.</p></div><button type="button" onClick={() => void startRecruiting()} disabled={Boolean(busy) || !selectedAccountsReady} className="rounded-xl bg-indigo-500 px-6 py-3 text-sm font-bold shadow-lg hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40">{busy === "launch" ? "Starting…" : "Start recruiting"}</button></div></div>
+        {editing
+          ? <div className="rounded-2xl border border-indigo-400/20 bg-gradient-to-r from-indigo-600/20 to-violet-600/10 p-6"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="text-lg font-semibold">Save your changes</h2><p className="mt-1 text-sm text-slate-400">Changes apply from now on. Anyone already contacted is never messaged again.</p></div><div className="flex gap-2"><button type="button" onClick={() => { setEditing(false); setError(""); setSuccess(""); }} disabled={Boolean(busy)} className="rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold text-slate-300 disabled:opacity-40">Cancel</button><button type="button" onClick={() => void saveEdits()} disabled={Boolean(busy)} className="rounded-xl bg-indigo-500 px-6 py-3 text-sm font-bold shadow-lg hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40">{busy === "save" ? "Saving…" : "Save changes"}</button></div></div></div>
+          : !hasCampaign && <div className="rounded-2xl border border-indigo-400/20 bg-gradient-to-r from-indigo-600/20 to-violet-600/10 p-6"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="text-lg font-semibold">Start the cloud agent</h2><p className="mt-1 text-sm text-slate-400">After starting, you can close CoveCRM and turn off your computer. If a platform logs out, every action stops until you reconnect.</p></div><button type="button" onClick={() => void startRecruiting()} disabled={Boolean(busy) || !selectedAccountsReady} className="rounded-xl bg-indigo-500 px-6 py-3 text-sm font-bold shadow-lg hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40">{busy === "launch" ? "Starting…" : "Start recruiting"}</button></div></div>}
       </div>
     </DashboardLayout>
   );

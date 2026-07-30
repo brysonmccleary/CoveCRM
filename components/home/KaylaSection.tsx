@@ -54,23 +54,23 @@ function DialSessionCard({ reduced }: { reduced: boolean }) {
     >
       {/* Eyebrow + live badge */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-        <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.28em", textTransform: "uppercase", color: "#64748b" }}>
+        <span style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.28em", textTransform: "uppercase", color: "var(--cove-muted)" }}>
           Dial Session In Progress
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: "5px", background: pa(0.15), border: `1px solid ${pa(0.3)}`, borderRadius: "9999px", padding: "2px 9px" }}>
           <span className="live-dot" style={{ width: "6px", height: "6px", borderRadius: "50%", background: PURPLE, flexShrink: 0 }} />
-          <span style={{ fontSize: "9px", color: "#c4b5fd", fontWeight: 700 }}>LIVE</span>
+          <span style={{ fontSize: "9px", color: "var(--cove-purple)", fontWeight: 700 }}>LIVE</span>
         </span>
       </div>
 
       {/* Headline */}
-      <p style={{ fontFamily: "'Sora', sans-serif", color: "#fff", fontWeight: 700, fontSize: "15px", margin: "0 0 4px" }}>
+      <p style={{ fontFamily: "'Sora', sans-serif", color: "var(--cove-text)", fontWeight: 700, fontSize: "15px", margin: "0 0 4px" }}>
         Kayla is calling 400 leads
       </p>
 
       {/* Progress counter + bar */}
-      <p style={{ color: "#64748b", fontSize: "11px", margin: "0 0 10px" }}>
-        <span style={{ color: "#c4b5fd", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+      <p style={{ color: "var(--cove-muted)", fontSize: "11px", margin: "0 0 10px" }}>
+        <span style={{ color: "var(--cove-purple)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
           {dialCount}
         </span>
         {" / 400 dialed"}
@@ -89,7 +89,7 @@ function DialSessionCard({ reduced }: { reduced: boolean }) {
 
       {/* Activity feed */}
       <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "14px" }}>
-        <p style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.2em", textTransform: "uppercase", color: "#334155", marginBottom: "8px" }}>
+        <p style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--cove-muted)", marginBottom: "8px" }}>
           Activity
         </p>
         {reduced ? (
@@ -116,16 +116,16 @@ function DialSessionCard({ reduced }: { reduced: boolean }) {
       {/* Bottom stat row */}
       <div style={{ display: "flex", gap: "8px", marginTop: "14px", paddingTop: "12px", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
         <div style={{ flex: 1, textAlign: "center", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.18)", borderRadius: "8px", padding: "7px 4px" }}>
-          <p style={{ color: "#4ade80", fontWeight: 700, fontSize: "13px", margin: 0, fontVariantNumeric: "tabular-nums" }}>6</p>
-          <p style={{ color: "#166534", fontSize: "9px", margin: "1px 0 0" }}>Booked</p>
+          <p style={{ color: "var(--cove-success)", fontWeight: 700, fontSize: "13px", margin: 0, fontVariantNumeric: "tabular-nums" }}>6</p>
+          <p style={{ color: "var(--cove-success)", fontSize: "9px", margin: "1px 0 0" }}>Booked</p>
         </div>
         <div style={{ flex: 1, textAlign: "center", background: pa(0.1), border: `1px solid ${pa(0.2)}`, borderRadius: "8px", padding: "7px 4px" }}>
-          <p style={{ color: "#c4b5fd", fontWeight: 700, fontSize: "13px", margin: 0, fontVariantNumeric: "tabular-nums" }}>2</p>
-          <p style={{ color: "#4c1d95", fontSize: "9px", margin: "1px 0 0" }}>Transferred</p>
+          <p style={{ color: "var(--cove-purple)", fontWeight: 700, fontSize: "13px", margin: 0, fontVariantNumeric: "tabular-nums" }}>2</p>
+          <p style={{ color: "var(--cove-purple)", fontSize: "9px", margin: "1px 0 0" }}>Transferred</p>
         </div>
         <div style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "8px", padding: "7px 4px" }}>
-          <p style={{ color: "#475569", fontWeight: 700, fontSize: "13px", margin: 0, fontVariantNumeric: "tabular-nums" }}>218</p>
-          <p style={{ color: "#1e293b", fontSize: "9px", margin: "1px 0 0" }}>Remaining</p>
+          <p style={{ color: "var(--cove-muted)", fontWeight: 700, fontSize: "13px", margin: 0, fontVariantNumeric: "tabular-nums" }}>218</p>
+          <p style={{ color: "var(--cove-text)", fontSize: "9px", margin: "1px 0 0" }}>Remaining</p>
         </div>
       </div>
     </div>
@@ -162,10 +162,10 @@ export default function KaylaSection() {
         {/* Text side */}
         <div style={{ maxWidth: "560px", width: "100%" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px" }}>
-            <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase", color: "#a78bfa" }}>
+            <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase", color: "var(--cove-purple)" }}>
               AI Voice Agent
             </span>
-            <span style={{ borderRadius: "9999px", background: pa(0.15), border: `1px solid ${pa(0.3)}`, padding: "2px 10px", fontSize: "10px", color: "#c4b5fd", fontWeight: 600 }}>
+            <span style={{ borderRadius: "9999px", background: pa(0.15), border: `1px solid ${pa(0.3)}`, padding: "2px 10px", fontSize: "10px", color: "var(--cove-purple)", fontWeight: 600 }}>
               Always-On
             </span>
           </div>
@@ -175,7 +175,7 @@ export default function KaylaSection() {
               fontFamily: "'Sora', sans-serif",
               fontSize: "clamp(1.9rem, 4vw, 2.8rem)",
               fontWeight: 800,
-              color: "#fff",
+              color: "var(--cove-text)",
               lineHeight: 1.15,
               marginBottom: "1.25rem",
               letterSpacing: "-0.02em",
@@ -194,7 +194,7 @@ export default function KaylaSection() {
             </span>
           </h2>
 
-          <p style={{ color: "#cbd5e1", fontSize: "1rem", lineHeight: 1.7, marginBottom: "1.5rem" }}>
+          <p style={{ color: "var(--cove-text)", fontSize: "1rem", lineHeight: 1.7, marginBottom: "1.5rem" }}>
             A fully autonomous calling agent that dials your leads, handles objections using proven insurance
             scripts, and books real appointments directly on your Google Calendar — all while you focus on
             closing.
@@ -206,8 +206,8 @@ export default function KaylaSection() {
               "Books appointments into your real Google Calendar in the correct time zone.",
               "Runs quietly in the background while you work, travel, or take the day off.",
             ].map((point) => (
-              <li key={point} style={{ display: "flex", alignItems: "flex-start", gap: "10px", color: "#94a3b8", fontSize: "14px", lineHeight: 1.5 }}>
-                <span style={{ color: "#a78bfa", marginTop: "1px", flexShrink: 0 }}>✔</span>
+              <li key={point} style={{ display: "flex", alignItems: "flex-start", gap: "10px", color: "var(--cove-muted)", fontSize: "14px", lineHeight: 1.5 }}>
+                <span style={{ color: "var(--cove-purple)", marginTop: "1px", flexShrink: 0 }}>✔</span>
                 {point}
               </li>
             ))}
@@ -217,7 +217,7 @@ export default function KaylaSection() {
             <button
               style={{
                 background: `linear-gradient(135deg, #4f46e5, ${PURPLE})`,
-                color: "#fff",
+                color: "var(--cove-text)",
                 padding: "0.75rem 1.75rem",
                 borderRadius: "12px",
                 fontWeight: 700,

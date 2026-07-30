@@ -8,6 +8,7 @@ const RecruitingAuditEventSchema = new Schema(
       type: String,
       enum: [
         "campaign_created",
+        "campaign_updated",
         "action_simulated",
         "action_blocked",
         "companion_pairing_created",
@@ -27,6 +28,8 @@ const RecruitingAuditEventSchema = new Schema(
         "cloud_account_canceled",
         "cloud_worker_started",
         "cloud_worker_finished",
+        "discovery_qualification_failed",
+        "automation_alert_sent",
       ],
       required: true,
       index: true,

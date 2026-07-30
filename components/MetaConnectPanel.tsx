@@ -305,7 +305,7 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                   await fetch("/api/meta/disconnect", { method: "POST" });
                   window.location.href = "/facebook-leads";
                 }}
-                style={{ fontSize: 11, color: "#f87171", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}
+                style={{ fontSize: 11, color: "var(--cove-danger)", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}
               >
                 Disconnect
               </button>
@@ -404,7 +404,7 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                 {showSetupChecklist && (
                   <div
                     style={{
-                      background: "#0f172a",
+                      background: "var(--cove-card)",
                       border: "1px solid rgba(255,255,255,0.1)",
                       borderRadius: 12,
                       padding: 16,
@@ -432,10 +432,10 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
                             {step.complete ? "✓" : ""}
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ color: "#ffffff", fontSize: 14, fontWeight: 500, lineHeight: 1.25 }}>
+                            <div style={{ color: "var(--cove-text)", fontSize: 14, fontWeight: 500, lineHeight: 1.25 }}>
                               {step.title}
                             </div>
-                            <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.35, marginTop: 2 }}>
+                            <div style={{ color: "var(--cove-muted)", fontSize: 12, lineHeight: 1.35, marginTop: 2 }}>
                               {step.helper}
                             </div>
                           </div>

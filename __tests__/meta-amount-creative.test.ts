@@ -27,7 +27,42 @@ describe("Final Expense amount-focused creative", () => {
 
     const markup = renderToStaticMarkup(React.createElement(ProductionFeedCreative, { draft }));
     expect(markup).toContain("$50,000");
+    expect(markup).toMatch(/No exam required|Fixed rates|Simple qualification/);
+    expect(markup).toContain("TAP YOUR AGE TO EXPLORE OPTIONS");
     expect(markup).toMatch(/See What I Qualify For|Check My Options|Learn More/);
   });
-});
 
+  test("replaces the legacy questionnaire layout with a direct-response offer card", () => {
+    const hashString = (value: string) => {
+      let hash = 0;
+      for (let index = 0; index < value.length; index += 1) {
+        hash = (Math.imul(31, hash) + value.charCodeAt(index)) | 0;
+      }
+      return Math.abs(hash);
+    };
+    const baseDraft = {
+      leadType: "final_expense",
+      headline: "Help protect loved ones from final costs",
+      description: "Explore private coverage options with a licensed agent.",
+      displayAmount: "$40,000",
+      buttonLabels: ["50-59", "60-69", "70-79", "80+"],
+      benefitBullets: ["Simple review", "Family-focused options"],
+      cta: "Review options",
+      visualVariantIndex: 0,
+    };
+    const quizDraft = Array.from({ length: 100 }, (_, index) => ({
+      ...baseDraft,
+      uniquenessFingerprint: `legacy-quiz-${index}`,
+    })).find((draft) => {
+      const seed = hashString(`${draft.uniquenessFingerprint}|${draft.headline}`);
+      return resolveCreativeLayoutFamily(draft, "final_expense", seed, 0) === "quiz_card";
+    });
+
+    expect(quizDraft).toBeDefined();
+    const markup = renderToStaticMarkup(React.createElement(ProductionFeedCreative, { draft: quizDraft }));
+
+    expect(markup).toContain("FINAL EXPENSE COVERAGE");
+    expect(markup).toContain("TAP YOUR AGE TO EXPLORE OPTIONS");
+    expect(markup).not.toContain("QUESTION 1 OF 1");
+  });
+});

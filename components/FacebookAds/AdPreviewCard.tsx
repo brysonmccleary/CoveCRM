@@ -759,13 +759,20 @@ function renderChecklistFirst(state: CreativeState) {
 }
 
 function renderAmountHero(state: CreativeState) {
+  const selectionLabel = state.leadType === "mortgage_protection"
+    ? "CHOOSE YOUR MORTGAGE RANGE"
+    : "TAP YOUR AGE TO EXPLORE OPTIONS";
+
   return (
     <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, textAlign: "center", display: "flex", flexDirection: "column" }}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, textAlign: "center", display: "flex", flexDirection: "column", gap: state.gap }}>
         <div style={{ color: state.palette.eyebrow, fontSize: 11, fontWeight: 950, letterSpacing: 2.2 }}>{state.eyebrow}</div>
-        <div style={{ color: state.palette.accent, fontSize: 54, fontWeight: 950, lineHeight: 0.95, margin: "16px 0 8px", textShadow: "0 4px 18px rgba(0,0,0,0.65)" }}>{state.amount || "$50,000"}</div>
+        <div style={{ color: state.palette.accent, fontSize: 54, fontWeight: 950, lineHeight: 0.95, marginTop: 7, textShadow: "0 4px 18px rgba(0,0,0,0.65)" }}>{state.amount || "$50,000"}</div>
         <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase" }}>{state.headline}</div>
+        {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: state.subSize, fontWeight: 800, lineHeight: 1.3, maxWidth: "88%", margin: "0 auto" }}>{state.subheadline}</div>}
         <div style={{ marginTop: "auto", display: "grid", gap: state.gap }}>
+          <MiniBenefits state={state} columns={2} />
+          <div style={{ color: state.palette.headline, fontSize: 10, fontWeight: 950, letterSpacing: 1.1, textTransform: "uppercase" }}>{selectionLabel}</div>
           <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
           {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="floating_cta" />}
         </div>
@@ -796,23 +803,44 @@ function renderComparisonTable(state: CreativeState) {
   );
 }
 
-function renderQuizCard(state: CreativeState) {
+/**
+ * This layout used to imitate a one-question lead form. It read as a broken
+ * survey in-feed (especially on final-expense ads), so it is deliberately a
+ * direct-response offer instead: one promise, a meaningful visual, compact
+ * proof points, and an age/coverage selector. The stable layout key remains
+ * `quiz_card` so only the existing weak variants are replaced.
+ */
+function renderDirectResponseOffer(state: CreativeState) {
+  const offerLabel: Record<string, string> = {
+    veteran: "PRIVATE COVERAGE FOR VETERANS",
+    trucker: "TRUCK DRIVER LIFE COVERAGE",
+    mortgage_protection: "MORTGAGE PROTECTION",
+    final_expense: "FINAL EXPENSE COVERAGE",
+    iul: "INDEXED UNIVERSAL LIFE",
+  };
+  const selectorLabel = state.leadType === "mortgage_protection"
+    ? "CHOOSE YOUR MORTGAGE RANGE"
+    : state.leadType === "iul"
+    ? "EXPLORE YOUR OPTIONS"
+    : "TAP YOUR AGE TO EXPLORE OPTIONS";
+
   return (
     <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap }}>
-        <Panel state={state} style={{ padding: 13, textAlign: "center" }}>
-          <div style={{ color: state.palette.eyebrow, fontSize: 11, fontWeight: 950 }}>QUESTION 1 OF 1</div>
-          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.03, textTransform: "uppercase", marginTop: 7 }}>{state.headline}</div>
-        </Panel>
-        <div style={{ display: "grid", gap: 8 }}>
-          {state.buttons.map((button, index) => (
-            <div key={button} style={{ display: "flex", alignItems: "center", gap: 9, background: state.palette.panel, border: `1px solid ${state.palette.panelBorder}`, borderRadius: state.radius, padding: "9px 10px", color: state.palette.subheadline, fontSize: 12, fontWeight: 950 }}>
-              <span style={{ width: 20, height: 20, borderRadius: 999, background: state.palette.cta, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>{index + 1}</span>
-              {button}
-            </div>
-          ))}
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap, textAlign: "center" }}>
+        <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.7, textTransform: "uppercase" }}>
+          {offerLabel[state.leadType] || state.eyebrow}
         </div>
-        <div style={{ marginTop: "auto" }}>{state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="quiz_cta" />}</div>
+        <Panel state={state} style={{ padding: "12px 12px 11px" }}>
+          {state.amount && <div style={{ color: state.palette.accent, fontSize: 39, fontWeight: 950, lineHeight: 0.98, letterSpacing: -1, textShadow: "0 3px 14px rgba(0,0,0,0.28)" }}>{state.amount}</div>}
+          <div style={{ color: state.palette.headline, fontSize: state.amount ? Math.max(19, state.headlineSize - 4) : state.headlineSize, fontWeight: 950, lineHeight: 1.03, textTransform: "uppercase", marginTop: state.amount ? 7 : 0 }}>{state.headline}</div>
+          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 11, fontWeight: 800, lineHeight: 1.28, marginTop: 7 }}>{state.subheadline}</div>}
+        </Panel>
+        <div style={{ marginTop: "auto", display: "grid", gap: 8 }}>
+          <MiniBenefits state={state} columns={2} />
+          <div style={{ color: state.palette.headline, fontSize: 10, fontWeight: 950, letterSpacing: 1.1, textTransform: "uppercase" }}>{selectorLabel}</div>
+          <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
+          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
+        </div>
       </div>
       {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
     </CreativeShell>
@@ -1054,7 +1082,7 @@ function renderTemplateFamily(state: CreativeState) {
   if (state.layoutFamily === "checklist_first" || state.layoutFamily === "trust_medical") return renderChecklistFirst(state);
   if (state.layoutFamily === "amount_hero") return renderAmountHero(state);
   if (state.layoutFamily === "comparison_table") return renderComparisonTable(state);
-  if (state.layoutFamily === "quiz_card") return renderQuizCard(state);
+  if (state.layoutFamily === "quiz_card") return renderDirectResponseOffer(state);
   if (state.layoutFamily === "report_card" || state.layoutFamily === "mobile_native") return renderReportCard(state);
   if (state.layoutFamily === "advisory_notice") return renderAdvisoryNotice(state);
   if (state.layoutFamily === "messenger_prompt") return renderMessengerPrompt(state);

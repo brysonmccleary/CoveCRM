@@ -1,5 +1,5 @@
 import { actionsForConfidence } from "@/lib/recruiting/qualification";
-import { isWithinCompanionActiveHours } from "@/lib/recruiting/companion/security";
+import { isWithinCompanionActiveHours, nextSignedOutState } from "@/lib/recruiting/companion/security";
 import type { SocialPlatform } from "@/lib/recruiting/social/types";
 import { transitionHostedAccount, type HostedAccountStatus } from "./lifecycle";
 import { assertPlanAllowsCampaign } from "@/lib/recruiting/plans";
@@ -78,6 +78,11 @@ export function runHostedRecruitingSimulation() {
   const engagementAllowed = instagram.status === "active";
   record("50-DM cap", !dmAllowed, "The next Instagram DM is blocked after 50 successes.");
   record("engagement continues after DM cap", engagementAllowed, "DM metering does not consume or disable engagement.");
+
+  const firstBlip = nextSignedOutState(0);
+  record("transient logout is tolerated", !firstBlip.escalate, "A single signed-out reading backs off and retries instead of forcing the customer to log in again.");
+  const confirmedBlip = nextSignedOutState(firstBlip.strikes);
+  record("confirmed logout forces reconnect", confirmedBlip.escalate, "A repeated signed-out reading is treated as a real logout and stops all work.");
 
   instagram.status = transitionHostedAccount(instagram.status, "logout_detected");
   record("logout stops all work", instagram.status === "reauth_required", "Worker changes the account to reauthentication required before another action.");

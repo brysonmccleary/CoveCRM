@@ -234,7 +234,7 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
                           ? {
                               backgroundColor: "rgba(59,130,246,0.15)",
                               border: "1px solid rgba(59,130,246,0.4)",
-                              color: "#60a5fa",
+                              color: "var(--cove-info)",
                               borderRadius: "999px",
                               fontSize: "11px",
                               padding: "2px 10px",
@@ -244,7 +244,7 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
                           : {
                               backgroundColor: "rgba(255,255,255,0.05)",
                               border: "1px solid rgba(255,255,255,0.1)",
-                              color: "#94a3b8",
+                              color: "var(--cove-muted)",
                               borderRadius: "999px",
                               fontSize: "11px",
                               padding: "2px 10px",
@@ -267,10 +267,10 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
                           updateScriptKey(folder._id, e.target.value);
                         }}
                         style={{
-                          backgroundColor: "#0f172a",
+                          backgroundColor: "var(--cove-card)",
                           border: "1px solid #334155",
                           borderRadius: "4px",
-                          color: "#cbd5e1",
+                          color: "var(--cove-text)",
                           fontSize: "11px",
                           padding: "2px 6px",
                           cursor: "pointer",
@@ -288,7 +288,7 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
                         <option value="default">Default (Generic)</option>
                       </select>
                       {savedFolderIds[folder._id] && (
-                        <span style={{ fontSize: "11px", color: "#4ade80" }}>Saved ✓</span>
+                        <span style={{ fontSize: "11px", color: "var(--cove-success)" }}>Saved ✓</span>
                       )}
                     </span>
                   )}
@@ -306,7 +306,7 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
                         backgroundColor: "transparent",
                         border: "1px solid #1e293b",
                         borderRadius: "4px",
-                        color: "#64748b",
+                        color: "var(--cove-muted)",
                         fontSize: "10px",
                         padding: "1px 4px",
                         cursor: "pointer",

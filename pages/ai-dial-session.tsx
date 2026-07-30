@@ -277,7 +277,7 @@ function CallTranscriptsCard({
   const expandedTranscript = expandedRow?.transcript;
 
   return (
-    <div className="rounded-2xl border border-gray-700/70 bg-[#07101e] p-5">
+    <div className="cove-app-shell rounded-2xl border border-gray-700/70 bg-[#07101e] p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">Call Transcripts</h2>
@@ -1097,7 +1097,7 @@ export default function AIDialSessionPage() {
     "rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow";
 
   return (
-    <div className="flex min-h-screen bg-[#0f172a] text-white">
+    <div className="cove-app-shell flex min-h-screen bg-[#0f172a] text-white">
       <Sidebar />
       <div className="flex-1 p-6">
         {!activeSession && (

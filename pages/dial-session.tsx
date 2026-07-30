@@ -2302,7 +2302,7 @@ export default function DialSession() {
 
   return (
     // ✅ UI ONLY: make the area to the right of Sidebar a constrained flex container (Safari-safe scroll)
-    <div className="flex bg-[#0f172a] text:white h-screen min-h-0">
+    <div className="cove-app-shell flex bg-[#0f172a] text-white h-screen min-h-0">
       <Sidebar collapsed />
 
       {/* Safari gesture banner: audio/WebRTC requires a user interaction to begin */}

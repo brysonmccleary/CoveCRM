@@ -5,6 +5,11 @@ const RecruitingCampaignSchema = new Schema(
     ownerEmail: { type: String, required: true, lowercase: true, index: true, immutable: true },
     name: { type: String, required: true, trim: true },
     idealRecruit: { type: String, required: true, trim: true },
+    // First-class audience fields so a running campaign can be edited cleanly
+    // (rather than parsing them back out of idealRecruit).
+    audienceDescription: { type: String, default: "", trim: true },
+    location: { type: String, default: "", trim: true },
+    examples: [{ type: String, trim: true }],
     category: { type: String, required: true, trim: true, index: true },
     planKey: { type: String, enum: ["growth", "growth_recruiting"], default: "growth_recruiting", index: true },
     platforms: [{ type: String, enum: ["linkedin", "instagram"], required: true }],

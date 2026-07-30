@@ -135,7 +135,7 @@ export default function BillingPage() {
 
   // Render
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-black px-4">
+    <div className="cove-app-shell min-h-screen flex items-center justify-center bg-gray-100 dark:bg-black px-4">
       <div className="max-w-2xl w-full p-6 bg-white dark:bg-gray-900 text-black dark:text-white shadow-xl rounded">
         <h1 className="text-3xl font-bold mb-2 text-center">Secure Billing</h1>
 

@@ -547,7 +547,7 @@ export default function LeadsPage() {
   const canResume = hasResume && !!selectedNumber && !!leads && leads.length > 0;
 
   return (
-    <div className="flex bg-[#0f172a] text-white min-h-screen">
+    <div className="cove-app-shell flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar />
       <div className="flex-1 p-6">
         {/* Top actions */}

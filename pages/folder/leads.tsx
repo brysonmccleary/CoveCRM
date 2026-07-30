@@ -388,7 +388,7 @@ export default function LeadsPage() {
 
   /** Render */
   return (
-    <div className="flex h-screen">
+    <div className="cove-app-shell flex h-screen">
       {/* Sidebar */}
       <div className="w-1/4 bg-[#0f172a] text-white p-4 overflow-y-auto">
         <h3 className="font-bold text-lg mb-4">Folders</h3>
@@ -505,7 +505,7 @@ export default function LeadsPage() {
                         alert("Failed to save AI settings.");
                       }
                     }}
-                    style={{ width: 16, height: 16, accentColor: "#3b82f6" }}
+                    style={{ width: 16, height: 16, accentColor: "var(--cove-info)" }}
                   />
                   <span className="text-sm text-slate-200">Auto-call new leads in this folder</span>
                 </label>
@@ -527,7 +527,7 @@ export default function LeadsPage() {
                             alert("Failed to save AI settings.");
                           }
                         }}
-                        style={{ width: 14, height: 14, accentColor: "#3b82f6" }}
+                        style={{ width: 14, height: 14, accentColor: "var(--cove-info)" }}
                       />
                       <span className="text-sm text-slate-300">Real-time leads only</span>
                       <span className="text-xs text-slate-500">(Facebook, live Sheets, funnels — recommended)</span>
@@ -553,7 +553,7 @@ export default function LeadsPage() {
                             alert("Failed to save AI settings.");
                           }
                         }}
-                        style={{ backgroundColor: "#1e293b", border: "1px solid #475569", borderRadius: 4, color: "#e2e8f0", padding: "4px 8px", fontSize: 13 }}
+                        style={{ backgroundColor: "var(--cove-surface-hover)", border: "1px solid #475569", borderRadius: 4, color: "var(--cove-text)", padding: "4px 8px", fontSize: 13 }}
                       >
                         <option value={0}>Immediately</option>
                         <option value={1}>1 minute</option>
@@ -578,7 +578,7 @@ export default function LeadsPage() {
                             alert("Failed to save AI settings.");
                           }
                         }}
-                        style={{ backgroundColor: "#1e293b", border: "1px solid #475569", borderRadius: 4, color: "#e2e8f0", padding: "4px 8px", fontSize: 13 }}
+                        style={{ backgroundColor: "var(--cove-surface-hover)", border: "1px solid #475569", borderRadius: 4, color: "var(--cove-text)", padding: "4px 8px", fontSize: 13 }}
                       >
                         {AI_SCRIPT_OPTIONS.map((option) => (
                           <option key={option.value} value={option.value}>

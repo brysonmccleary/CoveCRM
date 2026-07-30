@@ -147,7 +147,9 @@ describe("recruiting social safety boundaries", () => {
 
   test("pricing tiers enforce platform and DM entitlements server-side", () => {
     expect(normalizeRecruitingPlan("growth")).toBe("growth");
-    expect(normalizeRecruitingPlan("not-a-plan")).toBe("growth_recruiting");
+    expect(normalizeRecruitingPlan("not-a-plan")).toBe("growth");
+    expect(normalizeRecruitingPlan(undefined)).toBe("growth");
+    expect(normalizeRecruitingPlan("growth_recruiting")).toBe("growth_recruiting");
     expect(() => assertPlanAllowsCampaign("growth", ["instagram"], false)).not.toThrow();
     expect(() => assertPlanAllowsCampaign("growth", ["instagram", "linkedin"], false)).toThrow("1 platform");
     expect(() => assertPlanAllowsCampaign("growth", ["instagram"], true)).toThrow("Growth + Recruiting");

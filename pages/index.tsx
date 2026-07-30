@@ -441,7 +441,7 @@ export default function Home() {
                 >
                   01
                 </span>
-                <p style={{ fontFamily: "'Sora', sans-serif", color: "#ffffff", fontWeight: 700, fontSize: "1.05rem", lineHeight: "1.3", marginBottom: "6px" }}>
+                <p style={{ fontFamily: "'Sora', sans-serif", color: "var(--cove-text)", fontWeight: 700, fontSize: "1.05rem", lineHeight: "1.3", marginBottom: "6px" }}>
                   Generate<br />Real-Time Leads
                 </p>
                 <p style={{ color: "#64748b", fontSize: "12px", lineHeight: "1.6" }}>
@@ -484,7 +484,7 @@ export default function Home() {
                 >
                   02
                 </span>
-                <p style={{ fontFamily: "'Sora', sans-serif", color: "#ffffff", fontWeight: 700, fontSize: "1.05rem", lineHeight: "1.3", marginBottom: "6px" }}>
+                <p style={{ fontFamily: "'Sora', sans-serif", color: "var(--cove-text)", fontWeight: 700, fontSize: "1.05rem", lineHeight: "1.3", marginBottom: "6px" }}>
                   AI Calls,<br />Texts &amp; Books
                 </p>
                 <p style={{ color: "#64748b", fontSize: "12px", lineHeight: "1.6" }}>
@@ -527,7 +527,7 @@ export default function Home() {
                 >
                   03
                 </span>
-                <p style={{ fontFamily: "'Sora', sans-serif", color: "#ffffff", fontWeight: 700, fontSize: "1.05rem", lineHeight: "1.3", marginBottom: "6px" }}>
+                <p style={{ fontFamily: "'Sora', sans-serif", color: "var(--cove-text)", fontWeight: 700, fontSize: "1.05rem", lineHeight: "1.3", marginBottom: "6px" }}>
                   You Just<br />Close
                 </p>
                 <p style={{ color: "#64748b", fontSize: "12px", lineHeight: "1.6" }}>
@@ -751,7 +751,7 @@ export default function Home() {
             {/* AI Dialer mock panel — active call card */}
             <div
               className="border border-gray-700/70 rounded-2xl w-full md:max-w-xs flex-shrink-0"
-              style={{ background: "#07101e", padding: "20px 20px 18px" }}
+              style={{ background: "var(--cove-card)", padding: "20px 20px 18px" }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
                 <p style={{ fontSize: "10px", letterSpacing: "0.25em", textTransform: "uppercase", color: "#64748b", margin: 0 }}>
@@ -762,7 +762,7 @@ export default function Home() {
                   <span style={{ fontSize: "10px", color: "#4ade80", fontWeight: 600 }}>LIVE</span>
                 </span>
               </div>
-              <p style={{ color: "#fff", fontWeight: 700, fontSize: "15px", margin: "0 0 2px" }}>John Martinez</p>
+              <p style={{ color: "var(--cove-text)", fontWeight: 700, fontSize: "15px", margin: "0 0 2px" }}>John Martinez</p>
               <p style={{ color: "#64748b", fontSize: "11px", margin: "0 0 12px" }}>Final Expense · Texas</p>
               <div style={{ display: "flex", gap: "6px", marginBottom: "14px", flexWrap: "wrap" }}>
                 <span style={{ background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.25)", borderRadius: "9999px", padding: "2px 9px", fontSize: "10px", color: "#93c5fd" }}>Interested</span>
@@ -770,7 +770,7 @@ export default function Home() {
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "9px 12px", background: "rgba(255,255,255,0.04)", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.06)" }}>
                 <span style={{ color: "#60a5fa", fontSize: "15px" }}>⏱</span>
-                <span style={{ color: "#e2e8f0", fontSize: "14px", fontWeight: 700, fontVariantNumeric: "tabular-nums", letterSpacing: "0.04em" }}>02:47</span>
+                <span style={{ color: "var(--cove-text)", fontSize: "14px", fontWeight: 700, fontVariantNumeric: "tabular-nums", letterSpacing: "0.04em" }}>02:47</span>
                 <span style={{ marginLeft: "auto", color: "#475569", fontSize: "10px" }}>Recording</span>
               </div>
               <p style={{ color: "#334155", fontSize: "10px", marginTop: "10px", lineHeight: 1.5 }}>
@@ -798,16 +798,16 @@ export default function Home() {
             {/* AI SMS mock panel — conversation bubbles */}
             <div
               className="border border-gray-700/70 rounded-2xl w-full md:max-w-xs flex-shrink-0"
-              style={{ background: "#07101e", padding: "16px 16px 14px" }}
+              style={{ background: "var(--cove-card)", padding: "16px 16px 14px" }}
             >
               <p style={{ fontSize: "10px", letterSpacing: "0.25em", textTransform: "uppercase", color: "#64748b", textAlign: "center", marginBottom: "14px" }}>
                 AI Conversation
               </p>
               {/* Kayla message */}
               <div style={{ display: "flex", gap: "7px", marginBottom: "10px", alignItems: "flex-end" }}>
-                <div style={{ width: "26px", height: "26px", borderRadius: "50%", background: "linear-gradient(135deg,#4f46e5,#7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: 700, color: "#fff", flexShrink: 0, marginBottom: "2px" }}>K</div>
+                <div style={{ width: "26px", height: "26px", borderRadius: "50%", background: "linear-gradient(135deg,#4f46e5,#7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: 700, color: "var(--cove-text)", flexShrink: 0, marginBottom: "2px" }}>K</div>
                 <div>
-                  <div style={{ background: "rgba(124,58,237,0.22)", border: "1px solid rgba(124,58,237,0.35)", borderRadius: "4px 12px 12px 12px", padding: "8px 10px", fontSize: "11px", color: "#e2e8f0", maxWidth: "170px", lineHeight: 1.55 }}>
+                  <div style={{ background: "rgba(124,58,237,0.22)", border: "1px solid rgba(124,58,237,0.35)", borderRadius: "4px 12px 12px 12px", padding: "8px 10px", fontSize: "11px", color: "var(--cove-text)", maxWidth: "170px", lineHeight: 1.55 }}>
                     Hi Maria! I saw your request about Final Expense coverage — are you free for a quick call today?
                   </div>
                   <p style={{ color: "#334155", fontSize: "9px", marginTop: "3px" }}>Kayla · 2:14 PM</p>
@@ -816,7 +816,7 @@ export default function Home() {
               {/* Lead reply */}
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "10px" }}>
                 <div>
-                  <div style={{ background: "rgba(255,255,255,0.07)", borderRadius: "12px 4px 12px 12px", padding: "8px 10px", fontSize: "11px", color: "#e2e8f0", maxWidth: "150px", lineHeight: 1.55 }}>
+                  <div style={{ background: "rgba(255,255,255,0.07)", borderRadius: "12px 4px 12px 12px", padding: "8px 10px", fontSize: "11px", color: "var(--cove-text)", maxWidth: "150px", lineHeight: 1.55 }}>
                     Yes, free at 3 PM!
                   </div>
                   <p style={{ color: "#334155", fontSize: "9px", marginTop: "3px", textAlign: "right" }}>Lead · 2:15 PM</p>
@@ -824,9 +824,9 @@ export default function Home() {
               </div>
               {/* Kayla confirmation */}
               <div style={{ display: "flex", gap: "7px", alignItems: "flex-end" }}>
-                <div style={{ width: "26px", height: "26px", borderRadius: "50%", background: "linear-gradient(135deg,#4f46e5,#7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: 700, color: "#fff", flexShrink: 0, marginBottom: "2px" }}>K</div>
+                <div style={{ width: "26px", height: "26px", borderRadius: "50%", background: "linear-gradient(135deg,#4f46e5,#7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: 700, color: "var(--cove-text)", flexShrink: 0, marginBottom: "2px" }}>K</div>
                 <div>
-                  <div style={{ background: "rgba(124,58,237,0.22)", border: "1px solid rgba(124,58,237,0.35)", borderRadius: "4px 12px 12px 12px", padding: "8px 10px", fontSize: "11px", color: "#e2e8f0", maxWidth: "170px", lineHeight: 1.55 }}>
+                  <div style={{ background: "rgba(124,58,237,0.22)", border: "1px solid rgba(124,58,237,0.35)", borderRadius: "4px 12px 12px 12px", padding: "8px 10px", fontSize: "11px", color: "var(--cove-text)", maxWidth: "170px", lineHeight: 1.55 }}>
                     Perfect! Booking 3 PM now — calendar invite on the way. ✅
                   </div>
                   <p style={{ color: "#334155", fontSize: "9px", marginTop: "3px" }}>Kayla · 2:15 PM</p>
@@ -857,7 +857,7 @@ export default function Home() {
             {/* Facebook Lead Manager mock panel — new lead card */}
             <div
               className="border border-gray-700/70 rounded-2xl w-full md:max-w-xs flex-shrink-0"
-              style={{ background: "#07101e", padding: "18px 18px 16px" }}
+              style={{ background: "var(--cove-card)", padding: "18px 18px 16px" }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
                 <p style={{ fontSize: "10px", letterSpacing: "0.25em", textTransform: "uppercase", color: "#64748b", margin: 0 }}>New Lead</p>
@@ -867,9 +867,9 @@ export default function Home() {
                 </span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
-                <div style={{ width: "38px", height: "38px", borderRadius: "50%", background: "linear-gradient(135deg, #1d4ed8, #4f46e5)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: "13px", color: "#fff", flexShrink: 0 }}>MG</div>
+                <div style={{ width: "38px", height: "38px", borderRadius: "50%", background: "linear-gradient(135deg, #1d4ed8, #4f46e5)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: "13px", color: "var(--cove-text)", flexShrink: 0 }}>MG</div>
                 <div>
-                  <p style={{ color: "#fff", fontWeight: 700, fontSize: "13px", margin: "0 0 2px" }}>Maria Gonzalez</p>
+                  <p style={{ color: "var(--cove-text)", fontWeight: 700, fontSize: "13px", margin: "0 0 2px" }}>Maria Gonzalez</p>
                   <p style={{ color: "#64748b", fontSize: "10px", margin: 0 }}>Florida · Age 62</p>
                 </div>
               </div>

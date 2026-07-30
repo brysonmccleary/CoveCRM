@@ -1,7 +1,11 @@
 import { DateTime } from "luxon";
 import { sendEmail } from "@/lib/email";
 import mongooseConnect from "@/lib/mongooseConnect";
-import { isWithinCompanionActiveHours, JOB_LEASE_MS, MIN_ACTION_INTERVAL_MS } from "@/lib/recruiting/companion/security";
+import { isWithinCompanionActiveHours, JOB_LEASE_MS, jitteredActionIntervalMs, nextSignedOutState, SUSPECTED_LOGOUT_RETRY_MS } from "@/lib/recruiting/companion/security";
+import { effectiveDailyActionLimit } from "@/lib/recruiting/dm-settings";
+import { geolocationForTimeZone } from "@/lib/recruiting/social/geo";
+import { ownerHasRecruitingEntitlement } from "@/lib/recruiting/access";
+import { AUTOMATION_FAILURE_CODES, maybeSendAutomationHealthAlert } from "./alerts";
 import { normalizeProfileUrl } from "@/lib/recruiting/social/policy";
 import type { SocialPlatform } from "@/lib/recruiting/social/types";
 import RecruitingAuditEvent from "@/models/RecruitingAuditEvent";
@@ -35,6 +39,22 @@ async function markReauthenticationRequired(account: any) {
   await RecruitingAuditEvent.create({ ownerEmail: account.ownerEmail, actorEmail: account.ownerEmail, eventType: "cloud_account_reauth_required", entityType: "cloud_account", entityId: `${account._id}:${Date.now()}`, details: { platform: account.platform } });
 }
 
+// Records one "appears signed out" observation. Returns true only once the
+// strike count confirms a real logout — at which point the account is flipped
+// to reauth_required and the customer is emailed. Below that, the healthy
+// persistent session is kept and the work item just retries shortly.
+async function registerSignedOut(account: any, now: Date): Promise<boolean> {
+  const { strikes, escalate } = nextSignedOutState(account.signedOutStrikes);
+  account.signedOutStrikes = strikes;
+  account.lastCheckedAt = now;
+  if (escalate) {
+    await markReauthenticationRequired(account); // persists status + strike reset
+    return true;
+  }
+  await account.save();
+  return false;
+}
+
 function localStartOfDay(now: Date, timeZone: string): Date {
   const value = DateTime.fromJSDate(now).setZone(timeZone || "America/Phoenix").startOf("day").toUTC().toJSDate();
   return Number.isFinite(value.getTime()) ? value : new Date(new Date(now).setUTCHours(0, 0, 0, 0));
@@ -48,23 +68,38 @@ async function claimDiscovery(account: any, now: Date) {
   );
 }
 
+const PLATFORM_ACTION_TYPES: Record<string, Array<"like_post" | "like_story" | "follow" | "connect" | "dm">> = {
+  instagram: ["like_post", "like_story", "follow", "dm"],
+  linkedin: ["like_post", "connect", "dm"],
+};
+
 async function claimAction(account: any, now: Date) {
   const sinceLast = account.lastActionAt ? now.getTime() - account.lastActionAt.getTime() : Number.POSITIVE_INFINITY;
-  const inCooldown = sinceLast < MIN_ACTION_INTERVAL_MS;
-  const dmCount = await RecruitingCompanionJob.countDocuments({
-    cloudAccountId: account._id,
-    platform: account.platform,
-    actionType: "dm",
-    status: "succeeded",
-    completedAt: { $gte: localStartOfDay(now, account.timeZone) },
-  });
+  const inCooldown = sinceLast < jitteredActionIntervalMs();
+  const startOfDay = localStartOfDay(now, account.timeZone);
+  // Every action type has its own ramped daily ceiling — likes, follows, and
+  // connections included, not just DMs. Any type already at its cap for today
+  // is excluded from the claim so the account can never overshoot.
+  const cappedTypes: string[] = [];
+  for (const actionType of PLATFORM_ACTION_TYPES[account.platform] || []) {
+    const doneToday = await RecruitingCompanionJob.countDocuments({
+      cloudAccountId: account._id,
+      platform: account.platform,
+      actionType,
+      status: "succeeded",
+      completedAt: { $gte: startOfDay },
+    });
+    if (doneToday >= effectiveDailyActionLimit(actionType, account.createdAt, now, account.dailyDmLimit)) {
+      cappedTypes.push(actionType);
+    }
+  }
   return RecruitingCompanionJob.findOneAndUpdate(
     {
       cloudAccountId: account._id,
       platform: account.platform,
       availableAt: { $lte: now },
       ...(inCooldown ? { recipientLock: account.lastRecipientLock } : {}),
-      ...(dmCount >= account.dailyDmLimit ? { actionType: { $ne: "dm" } } : {}),
+      ...(cappedTypes.length ? { actionType: { $nin: cappedTypes } } : {}),
       $or: [{ status: "queued" }, { status: "claimed", leaseExpiresAt: { $lt: now } }],
     },
     { $set: { status: "claimed", claimedAt: now, leaseExpiresAt: new Date(now.getTime() + JOB_LEASE_MS) }, $inc: { attempts: 1 } },
@@ -113,6 +148,9 @@ async function completeAction(account: any, job: any, rawResult: any) {
     { $setOnInsert: { ownerEmail: account.ownerEmail, actorEmail: account.ownerEmail, eventType, entityType: "cloud_job", entityId: String(job._id), details: { hostedCloud: true, failureCode, resultSummary: job.resultSummary, deferred: defer } } },
     { upsert: true },
   );
+  if (outcome === "failed" && !defer && (AUTOMATION_FAILURE_CODES as readonly string[]).includes(failureCode)) {
+    await maybeSendAutomationHealthAlert("action_failures", job.platform).catch(() => undefined);
+  }
   return { type: "action", outcome, failureCode, deferred: defer, jobId: String(job._id) };
 }
 
@@ -120,10 +158,17 @@ async function processAccount(account: any) {
   const now = new Date();
   if (!isWithinCompanionActiveHours(now, account.timeZone || "America/Phoenix")) return { type: "quiet_hours", platform: account.platform };
   const ownerKey = String(account._id);
+  // Every session for this account uses its pinned residential geolocation so
+  // its IP region never changes between login, discovery, and actions.
+  const geolocation = account.proxyGeolocation || geolocationForTimeZone(account.timeZone || "America/Phoenix");
   const snapshotDue = account.profileUrl && (!account.lastGrowthSnapshotAt || now.getTime() - account.lastGrowthSnapshotAt.getTime() >= 20 * 60 * 60 * 1000);
   if (snapshotDue) {
-    const metrics = await withHostedPage({ contextId: account.providerContextId, platform: account.platform, region: account.region as BrowserbaseRegion, ownerKey, task: (page) => captureOwnedAccountGrowth(page, account.platform as SocialPlatform, account.profileUrl) });
-    if (metrics.loggedOut) { await markReauthenticationRequired(account); return { type: "reauth_required", platform: account.platform }; }
+    const metrics = await withHostedPage({ contextId: account.providerContextId, platform: account.platform, region: account.region as BrowserbaseRegion, ownerKey, geolocation, task: (page) => captureOwnedAccountGrowth(page, account.platform as SocialPlatform, account.profileUrl) });
+    if (metrics.loggedOut) {
+      const escalated = await registerSignedOut(account, now);
+      return { type: escalated ? "reauth_required" : "logout_suspected", platform: account.platform };
+    }
+    account.signedOutStrikes = 0; // confirmed still logged in via the persistent session
     account.lastGrowthSnapshotAt = now;
     account.lastCheckedAt = now;
     await account.save();
@@ -150,6 +195,7 @@ async function processAccount(account: any) {
       platform: account.platform,
       region: account.region as BrowserbaseRegion,
       ownerKey,
+      geolocation,
       task: (page) => discoverHostedCandidates(page, account.platform as SocialPlatform, sourcePlan.activeQuery, discovery.maxCandidatesPerScan, {
         seedAccounts: activeSeedAccounts,
         sourceCursor: sourcePlan.seedSourceCursor,
@@ -157,14 +203,15 @@ async function processAccount(account: any) {
     });
     account.lastCheckedAt = now;
     if (browserResult.loggedOut) {
+      const escalated = await registerSignedOut(account, now);
       discovery.status = "queued";
-      discovery.availableAt = new Date(now.getTime() + 60 * 60 * 1000);
+      discovery.availableAt = new Date(now.getTime() + (escalated ? 60 * 60 * 1000 : SUSPECTED_LOGOUT_RETRY_MS));
       discovery.leaseExpiresAt = null as any;
       discovery.lastError = browserResult.error;
       await discovery.save();
-      await markReauthenticationRequired(account);
-      return { type: "reauth_required", platform: account.platform };
+      return { type: escalated ? "reauth_required" : "logout_suspected", platform: account.platform };
     }
+    account.signedOutStrikes = 0; // confirmed still logged in via the persistent session
     await account.save();
     return { type: "discovery", ...(await completeHostedDiscovery({ ownerEmail: account.ownerEmail, cloudAccountId: account._id, discovery, rawCandidates: browserResult.candidates, browserError: browserResult.error })) };
   }
@@ -175,19 +222,21 @@ async function processAccount(account: any) {
     platform: account.platform,
     region: account.region as BrowserbaseRegion,
     ownerKey,
+    geolocation,
     task: async (page) => {
       const completed: any[] = [];
       let job: any = firstJob;
       for (let batchIndex = 0; batchIndex < 3 && job; batchIndex += 1) {
         const result = await executeHostedAction(page, { platform: job.platform as SocialPlatform, actionType: job.actionType as any, targetSnapshot: job.targetSnapshot as any, message: job.message });
         if (result.failureCode === "not_logged_in") {
+          const escalated = await registerSignedOut(account, new Date());
           job.status = "queued";
-          job.availableAt = new Date(Date.now() + 60 * 60 * 1000);
+          job.availableAt = new Date(Date.now() + (escalated ? 60 * 60 * 1000 : SUSPECTED_LOGOUT_RETRY_MS));
           job.leaseExpiresAt = null as any;
           await job.save();
-          await markReauthenticationRequired(account);
-          return { type: "reauth_required", platform: account.platform, completed };
+          return { type: escalated ? "reauth_required" : "logout_suspected", platform: account.platform, completed };
         }
+        if ((account.signedOutStrikes || 0) > 0) { account.signedOutStrikes = 0; await account.save(); } // confirmed logged in
         completed.push(await completeAction(account, job, result));
         job = batchIndex < 2 ? await claimAction(account, new Date()) : null;
       }
@@ -197,6 +246,11 @@ async function processAccount(account: any) {
 }
 
 export async function processRecruitingCloudWork(limit = 10) {
+  // Operational kill switch: set RECRUITING_CLOUD_WORKER_DISABLED=true to halt
+  // all hosted automation immediately without a deploy.
+  if (String(process.env.RECRUITING_CLOUD_WORKER_DISABLED || "").toLowerCase() === "true") {
+    return { processed: 0, results: [], disabled: true };
+  }
   await mongooseConnect();
   const accounts: any[] = [];
   for (let index = 0; index < Math.min(25, Math.max(1, limit)); index += 1) {
@@ -211,6 +265,9 @@ export async function processRecruitingCloudWork(limit = 10) {
   }
   const results = await Promise.all(accounts.map(async (account) => {
     try {
+      if (!(await ownerHasRecruitingEntitlement(account.ownerEmail))) {
+        return { type: "not_entitled", platform: account.platform };
+      }
       return await processAccount(account);
     } catch {
       return { type: "error", platform: account.platform, error: "This account could not be processed right now." };

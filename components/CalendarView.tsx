@@ -392,7 +392,7 @@ export default function CalendarView() {
   };
 
   return (
-    <div className="min-h-[82vh] bg-[#111] rounded-lg p-4 text-white shadow-md">
+    <div className="calendar-view min-h-[82vh] bg-[#111] rounded-lg p-4 text-white shadow-md">
       <style>
         {`
           .rbc-today {

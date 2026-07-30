@@ -1208,7 +1208,7 @@ export default function LeadProfileDial() {
 
   // ---------- Render ----------
   return (
-    <div className="flex bg-[#0f172a] text-white min-h-screen">
+    <div className="cove-app-shell flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar collapsed />
 
       <main className="min-w-0 flex-1">

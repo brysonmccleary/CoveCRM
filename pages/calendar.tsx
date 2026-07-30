@@ -194,7 +194,7 @@ export default function CalendarPage() {
   }, [calendarConnected, session?.user?.email]);
 
   return (
-    <div className="flex">
+    <div className="cove-app-shell flex">
       <Sidebar />
       <main className="p-8 w-full text-white">
         <h1 className="text-2xl font-bold mb-6">📅 Booking Calendar</h1>

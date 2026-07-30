@@ -91,13 +91,13 @@ describe("hosted recruiting lifecycle", () => {
     expect(automation).toContain("confirmedRelationship");
   });
 
-  test("worker is server-side, leased, quiet-hour gated, and separately caps DMs", () => {
+  test("worker is server-side, leased, quiet-hour gated, and caps every action type", () => {
     const worker = fs.readFileSync(path.join(process.cwd(), "lib/recruiting/cloud/worker.ts"), "utf8");
     const indexes = fs.readFileSync(path.join(process.cwd(), "scripts/create-indexes.ts"), "utf8");
     expect(worker).toContain("workerLeaseExpiresAt");
     expect(worker).toContain("isWithinCompanionActiveHours");
-    expect(worker).toContain('actionType: "dm"');
-    expect(worker).toContain('actionType: { $ne: "dm" }');
+    expect(worker).toContain("PLATFORM_ACTION_TYPES");
+    expect(worker).toContain("actionType: { $nin: cappedTypes }");
     expect(worker).toContain("markReauthenticationRequired");
     expect(worker).toContain("prerequisite_failed");
     expect(indexes).toContain("ensureRecruitingCloudIndexes");

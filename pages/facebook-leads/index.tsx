@@ -1759,9 +1759,9 @@ function CampaignCard({
   }
 
   const alertStyles: Record<AlertColor, React.CSSProperties> = {
-    red: { background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#fca5a5" },
-    yellow: { background: "rgba(234,179,8,0.1)", border: "1px solid rgba(234,179,8,0.3)", color: "#fde68a" },
-    green: { background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", color: "#6ee7b7" },
+    red: { background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "var(--cove-danger)" },
+    yellow: { background: "rgba(234,179,8,0.1)", border: "1px solid rgba(234,179,8,0.3)", color: "var(--cove-warning)" },
+    green: { background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", color: "var(--cove-success)" },
   };
 
   const optimize = async () => {
@@ -2140,13 +2140,13 @@ function CampaignCard({
 
         {/* Manage Campaign expandable panel */}
         {showManage && (
-          <div style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 14 }}>
+          <div style={{ background: "var(--cove-card)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 14 }}>
 
             {/* Sub-section A: Budget */}
             <div style={{ paddingBottom: 14, marginBottom: 14, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-              <p style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Daily Budget</p>
-              <p style={{ color: "#94a3b8", fontSize: 12, marginBottom: 8 }}>
-                Current: <span style={{ color: "#fff", fontWeight: 600 }}>${campaign.dailyBudget ?? 0}/day</span>
+              <p style={{ color: "var(--cove-muted)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Daily Budget</p>
+              <p style={{ color: "var(--cove-muted)", fontSize: 12, marginBottom: 8 }}>
+                Current: <span style={{ color: "var(--cove-text)", fontWeight: 600 }}>${campaign.dailyBudget ?? 0}/day</span>
               </p>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <input
@@ -2154,30 +2154,30 @@ function CampaignCard({
                   value={budgetInput}
                   onChange={(e) => setBudgetInput(e.target.value)}
                   placeholder="e.g. 25"
-                  style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", borderRadius: 6, padding: "6px 10px", width: 90, fontSize: 13 }}
+                  style={{ background: "var(--cove-surface-hover)", border: "1px solid rgba(255,255,255,0.15)", color: "var(--cove-text)", borderRadius: 6, padding: "6px 10px", width: 90, fontSize: 13 }}
                 />
-                <span style={{ color: "#94a3b8", fontSize: 12 }}>/day</span>
+                <span style={{ color: "var(--cove-muted)", fontSize: 12 }}>/day</span>
                 <button
                   onClick={saveBudget}
                   disabled={savingBudget}
-                  style={{ background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", opacity: savingBudget ? 0.6 : 1 }}
+                  style={{ background: "#0ea5e9", color: "#ffffff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", opacity: savingBudget ? 0.6 : 1 }}
                 >
                   {savingBudget ? "Saving…" : "Save Budget"}
                 </button>
-                {budgetSaved && <span style={{ color: "#6ee7b7", fontSize: 12 }}>Saved!</span>}
+                {budgetSaved && <span style={{ color: "var(--cove-success)", fontSize: 12 }}>Saved!</span>}
               </div>
             </div>
 
             {/* Sub-section B: Licensed States */}
             <div style={{ paddingBottom: 14, marginBottom: 14, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-              <p style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Licensed States</p>
+              <p style={{ color: "var(--cove-muted)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Licensed States</p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
                 {selectedStates.length === 0 ? (
-                  <span style={{ color: "#64748b", fontSize: 12 }}>No states selected</span>
+                  <span style={{ color: "var(--cove-muted)", fontSize: 12 }}>No states selected</span>
                 ) : selectedStates.map((code) => {
                   const name = US_STATES.find((s) => s.code === code)?.name || code;
                   return (
-                    <span key={code} style={{ background: "rgba(99,102,241,0.2)", border: "1px solid rgba(99,102,241,0.4)", color: "#a5b4fc", borderRadius: 20, padding: "2px 8px", fontSize: 11 }}>
+                    <span key={code} style={{ background: "rgba(99,102,241,0.2)", border: "1px solid rgba(99,102,241,0.4)", color: "var(--cove-purple)", borderRadius: 20, padding: "2px 8px", fontSize: 11 }}>
                       {name}
                     </span>
                   );
@@ -2185,15 +2185,15 @@ function CampaignCard({
               </div>
               <button
                 onClick={() => setEditingStates((v) => !v)}
-                style={{ background: "#334155", color: "#fff", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, cursor: "pointer", marginBottom: editingStates ? 10 : 0 }}
+                style={{ background: "var(--cove-surface-hover)", color: "var(--cove-text)", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, cursor: "pointer", marginBottom: editingStates ? 10 : 0 }}
               >
                 {editingStates ? "Cancel" : "Edit States"}
               </button>
               {editingStates && (
                 <div>
-                  <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, background: "#1e293b", padding: "8px 10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}>
+                  <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, background: "var(--cove-surface-hover)", padding: "8px 10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}>
                     {US_STATES.map((s) => (
-                      <label key={s.code} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: "#e2e8f0", fontSize: 12 }}>
+                      <label key={s.code} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: "var(--cove-text)", fontSize: 12 }}>
                         <input
                           type="checkbox"
                           checked={selectedStates.includes(s.code)}
@@ -2211,11 +2211,11 @@ function CampaignCard({
                     <button
                       onClick={saveStates}
                       disabled={savingStates}
-                      style={{ background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", opacity: savingStates ? 0.6 : 1 }}
+                      style={{ background: "#0ea5e9", color: "#ffffff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", opacity: savingStates ? 0.6 : 1 }}
                     >
                       {savingStates ? "Saving…" : "Save States"}
                     </button>
-                    {statesSaved && <span style={{ color: "#6ee7b7", fontSize: 12 }}>Saved!</span>}
+                    {statesSaved && <span style={{ color: "var(--cove-success)", fontSize: 12 }}>Saved!</span>}
                   </div>
                 </div>
               )}
@@ -2223,12 +2223,12 @@ function CampaignCard({
 
             {/* Sub-section C: Duplicate */}
             <div>
-              <p style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Duplicate Campaign</p>
+              <p style={{ color: "var(--cove-muted)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Duplicate Campaign</p>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <button
                   onClick={duplicateCampaign}
                   disabled={duplicating}
-                  style={{ background: "#334155", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", opacity: duplicating ? 0.6 : 1 }}
+                  style={{ background: "var(--cove-surface-hover)", color: "var(--cove-text)", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, cursor: "pointer", opacity: duplicating ? 0.6 : 1 }}
                 >
                   {duplicating ? "Duplicating…" : "Duplicate"}
                 </button>

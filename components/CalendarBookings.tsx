@@ -519,7 +519,7 @@ export default function CalendarBookings() {
   };
 
   return (
-    <div className="p-4">
+    <div className="calendar-bookings p-4">
       <style>
         {`
           .rbc-calendar,

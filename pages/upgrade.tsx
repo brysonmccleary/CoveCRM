@@ -47,7 +47,7 @@ export default function UpgradePage() {
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center">
+      <div className="cove-app-shell min-h-screen bg-[#0f172a] flex flex-col items-center justify-center">
         <Head><title>Login Required</title></Head>
         <h2 className="text-xl font-semibold text-white mb-4">Please sign in to upgrade</h2>
         <button
@@ -61,7 +61,7 @@ export default function UpgradePage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center px-4 py-16">
+    <div className="cove-app-shell min-h-screen bg-[#0f172a] flex flex-col items-center justify-center px-4 py-16">
       <Head><title>Upgrade to Pro — CoveCRM</title></Head>
 
       <div className="max-w-lg w-full space-y-8 text-center">

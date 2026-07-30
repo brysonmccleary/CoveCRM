@@ -1,5 +1,6 @@
 // /pages/_app.tsx
 import "../styles/globals.css";
+import "../styles/calendar-override.css";
 import type { AppProps } from "next/app";
 import { SessionProvider, useSession } from "next-auth/react";
 import { Toaster } from "react-hot-toast";

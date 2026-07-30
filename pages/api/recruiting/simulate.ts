@@ -24,7 +24,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const campaign = await RecruitingCampaign.findOne({
       _id: new Types.ObjectId(campaignId),
       ownerEmail: admin.email,
-      status: { $in: ["draft", "simulation_ready", "paused"] },
+      // "active" is included so a launched campaign can be spot-tested without
+      // pausing it — the simulation adapter never makes a provider request.
+      status: { $in: ["draft", "simulation_ready", "paused", "active"] },
     }).lean() as any;
     if (!campaign) throw new RecruitingPublicError("SIMULATION_FAILED", "That campaign is no longer available.");
     const target = req.body?.target as SocialTargetSnapshot;

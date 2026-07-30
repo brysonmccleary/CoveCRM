@@ -212,8 +212,8 @@ export default function DashboardOverview() {
                   <YAxis stroke="#9CA3AF" domain={[0, "auto"]} />
                   <Tooltip
                     formatter={(value) => `${Number(value ?? 0)} calls`}
-                    labelStyle={{ color: "#fff" }}
-                    contentStyle={{ backgroundColor: "#111827", borderColor: "#4B5563" }}
+                    labelStyle={{ color: "var(--cove-text)" }}
+                    contentStyle={{ backgroundColor: "var(--cove-card)", borderColor: "#4B5563" }}
                   />
                   <Line type="monotone" dataKey="dials" stroke="#60A5FA" strokeWidth={2} name="Total Dials" />
                   <Line type="monotone" dataKey="talks" stroke="#34D399" strokeWidth={2} name="Talks Connected" />

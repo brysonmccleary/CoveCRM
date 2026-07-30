@@ -1,5 +1,4 @@
 /* styles/calendar-override.css */
-
 /* Global calendar appearance */
 .rbc-calendar {
   background-color: #111;
@@ -66,4 +65,98 @@
   color: white;
   padding: 8px;
   border-radius: 6px;
+}
+
+/* Light-mode calendar polish. CalendarBookings retained a few legacy dark
+   inline rules; these intentionally win only when the app is in light mode. */
+html:not(.dark) .calendar-bookings .rbc-calendar,
+html:not(.dark) .calendar-bookings .rbc-month-view,
+html:not(.dark) .calendar-bookings .rbc-time-view,
+html:not(.dark) .calendar-bookings .rbc-agenda-view,
+html:not(.dark) .calendar-view .rbc-calendar,
+html:not(.dark) .calendar-view .rbc-month-view,
+html:not(.dark) .calendar-view .rbc-time-view,
+html:not(.dark) .calendar-view .rbc-agenda-view {
+  background: #ffffff !important;
+  color: var(--cove-text) !important;
+  border-color: var(--cove-border) !important;
+}
+
+html:not(.dark) .calendar-bookings .rbc-toolbar,
+html:not(.dark) .calendar-bookings .rbc-header,
+html:not(.dark) .calendar-view .rbc-toolbar,
+html:not(.dark) .calendar-view .rbc-header {
+  background: #f8fafc !important;
+  color: var(--cove-text) !important;
+  border-color: var(--cove-border) !important;
+}
+
+html:not(.dark) .calendar-bookings .rbc-header + .rbc-header,
+html:not(.dark) .calendar-view .rbc-header + .rbc-header,
+html:not(.dark) .calendar-bookings .rbc-time-content,
+html:not(.dark) .calendar-bookings .rbc-time-gutter,
+html:not(.dark) .calendar-bookings .rbc-timeslot-group,
+html:not(.dark) .calendar-bookings .rbc-day-bg,
+html:not(.dark) .calendar-bookings .rbc-month-row,
+html:not(.dark) .calendar-bookings .rbc-day-slot,
+html:not(.dark) .calendar-bookings .rbc-agenda-table,
+html:not(.dark) .calendar-view .rbc-time-content,
+html:not(.dark) .calendar-view .rbc-time-gutter,
+html:not(.dark) .calendar-view .rbc-timeslot-group,
+html:not(.dark) .calendar-view .rbc-day-bg,
+html:not(.dark) .calendar-view .rbc-month-row,
+html:not(.dark) .calendar-view .rbc-day-slot,
+html:not(.dark) .calendar-view .rbc-agenda-table {
+  border-color: #dbe3ef !important;
+}
+
+html:not(.dark) .calendar-bookings .rbc-day-bg,
+html:not(.dark) .calendar-view .rbc-day-bg { background: #ffffff !important; }
+html:not(.dark) .calendar-bookings .rbc-off-range-bg,
+html:not(.dark) .calendar-view .rbc-off-range-bg { background: #f8fafc !important; }
+html:not(.dark) .calendar-bookings .rbc-date-cell,
+html:not(.dark) .calendar-view .rbc-date-cell { color: var(--cove-text) !important; }
+html:not(.dark) .calendar-bookings .rbc-off-range,
+html:not(.dark) .calendar-view .rbc-off-range { color: var(--cove-muted) !important; }
+
+html:not(.dark) .calendar-bookings .rbc-today,
+html:not(.dark) .calendar-view .rbc-today {
+  background: #eff6ff !important;
+  border: 0 !important;
+  box-shadow: inset 0 0 0 2px #93c5fd !important;
+}
+
+html:not(.dark) .calendar-bookings .rbc-btn-group button,
+html:not(.dark) .calendar-view .rbc-btn-group button {
+  background: #ffffff;
+  border-color: var(--cove-border);
+  color: var(--cove-text);
+}
+html:not(.dark) .calendar-bookings .rbc-btn-group button.rbc-active,
+html:not(.dark) .calendar-view .rbc-btn-group button.rbc-active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+  box-shadow: none;
+}
+
+/* The booking calendar supplies its own toolbar and frame. Keep those
+   controls in the same quiet, light treatment as the grid. */
+html:not(.dark) .calendar-bookings > div[class*="bg-[#0f172a]"],
+html:not(.dark) .calendar-view {
+  background: #ffffff !important;
+  color: var(--cove-text) !important;
+  border: 1px solid var(--cove-border);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08) !important;
+}
+html:not(.dark) .calendar-bookings button[class*="bg-[#1e293b]"],
+html:not(.dark) .calendar-bookings select[class*="bg-[#1e293b]"] {
+  background: #ffffff !important;
+  color: var(--cove-text) !important;
+  border: 1px solid var(--cove-border) !important;
+}
+html:not(.dark) .calendar-bookings button[class*="bg-[#2563eb]"] {
+  background: #2563eb !important;
+  color: #ffffff !important;
+  border: 1px solid #2563eb !important;
 }

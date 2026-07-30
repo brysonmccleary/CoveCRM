@@ -7,8 +7,8 @@ import {
 } from "@/lib/recruiting/dm-settings";
 
 describe("recruiting DM settings", () => {
-  test("uses 50 as both the new-account default and hard maximum", () => {
-    expect(DEFAULT_DAILY_DM_LIMIT).toBe(50);
+  test("defaults new accounts to a conservative 25 DMs with a hard maximum of 50", () => {
+    expect(DEFAULT_DAILY_DM_LIMIT).toBe(25);
     expect(MAX_DAILY_DM_LIMIT).toBe(50);
     expect(parseDailyDmLimit(50)).toBe(50);
     expect(parseDailyDmLimit("25")).toBe(25);

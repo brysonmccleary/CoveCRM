@@ -11,6 +11,7 @@ import {
 } from "@/lib/recruiting/cloud/browserbase";
 import { HOSTED_SOCIAL_CONSENT_VERSION } from "@/lib/recruiting/cloud/lifecycle";
 import { RECRUITING_PUBLIC_MESSAGES } from "@/lib/recruiting/public-errors";
+import { geolocationForTimeZone } from "@/lib/recruiting/social/geo";
 import { isValidTimeZone } from "@/lib/recruiting/companion/security";
 import type { SocialPlatform } from "@/lib/recruiting/social/types";
 import RecruitingAuditEvent from "@/models/RecruitingAuditEvent";
@@ -37,6 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!platform) return res.status(400).json({ error: "Choose Instagram or LinkedIn." });
   const timeZone = isValidTimeZone(String(req.body?.timeZone || "")) ? String(req.body.timeZone) : "America/Phoenix";
   const region: BrowserbaseRegion = /^(America\/New_York|America\/Detroit|America\/Indiana)/.test(timeZone) ? "us-east-1" : "us-west-2";
+  const proxyGeolocation = geolocationForTimeZone(timeZone);
 
   try {
     await mongooseConnect();
@@ -53,14 +55,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         consentAcceptedAt: new Date(),
         region,
         timeZone,
+        proxyGeolocation,
       });
     } else {
       if (account.loginSessionId) await releaseHostedSession(account.loginSessionId).catch(() => undefined);
       account.status = "connecting";
       account.timeZone = timeZone;
+      // Pin a stable proxy geolocation once; never move an existing account's IP region.
+      if (!account.proxyGeolocation) account.proxyGeolocation = proxyGeolocation;
     }
     const ownerKey = createHash("sha256").update(admin.email).digest("hex").slice(0, 16);
-    const login = await startLoginSession({ contextId: account.providerContextId, platform, region: account.region as BrowserbaseRegion, ownerKey });
+    const login = await startLoginSession({ contextId: account.providerContextId, platform, region: account.region as BrowserbaseRegion, ownerKey, geolocation: (account.proxyGeolocation as any) || proxyGeolocation });
     account.loginSessionId = login.sessionId;
     await account.save();
     await RecruitingAuditEvent.create({

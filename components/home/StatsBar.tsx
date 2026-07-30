@@ -83,7 +83,7 @@ function StatCounter({ stat }: { stat: Stat }) {
           fontFamily: "'Sora', sans-serif",
           fontSize: "clamp(1.8rem, 3.5vw, 2.4rem)",
           fontWeight: 800,
-          color: "#fff",
+          color: "var(--cove-text)",
           lineHeight: 1.1,
           letterSpacing: "-0.02em",
         }}
@@ -92,14 +92,14 @@ function StatCounter({ stat }: { stat: Stat }) {
         {display}
         {stat.suffix ?? ""}
         {stat.sublabel && (
-          <span style={{ fontSize: "0.85rem", fontWeight: 400, color: "#475569", marginLeft: "5px" }}>
+          <span style={{ fontSize: "0.85rem", fontWeight: 400, color: "var(--cove-muted)", marginLeft: "5px" }}>
             {stat.sublabel}
           </span>
         )}
       </div>
       <div
         style={{
-          color: "#475569",
+          color: "var(--cove-muted)",
           fontSize: "11px",
           marginTop: "6px",
           letterSpacing: "0.06em",
