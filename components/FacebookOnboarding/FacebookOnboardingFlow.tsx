@@ -327,11 +327,11 @@ export default function FacebookOnboardingFlow({
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Automatic ad account setup</p>
               <h2 className="mt-1 text-xl font-bold text-white">
-                {provisioningStatus === "payment_required" ? "Add payment and billing details" : "CoveCRM is preparing your ad account"}
+                {provisioningStatus === "payment_required" ? "Add your payment method" : "CoveCRM is preparing your ad account"}
               </h2>
               <p className="mt-2 max-w-2xl text-sm text-gray-400">
                 {provisioningStatus === "payment_required"
-                  ? "Your account is ready. Add the card plus your legal business name and address directly in Meta; CoveCRM never sees or stores the card."
+                  ? "Your account is ready. Add a card directly in Meta; CoveCRM never sees or stores it. No LLC is required."
                   : "We recover the account your business already owns or create one cleanly named for your insurance brand."}
               </p>
             </div>
@@ -364,7 +364,7 @@ export default function FacebookOnboardingFlow({
                   onClick={() => window.open(paymentUrl, "_blank", "noopener,noreferrer")}
                   className="min-h-11 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-500"
                 >
-                  Finish billing setup in Meta
+                  Add payment method in Meta
                 </button>
                 <button
                   type="button"

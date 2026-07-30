@@ -48,7 +48,7 @@ describe("Meta ad-account provisioning", () => {
       client({
         get: async (path) => {
           if (path === "me/adaccounts") return { data: [{ id: "act_111", account_id: "111", name: "Life Quotes", account_status: 1, business: { id: "biz-1" } }] };
-          return { id: "act_111", account_id: "111", name: "Life Quotes", account_status: 1, funding_source: "card", business: { id: "biz-1" }, business_name: "Life Quotes LLC" };
+          return { id: "act_111", account_id: "111", name: "Life Quotes", account_status: 1, funding_source: "card", business: { id: "biz-1" } };
         },
         post,
       }) as any

@@ -141,10 +141,9 @@ async function inspectAccount(client: GraphClient, account: MetaSetupAdAccount) 
     "id,name,account_id,account_status,currency,funding_source,funding_source_details,timezone_id,timezone_name,business,business_name,business_street,business_city,business_state,business_zip,business_country_code"
   );
   const fundingSource = String(detail?.funding_source || detail?.funding_source_details?.id || "");
-  const businessBillingDetailsMissing = Boolean(detail?.business?.id) && !String(detail?.business_name || "").trim();
   return {
     account: mapMetaAdAccounts([detail])[0] || account,
-    paymentRequired: !fundingSource || businessBillingDetailsMissing,
+    paymentRequired: !fundingSource,
   };
 }
 
