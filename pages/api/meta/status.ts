@@ -14,7 +14,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await mongooseConnect();
 
   const user = await User.findOne({ email: session.user.email.toLowerCase() })
-    .select("metaAccessToken metaAdAccountId metaPageId metaPageName metaTokenExpiresAt metaLastWebhookAt metaLastInsightSyncAt metaDatasetId metaCapiEnabled")
+    .select("metaAccessToken metaAdAccountId metaBusinessId metaBusinessName metaAdAccountProvisioningStatus metaPageId metaPageName metaTokenExpiresAt metaLastWebhookAt metaLastInsightSyncAt metaDatasetId metaCapiEnabled")
     .lean() as any;
 
   const capiConfigured = !!(user?.metaDatasetId && user?.metaCapiEnabled && isCapiEnabled());
@@ -25,6 +25,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   return res.status(200).json({
     connected: !!(user?.metaAccessToken || user?.metaAdAccountId || user?.metaPageId),
     adAccountId: user?.metaAdAccountId || "",
+    businessId: user?.metaBusinessId || "",
+    businessName: user?.metaBusinessName || "",
+    adAccountProvisioningStatus: user?.metaAdAccountProvisioningStatus || "unknown",
     pageId: user?.metaPageId || "",
     pageName: user?.metaPageName || "",
     tokenExpiresAt: user?.metaTokenExpiresAt || null,

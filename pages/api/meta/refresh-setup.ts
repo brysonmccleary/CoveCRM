@@ -53,19 +53,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!token) return res.status(200).json({ connected: false, ready: false });
 
   try {
-    const [pagesResult, accountsResult] = await Promise.allSettled([
+    const [pagesResult, accountsResult, businessesResult] = await Promise.allSettled([
       graphGet(
         "me/accounts",
         token,
         "id,name,access_token,category,link,tasks,picture.type(large){url},instagram_business_account{id}"
       ),
       graphGet("me/adaccounts", token, "id,name,account_id,account_status,currency"),
+      graphGet("me/businesses", token, "id,name,timezone_id,primary_page{id}"),
     ]);
     if (pagesResult.status === "rejected" && accountsResult.status === "rejected") {
       throw pagesResult.reason;
     }
     const pages = mapMetaPages(pagesResult.status === "fulfilled" ? pagesResult.value?.data : []);
-    const adAccounts = mapMetaAdAccounts(accountsResult.status === "fulfilled" ? accountsResult.value?.data : []);
+    const businesses = businessesResult.status === "fulfilled" && Array.isArray(businessesResult.value?.data)
+      ? businessesResult.value.data
+      : [];
+    const ownedAccountResults = await Promise.allSettled(
+      businesses.map((business: any) => graphGet(
+        `${String(business?.id || "")}/owned_ad_accounts`,
+        token,
+        "id,name,account_id,account_status,currency"
+      ))
+    );
+    const ownedRawAccounts = ownedAccountResults.flatMap((result) =>
+      result.status === "fulfilled" && Array.isArray(result.value?.data) ? result.value.data : []
+    );
+    const adAccounts = mapMetaAdAccounts([
+      ...(accountsResult.status === "fulfilled" ? accountsResult.value?.data || [] : []),
+      ...ownedRawAccounts,
+    ]).filter((account, index, all) => all.findIndex((candidate) => candidate.accountId === account.accountId) === index);
     const preferNewPage = req.body?.preferNewPage === true;
     const preferNewAdAccount = req.body?.preferNewAdAccount === true;
     const knownPageIds = Array.isArray(req.body?.knownPageIds)
@@ -116,6 +133,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (selectedPage.instagramId) update.metaInstagramId = selectedPage.instagramId;
     }
     if (selectedAdAccount) update.metaAdAccountId = selectedAdAccount.accountId;
+    const selectedBusiness = businesses.find((business: any) =>
+      String(business?.primary_page?.id || business?.primary_page || "") === String(selectedPage?.id || "")
+    );
+    if (selectedBusiness?.id) {
+      update.metaBusinessId = String(selectedBusiness.id);
+      update.metaBusinessName = String(selectedBusiness.name || "");
+    }
 
     const leadType = String(req.body?.leadType || "").trim();
     if (leadType && selectedPage && selectedAdAccount) {

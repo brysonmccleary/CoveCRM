@@ -325,6 +325,11 @@ export interface IUser {
   metaPageName?: string;
   metaInstagramId?: string;
   metaAdAccountId?: string;
+  metaBusinessId?: string;
+  metaBusinessName?: string;
+  metaAdAccountProvisioningStatus?: "unknown" | "provisioning" | "payment_required" | "ready" | "blocked";
+  metaAdAccountProvisioningError?: string;
+  metaAdAccountProvisionedAt?: Date;
   metaDatasetId?: string;
   metaCapiAdAccountId?: string;
   metaCapiEnabled?: boolean;
@@ -690,6 +695,15 @@ const UserSchema = new Schema<IUser>({
   metaPageName: { type: String, default: "" },
   metaInstagramId: { type: String, default: "" },
   metaAdAccountId: { type: String, default: "" },
+  metaBusinessId: { type: String, default: "" },
+  metaBusinessName: { type: String, default: "" },
+  metaAdAccountProvisioningStatus: {
+    type: String,
+    enum: ["unknown", "provisioning", "payment_required", "ready", "blocked"],
+    default: "unknown",
+  },
+  metaAdAccountProvisioningError: { type: String, default: "" },
+  metaAdAccountProvisionedAt: { type: Date, default: null },
   metaDatasetId: { type: String, default: "" },
   metaCapiAdAccountId: { type: String, default: "" },
   metaCapiEnabled: { type: Boolean, default: false },

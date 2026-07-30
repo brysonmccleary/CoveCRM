@@ -36,8 +36,11 @@ export default function FacebookOnboardingFlow({
   const [selectingPageId, setSelectingPageId] = useState("");
   const [selectingAdAccountId, setSelectingAdAccountId] = useState("");
   const [setupError, setSetupError] = useState("");
+  const [provisioningStatus, setProvisioningStatus] = useState<"idle" | "provisioning" | "payment_required" | "ready" | "blocked">("idle");
+  const [paymentUrl, setPaymentUrl] = useState("");
   const knownPageIds = useRef<string[]>([]);
   const knownAdAccountIds = useRef<string[]>([]);
+  const provisionedPageId = useRef("");
 
   const refreshSetup = useCallback(async (options?: {
     preferNewPage?: boolean;
@@ -125,11 +128,54 @@ export default function FacebookOnboardingFlow({
     setSelectingPageId(pageId);
     const data = await refreshSetup({ pageId });
     if (String(data?.page?.id || "") === pageId) {
+      provisionedPageId.current = "";
+      setProvisioningStatus("idle");
       setShowPageSetup(false);
       setShowCreatePageSetup(false);
     }
     setSelectingPageId("");
   };
+
+  const provisionAdAccount = useCallback(async () => {
+    if (!connected || !selectedPage) return null;
+    setProvisioningStatus("provisioning");
+    setSetupError("");
+    try {
+      const response = await fetch("/api/meta/provision-ad-account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "Meta could not finish the ad account setup.");
+      if (data?.adAccount) setSelectedAdAccount(data.adAccount);
+      setPaymentUrl(String(data?.paymentUrl || ""));
+      setProvisioningStatus(data?.paymentRequired ? "payment_required" : "ready");
+      provisionedPageId.current = selectedPage.id;
+      await refreshSetup();
+      return data;
+    } catch (error: any) {
+      setProvisioningStatus("blocked");
+      setSetupError(error?.message || "Meta could not finish the ad account setup.");
+      provisionedPageId.current = selectedPage.id;
+      return null;
+    }
+  }, [connected, refreshSetup, selectedPage]);
+
+  useEffect(() => {
+    if (!connected || !selectedPage || refreshing || provisionedPageId.current === selectedPage.id) return;
+    provisionedPageId.current = selectedPage.id;
+    provisionAdAccount();
+  }, [connected, provisioningStatus, provisionAdAccount, refreshing, selectedPage]);
+
+  useEffect(() => {
+    if (provisioningStatus !== "payment_required") return;
+    const checkPayment = () => provisionAdAccount();
+    window.addEventListener("focus", checkPayment);
+    return () => window.removeEventListener("focus", checkPayment);
+  }, [provisionAdAccount, provisioningStatus]);
 
   const openAdAccountCreator = () => {
     knownAdAccountIds.current = adAccounts.map((account) => account.accountId);
@@ -152,6 +198,7 @@ export default function FacebookOnboardingFlow({
     connected &&
     selectedPage &&
     selectedAdAccount?.status === 1 &&
+    provisioningStatus === "ready" &&
     !showPageSetup &&
     !showCreatePageSetup &&
     !showAdAccountSetup
@@ -252,7 +299,7 @@ export default function FacebookOnboardingFlow({
         </section>
       )}
 
-      {connected && selectedPage && selectedAdAccount?.status === 1 && !showPageSetup && !showCreatePageSetup && !showAdAccountSetup && (
+      {connected && selectedPage && selectedAdAccount?.status === 1 && provisioningStatus === "ready" && !showPageSetup && !showCreatePageSetup && !showAdAccountSetup && (
         <section className="rounded-3xl border border-emerald-500/25 bg-emerald-950/20 p-5 sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
@@ -288,21 +335,25 @@ export default function FacebookOnboardingFlow({
                 onClick={() => setShowAdAccountSetup(true)}
                 className="text-sm font-semibold text-gray-400 underline decoration-white/20 underline-offset-4 hover:text-white"
               >
-                Change or create ad account
+                Advanced account options
               </button>
             </div>
           </div>
         </section>
       )}
 
-      {connected && selectedPage && (!selectedAdAccount || selectedAdAccount.status !== 1 || showAdAccountSetup) && (
+      {connected && selectedPage && (provisioningStatus !== "ready" || !selectedAdAccount || selectedAdAccount.status !== 1 || showAdAccountSetup) && (
         <section className="rounded-3xl border border-blue-500/25 bg-[#0f172a] p-5 sm:p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Ad account setup</p>
-              <h2 className="mt-1 text-xl font-bold text-white">Create or choose the account that will run this ad</h2>
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Automatic ad account setup</p>
+              <h2 className="mt-1 text-xl font-bold text-white">
+                {provisioningStatus === "payment_required" ? "Add your payment method" : "CoveCRM is preparing your ad account"}
+              </h2>
               <p className="mt-2 max-w-2xl text-sm text-gray-400">
-                Meta requires you to confirm the business, currency, time zone, billing details, and any account-creation limits. CoveCRM will detect the new account after Meta creates it.
+                {provisioningStatus === "payment_required"
+                  ? "Your account is ready. Meta requires you to enter the card directly; CoveCRM never sees or stores it."
+                  : "We recover the account your business already owns or create one cleanly named for your insurance brand."}
               </p>
             </div>
             {selectedAdAccount && (
@@ -316,7 +367,38 @@ export default function FacebookOnboardingFlow({
             )}
           </div>
 
-          {adAccounts.length > 0 && (
+          {provisioningStatus === "provisioning" && (
+            <div className="mt-5 rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4 text-sm text-blue-100">
+              Checking your business, Page, and existing ad accounts…
+            </div>
+          )}
+
+          {provisioningStatus === "payment_required" && paymentUrl && (
+            <div className="mt-5 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 p-5">
+              <p className="font-semibold text-white">One last step in Meta</p>
+              <p className="mt-1 text-sm text-emerald-100/75">
+                This opens payment settings for {selectedAdAccount?.name || "your ad account"} directly.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => window.open(paymentUrl, "_blank", "noopener,noreferrer")}
+                  className="min-h-11 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-500"
+                >
+                  Add payment method in Meta
+                </button>
+                <button
+                  type="button"
+                  onClick={() => provisionAdAccount()}
+                  className="min-h-11 rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-gray-200 hover:bg-white/10"
+                >
+                  I added it — check again
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showAdAccountSetup && adAccounts.length > 0 && (
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               {adAccounts.map((account) => {
                 const isActive = account.status === 1;
@@ -350,29 +432,22 @@ export default function FacebookOnboardingFlow({
             </div>
           )}
 
+          {showAdAccountSetup && (
           <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-            <p className="font-semibold text-white">Need a new ad account?</p>
-            <p className="mt-1 text-sm text-gray-400">
-              Create it in Meta Business Settings. Leave this CoveCRM page open; it checks for the new active account automatically.
-            </p>
+            <p className="font-semibold text-white">Account recovery</p>
+            <p className="mt-1 text-sm text-gray-400">Use this only if Meta added or changed an account outside CoveCRM.</p>
             <div className="mt-4 flex flex-wrap gap-3">
               <button
                 type="button"
-                onClick={openAdAccountCreator}
-                className="min-h-11 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-500"
-              >
-                Create new ad account in Meta
-              </button>
-              <button
-                type="button"
-                onClick={() => refreshSetup({ preferNewAdAccount: awaitingNewAdAccount })}
+                onClick={() => provisionAdAccount()}
                 disabled={refreshing}
-                className="min-h-11 rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-gray-200 hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                className="min-h-11 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-500 disabled:cursor-wait disabled:opacity-60"
               >
-                {refreshing || awaitingNewAdAccount ? "Checking for new account..." : "Refresh accounts"}
+                Check and repair setup
               </button>
             </div>
           </div>
+          )}
         </section>
       )}
 
