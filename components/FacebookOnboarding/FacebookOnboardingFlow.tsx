@@ -29,14 +29,19 @@ export default function FacebookOnboardingFlow({
   const [adAccounts, setAdAccounts] = useState<AdAccount[]>([]);
   const [refreshing, setRefreshing] = useState(true);
   const [awaitingNewPage, setAwaitingNewPage] = useState(false);
+  const [awaitingNewAdAccount, setAwaitingNewAdAccount] = useState(false);
   const [showPageSetup, setShowPageSetup] = useState(false);
   const [showCreatePageSetup, setShowCreatePageSetup] = useState(false);
+  const [showAdAccountSetup, setShowAdAccountSetup] = useState(false);
   const [selectingPageId, setSelectingPageId] = useState("");
+  const [selectingAdAccountId, setSelectingAdAccountId] = useState("");
   const [setupError, setSetupError] = useState("");
   const knownPageIds = useRef<string[]>([]);
+  const knownAdAccountIds = useRef<string[]>([]);
 
   const refreshSetup = useCallback(async (options?: {
     preferNewPage?: boolean;
+    preferNewAdAccount?: boolean;
     pageId?: string;
     adAccountId?: string;
   }) => {
@@ -49,7 +54,9 @@ export default function FacebookOnboardingFlow({
         body: JSON.stringify({
           leadType: selectedLeadType,
           preferNewPage: options?.preferNewPage === true,
+          preferNewAdAccount: options?.preferNewAdAccount === true,
           knownPageIds: knownPageIds.current,
+          knownAdAccountIds: knownAdAccountIds.current,
           pageId: options?.pageId,
           adAccountId: options?.adAccountId,
         }),
@@ -64,6 +71,14 @@ export default function FacebookOnboardingFlow({
       if (data?.page && options?.preferNewPage && !knownPageIds.current.includes(String(data.page.id))) {
         setAwaitingNewPage(false);
         setShowPageSetup(false);
+      }
+      if (
+        data?.adAccount &&
+        options?.preferNewAdAccount &&
+        !knownAdAccountIds.current.includes(String(data.adAccount.accountId))
+      ) {
+        setAwaitingNewAdAccount(false);
+        setShowAdAccountSetup(false);
       }
       return data;
     } catch (error: any) {
@@ -89,6 +104,17 @@ export default function FacebookOnboardingFlow({
     };
   }, [awaitingNewPage, refreshSetup]);
 
+  useEffect(() => {
+    if (!awaitingNewAdAccount) return;
+    const checkForAdAccount = () => refreshSetup({ preferNewAdAccount: true });
+    const interval = window.setInterval(checkForAdAccount, 4000);
+    window.addEventListener("focus", checkForAdAccount);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", checkForAdAccount);
+    };
+  }, [awaitingNewAdAccount, refreshSetup]);
+
   const openPageCreator = () => {
     knownPageIds.current = pages.map((page) => page.id);
     setAwaitingNewPage(true);
@@ -105,7 +131,31 @@ export default function FacebookOnboardingFlow({
     setSelectingPageId("");
   };
 
-  const facebookReady = Boolean(connected && selectedPage && selectedAdAccount);
+  const openAdAccountCreator = () => {
+    knownAdAccountIds.current = adAccounts.map((account) => account.accountId);
+    setShowAdAccountSetup(true);
+    setAwaitingNewAdAccount(true);
+    window.open("https://business.facebook.com/settings/ad-accounts", "_blank", "noopener,noreferrer");
+  };
+
+  const selectAdAccount = async (accountId: string) => {
+    setSelectingAdAccountId(accountId);
+    const data = await refreshSetup({ adAccountId: accountId });
+    if (String(data?.adAccount?.accountId || "") === accountId) {
+      setAwaitingNewAdAccount(false);
+      setShowAdAccountSetup(false);
+    }
+    setSelectingAdAccountId("");
+  };
+
+  const facebookReady = Boolean(
+    connected &&
+    selectedPage &&
+    selectedAdAccount?.status === 1 &&
+    !showPageSetup &&
+    !showCreatePageSetup &&
+    !showAdAccountSetup
+  );
   const needsPageSetup = connected && !selectedPage;
 
   return (
@@ -202,7 +252,7 @@ export default function FacebookOnboardingFlow({
         </section>
       )}
 
-      {connected && selectedPage && !showPageSetup && !showCreatePageSetup && (
+      {connected && selectedPage && selectedAdAccount?.status === 1 && !showPageSetup && !showCreatePageSetup && !showAdAccountSetup && (
         <section className="rounded-3xl border border-emerald-500/25 bg-emerald-950/20 p-5 sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
@@ -220,33 +270,108 @@ export default function FacebookOnboardingFlow({
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Facebook ready</p>
                 <p className="mt-1 font-semibold text-white">{selectedPage.name}</p>
+                <p className="mt-1 text-xs text-emerald-100/70">
+                  {selectedAdAccount.name || "Meta ad account"} · ID {selectedAdAccount.accountId}
+                </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowPageSetup(true)}
-              className="text-sm font-semibold text-gray-400 underline decoration-white/20 underline-offset-4 hover:text-white"
-            >
-              Change Page
-            </button>
+            <div className="flex flex-wrap gap-4">
+              <button
+                type="button"
+                onClick={() => setShowPageSetup(true)}
+                className="text-sm font-semibold text-gray-400 underline decoration-white/20 underline-offset-4 hover:text-white"
+              >
+                Change Page
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAdAccountSetup(true)}
+                className="text-sm font-semibold text-gray-400 underline decoration-white/20 underline-offset-4 hover:text-white"
+              >
+                Change or create ad account
+              </button>
+            </div>
           </div>
         </section>
       )}
 
-      {connected && selectedPage && !selectedAdAccount && adAccounts.length > 1 && (
-        <section className="rounded-3xl border border-white/10 bg-[#0f172a] p-5">
-          <h2 className="text-lg font-bold text-white">Choose where Facebook bills your ads</h2>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {adAccounts.map((account) => (
+      {connected && selectedPage && (!selectedAdAccount || selectedAdAccount.status !== 1 || showAdAccountSetup) && (
+        <section className="rounded-3xl border border-blue-500/25 bg-[#0f172a] p-5 sm:p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Ad account setup</p>
+              <h2 className="mt-1 text-xl font-bold text-white">Create or choose the account that will run this ad</h2>
+              <p className="mt-2 max-w-2xl text-sm text-gray-400">
+                Meta requires you to confirm the business, currency, time zone, billing details, and any account-creation limits. CoveCRM will detect the new account after Meta creates it.
+              </p>
+            </div>
+            {selectedAdAccount && (
               <button
-                key={account.accountId}
                 type="button"
-                onClick={() => refreshSetup({ adAccountId: account.accountId })}
-                className="rounded-xl border border-white/10 bg-white/5 p-3 text-left text-sm font-semibold text-white hover:bg-white/10"
+                onClick={() => { setAwaitingNewAdAccount(false); setShowAdAccountSetup(false); }}
+                className="text-sm font-semibold text-gray-400 hover:text-white"
               >
-                {account.name || `Ad account ${account.accountId}`}
+                Cancel
               </button>
-            ))}
+            )}
+          </div>
+
+          {adAccounts.length > 0 && (
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {adAccounts.map((account) => {
+                const isActive = account.status === 1;
+                const isSelected = account.accountId === selectedAdAccount?.accountId;
+                return (
+                  <button
+                    key={account.accountId}
+                    type="button"
+                    onClick={() => selectAdAccount(account.accountId)}
+                    disabled={!isActive || Boolean(selectingAdAccountId)}
+                    className={`rounded-2xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isSelected
+                        ? "border-emerald-400/40 bg-emerald-500/10"
+                        : "border-white/10 bg-white/[0.04] hover:border-blue-400/40 hover:bg-blue-500/10"
+                    }`}
+                  >
+                    <p className="font-semibold text-white">{account.name || `Ad account ${account.accountId}`}</p>
+                    <p className="mt-1 text-xs text-gray-400">ID {account.accountId}</p>
+                    <p className={`mt-2 text-xs font-semibold ${isActive ? "text-emerald-300" : "text-amber-300"}`}>
+                      {selectingAdAccountId === account.accountId
+                        ? "Saving..."
+                        : isSelected
+                          ? "Currently selected"
+                          : isActive
+                            ? "Active — select this account"
+                            : "Not active in Meta"}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+            <p className="font-semibold text-white">Need a new ad account?</p>
+            <p className="mt-1 text-sm text-gray-400">
+              Create it in Meta Business Settings. Leave this CoveCRM page open; it checks for the new active account automatically.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={openAdAccountCreator}
+                className="min-h-11 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-500"
+              >
+                Create new ad account in Meta
+              </button>
+              <button
+                type="button"
+                onClick={() => refreshSetup({ preferNewAdAccount: awaitingNewAdAccount })}
+                disabled={refreshing}
+                className="min-h-11 rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-gray-200 hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+              >
+                {refreshing || awaitingNewAdAccount ? "Checking for new account..." : "Refresh accounts"}
+              </button>
+            </div>
           </div>
         </section>
       )}

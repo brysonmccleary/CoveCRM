@@ -23,12 +23,21 @@ describe("automatic Meta setup asset selection", () => {
     expect(chooseSetupPage([oldPage, newPage], "", false)).toBeNull();
   });
 
-  it("automatically chooses the only active ad account", () => {
+  it("does not silently choose an ad account the user did not confirm", () => {
     const accounts = [
       { id: "act_1", accountId: "1", name: "Disabled", status: 2 },
       { id: "act_2", accountId: "2", name: "Active", status: 1 },
     ];
-    expect(chooseSetupAdAccount(accounts)?.accountId).toBe("2");
+    expect(chooseSetupAdAccount(accounts)).toBeNull();
+    expect(chooseSetupAdAccount(accounts, "2")?.accountId).toBe("2");
+  });
+
+  it("selects the one newly-created active ad account after returning from Meta", () => {
+    const accounts = [
+      { id: "act_1", accountId: "1", name: "Existing", status: 1 },
+      { id: "act_2", accountId: "2", name: "New", status: 1 },
+    ];
+    expect(chooseSetupAdAccount(accounts, "1", true, ["1"])?.accountId).toBe("2");
   });
 
   it("maps Meta responses without leaking or dropping identifiers", () => {

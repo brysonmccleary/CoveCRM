@@ -13,8 +13,8 @@ export default function FacebookTrustIntro({ connected = false }: FacebookTrustI
           </h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-300">
             {connected
-              ? "CoveCRM keeps the Page and ad account setup out of your way."
-              : "Connect Facebook, create or choose a Page, then build your ad."}
+              ? "Confirm your Page, create or choose the Meta ad account that will run the campaign, then launch."
+              : "Connect Facebook, confirm your Page, create or choose an ad account, then build your ad."}
           </p>
         </div>
       </div>

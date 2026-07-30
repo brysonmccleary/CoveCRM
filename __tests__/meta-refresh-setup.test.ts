@@ -79,4 +79,51 @@ describe("automatic Meta setup refresh", () => {
       { new: true }
     );
   });
+
+  it("detects and saves the newly-created active ad account", async () => {
+    (User.findOneAndUpdate as jest.Mock).mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ metaPageId: "old-page", metaAdAccountId: "456" }),
+      }),
+    });
+    global.fetch = jest.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/me/accounts")) {
+        return { ok: true, json: async () => ({ data: [
+          { id: "old-page", name: "Old Page", access_token: "page-token", tasks: ["ADVERTISE"] },
+        ] }) } as Response;
+      }
+      if (url.includes("/me/adaccounts")) {
+        return { ok: true, json: async () => ({ data: [
+          { id: "act_123", account_id: "123", name: "Old Ads", account_status: 1 },
+          { id: "act_456", account_id: "456", name: "New Ads", account_status: 1 },
+        ] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ success: true }) } as Response;
+    }) as jest.Mock;
+
+    const { req, res } = createMocks({
+      method: "POST",
+      body: {
+        preferNewAdAccount: true,
+        knownAdAccountIds: ["123"],
+        leadType: "final_expense",
+      },
+    });
+    await handler(req as any, res as any);
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res._getData())).toMatchObject({
+      ready: true,
+      adAccount: { accountId: "456", name: "New Ads", status: 1 },
+    });
+    expect(User.findOneAndUpdate).toHaveBeenCalledWith(
+      { email: "agent@example.com" },
+      { $set: expect.objectContaining({
+        metaAdAccountId: "456",
+        "metaLeadTypeAssets.final_expense": expect.objectContaining({ adAccountId: "456" }),
+      }) },
+      { new: true }
+    );
+  });
 });

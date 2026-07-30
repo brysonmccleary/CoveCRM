@@ -67,8 +67,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const pages = mapMetaPages(pagesResult.status === "fulfilled" ? pagesResult.value?.data : []);
     const adAccounts = mapMetaAdAccounts(accountsResult.status === "fulfilled" ? accountsResult.value?.data : []);
     const preferNewPage = req.body?.preferNewPage === true;
+    const preferNewAdAccount = req.body?.preferNewAdAccount === true;
     const knownPageIds = Array.isArray(req.body?.knownPageIds)
       ? req.body.knownPageIds.map((id: unknown) => String(id || "")).filter(Boolean)
+      : [];
+    const knownAdAccountIds = Array.isArray(req.body?.knownAdAccountIds)
+      ? req.body.knownAdAccountIds
+        .map((id: unknown) => String(id || "").replace(/^act_/, ""))
+        .filter(Boolean)
       : [];
     const requestedPageId = String(req.body?.pageId || "").trim();
     const requestedAccountId = String(req.body?.adAccountId || "").replace(/^act_/, "").trim();
@@ -83,7 +89,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : chooseSetupPage(pages, String(user?.metaPageId || ""), preferNewPage, knownPageIds);
     let selectedAdAccount = requestedAccountId
       ? adAccounts.find((account) => account.accountId === requestedAccountId) || null
-      : chooseSetupAdAccount(adAccounts, String(user?.metaAdAccountId || ""));
+      : chooseSetupAdAccount(
+        adAccounts,
+        String(user?.metaAdAccountId || ""),
+        preferNewAdAccount,
+        knownAdAccountIds
+      );
     if (!selectedPage && pagesResult.status === "rejected" && user?.metaPageId) {
       selectedPage = { id: String(user.metaPageId), name: String(user.metaPageName || "Facebook Page") };
     }
@@ -153,7 +164,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })),
       adAccounts,
       needsPageChoice: !selectedPage && pages.length > 1,
-      needsAdAccountChoice: !selectedAdAccount && adAccounts.length > 1,
+      needsAdAccountChoice: !selectedAdAccount,
       pageRefreshAvailable: pagesResult.status === "fulfilled",
       adAccountRefreshAvailable: accountsResult.status === "fulfilled",
     });

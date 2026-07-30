@@ -35,14 +35,25 @@ export function chooseSetupPage(
 
 export function chooseSetupAdAccount(
   accounts: MetaSetupAdAccount[],
-  currentAccountId = ""
+  currentAccountId = "",
+  preferNewAccount = false,
+  knownAccountIds: string[] = []
 ): MetaSetupAdAccount | null {
   const normalizedCurrent = currentAccountId.replace(/^act_/, "");
   const current = accounts.find((account) => account.accountId === normalizedCurrent) || null;
+  if (preferNewAccount) {
+    const known = new Set(
+      (knownAccountIds.length ? knownAccountIds : normalizedCurrent ? [normalizedCurrent] : [])
+        .map((id) => String(id || "").replace(/^act_/, ""))
+        .filter(Boolean)
+    );
+    const newActiveAccounts = accounts.filter(
+      (account) => account.status === 1 && !known.has(account.accountId)
+    );
+    if (newActiveAccounts.length === 1) return newActiveAccounts[0];
+  }
   if (current) return current;
-  const active = accounts.filter((account) => account.status === 1);
-  if (active.length === 1) return active[0];
-  return accounts.length === 1 ? accounts[0] : null;
+  return null;
 }
 
 export function mapMetaPages(rawPages: any[]): MetaSetupPage[] {
