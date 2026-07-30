@@ -25,6 +25,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         metaPageName: "",
         metaPageAccessToken: "",
         metaAdAccountId: "",
+        metaBusinessId: "",
+        metaBusinessName: "",
+        metaAdAccountProvisioningStatus: "unknown",
+        metaAdAccountProvisioningError: "",
+        metaAdAccountProvisionedAt: null,
         metaInstagramId: "",
       },
     }

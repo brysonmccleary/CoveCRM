@@ -29,7 +29,6 @@ export default function FacebookOnboardingFlow({
   const [adAccounts, setAdAccounts] = useState<AdAccount[]>([]);
   const [refreshing, setRefreshing] = useState(true);
   const [awaitingNewPage, setAwaitingNewPage] = useState(false);
-  const [awaitingNewAdAccount, setAwaitingNewAdAccount] = useState(false);
   const [showPageSetup, setShowPageSetup] = useState(false);
   const [showCreatePageSetup, setShowCreatePageSetup] = useState(false);
   const [showAdAccountSetup, setShowAdAccountSetup] = useState(false);
@@ -39,7 +38,6 @@ export default function FacebookOnboardingFlow({
   const [provisioningStatus, setProvisioningStatus] = useState<"idle" | "provisioning" | "payment_required" | "ready" | "blocked">("idle");
   const [paymentUrl, setPaymentUrl] = useState("");
   const knownPageIds = useRef<string[]>([]);
-  const knownAdAccountIds = useRef<string[]>([]);
   const provisionedPageId = useRef("");
 
   const refreshSetup = useCallback(async (options?: {
@@ -59,7 +57,6 @@ export default function FacebookOnboardingFlow({
           preferNewPage: options?.preferNewPage === true,
           preferNewAdAccount: options?.preferNewAdAccount === true,
           knownPageIds: knownPageIds.current,
-          knownAdAccountIds: knownAdAccountIds.current,
           pageId: options?.pageId,
           adAccountId: options?.adAccountId,
         }),
@@ -74,14 +71,6 @@ export default function FacebookOnboardingFlow({
       if (data?.page && options?.preferNewPage && !knownPageIds.current.includes(String(data.page.id))) {
         setAwaitingNewPage(false);
         setShowPageSetup(false);
-      }
-      if (
-        data?.adAccount &&
-        options?.preferNewAdAccount &&
-        !knownAdAccountIds.current.includes(String(data.adAccount.accountId))
-      ) {
-        setAwaitingNewAdAccount(false);
-        setShowAdAccountSetup(false);
       }
       return data;
     } catch (error: any) {
@@ -106,17 +95,6 @@ export default function FacebookOnboardingFlow({
       window.removeEventListener("focus", checkForPage);
     };
   }, [awaitingNewPage, refreshSetup]);
-
-  useEffect(() => {
-    if (!awaitingNewAdAccount) return;
-    const checkForAdAccount = () => refreshSetup({ preferNewAdAccount: true });
-    const interval = window.setInterval(checkForAdAccount, 4000);
-    window.addEventListener("focus", checkForAdAccount);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener("focus", checkForAdAccount);
-    };
-  }, [awaitingNewAdAccount, refreshSetup]);
 
   const openPageCreator = () => {
     knownPageIds.current = pages.map((page) => page.id);
@@ -177,18 +155,10 @@ export default function FacebookOnboardingFlow({
     return () => window.removeEventListener("focus", checkPayment);
   }, [provisionAdAccount, provisioningStatus]);
 
-  const openAdAccountCreator = () => {
-    knownAdAccountIds.current = adAccounts.map((account) => account.accountId);
-    setShowAdAccountSetup(true);
-    setAwaitingNewAdAccount(true);
-    window.open("https://business.facebook.com/settings/ad-accounts", "_blank", "noopener,noreferrer");
-  };
-
   const selectAdAccount = async (accountId: string) => {
     setSelectingAdAccountId(accountId);
     const data = await refreshSetup({ adAccountId: accountId });
     if (String(data?.adAccount?.accountId || "") === accountId) {
-      setAwaitingNewAdAccount(false);
       setShowAdAccountSetup(false);
     }
     setSelectingAdAccountId("");
@@ -359,7 +329,7 @@ export default function FacebookOnboardingFlow({
             {selectedAdAccount && (
               <button
                 type="button"
-                onClick={() => { setAwaitingNewAdAccount(false); setShowAdAccountSetup(false); }}
+                onClick={() => setShowAdAccountSetup(false)}
                 className="text-sm font-semibold text-gray-400 hover:text-white"
               >
                 Cancel
