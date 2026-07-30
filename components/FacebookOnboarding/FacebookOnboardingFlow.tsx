@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import AdWizard from "@/components/FacebookAds/AdWizard";
 import FacebookTrustIntro from "./FacebookTrustIntro";
 import NoPageGuidedSetup from "./NoPageGuidedSetup";
+import PageProfilePicturePicker from "./PageProfilePicturePicker";
 
 type FacebookOnboardingFlowProps = {
   selectedLeadType: string;
@@ -267,6 +268,14 @@ export default function FacebookOnboardingFlow({
             Create a different Facebook Page
           </button>
         </section>
+      )}
+
+      {connected && selectedPage && !showPageSetup && !showCreatePageSetup && (
+        <PageProfilePicturePicker
+          pageId={selectedPage.id}
+          pageName={selectedPage.name}
+          leadType={selectedLeadType}
+        />
       )}
 
       {connected && selectedPage && selectedAdAccount?.status === 1 && provisioningStatus === "ready" && !showPageSetup && !showCreatePageSetup && !showAdAccountSetup && (
