@@ -82,10 +82,11 @@ export function getMetaTimezoneId(browserTimeZone = "", businessTimezoneId?: num
 }
 
 export function buildMetaPaymentUrl(accountId: string, businessId = "") {
-  const url = new URL("https://business.facebook.com/ads/manager/account_settings/account_billing/");
-  url.searchParams.set("act", normalizeId(accountId));
-  url.searchParams.set("page", "account_settings");
-  url.searchParams.set("tab", "account_billing_settings");
+  const normalizedAccountId = normalizeId(accountId);
+  const url = new URL("https://business.facebook.com/latest/billing_hub/accounts/details/");
+  url.searchParams.set("payment_account_id", normalizedAccountId);
+  url.searchParams.set("asset_id", normalizedAccountId);
+  url.searchParams.set("placement", "campaign_manager");
   if (businessId) url.searchParams.set("business_id", businessId);
   return url.toString();
 }
@@ -137,12 +138,13 @@ function mapBusiness(raw: any): MetaBusiness | null {
 async function inspectAccount(client: GraphClient, account: MetaSetupAdAccount) {
   const detail = await client.get(
     `act_${account.accountId}`,
-    "id,name,account_id,account_status,currency,funding_source,funding_source_details,timezone_id,timezone_name,business"
+    "id,name,account_id,account_status,currency,funding_source,funding_source_details,timezone_id,timezone_name,business,business_name,business_street,business_city,business_state,business_zip,business_country_code"
   );
   const fundingSource = String(detail?.funding_source || detail?.funding_source_details?.id || "");
+  const businessBillingDetailsMissing = Boolean(detail?.business?.id) && !String(detail?.business_name || "").trim();
   return {
     account: mapMetaAdAccounts([detail])[0] || account,
-    paymentRequired: !fundingSource,
+    paymentRequired: !fundingSource || businessBillingDetailsMissing,
   };
 }
 

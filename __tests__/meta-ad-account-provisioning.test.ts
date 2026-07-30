@@ -35,9 +35,10 @@ describe("Meta ad-account provisioning", () => {
   test("uses the customer's browser timezone and builds account-specific billing URL", () => {
     expect(getMetaTimezoneId("America/Phoenix")).toBe(5);
     const url = new URL(buildMetaPaymentUrl("act_123", "456"));
-    expect(url.searchParams.get("act")).toBe("123");
+    expect(url.searchParams.get("payment_account_id")).toBe("123");
+    expect(url.searchParams.get("asset_id")).toBe("123");
     expect(url.searchParams.get("business_id")).toBe("456");
-    expect(url.searchParams.get("tab")).toBe("account_billing_settings");
+    expect(url.pathname).toContain("billing_hub/accounts/details");
   });
 
   test("keeps an already selected active account and does not create another", async () => {
@@ -47,7 +48,7 @@ describe("Meta ad-account provisioning", () => {
       client({
         get: async (path) => {
           if (path === "me/adaccounts") return { data: [{ id: "act_111", account_id: "111", name: "Life Quotes", account_status: 1, business: { id: "biz-1" } }] };
-          return { id: "act_111", account_id: "111", name: "Life Quotes", account_status: 1, funding_source: "card" };
+          return { id: "act_111", account_id: "111", name: "Life Quotes", account_status: 1, funding_source: "card", business: { id: "biz-1" }, business_name: "Life Quotes LLC" };
         },
         post,
       }) as any
