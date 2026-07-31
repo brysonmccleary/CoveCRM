@@ -75,8 +75,8 @@ export default function PageStarterKit({ initialLeadType = "" }: PageStarterKitP
     [market, offset, seed],
   );
   const logoUrl = useMemo(
-    () => facebookPageLogoDataUrl(option.logoStyleId, option.paletteId),
-    [option.logoStyleId, option.paletteId],
+    () => facebookPageLogoDataUrl(option.logoStyleId, option.paletteId, option.name),
+    [option.logoStyleId, option.name, option.paletteId],
   );
 
   const handleCopy = async (field: "name" | "category" | "bio", value: string) => {
@@ -90,7 +90,7 @@ export default function PageStarterKit({ initialLeadType = "" }: PageStarterKitP
     setDownloadError("");
     let source = "";
     try {
-      const svg = buildFacebookPageLogoSvg(option.logoStyleId, option.paletteId);
+      const svg = buildFacebookPageLogoSvg(option.logoStyleId, option.paletteId, option.name);
       source = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
       const image = new window.Image();
       image.decoding = "async";

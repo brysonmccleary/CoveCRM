@@ -23,14 +23,14 @@ function safeFilename(value: string) {
 }
 
 const logoLabels: Record<string, string> = {
-  "roof-hand": "Home & Care",
-  "family-home": "Family Home",
-  "legacy-heart": "Legacy Heart",
-  "home-check": "Home Protection",
+  "signature-mark": "Signature Mark",
+  "classic-monogram": "Classic Monogram",
+  "modern-wordmark": "Modern Wordmark",
+  "seal-mark": "Professional Seal",
 };
 
-async function logoPng(styleId: string, paletteId: string) {
-  const svg = buildFacebookPageLogoSvg(styleId, paletteId);
+async function logoPng(styleId: string, paletteId: string, pageName: string) {
+  const svg = buildFacebookPageLogoSvg(styleId, paletteId, pageName);
   const source = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
   try {
     const image = new window.Image();
@@ -74,7 +74,7 @@ export default function PageProfilePicturePicker({ pageId, pageName, leadType }:
     setDownloaded(false);
     setError("");
     try {
-      const blob = await logoPng(selected.logoStyleId, selected.paletteId);
+      const blob = await logoPng(selected.logoStyleId, selected.paletteId, pageName);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -131,7 +131,7 @@ export default function PageProfilePicturePicker({ pageId, pageName, leadType }:
             >
               <span className="mx-auto block w-fit overflow-hidden rounded-xl border border-white/10 shadow-xl shadow-black/30">
                 <Image
-                  src={facebookPageLogoDataUrl(option.logoStyleId, option.paletteId)}
+                  src={facebookPageLogoDataUrl(option.logoStyleId, option.paletteId, pageName)}
                   alt={`Profile picture option ${index + 1} for ${pageName}`}
                   width={144}
                   height={144}

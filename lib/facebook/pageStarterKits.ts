@@ -137,19 +137,19 @@ const BIO_LIBRARY: Record<FacebookPageMarket, string[]> = {
 };
 
 const LOGO_STYLES: Record<FacebookPageMarket, string[]> = {
-  general_life: ["roof-hand", "family-home", "legacy-heart", "home-check"],
-  final_expense: ["legacy-heart", "roof-hand", "home-check", "family-home"],
-  mortgage_protection: ["home-check", "roof-hand", "legacy-heart", "family-home"],
-  iul: ["home-check", "roof-hand", "legacy-heart", "family-home"],
-  veteran: ["roof-hand", "legacy-heart", "family-home", "home-check"],
-  trucker: ["home-check", "roof-hand", "family-home", "legacy-heart"],
+  general_life: ["signature-mark", "classic-monogram", "modern-wordmark", "seal-mark"],
+  final_expense: ["classic-monogram", "seal-mark", "signature-mark", "modern-wordmark"],
+  mortgage_protection: ["modern-wordmark", "signature-mark", "classic-monogram", "seal-mark"],
+  iul: ["signature-mark", "seal-mark", "modern-wordmark", "classic-monogram"],
+  veteran: ["seal-mark", "classic-monogram", "signature-mark", "modern-wordmark"],
+  trucker: ["signature-mark", "modern-wordmark", "seal-mark", "classic-monogram"],
 };
 
 const PALETTES = [
-  "navy-teal-gold",
-  "navy-aqua-gold",
-  "deep-blue-teal-gold",
-  "midnight-teal-gold",
+  "navy-mint",
+  "forest-cream",
+  "slate-sky",
+  "indigo-sand",
 ] as const;
 
 export const FACEBOOK_PAGE_STARTER_VARIETY =

@@ -37,19 +37,18 @@ describe("Meta Page starter kits", () => {
     }
   });
 
-  test("generates self-contained, square, text-free logo artwork", () => {
+  test("generates self-contained, square, name-aware logo artwork", () => {
     for (const market of FACEBOOK_PAGE_MARKETS) {
       for (let seed = 0; seed < 8; seed += 1) {
         const option = getFacebookPageStarterOption(market.id, seed, seed);
-        const svg = buildFacebookPageLogoSvg(option.logoStyleId, option.paletteId);
+        const svg = buildFacebookPageLogoSvg(option.logoStyleId, option.paletteId, option.name);
         expect(svg).toContain('width="1024"');
         expect(svg).toContain('height="1024"');
         expect(svg).toContain('viewBox="0 0 1024 1024"');
-        expect(svg).toContain('id="primaryGradient"');
-        expect(svg).toContain('id="emblemShadow"');
-        expect(svg).not.toContain("<text");
+        expect(svg).toContain("<text");
+        expect(svg).toContain("font-family");
         expect(svg).not.toMatch(/<image|\shref=/);
-        expect(facebookPageLogoDataUrl(option.logoStyleId, option.paletteId)).toMatch(/^data:image\/svg\+xml/);
+        expect(facebookPageLogoDataUrl(option.logoStyleId, option.paletteId, option.name)).toMatch(/^data:image\/svg\+xml/);
       }
     }
   });
