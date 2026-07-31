@@ -49,7 +49,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
   const user = await User.findOne({ email }).lean() as any;
-  const token = String(user?.metaSystemUserToken || user?.metaAccessToken || "");
+  // Setup discovery must use the person's token. A system user can manage
+  // already-assigned assets but cannot discover a newly-created Page yet.
+  const token = String(user?.metaAccessToken || user?.metaSystemUserToken || "");
   if (!token) return res.status(200).json({ connected: false, ready: false });
 
   try {
@@ -141,20 +143,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       update.metaBusinessName = String(selectedBusiness.name || "");
     }
 
-    const leadType = String(req.body?.leadType || "").trim();
-    if (leadType && selectedPage && selectedAdAccount) {
-      update[`metaLeadTypeAssets.${leadType}`] = {
-        pageId: selectedPage.id,
-        pageName: selectedPage.name,
-        adAccountId: selectedAdAccount.accountId,
-        updatedAt: new Date(),
-      };
-    }
-
     if (selectedPage || selectedAdAccount) {
       const savedUser = await User.findOneAndUpdate(
         { email },
-        { $set: update },
+        { $set: update, $unset: { metaLeadTypeAssets: "" } },
         { new: true }
       ).select("metaPageId metaAdAccountId").lean() as any;
       if (selectedPage && String(savedUser?.metaPageId || "") !== selectedPage.id) {

@@ -54,15 +54,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const user = await User.findOne({ email: session.user.email })
-      .select("_id metaLeadTypeAssets metaPageId metaPageName metaAdAccountId")
+      .select("_id metaPageId metaPageName metaAdAccountId")
       .lean() as any;
     if (!user) return res.status(404).json({ error: "User not found" });
-    const leadTypeAssets =
-      leadType && user?.metaLeadTypeAssets
-        ? user.metaLeadTypeAssets instanceof Map
-          ? user.metaLeadTypeAssets.get(leadType)
-          : user.metaLeadTypeAssets[leadType]
-        : null;
     const normalizedStates = normalizeStateCodes(licensedStates);
     if (!normalizedStates.length) {
       return res.status(400).json({ error: "Select at least one licensed state before creating a campaign." });
@@ -89,9 +83,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       funnelSlug,
       funnelStatus: "active",
       funnelVersion: "2026-04-production-v1",
-      facebookPageId: String(leadTypeAssets?.pageId || user.metaPageId || "").trim(),
-      facebookPageName: String(leadTypeAssets?.pageName || user.metaPageName || "").trim(),
-      adAccountId: String(leadTypeAssets?.adAccountId || user.metaAdAccountId || "").trim().replace(/^act_/, ""),
+      facebookPageId: String(user.metaPageId || "").trim(),
+      facebookPageName: String(user.metaPageName || "").trim(),
+      adAccountId: String(user.metaAdAccountId || "").trim().replace(/^act_/, ""),
       licensedStates: normalizedStates,
       borderStateBehavior: borderStateBehavior === "allow_with_warning" ? "allow_with_warning" : "block",
       stateRestrictionNoticeAccepted: true,

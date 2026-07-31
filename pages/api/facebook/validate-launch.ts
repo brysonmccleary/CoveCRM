@@ -26,28 +26,20 @@ export async function validateLaunchInput(params: {
 
   const body = params.body || {};
   const user = await User.findOne({ email: String(params.userEmail).toLowerCase() })
-    .select("_id metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaLeadTypeAssets metaDatasetId metaCapiAdAccountId metaCapiEnabled")
+    .select("_id metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaDatasetId metaCapiAdAccountId metaCapiEnabled")
     .lean() as any;
 
   if (!user) throw new Error("User account not found");
 
   const accessToken = String(user.metaSystemUserToken || user.metaAccessToken || "").trim();
   const leadType = String(body.leadType || "").trim();
-  const leadTypeAssets =
-    leadType && user?.metaLeadTypeAssets
-      ? user.metaLeadTypeAssets instanceof Map
-        ? user.metaLeadTypeAssets.get(leadType)
-        : user.metaLeadTypeAssets[leadType]
-      : null;
   const adAccountId = String(
     body.adAccountId ||
-      leadTypeAssets?.adAccountId ||
       user.metaAdAccountId ||
       ""
   ).trim();
   const pageId = String(
     body.facebookPageId ||
-      leadTypeAssets?.pageId ||
       user.metaPageId ||
       ""
   ).trim();

@@ -18,7 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
   const user = await User.findOne({ email }).lean() as any;
-  const token = user?.metaSystemUserToken || user?.metaAccessToken;
+  const token = user?.metaAccessToken || user?.metaSystemUserToken;
 
   if (!token) {
     return res.status(200).json({ pages: [], connected: false });

@@ -74,8 +74,7 @@ describe("automatic Meta setup refresh", () => {
         metaPageName: "Your Life Quotes",
         metaPageAccessToken: "page-token",
         metaAdAccountId: "123",
-        "metaLeadTypeAssets.final_expense": expect.objectContaining({ pageId: "new-page", adAccountId: "123" }),
-      }) },
+      }), $unset: { metaLeadTypeAssets: "" } },
       { new: true }
     );
   });
@@ -121,8 +120,7 @@ describe("automatic Meta setup refresh", () => {
       { email: "agent@example.com" },
       { $set: expect.objectContaining({
         metaAdAccountId: "456",
-        "metaLeadTypeAssets.final_expense": expect.objectContaining({ adAccountId: "456" }),
-      }) },
+      }), $unset: { metaLeadTypeAssets: "" } },
       { new: true }
     );
   });

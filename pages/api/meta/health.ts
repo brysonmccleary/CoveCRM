@@ -16,19 +16,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = await User.findOne({ email }).lean() as any;
   if (!user) return res.status(404).json({ error: "User not found" });
 
-  const leadType = String(req.query.leadType || "").trim();
-  const leadTypeAssets =
-    leadType && user?.metaLeadTypeAssets
-      ? user.metaLeadTypeAssets instanceof Map
-        ? user.metaLeadTypeAssets.get(leadType)
-        : user.metaLeadTypeAssets[leadType]
-      : null;
-
   const health = await checkMetaWriteReadiness({
     user,
     userEmail: email,
-    pageId: String(req.query.pageId || leadTypeAssets?.pageId || user.metaPageId || "").trim(),
-    adAccountId: String(req.query.adAccountId || leadTypeAssets?.adAccountId || user.metaAdAccountId || "").trim(),
+    pageId: String(req.query.pageId || user.metaPageId || "").trim(),
+    adAccountId: String(req.query.adAccountId || user.metaAdAccountId || "").trim(),
     accessToken: String(user.metaSystemUserToken || user.metaAccessToken || "").trim(),
     requireLeadAdsEligibility: String(req.query.campaignType || "") === "native_form",
     force: String(req.query.force || "") === "true",

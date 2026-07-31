@@ -48,6 +48,10 @@ describe("Meta ad-account provisioning", () => {
       client({
         get: async (path) => {
           if (path === "me/adaccounts") return { data: [{ id: "act_111", account_id: "111", name: "Life Quotes", account_status: 1, business: { id: "biz-1" } }] };
+          if (path === "me/businesses") return { data: [{ id: "biz-1", name: "Test", primary_page: { id: "page-1" } }] };
+          if (path === "biz-1/owned_pages") return { data: [{ id: "page-1", name: "Your Life Quotes" }] };
+          if (path === "biz-1/owned_ad_accounts") return { data: [{ id: "act_111", account_id: "111", name: "Life Quotes", account_status: 1 }] };
+          if (path === "act_111/promote_pages") return { data: [{ id: "page-1", name: "Your Life Quotes" }] };
           return { id: "act_111", account_id: "111", name: "Life Quotes", account_status: 1, funding_source: "card", business: { id: "biz-1" } };
         },
         post,
@@ -64,7 +68,9 @@ describe("Meta ad-account provisioning", () => {
       get: async (path) => {
         if (path === "me/adaccounts") return { data: [] };
         if (path === "me/businesses") return { data: [{ id: "biz-1", name: "Test", timezone_id: 5, primary_page: { id: "page-1" } }] };
+        if (path === "biz-1/owned_pages") return { data: [{ id: "page-1", name: "Your Life Quotes" }] };
         if (path === "biz-1/owned_ad_accounts") return { data: [{ id: "act_222", account_id: "222", name: "CoveCRM", account_status: 1 }] };
+        if (path === "act_222/promote_pages") return { data: [{ id: "page-1", name: "Your Life Quotes" }] };
         if (path === "act_222") return { id: "act_222", account_id: "222", name: "Your Life Quotes", account_status: 1 };
         return { data: [] };
       },
@@ -82,7 +88,9 @@ describe("Meta ad-account provisioning", () => {
       get: async (path) => {
         if (path === "me/adaccounts") return { data: [] };
         if (path === "me/businesses") return { data: [{ id: "biz-1", name: "Test", timezone_id: 5, primary_page: { id: "page-1" } }] };
+        if (path === "biz-1/owned_pages") return { data: [{ id: "page-1", name: "Your Life Quotes" }] };
         if (path === "biz-1/owned_ad_accounts") return { data: [] };
+        if (path === "act_333/promote_pages") return { data: [{ id: "page-1", name: "Your Life Quotes" }] };
         if (path === "act_333") return { id: "act_333", account_id: "333", name: "Your Life Quotes", account_status: 1 };
         return { data: [] };
       },
@@ -90,5 +98,44 @@ describe("Meta ad-account provisioning", () => {
     }) as any);
     expect(result.createdAdAccount).toBe(true);
     expect(post).toHaveBeenCalledWith("biz-1/adaccount", expect.objectContaining({ name: "Your Life Quotes", currency: "USD", timezone_id: "5" }));
+  });
+
+  test("does not accept a personal account as a complete managed setup", async () => {
+    const post = jest.fn(async (path: string) => path === "biz-1/adaccount" ? { id: "act_333" } : { success: true });
+    const result = await provisionMetaAdAccount(
+      { ...input, currentAdAccountId: "111", currentBusinessId: "biz-1" },
+      client({
+        get: async (path) => {
+          if (path === "me/adaccounts") return { data: [{ id: "act_111", account_id: "111", name: "Personal Ads", account_status: 1 }] };
+          if (path === "me/businesses") return { data: [{ id: "biz-1", name: "Test", timezone_id: 5 }] };
+          if (path === "biz-1/owned_pages") return { data: [{ id: "page-1", name: "Your Life Quotes" }] };
+          if (path === "biz-1/owned_ad_accounts") return { data: [] };
+          if (path === "act_333/promote_pages") return { data: [{ id: "page-1", name: "Your Life Quotes" }] };
+          if (path === "act_333") return { id: "act_333", account_id: "333", name: "Your Life Quotes", account_status: 1 };
+          return { data: [] };
+        },
+        post,
+      }) as any
+    );
+    expect(result.adAccount?.accountId).toBe("333");
+    expect(result.createdAdAccount).toBe(true);
+  });
+
+  test("blocks readiness when Meta refuses to add the Page to the business", async () => {
+    const post = jest.fn(async (path: string) => {
+      if (path === "biz-1/owned_pages") throw new Error("Page is owned by another business");
+      return { success: true };
+    });
+    const result = await provisionMetaAdAccount(input, client({
+      get: async (path) => {
+        if (path === "me/adaccounts") return { data: [] };
+        if (path === "me/businesses") return { data: [{ id: "biz-1", name: "Test", timezone_id: 5, primary_page: { id: "page-1" } }] };
+        if (path === "biz-1/owned_pages" || path === "biz-1/client_pages") return { data: [] };
+        return { data: [] };
+      },
+      post,
+    }) as any);
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toBe("page_assignment_required");
   });
 });

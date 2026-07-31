@@ -293,35 +293,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const userEmail = String(session.user.email).toLowerCase();
     const user = await User.findOne({ email: userEmail })
-      .select("_id email name firstName lastName agentPhone numbers metaAccessToken metaSystemUserToken metaPageAccessToken metaAdAccountId metaPageId metaPageName metaInstagramId metaLeadTypeAssets metaDatasetId")
+      .select("_id email name firstName lastName agentPhone numbers metaAccessToken metaSystemUserToken metaPageAccessToken metaAdAccountId metaPageId metaPageName metaInstagramId metaDatasetId")
       .lean();
     if (!user) {
       return res.status(404).json({ error: "User account not found" });
     }
-    const leadTypeAssets =
-      leadType && (user as any)?.metaLeadTypeAssets
-        ? (user as any).metaLeadTypeAssets instanceof Map
-          ? (user as any).metaLeadTypeAssets.get(leadType)
-          : (user as any).metaLeadTypeAssets[leadType]
-        : null;
     const resolvedPageId = String(
       launchValidation.pageId ||
       facebookPageId ||
-      leadTypeAssets?.pageId ||
       (user as any).metaPageId ||
       ""
     ).trim();
     const resolvedAdAccountId = String(
       launchValidation.adAccountId ||
       adAccountId ||
-      leadTypeAssets?.adAccountId ||
       (user as any).metaAdAccountId ||
       ""
     ).trim().replace(/^act_/, "");
     const resolvedPageName =
-      resolvedPageId && resolvedPageId === String(leadTypeAssets?.pageId || "").trim()
-        ? String(leadTypeAssets?.pageName || "").trim()
-        : resolvedPageId && resolvedPageId === String((user as any).metaPageId || "").trim()
+      resolvedPageId && resolvedPageId === String((user as any).metaPageId || "").trim()
           ? String((user as any).metaPageName || "").trim()
           : "";
     const agentContact = injectAgentContact(user, {

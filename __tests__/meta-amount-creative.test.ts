@@ -27,7 +27,7 @@ describe("Final Expense amount-focused creative", () => {
 
     const markup = renderToStaticMarkup(React.createElement(ProductionFeedCreative, { draft }));
     expect(markup).toContain("$50,000");
-    expect(markup).toMatch(/No exam required|Fixed rates|Simple qualification/);
+    expect(markup).toMatch(/No exam required|No medical exam options available|Fixed rates|Rates never increase with age|Simple qualification/);
     expect(markup).toContain("TAP YOUR AGE TO EXPLORE OPTIONS");
     expect(markup).toMatch(/See What I Qualify For|Check My Options|Learn More/);
   });

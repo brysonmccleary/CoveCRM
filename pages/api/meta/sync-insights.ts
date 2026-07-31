@@ -42,16 +42,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!user) return res.status(404).json({ error: "User not found" });
 
   if (req.method === "GET") {
-    const leadType = String(req.query.leadType || "").trim();
-    const leadTypeAssets =
-      leadType && user?.metaLeadTypeAssets
-        ? user.metaLeadTypeAssets instanceof Map
-          ? user.metaLeadTypeAssets.get(leadType)
-          : user.metaLeadTypeAssets[leadType]
-        : null;
-    const pageId = leadTypeAssets?.pageId || user.metaPageId || "";
-    const pageName = leadTypeAssets?.pageName || user.metaPageName || "";
-    const adAccountId = leadTypeAssets?.adAccountId || user.metaAdAccountId || "";
+    const pageId = user.metaPageId || "";
+    const pageName = user.metaPageName || "";
+    const adAccountId = user.metaAdAccountId || "";
 
     return res.status(200).json({
       connected: !!(user.metaAccessToken || user.metaSystemUserToken),
@@ -77,7 +70,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (action === "save-assets") {
       const pageId = String(body?.pageId || "").trim();
       const adAccountId = String(body?.adAccountId || "").trim();
-      const leadType = String(body?.leadType || "").trim();
 
       if (!pageId && !adAccountId) {
         return res.status(400).json({ error: "No pageId or adAccountId provided" });
@@ -90,17 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (adAccountId) update.metaAdAccountId = adAccountId.replace(/^act_/, "");
       if (pageMeta.metaPageName) update.metaPageName = pageMeta.metaPageName;
       if (pageMeta.metaInstagramId) update.metaInstagramId = pageMeta.metaInstagramId;
-      if (leadType) {
-        const scopedPath = `metaLeadTypeAssets.${leadType}`;
-        update[scopedPath] = {
-          pageId: pageId || "",
-          pageName: pageMeta.metaPageName || "",
-          adAccountId: adAccountId ? adAccountId.replace(/^act_/, "") : "",
-          updatedAt: new Date(),
-        };
-      }
-
-      await User.updateOne({ email }, { $set: update });
+      await User.updateOne({ email }, { $set: update, $unset: { metaLeadTypeAssets: "" } });
 
       const refreshed = await User.findOne({ email }).lean() as any;
       return res.status(200).json({

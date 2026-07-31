@@ -13,6 +13,7 @@ export type MetaHealthStatus =
   | "accountDisabled"
   | "missingPaymentMethod"
   | "missingPagePermission"
+  | "missingPageAdAccountConnection"
   | "missingLeadAdsEligibility"
   | "missingPage"
   | "missingAdAccount"
@@ -50,6 +51,7 @@ const BLOCKING_STATUSES = new Set<MetaHealthStatus>([
   "accountDisabled",
   "missingPaymentMethod",
   "missingPagePermission",
+  "missingPageAdAccountConnection",
   "missingLeadAdsEligibility",
   "missingPage",
   "missingAdAccount",
@@ -177,6 +179,7 @@ function fixUrlForStatus(status: MetaHealthStatus) {
   if (status === "securityVerificationRequired") return "https://business.facebook.com/accountquality";
   if (status === "missingBusinessInformation") return "https://business.facebook.com/settings/ad-accounts";
   if (status === "missingPage") return "https://www.facebook.com/pages/create";
+  if (status === "missingPageAdAccountConnection") return "/facebook-ads";
   return undefined;
 }
 
@@ -193,6 +196,8 @@ export async function markMetaHealthFailure(params: {
   userEmail?: string;
   error: unknown;
   cooldownMs?: number;
+  pageId?: string;
+  adAccountId?: string;
 }) {
   await mongooseConnect();
   const classified = classifyMetaHealthError(params.error);
@@ -206,6 +211,8 @@ export async function markMetaHealthFailure(params: {
     lastMetaHealthError: classified.reason,
     metaHealthCooldownUntil: cooldownUntil,
     metaLastHealthCheckAt: now,
+    ...(params.pageId ? { metaHealthPageId: String(params.pageId) } : {}),
+    ...(params.adAccountId ? { metaHealthAdAccountId: normalizeAdAccountId(String(params.adAccountId)) } : {}),
   };
   const query = params.user?._id
     ? { _id: params.user._id }
@@ -228,8 +235,13 @@ export async function markMetaHealthFailure(params: {
   return { ...classified, cooldownUntil };
 }
 
-function cachedHealth(user: any, now: Date): MetaHealthResult | null {
+function cachedHealth(user: any, now: Date, pageId: string, adAccountId: string): MetaHealthResult | null {
   const status = String(user?.metaHealthStatus || "unknown") as MetaHealthStatus;
+  const cachedPageId = String(user?.metaHealthPageId || "");
+  const cachedAdAccountId = normalizeAdAccountId(String(user?.metaHealthAdAccountId || ""));
+  if (!cachedPageId || !cachedAdAccountId || cachedPageId !== pageId || cachedAdAccountId !== adAccountId) {
+    return null;
+  }
   const cooldownUntil = user?.metaHealthCooldownUntil ? new Date(user.metaHealthCooldownUntil) : null;
   if (cooldownUntil && cooldownUntil > now) {
     return {
@@ -293,6 +305,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
   const accessToken = String(input.accessToken || user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
   const pageId = String(input.pageId || user?.metaPageId || "").trim();
   const adAccountId = normalizeAdAccountId(String(input.adAccountId || user?.metaAdAccountId || ""));
+  const pairHealthFields = { metaHealthPageId: pageId, metaHealthAdAccountId: adAccountId };
 
   if (!accessToken) {
     const result: MetaHealthResult = {
@@ -305,6 +318,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
     await updateUserHealth(user, {
       metaReconnectNeeded: true,
       metaHealthStatus: result.status,
+      ...pairHealthFields,
       lastMetaHealthError: result.reason,
       metaHealthCooldownUntil: new Date(now.getTime() + HEALTH_COOLDOWN_MS),
       metaLastHealthCheckAt: now,
@@ -330,7 +344,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
   }
 
   if (!input.force) {
-    const cached = cachedHealth(user, now);
+    const cached = cachedHealth(user, now, pageId, adAccountId);
     if (cached) return cached;
   }
 
@@ -352,6 +366,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
       await updateUserHealth(user, {
         metaReconnectNeeded: false,
         metaHealthStatus: result.status,
+        ...pairHealthFields,
         lastMetaHealthError: result.reason,
         metaHealthCooldownUntil: new Date(now.getTime() + HEALTH_COOLDOWN_MS),
         metaLastHealthCheckAt: now,
@@ -371,6 +386,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
       await updateUserHealth(user, {
         metaReconnectNeeded: false,
         metaHealthStatus: result.status,
+        ...pairHealthFields,
         lastMetaHealthError: result.reason,
         metaHealthCooldownUntil: new Date(now.getTime() + HEALTH_COOLDOWN_MS),
         metaLastHealthCheckAt: now,
@@ -397,6 +413,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
       await updateUserHealth(user, {
         metaReconnectNeeded: false,
         metaHealthStatus: result.status,
+        ...pairHealthFields,
         lastMetaHealthError: result.reason,
         metaHealthCooldownUntil: new Date(now.getTime() + HEALTH_COOLDOWN_MS),
         metaLastHealthCheckAt: now,
@@ -407,7 +424,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
     const account = await graphGet(
       `act_${adAccountId}`,
       accessToken,
-      "account_status,disable_reason,currency,timezone_name,amount_spent,balance,business{id,name,verification_status}"
+      "account_status,disable_reason,currency,timezone_name,amount_spent,balance,funding_source,funding_source_details,business{id,name,verification_status}"
     );
     const statusCode = Number(account?.account_status ?? accountFromList?.account_status ?? 0);
     const disableReason = Number(account?.disable_reason ?? accountFromList?.disable_reason ?? 0);
@@ -424,8 +441,71 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
       await updateUserHealth(user, {
         metaReconnectNeeded: false,
         metaHealthStatus: result.status,
+        ...pairHealthFields,
         lastMetaHealthError: result.reason,
         metaHealthCooldownUntil: new Date(now.getTime() + HEALTH_COOLDOWN_MS),
+        metaLastHealthCheckAt: now,
+      });
+      return result;
+    }
+
+    const fundingSource = String(account?.funding_source || account?.funding_source_details?.id || "");
+    if (!fundingSource) {
+      const result: MetaHealthResult = {
+        ok: false,
+        status: "missingPaymentMethod",
+        reason: "Add a payment method to this Facebook ad account before launching.",
+        fixUrl: "https://business.facebook.com/billing",
+        checkedAt: now,
+        account,
+        page,
+      };
+      await updateUserHealth(user, {
+        metaReconnectNeeded: false,
+        metaHealthStatus: result.status,
+        ...pairHealthFields,
+        lastMetaHealthError: result.reason,
+        metaHealthCooldownUntil: null,
+        metaLastHealthCheckAt: now,
+      });
+      return result;
+    }
+
+    const businessId = String(account?.business?.id || accountFromList?.business?.id || "");
+    let pageConnected = false;
+    if (businessId) {
+      const [ownedPages, clientPages] = await Promise.all([
+        graphGet(`${businessId}/owned_pages`, accessToken, "id,name").catch(() => ({ data: [] })),
+        graphGet(`${businessId}/client_pages`, accessToken, "id,name").catch(() => ({ data: [] })),
+      ]);
+      pageConnected = [...(ownedPages?.data || []), ...(clientPages?.data || [])]
+        .some((candidate: any) => String(candidate?.id || "") === pageId);
+    } else {
+      const promotablePages = await graphGet(
+        `act_${adAccountId}/promote_pages`,
+        accessToken,
+        "id,name"
+      );
+      pageConnected = (Array.isArray(promotablePages?.data) ? promotablePages.data : [])
+        .some((candidate: any) => String(candidate?.id || "") === pageId);
+    }
+    if (!pageConnected) {
+      const result: MetaHealthResult = {
+        ok: false,
+        status: "missingPageAdAccountConnection",
+        reason: "CoveCRM is finishing the connection between your Facebook Page and ad account. Open Facebook setup and try the automatic repair.",
+        fixUrl: "/facebook-ads",
+        checkedAt: now,
+        account,
+        page,
+      };
+      await updateUserHealth(user, {
+        metaReconnectNeeded: false,
+        metaHealthStatus: result.status,
+        metaHealthPageId: pageId,
+        metaHealthAdAccountId: adAccountId,
+        lastMetaHealthError: result.reason,
+        metaHealthCooldownUntil: null,
         metaLastHealthCheckAt: now,
       });
       return result;
@@ -458,6 +538,7 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
         await updateUserHealth(user, {
           metaReconnectNeeded: false,
           metaHealthStatus: result.status,
+          ...pairHealthFields,
           lastMetaHealthError: result.reason,
           metaHealthCooldownUntil: new Date(now.getTime() + HEALTH_COOLDOWN_MS),
           metaLastHealthCheckAt: now,
@@ -469,6 +550,8 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
     const update = {
       metaReconnectNeeded: false,
       metaHealthStatus: "healthy",
+      metaHealthPageId: pageId,
+      metaHealthAdAccountId: adAccountId,
       lastMetaHealthError: "",
       metaHealthCooldownUntil: null,
       metaLastHealthCheckAt: now,
@@ -489,6 +572,8 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
       user,
       userEmail: input.userEmail,
       error: err,
+      pageId,
+      adAccountId,
     });
     return {
       ok: false,

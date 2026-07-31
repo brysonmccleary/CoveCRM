@@ -351,6 +351,8 @@ export interface IUser {
   metaLastInsightSyncAt?: Date;
   metaReconnectNeeded?: boolean;
   metaHealthStatus?: string;
+  metaHealthPageId?: string;
+  metaHealthAdAccountId?: string;
   lastMetaHealthError?: string;
   metaHealthCooldownUntil?: Date;
   metaLastHealthCheckAt?: Date;
@@ -740,6 +742,7 @@ const UserSchema = new Schema<IUser>({
       "accountDisabled",
       "missingPaymentMethod",
       "missingPagePermission",
+      "missingPageAdAccountConnection",
       "missingLeadAdsEligibility",
       "missingPage",
       "missingAdAccount",
@@ -751,6 +754,8 @@ const UserSchema = new Schema<IUser>({
     default: "unknown",
   },
   lastMetaHealthError: { type: String, default: "" },
+  metaHealthPageId: { type: String, default: "" },
+  metaHealthAdAccountId: { type: String, default: "" },
   metaHealthCooldownUntil: { type: Date, default: null },
   metaLastHealthCheckAt: { type: Date, default: null },
   metaLastSuccessfulHealthCheckAt: { type: Date, default: null },
