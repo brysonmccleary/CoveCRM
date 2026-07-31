@@ -22,6 +22,13 @@ function safeFilename(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "insurance-page";
 }
 
+const logoLabels: Record<string, string> = {
+  "roof-hand": "Home & Care",
+  "family-home": "Family Home",
+  "legacy-heart": "Legacy Heart",
+  "home-check": "Home Protection",
+};
+
 async function logoPng(styleId: string, paletteId: string) {
   const svg = buildFacebookPageLogoSvg(styleId, paletteId);
   const source = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
@@ -96,7 +103,7 @@ export default function PageProfilePicturePicker({ pageId, pageName, leadType }:
           <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">Page profile picture</p>
           <h2 className="mt-1 text-xl font-bold text-white">Choose a professional insurance logo</h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-300">
-            These are built for {pageName}, match the polished shield style used on Cove insurance Pages, and stay readable in Facebook&apos;s circular crop.
+            These are built for {pageName} as clean, real-world insurance marks—not generic app icons—and stay clear in Facebook&apos;s circular crop.
           </p>
         </div>
         <span className="w-fit rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-[11px] font-semibold text-cyan-100">
@@ -122,7 +129,7 @@ export default function PageProfilePicturePicker({ pageId, pageName, leadType }:
                   : "border-white/10 bg-white/[0.03] hover:border-cyan-300/40 hover:bg-white/[0.06]"
               }`}
             >
-              <span className="mx-auto block w-fit overflow-hidden rounded-full border-2 border-white/10 shadow-xl shadow-black/30">
+              <span className="mx-auto block w-fit overflow-hidden rounded-xl border border-white/10 shadow-xl shadow-black/30">
                 <Image
                   src={facebookPageLogoDataUrl(option.logoStyleId, option.paletteId)}
                   alt={`Profile picture option ${index + 1} for ${pageName}`}
@@ -133,7 +140,7 @@ export default function PageProfilePicturePicker({ pageId, pageName, leadType }:
                 />
               </span>
               <span className={`mt-2 block text-xs font-semibold ${isSelected ? "text-cyan-100" : "text-gray-300"}`}>
-                {isSelected ? "Selected" : `Option ${index + 1}`}
+                {isSelected ? `Selected — ${logoLabels[option.logoStyleId] || "Insurance Mark"}` : logoLabels[option.logoStyleId] || `Option ${index + 1}`}
               </span>
             </button>
           );

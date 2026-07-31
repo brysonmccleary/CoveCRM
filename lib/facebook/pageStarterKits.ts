@@ -137,28 +137,25 @@ const BIO_LIBRARY: Record<FacebookPageMarket, string[]> = {
 };
 
 const LOGO_STYLES: Record<FacebookPageMarket, string[]> = {
-  general_life: ["shield-heart", "family-circle", "umbrella", "compass"],
-  final_expense: ["legacy-tree", "shield-heart", "dove-leaf", "family-circle"],
-  mortgage_protection: ["home-shield", "roof-heart", "home-key", "umbrella"],
-  iul: ["growth-shield", "bridge", "compass", "legacy-tree"],
-  veteran: ["liberty-star", "shield-heart", "torch", "compass"],
-  trucker: ["road-shield", "route-badge", "mountain-road", "shield-heart"],
+  general_life: ["roof-hand", "family-home", "legacy-heart", "home-check"],
+  final_expense: ["legacy-heart", "roof-hand", "home-check", "family-home"],
+  mortgage_protection: ["home-check", "roof-hand", "legacy-heart", "family-home"],
+  iul: ["home-check", "roof-hand", "legacy-heart", "family-home"],
+  veteran: ["roof-hand", "legacy-heart", "family-home", "home-check"],
+  trucker: ["home-check", "roof-hand", "family-home", "legacy-heart"],
 };
 
 const PALETTES = [
   "navy-teal-gold",
-  "midnight-blue-silver",
-  "forest-cream-gold",
-  "charcoal-cobalt-cyan",
-  "burgundy-cream-gold",
-  "deep-teal-navy-white",
-  "slate-blue-copper",
-  "indigo-sky-white",
+  "navy-aqua-gold",
+  "deep-blue-teal-gold",
+  "midnight-teal-gold",
 ] as const;
 
 export const FACEBOOK_PAGE_STARTER_VARIETY =
   Object.values(NAME_LIBRARY).reduce((total, names) => total + names.length, 0) *
-  PALETTES.length;
+  PALETTES.length *
+  4;
 
 export function marketForLeadType(leadType: string): FacebookPageMarket {
   if (leadType === "final_expense") return "final_expense";
