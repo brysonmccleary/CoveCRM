@@ -48,6 +48,7 @@ const PUBLIC_ROUTES = new Set<string>([
   "/legal/terms",
   "/legal/privacy",
   "/legal/acceptance",
+  "/f/[id]",
 ]);
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -126,6 +127,7 @@ function InnerApp({
     () => PUBLIC_ROUTES.has(router.pathname),
     [router.pathname],
   );
+  const isHostedFunnel = router.pathname === "/f/[id]";
   const [leads, setLeads] = useState<any[]>([]);
   const isDialing =
     typeof window !== "undefined" &&
@@ -213,9 +215,11 @@ function InnerApp({
   /** Page shell */
   const pageContent = (
     <>
-      <Head>
-        <title>Cove CRM</title>
-      </Head>
+      {!isHostedFunnel && (
+        <Head>
+          <title>Cove CRM</title>
+        </Head>
+      )}
 
       {/* Auth-only banners */}
       {authed && !isPublic && <CallbackBanner />}

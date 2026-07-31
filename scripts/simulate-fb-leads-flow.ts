@@ -119,6 +119,7 @@ async function main() {
     const FBLeadCampaign = (await import("../models/FBLeadCampaign")).default;
     const FBLeadSubscription = (await import("../models/FBLeadSubscription")).default;
     const FBLeadEntry = (await import("../models/FBLeadEntry")).default;
+    const MetaLeadWebhookEvent = (await import("../models/MetaLeadWebhookEvent")).default;
     const Lead = (await import("../models/Lead")).default;
     const AISettings = (await import("../models/AISettings")).default;
     const AdMetricsDaily = (await import("../models/AdMetricsDaily")).default;
@@ -142,6 +143,7 @@ async function main() {
       FBLeadCampaign.deleteMany({ userEmail }),
       FBLeadSubscription.deleteMany({ userEmail }),
       FBLeadEntry.deleteMany({ userEmail }),
+      MetaLeadWebhookEvent.deleteMany({ leadgenId }),
       Lead.deleteMany({ userEmail }),
       AISettings.deleteMany({ userEmail }),
       AdMetricsDaily.deleteMany({ userEmail }),
@@ -273,6 +275,19 @@ async function main() {
     });
     pass("seed simulated published campaign", String(campaign._id));
 
+    await MetaLeadWebhookEvent.create({
+      leadgenId,
+      pageId,
+      formId: metaFormId,
+      adId: metaAdId,
+      adsetId: metaAdsetId,
+      metaCampaignId,
+      createdTime: Math.floor(Date.now() / 1000),
+      processingStatus: "received",
+      attemptCount: 0,
+    });
+    pass("seed pending Meta webhook event", leadgenId);
+
     await processMetaLead(
       leadgenId,
       pageId,
@@ -355,6 +370,7 @@ async function main() {
         const FBLeadCampaign = (await import("../models/FBLeadCampaign")).default;
         const FBLeadSubscription = (await import("../models/FBLeadSubscription")).default;
         const FBLeadEntry = (await import("../models/FBLeadEntry")).default;
+        const MetaLeadWebhookEvent = (await import("../models/MetaLeadWebhookEvent")).default;
         const Lead = (await import("../models/Lead")).default;
         const AISettings = (await import("../models/AISettings")).default;
         const AdMetricsDaily = (await import("../models/AdMetricsDaily")).default;
@@ -369,6 +385,7 @@ async function main() {
           FBLeadCampaign.deleteMany({ userEmail }),
           FBLeadSubscription.deleteMany({ userEmail }),
           FBLeadEntry.deleteMany({ userEmail }),
+          MetaLeadWebhookEvent.deleteMany({ leadgenId }),
           Lead.deleteMany({ userEmail }),
           AISettings.deleteMany({ userEmail }),
           AdMetricsDaily.deleteMany({ userEmail }),
