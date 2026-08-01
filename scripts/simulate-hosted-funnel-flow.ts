@@ -85,6 +85,9 @@ async function main() {
       ["iul", "veteran"],
       ["mortgage_protection", "trucker"],
       ["iul", "trucker"],
+      ["final_expense", "spanish"],
+      ["mortgage_protection", "spanish"],
+      ["iul", "spanish"],
     ] as const;
     check("all hosted funnel templates registered", Object.keys(FUNNEL_TEMPLATES).length >= expectedTemplates.length);
     for (const [leadType, audience] of expectedTemplates) {

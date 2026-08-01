@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type WinnerLeadType = "final_expense" | "mortgage_protection" | "veteran" | "trucker" | "iul";
-export type AudienceSegment = "standard" | "veteran" | "trucker";
+export type AudienceSegment = "standard" | "veteran" | "trucker" | "spanish";
 export type VariantType = "emotional" | "logical" | "curiosity";
 export type AdFormat = "long_copy" | "card" | "video_copy" | "benefit_stack" | "family_emotional";
 
@@ -1688,7 +1688,77 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   },
 
   ...buildAdditionalWinningAdFamilies(),
+  ...buildSpanishWinningAdFamilies(),
 ];
+
+// Spanish campaigns are intentionally their own families instead of translated
+// English ads. The copy, CTA and funnel language stay native end-to-end.
+function buildSpanishWinningAdFamilies(): WinningAdFamily[] {
+  const family = (
+    id: string,
+    leadType: WinnerLeadType,
+    archetype: string,
+    familyName: string,
+    visualDirection: string,
+    headlines: string[],
+    hooks: string[],
+    bullets: string[],
+    buttons: string[][],
+    theme: { background: string; accent: string; styleTag: string },
+    format: AdFormat = "card",
+  ): WinningAdFamily => ({
+    id,
+    leadType,
+    audienceSegment: "spanish",
+    archetype,
+    familyName,
+    vendorStyleTag: "spanish_market_research",
+    priority: 1,
+    format,
+    visualDirection,
+    copyBlueprint: {
+      headlinePool: headlines,
+      hookPool: hooks,
+      bulletPool: bullets,
+      ctaPool: ["Ver opciones →", "Obtener cotización →", "Revisar mi cobertura →"],
+      ...(leadType === "final_expense" ? { ageButtonPools: buttons } : { amountButtonPools: buttons }),
+      ...(leadType === "iul" ? { disclaimerPool: ["IUL es seguro de vida, no una inversión. Costos, límites, préstamos, retiros y resultados dependen del contrato."] } : {}),
+    },
+    imagePromptPool: [
+      `${visualDirection}. Spanish-language insurance direct-response creative with native Spanish overlay copy rendered by the app, blank image areas for headline and CTA, no readable image text, no logos, no government marks.`,
+    ],
+    landingPageConfig: {
+      pageType: archetype,
+      headlinePool: headlines,
+      subheadlinePool: hooks,
+      buttonLabelsPool: buttons,
+      benefitBulletsPool: [bullets.slice(0, 3)],
+      ctaStripPool: ["Ver mis opciones →", "Comenzar revisión →", "Solicitar cotización →"],
+      theme,
+    },
+    compliance: {
+      avoidGuaranteedClaims: true,
+      avoidUnsupportedMedicalClaims: true,
+      notes: ["Use Spanish reviewed by a native speaker.", "Use 'puede' and 'según elegibilidad' for coverage and approval claims.", "Do not imply a government program or guaranteed approval."],
+    },
+  });
+
+  const seniorAges = [["50–59", "60–69", "70–79", "80+"], ["45–54", "55–64", "65–74", "75–85"]];
+  const mortgageAmounts = [["Menos de $150k", "$150k–$300k", "$300k–$500k", "$500k+"], ["$100k", "$250k", "$500k", "$750k+"]];
+  const iulChoices = [["Protección", "Valor en efectivo", "Jubilación", "Legado"], ["Aprender IUL", "Protección", "Planificación", "Revisión"]];
+
+  return [
+    family("es_fex_cremation_guide", "final_expense", "spanish_fex_cremation_guide", "Spanish FEX Cremation Guide", "Warm cream and navy direct-response card, respectful older Hispanic couple or family, tidy gold offer panel", ["Cobertura para Gastos Finales", "Planifique hoy. Proteja a su familia."], ["Los costos de cremación y funerales pueden aumentar con el tiempo. Revise opciones de cobertura para gastos finales en español."], ["Opciones sin examen pueden estar disponibles", "Revisión sencilla con un agente autorizado", "Protección pensada para gastos finales"], seniorAges, { background: "#f7f2e8", accent: "#9a3412", styleTag: "es_fex_warm_cream" }),
+    family("es_fex_community_50k", "final_expense", "spanish_fex_community_50k", "Spanish FEX Community Notice", "Clean navy, cream and muted red community notice card with prominent but credible coverage amount and age buttons", ["Comunidad Hispana: Revise sus opciones", "Hasta $50,000 en cobertura de gastos finales"], ["Si tiene más de 50 años, una revisión de gastos finales puede ayudarle a conocer opciones disponibles para su familia."], ["Hasta $50,000 según elegibilidad", "Opciones sin examen médico", "Atención en español"], seniorAges, { background: "#0f2747", accent: "#d4a017", styleTag: "es_fex_navy_gold" }),
+    family("es_fex_family_plan", "final_expense", "spanish_fex_family_plan", "Spanish FEX Family Plan", "Soft white and terracotta family protection card with clean benefit boxes, not an AI poster", ["Evite dejar gastos inesperados a su familia", "Un plan sencillo para gastos finales"], ["Un plan de gastos finales puede ayudar a su familia a prepararse para costos funerarios y otras necesidades."], ["Sin obligación", "Opciones por edad", "Hable con un agente en español"], seniorAges, { background: "#fffaf4", accent: "#c2410c", styleTag: "es_fex_family" }),
+    family("es_mtg_homeowner", "mortgage_protection", "spanish_mtg_homeowner", "Spanish Mortgage Homeowner", "Modern navy and sky-blue homeowner card with real home/family visual and simple mortgage amount choices", ["Protección Hipotecaria para su Familia", "Su hipoteca no desaparece si algo cambia"], ["Los propietarios pueden revisar opciones de protección hipotecaria para ayudar a cuidar el hogar y a quienes aman."], ["Revisión por saldo hipotecario", "Opciones con beneficios en vida pueden estar disponibles", "Atención en español"], mortgageAmounts, { background: "#edf6ff", accent: "#075985", styleTag: "es_mtg_home" }),
+    family("es_mtg_story", "mortgage_protection", "spanish_mtg_family_story", "Spanish Mortgage Family Story", "Warm home-photo inspired layout, minimal copy blocks, terracotta CTA, trustworthy not alarmist", ["Proteja el hogar que tanto le costó construir", "Una revisión para propietarios de vivienda"], ["Conozca cómo la protección hipotecaria puede ayudar a su familia a mantener sus planes en camino si ocurre algo inesperado."], ["Para propietarios", "Revisión sencilla", "Opciones según estado y elegibilidad"], mortgageAmounts, { background: "#fff7ed", accent: "#c2410c", styleTag: "es_mtg_warm" }),
+    family("es_mtg_living_benefits", "mortgage_protection", "spanish_mtg_living_benefits", "Spanish Mortgage Living Benefits", "Clean white/red informational card with three small benefit icons and clear qualifications", ["Protección Hipotecaria con Beneficios en Vida", "Revise opciones para su hogar"], ["Algunas pólizas pueden incluir beneficios en vida según los términos del contrato. Conozca sus opciones con un agente autorizado."], ["Fallecimiento", "Enfermedad grave o discapacidad según póliza", "Revisión de cobertura"], mortgageAmounts, { background: "#fff7f7", accent: "#be123c", styleTag: "es_mtg_benefits" }),
+    family("es_iul_education", "iul", "spanish_iul_education", "Spanish IUL Education", "Clean white and navy financial education card with simple protection, value, legacy diagram", ["Vida Universal Indexada: Aprenda cómo funciona", "Protección y valor en efectivo potencial"], ["IUL combina seguro de vida con valor en efectivo potencial. Conozca costos, límites y cómo puede funcionar antes de decidir."], ["Protección para la familia", "Valor en efectivo potencial", "Revisión educativa en español"], iulChoices, { background: "#f8fbff", accent: "#1d4ed8", styleTag: "es_iul_education" }, "benefit_stack"),
+    family("es_iul_market_terms", "iul", "spanish_iul_market_terms", "Spanish IUL Terms", "Teal and navy educational chart card, no wealth promises or stock-market hype", ["¿Busca protección y planificación a largo plazo?", "Conozca las bases de IUL"], ["Antes de elegir IUL, vale la pena entender la protección, el valor en efectivo potencial y los términos de la póliza."], ["No es una inversión directa", "Límites y cargos aplican", "Explicación clara en español"], iulChoices, { background: "#effcfb", accent: "#0f766e", styleTag: "es_iul_teal" }, "benefit_stack"),
+    family("es_iul_family_legacy", "iul", "spanish_iul_family_legacy", "Spanish IUL Family Legacy", "Warm modern family legacy card with professional serif headline and unobtrusive disclosures", ["Planificación para su Familia y su Legado", "Educación sobre IUL en español"], ["Un agente autorizado puede explicarle si una póliza IUL encaja con sus metas de protección y planificación a largo plazo."], ["Protección", "Planificación de legado", "Revisión sin obligación"], iulChoices, { background: "#fffaf5", accent: "#9a3412", styleTag: "es_iul_legacy" }, "benefit_stack"),
+  ];
+}
 
 function buildAdditionalWinningAdFamilies(): WinningAdFamily[] {
   const subheadsFrom = (hooks: string[], fallback: string) => hooks.length ? hooks.slice(0, 3) : [fallback];
@@ -1975,7 +2045,7 @@ function buildAdditionalWinningAdFamilies(): WinningAdFamily[] {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function normalizeAudienceSegment(segment?: string): AudienceSegment {
-  return segment === "veteran" || segment === "trucker" ? segment : "standard";
+  return segment === "veteran" || segment === "trucker" || segment === "spanish" ? segment : "standard";
 }
 
 export function getWinningFamiliesByLeadType(

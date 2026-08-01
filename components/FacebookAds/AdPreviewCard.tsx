@@ -365,6 +365,7 @@ type CreativeState = {
   pad: number;
   radius: number;
   lineHeight: number;
+  spanish: boolean;
 };
 
 const LAYOUTS_BY_LEAD_TYPE: Record<string, LayoutFamily[]> = {
@@ -406,7 +407,12 @@ function clampCopy(value: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength - 3).trim()}...` : text;
 }
 
-function getLeadFallbackHeadline(leadType: string): string {
+function getLeadFallbackHeadline(leadType: string, spanish = false): string {
+  if (spanish) {
+    if (leadType === "mortgage_protection") return "Proteja el hogar de su familia";
+    if (leadType === "iul") return "Opciones de IUL para su futuro";
+    return "Opciones para gastos finales";
+  }
   if (leadType === "veteran") return "Veterans Life Insurance";
   if (leadType === "trucker") return "Truck Driver Coverage";
   if (leadType === "mortgage_protection") return "Protect Your Family's Home";
@@ -414,7 +420,12 @@ function getLeadFallbackHeadline(leadType: string): string {
   return "Final Expense Coverage";
 }
 
-function getLeadEyebrow(leadType: string, iaFamily: IaFamily): string {
+function getLeadEyebrow(leadType: string, iaFamily: IaFamily, spanish = false): string {
+  if (spanish) {
+    if (leadType === "mortgage_protection") return "PROTECCIÓN HIPOTECARIA";
+    if (leadType === "iul") return "VIDA UNIVERSAL INDEXADA";
+    return "GASTOS FINALES";
+  }
   if (leadType === "veteran") return iaFamily === "branch_selector" ? "COVERAGE FOR THOSE WHO SERVED" : "PRIVATE COVERAGE FOR VETERANS";
   if (leadType === "trucker") return iaFamily === "cdl_qualification" ? "CDL DRIVER CHECK" : "TRUCK DRIVER COVERAGE";
   if (leadType === "mortgage_protection") return iaFamily === "calculator_flow" ? "MORTGAGE PROTECTION CHECK" : "HOME PROTECTION OPTIONS";
@@ -523,6 +534,7 @@ function getPalettes(leadType: string): Palette[] {
 }
 
 function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<typeof getOverlay>): CreativeState {
+  const spanish = draft?.audienceSegment === "spanish";
   const seed = hashString(getVariationSeed(draft, leadType));
   const variantIndex = pickVisualVariant(draft, leadType, VISUAL_VARIANT_COUNT);
   const palette = getPalettes(leadType)[variantIndex % getPalettes(leadType).length];
@@ -546,7 +558,7 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     roomy: { pad: padOptions[hash2 % 4], gap: gapOptions[hash3 % 4], lineHeight: 1.12 },
   }[densityStyle];
   void seededCtaFlow;
-  const headlineRaw = overlay.headline || cleanText(draft?.headline) || getLeadFallbackHeadline(leadType);
+  const headlineRaw = overlay.headline || cleanText(draft?.headline) || getLeadFallbackHeadline(leadType, spanish);
   const headline = clampCopy(headlineRaw, headlineRaw.length > 46 ? 50 : 58);
   const headlineBase = typographyStyle === "aggressive_response" ? 30 : typographyStyle === "utility_ui" ? 24 : typographyStyle === "modern_minimal" ? 25 : 27;
   const headlineSize = Math.max(20, headlineBase - (headline.length > 42 ? 3 : 0) - (densityStyle === "compact" ? 1 : 0));
@@ -555,16 +567,21 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     : leadType === "trucker"
     ? ["35-44", "45-54", "55-64", "65+"]
     : ["Under 50", "50-60", "61-70", "71+"];
+  const localizedFallbackButtons = spanish
+    ? (leadType === "mortgage_protection"
+      ? ["Menos de $150k", "$150k-$300k", "$300k-$500k", "$500k+"]
+      : ["Menos de 50", "50-60", "61-70", "71+"])
+    : fallbackButtons;
 
   return {
     draft,
     leadType,
     headline,
     subheadline: clampCopy(overlay.subheadline, 82),
-    buttons: (overlay.buttonLabels.length ? overlay.buttonLabels : fallbackButtons).slice(0, 4),
+    buttons: (overlay.buttonLabels.length ? overlay.buttonLabels : localizedFallbackButtons).slice(0, 4),
     bullets: overlay.benefitBullets.slice(0, 3),
-    cta: clampCopy(overlay.ctaStrip || "Learn more ->", 42),
-    eyebrow: getLeadEyebrow(leadType, iaFamily),
+    cta: clampCopy(overlay.ctaStrip || (spanish ? "Conozca sus opciones →" : "Learn more ->"), 42),
+    eyebrow: getLeadEyebrow(leadType, iaFamily, spanish),
     amount: cleanText(draft?.displayAmount) || overlay.buttonLabels.find((label) => label.includes("$")) || (leadType === "veteran" ? "$50,000" : ""),
     backgroundUrl: getCreativeBackground(draft, leadType),
     layoutFamily,
@@ -583,6 +600,7 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     pad: density.pad,
     radius: frameStyle === "corner_badge" ? 3 : frameStyle === "soft_glass" ? 14 : 8,
     lineHeight: density.lineHeight,
+    spanish,
   };
 }
 
@@ -760,8 +778,8 @@ function renderChecklistFirst(state: CreativeState) {
 
 function renderAmountHero(state: CreativeState) {
   const selectionLabel = state.leadType === "mortgage_protection"
-    ? "CHOOSE YOUR MORTGAGE RANGE"
-    : "TAP YOUR AGE TO EXPLORE OPTIONS";
+    ? (state.spanish ? "ELIJA EL RANGO DE SU HIPOTECA" : "CHOOSE YOUR MORTGAGE RANGE")
+    : (state.spanish ? "ELIJA SU EDAD PARA VER OPCIONES" : "TAP YOUR AGE TO EXPLORE OPTIONS");
 
   return (
     <CreativeShell state={state}>
@@ -792,7 +810,7 @@ function renderComparisonTable(state: CreativeState) {
           {rows.slice(0, 4).map((row, index) => (
             <div key={row} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 6px", borderBottom: index === rows.length - 1 ? "none" : `1px solid ${state.palette.panelBorder}`, color: state.palette.subheadline, fontSize: 12, fontWeight: 900 }}>
               <span>{row}</span>
-              <span style={{ color: state.palette.accent }}>{index === 0 ? "Best" : "View"}</span>
+              <span style={{ color: state.palette.accent }}>{index === 0 ? (state.spanish ? "Mejor" : "Best") : (state.spanish ? "Ver" : "View")}</span>
             </div>
           ))}
         </Panel>
@@ -819,16 +837,16 @@ function renderDirectResponseOffer(state: CreativeState) {
     iul: "INDEXED UNIVERSAL LIFE",
   };
   const selectorLabel = state.leadType === "mortgage_protection"
-    ? "CHOOSE YOUR MORTGAGE RANGE"
+    ? (state.spanish ? "ELIJA EL RANGO DE SU HIPOTECA" : "CHOOSE YOUR MORTGAGE RANGE")
     : state.leadType === "iul"
-    ? "EXPLORE YOUR OPTIONS"
-    : "TAP YOUR AGE TO EXPLORE OPTIONS";
+    ? (state.spanish ? "CONOZCA SUS OPCIONES" : "EXPLORE YOUR OPTIONS")
+    : (state.spanish ? "ELIJA SU EDAD PARA VER OPCIONES" : "TAP YOUR AGE TO EXPLORE OPTIONS");
 
   return (
     <CreativeShell state={state}>
       <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap, textAlign: "center" }}>
         <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.7, textTransform: "uppercase" }}>
-          {offerLabel[state.leadType] || state.eyebrow}
+          {state.spanish ? state.eyebrow : (offerLabel[state.leadType] || state.eyebrow)}
         </div>
         <Panel state={state} style={{ padding: "12px 12px 11px" }}>
           {state.amount && <div style={{ color: state.palette.accent, fontSize: 39, fontWeight: 950, lineHeight: 0.98, letterSpacing: -1, textShadow: "0 3px 14px rgba(0,0,0,0.28)" }}>{state.amount}</div>}

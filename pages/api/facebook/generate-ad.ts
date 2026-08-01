@@ -71,8 +71,22 @@ const THANK_YOU_TEXT = {
     "Thank you! A licensed professional will reach out soon to review IUL education and options. This is a no-obligation educational review.",
 } as const;
 
+function spanishLeadFormQuestions(leadType: keyof typeof LEAD_FORM_QUESTIONS): readonly string[] {
+  const shared = ["Nombre completo", "Número de teléfono", "Correo electrónico", "Estado"];
+  if (leadType === "final_expense") {
+    return [...shared, "Rango de edad (45-54 / 55-64 / 65-74 / 75-85)", "Cobertura deseada ($5,000-$25,000 / $25,000+)"];
+  }
+  if (leadType === "mortgage_protection") {
+    return [...shared, "Saldo hipotecario aproximado", "Año de nacimiento", "¿Fuma? (Sí / No)"];
+  }
+  if (leadType === "iul") {
+    return [...shared, "Edad", "Interés principal (Protección / Valor en efectivo / Jubilación / Legado)", "Cobertura actual"];
+  }
+  return LEAD_FORM_QUESTIONS[leadType];
+}
+
 function normalizeAudienceSegment(segment?: string): AudienceSegment {
-  return segment === "veteran" || segment === "trucker" ? segment : "standard";
+  return segment === "veteran" || segment === "trucker" || segment === "spanish" ? segment : "standard";
 }
 
 function campaignLabel(leadType: string) {
@@ -290,8 +304,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         benefitBullets: sanitizeCreativeList(landingPageConfig.benefitBullets, leadType),
         ctaStrip: sanitizeCreativeText(landingPageConfig.ctaStrip, leadType),
       },
-      leadFormQuestions: LEAD_FORM_QUESTIONS[leadType],
-      thankYouPageText: THANK_YOU_TEXT[leadType],
+      leadFormQuestions: audienceSegment === "spanish" ? spanishLeadFormQuestions(leadType) : LEAD_FORM_QUESTIONS[leadType],
+      thankYouPageText: audienceSegment === "spanish" ? "¡Gracias! Un agente autorizado se comunicará pronto para revisar sus opciones en español." : THANK_YOU_TEXT[leadType],
       winningFamilyId: variant.familyId,
       variationType: variant.variantType,
       uniquenessFingerprint: variant.uniquenessFingerprint,

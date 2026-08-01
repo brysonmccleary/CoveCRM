@@ -10,6 +10,7 @@ const LEAD_TYPE_LABELS: Record<string, string> = {
   iul: "IUL",
   veteran: "Veteran",
   trucker: "Trucker",
+  spanish: "Spanish-Language Campaigns",
 };
 
 const MAIN_CATEGORY_OPTIONS = [
@@ -18,6 +19,7 @@ const MAIN_CATEGORY_OPTIONS = [
   { id: "iul", label: "IUL", leadType: "iul", audienceSegment: "standard", needsSubType: false },
   { id: "veteran", label: "Veteran Leads", leadType: "veteran", audienceSegment: "standard", needsSubType: true },
   { id: "trucker", label: "Trucker Leads", leadType: "trucker", audienceSegment: "standard", needsSubType: true },
+  { id: "spanish", label: "Spanish-Language Leads", leadType: "final_expense", audienceSegment: "spanish", needsSubType: true },
 ] as const;
 
 const SUBTYPE_OPTIONS: Record<string, { label: string; leadType: string; audienceSegment: string }[]> = {
@@ -30,6 +32,11 @@ const SUBTYPE_OPTIONS: Record<string, { label: string; leadType: string; audienc
     { label: "General Trucker Leads", leadType: "trucker", audienceSegment: "standard" },
     { label: "Trucker Mortgage Leads", leadType: "mortgage_protection", audienceSegment: "trucker" },
     { label: "Trucker IUL Leads", leadType: "iul", audienceSegment: "trucker" },
+  ],
+  spanish: [
+    { label: "Spanish Final Expense", leadType: "final_expense", audienceSegment: "spanish" },
+    { label: "Spanish Mortgage Protection", leadType: "mortgage_protection", audienceSegment: "spanish" },
+    { label: "Spanish IUL Education", leadType: "iul", audienceSegment: "spanish" },
   ],
 };
 
@@ -589,7 +596,11 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           {needsSubType && (
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <p className="text-sm font-semibold text-white mb-3">
-                {mainCategory === "veteran" ? "Choose Veteran Campaign Type" : "Choose Trucker Campaign Type"}
+                {mainCategory === "veteran"
+                  ? "Choose Veteran Campaign Type"
+                  : mainCategory === "trucker"
+                    ? "Choose Trucker Campaign Type"
+                    : "Choose Spanish Campaign Type"}
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {(SUBTYPE_OPTIONS[mainCategory] || []).map((option) => {

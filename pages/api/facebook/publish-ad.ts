@@ -67,6 +67,14 @@ function getBase64FromDataImageUrl(imageAsset: string) {
 }
 
 function getLeadSpecificQuestion(leadType: string, audienceSegment: string): { label: string; key: string } {
+  if (audienceSegment === "spanish") {
+    const spanishMap: Record<string, { label: string; key: string }> = {
+      mortgage_protection: { label: "¿Cuál es el saldo aproximado de su hipoteca?", key: "mortgage_balance" },
+      final_expense: { label: "¿Qué cantidad de cobertura le interesa?", key: "coverage_amount" },
+      iul: { label: "¿Busca protección, potencial de valor en efectivo o ambos?", key: "iul_goal" },
+    };
+    return spanishMap[leadType] || { label: "¿Qué le interesa más?", key: "lead_question" };
+  }
   if (audienceSegment === "veteran") {
     return { label: "What military branch did you serve in?", key: "military_branch" };
   }
@@ -782,20 +790,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           { type: "CUSTOM", label: leadSpecificQ.label, key: leadSpecificQ.key },
           { type: "PHONE" },
           { type: "EMAIL" },
-          { type: "CUSTOM", label: "Age", key: "age" },
-          { type: "CUSTOM", label: "State", key: "state" },
+          { type: "CUSTOM", label: audienceSegment === "spanish" ? "Edad" : "Age", key: "age" },
+          { type: "CUSTOM", label: audienceSegment === "spanish" ? "Estado" : "State", key: "state" },
         ];
 
         const storedComplianceProfile = (campaign as any).complianceProfile || {};
         const storedDisclaimerText = String(
           storedComplianceProfile.disclaimerText ||
           complianceProfile?.disclaimerText ||
-          "Availability varies by state and carrier. This is a no-obligation review with a licensed agent."
+          (audienceSegment === "spanish"
+            ? "La disponibilidad varía según el estado y la compañía. Esta es una revisión sin obligación con un agente autorizado."
+            : "Availability varies by state and carrier. This is a no-obligation review with a licensed agent.")
         ).trim() + (funnelData.qualifierTexts.length ? `\n${funnelData.qualifierTexts.join("\n")}` : "");
         const storedConsentText = String(
           storedComplianceProfile.consentText ||
           complianceProfile?.consentText ||
-          "By submitting, you agree to be contacted by phone, text/SMS, or email by a licensed insurance agent, including through automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase."
+          (audienceSegment === "spanish"
+            ? "Al enviar este formulario, acepta que un agente autorizado se comunique con usted por teléfono, SMS o correo electrónico, incluso mediante sistemas automatizados, voz artificial o pregrabada y llamadas asistidas por IA o asistentes virtuales. Responda STOP para dejar de recibir mensajes. El consentimiento no es una condición de compra."
+            : "By submitting, you agree to be contacted by phone, text/SMS, or email by a licensed insurance agent, including through automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase.")
         ).trim();
         const privacyUrl = String(
           storedComplianceProfile.privacyUrl ||

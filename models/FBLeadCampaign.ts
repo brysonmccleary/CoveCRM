@@ -13,7 +13,7 @@ const FBLeadCampaignSchema = new Schema(
     },
     audienceSegment: {
       type: String,
-      enum: ["standard", "veteran", "trucker"],
+      enum: ["standard", "veteran", "trucker", "spanish"],
       default: "standard",
     },
     campaignType: {

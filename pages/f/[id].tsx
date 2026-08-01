@@ -76,6 +76,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
     () => getFunnelTemplate(funnelData?.leadType || "mortgage_protection", funnelData?.audienceSegment),
     [funnelData?.leadType, funnelData?.audienceSegment]
   );
+  const isSpanish = template.locale === "es";
   const [stepIndex, setStepIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [contact, setContact] = useState(contactDefaults);
@@ -150,8 +151,8 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
         <div style={{ maxWidth: 420, width: "100%", background: otpTheme.panel, border: "1px solid rgba(15,23,42,0.1)", borderRadius: 12, padding: "32px 28px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.06), 0 20px 50px -8px rgba(15,23,42,0.12)" }}>
           {otpPhase === "phone" ? (
             <>
-              <h1 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 8px", color: otpTheme.text }}>Verify your phone number</h1>
-              <p style={{ fontSize: 14, color: otpTheme.muted, margin: "0 0 20px" }}>We'll send a 6-digit code to confirm your number before submitting.</p>
+              <h1 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 8px", color: otpTheme.text }}>{isSpanish ? "Verifique su número de teléfono" : "Verify your phone number"}</h1>
+              <p style={{ fontSize: 14, color: otpTheme.muted, margin: "0 0 20px" }}>{isSpanish ? "Le enviaremos un código de 6 dígitos para confirmar su número antes de enviar la solicitud." : "We'll send a 6-digit code to confirm your number before submitting."}</p>
               <input
                 type="tel"
                 placeholder="(555) 000-0000"
@@ -165,14 +166,14 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
                 disabled={otpLoading || otpPhone.replace(/\D/g, "").length < 10}
                 style={{ width: "100%", marginTop: 16, padding: "15px 16px", borderRadius: 8, border: "none", background: otpTheme.button, color: otpTheme.buttonText, fontSize: 16, fontWeight: 800, cursor: "pointer", opacity: otpLoading ? 0.7 : 1 }}
               >
-                {otpLoading ? "Sending…" : "Send Code"}
+                {otpLoading ? (isSpanish ? "Enviando…" : "Sending…") : (isSpanish ? "Enviar código" : "Send Code")}
               </button>
             </>
           ) : (
             <>
-              <h1 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 8px", color: otpTheme.text }}>Enter your code</h1>
+              <h1 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 8px", color: otpTheme.text }}>{isSpanish ? "Ingrese su código" : "Enter your code"}</h1>
               <p style={{ fontSize: 14, color: otpTheme.muted, margin: "0 0 20px" }}>
-                We sent a 6-digit code to {otpPhone}.{otpExpiry ? ` Expires at ${otpExpiry.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : ""}
+                {isSpanish ? "Enviamos un código de 6 dígitos a " : "We sent a 6-digit code to "}{otpPhone}.{otpExpiry ? (isSpanish ? ` Expira a las ${otpExpiry.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : ` Expires at ${otpExpiry.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`) : ""}
               </p>
               <input
                 type="text"
@@ -189,13 +190,13 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
                 disabled={otpLoading || otpCode.length < 6}
                 style={{ width: "100%", marginTop: 16, padding: "15px 16px", borderRadius: 8, border: "none", background: otpTheme.button, color: otpTheme.buttonText, fontSize: 16, fontWeight: 800, cursor: "pointer", opacity: otpLoading ? 0.7 : 1 }}
               >
-                {otpLoading ? "Verifying…" : "Verify Code"}
+                {otpLoading ? (isSpanish ? "Verificando…" : "Verifying…") : (isSpanish ? "Verificar código" : "Verify Code")}
               </button>
               <button
                 onClick={() => { setOtpPhase("phone"); setOtpCode(""); setOtpError(""); }}
                 style={{ width: "100%", marginTop: 10, padding: "10px 16px", borderRadius: 8, border: "none", background: "transparent", color: otpTheme.muted, fontSize: 14, cursor: "pointer" }}
               >
-                Use a different number
+                {isSpanish ? "Usar otro número" : "Use a different number"}
               </button>
             </>
           )}
@@ -218,7 +219,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
     template.governmentDisclaimer && !step1BaseBullets.includes(template.governmentDisclaimer)
       ? [...step1BaseBullets, template.governmentDisclaimer]
       : step1BaseBullets;
-  const submitButtonLabel = funnelData.ctaStrip || "Submit Request";
+  const submitButtonLabel = funnelData.ctaStrip || (isSpanish ? "Enviar solicitud" : "Submit Request");
   const selectedState = normalizeStateCode(answers.state);
   const blockedState =
     !!selectedState &&
@@ -274,7 +275,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
       return;
     }
     if (currentStep?.id === "state" && blockedState) {
-      setSubmitError("We currently do not service your state for this campaign.");
+      setSubmitError(isSpanish ? "Actualmente no atendemos su estado para esta campaña." : "We currently do not service your state for this campaign.");
       return;
     }
     if (stepIndex < steps.length - 1) {
@@ -286,7 +287,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
 
   const submit = async () => {
     if (blockedState) {
-      setSubmitError("We currently do not service your state for this campaign.");
+      setSubmitError(isSpanish ? "Actualmente no atendemos su estado para esta campaña." : "We currently do not service your state for this campaign.");
       return;
     }
     const finalAnswers = {
@@ -341,12 +342,12 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
       });
       const data = await r.json();
       if (!r.ok) {
-        setSubmitError(data.error || "Submission failed. Please try again.");
+        setSubmitError(data.error || (isSpanish ? "No se pudo enviar la solicitud. Inténtelo de nuevo." : "Submission failed. Please try again."));
         return;
       }
       setDone(true);
     } catch {
-      setSubmitError("Network error. Please try again.");
+      setSubmitError(isSpanish ? "Error de conexión. Inténtelo de nuevo." : "Network error. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -431,7 +432,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               cursor: submitting ? "wait" : !isA2PComplianceStub && !smsConsentGiven ? "not-allowed" : "pointer",
             }}
           >
-            {submitting ? "Submitting…" : submitButtonLabel}
+            {submitting ? (isSpanish ? "Enviando…" : "Submitting…") : submitButtonLabel}
           </button>
         </div>
       );
@@ -710,7 +711,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
                     letterSpacing: "0.01em",
                   }}
                 >
-                  {submitting ? "Submitting…" : stepIndex === steps.length - 1 ? submitButtonLabel : "Continue →"}
+                  {submitting ? (isSpanish ? "Enviando…" : "Submitting…") : stepIndex === steps.length - 1 ? submitButtonLabel : (isSpanish ? "Continuar →" : "Continue →")}
                 </button>
               )}
 
@@ -720,7 +721,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
                   onClick={() => { setStepIndex(stepIndex - 1); setSubmitError(""); }}
                   style={{ marginTop: 12, background: "transparent", border: "none", color: theme.muted, cursor: "pointer", fontSize: 13, padding: "4px 0" }}
                 >
-                  ← Back
+                  {isSpanish ? "← Regresar" : "← Back"}
                 </button>
               )}
 
@@ -775,9 +776,9 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
           ))}
           {(compliance.privacyUrl || compliance.termsUrl) && (
             <p style={{ textAlign: "center", fontSize: 11, marginTop: 4 }}>
-              {compliance.privacyUrl && <a href={compliance.privacyUrl} style={{ color: theme.accent }}>Privacy Policy</a>}
+              {compliance.privacyUrl && <a href={compliance.privacyUrl} style={{ color: theme.accent }}>{isSpanish ? "Política de privacidad" : "Privacy Policy"}</a>}
               {compliance.privacyUrl && compliance.termsUrl ? " · " : ""}
-              {compliance.termsUrl && <a href={compliance.termsUrl} style={{ color: theme.accent }}>Terms</a>}
+              {compliance.termsUrl && <a href={compliance.termsUrl} style={{ color: theme.accent }}>{isSpanish ? "Términos" : "Terms"}</a>}
             </p>
           )}
         </section>
