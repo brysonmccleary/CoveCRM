@@ -5,6 +5,41 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
+import { isPhoneNumberSubscription } from "@/lib/billing/stripePlanClassification";
+
+/**
+ * Phone numbers are billed as their own Stripe subscriptions.  End each one
+ * no later than its already-paid period when the CRM plan is cancelled, so an
+ * add-on with a different renewal date can never bill again after cancellation.
+ */
+async function schedulePhoneSubscriptionsToEnd(customerId: string) {
+  const subscriptions = await stripe.subscriptions.list({
+    customer: customerId,
+    status: "all",
+    limit: 100,
+    expand: ["data.items.data.price"],
+  });
+
+  const phoneSubscriptions = subscriptions.data.filter(
+    (subscription) =>
+      isPhoneNumberSubscription(subscription) &&
+      ["active", "trialing", "past_due", "incomplete"].includes(subscription.status) &&
+      !subscription.cancel_at_period_end,
+  );
+
+  await Promise.all(
+    phoneSubscriptions.map((subscription) =>
+      stripe.subscriptions.update(subscription.id, {
+        // This is intentionally the phone subscription's own period end rather
+        // than the CRM plan's. It prevents another phone renewal even when the
+        // two subscriptions have different billing anchors.
+        cancel_at_period_end: true,
+      }),
+    ),
+  );
+
+  return phoneSubscriptions.map((subscription) => subscription.id);
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -32,6 +67,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       cancel_at_period_end: true,
     });
 
+    // Phone-number billing is separate from the CRM subscription. Leaving it
+    // active here was the reason cancelled customers continued to be charged.
+    const phoneSubscriptionIds = await schedulePhoneSubscriptionsToEnd(
+      String((user as any).stripeCustomerId),
+    );
+
     await User.updateOne(
       { _id: user._id },
       { $set: { subscriptionStatus: "canceled" } },
@@ -40,6 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       success: true,
       cancelAt: (subscription as any).cancel_at || null,
+      phoneSubscriptionsScheduledToCancel: phoneSubscriptionIds.length,
     });
   } catch (err: any) {
     console.error("cancel-subscription error:", err?.message || err);

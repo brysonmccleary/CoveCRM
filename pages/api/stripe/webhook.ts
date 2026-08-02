@@ -39,6 +39,7 @@ import { Resend } from "resend";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import { computeHasAIForCustomer } from "@/lib/billing/computeHasAIForCustomer";
 import { computeAIEntitlement } from "@/lib/billing/computeAIEntitlement";
+import { isPhoneNumberSubscription as isPhoneNumberSubscriptionRecord } from "@/lib/billing/stripePlanClassification";
 import {
   AFFILIATE_MONTHLY_CREDIT_CENTS,
   AFFILIATE_MONTHLY_CREDIT_USD,
@@ -136,6 +137,36 @@ async function isPhoneNumberSubscription(subscriptionId?: string | null) {
       sub: null as Stripe.Subscription | null,
     };
   }
+}
+
+/**
+ * A phone number has an independent subscription. When the CRM plan enters
+ * cancellation, end every phone add-on at its own current period end so none
+ * can renew after the customer cancelled their account.
+ */
+async function schedulePhoneSubscriptionsToCancel(customerId?: string | null) {
+  if (!customerId) return [] as string[];
+
+  const subscriptions = await stripe.subscriptions.list({
+    customer: String(customerId),
+    status: "all",
+    limit: 100,
+    expand: ["data.items.data.price"],
+  });
+  const phoneSubscriptions = subscriptions.data.filter(
+    (subscription) =>
+      isPhoneNumberSubscriptionRecord(subscription) &&
+      ["active", "trialing", "past_due", "incomplete"].includes(subscription.status) &&
+      !subscription.cancel_at_period_end,
+  );
+
+  await Promise.all(
+    phoneSubscriptions.map((subscription) =>
+      stripe.subscriptions.update(subscription.id, { cancel_at_period_end: true }),
+    ),
+  );
+
+  return phoneSubscriptions.map((subscription) => subscription.id);
 }
 
 const currentMonthKey = () => {
@@ -1237,6 +1268,19 @@ export default async function handler(
         let subscriptionId: string | null =
           (inv.subscription as string) || null;
 
+        // A paid phone-number invoice must never reactivate the CRM plan or
+        // create plan-level affiliate accounting. Phone add-ons are separate
+        // subscriptions and used to be mistaken for the main subscription.
+        const phoneSubscription = await isPhoneNumberSubscription(subscriptionId);
+        if (phoneSubscription.ok) {
+          audit("phone subscription invoice processed without CRM status change", {
+            invoiceId: inv.id,
+            subscriptionId,
+            customerId: customerId || null,
+          });
+          break;
+        }
+
         let affiliateCreditCreated = false;
         if (customerId) {
           const user = await User.findOne({ stripeCustomerId: customerId });
@@ -1361,6 +1405,28 @@ export default async function handler(
         const sub = event.data.object as Stripe.Subscription;
         const customerId = sub.customer as string;
 
+        // Phone subscriptions must not alter the customer's CRM access state.
+        // In particular, a phone renewal previously reset a cancelled CRM plan
+        // to active, and a phone cancellation could mark an active CRM plan as
+        // cancelled.
+        if (isPhoneNumberSubscriptionRecord(sub)) {
+          audit("phone subscription update ignored for CRM status", {
+            subscriptionId: sub.id,
+            customerId,
+            status: sub.status,
+          });
+          break;
+        }
+
+        if (sub.cancel_at_period_end || (sub as any).cancel_at) {
+          const scheduledPhoneSubscriptionIds = await schedulePhoneSubscriptionsToCancel(customerId);
+          audit("CRM cancellation scheduled phone subscriptions to end", {
+            subscriptionId: sub.id,
+            customerId,
+            phoneSubscriptionCount: scheduledPhoneSubscriptionIds.length,
+          });
+        }
+
         const activeLike =
           sub.status === "active" || sub.status === "trialing";
 
@@ -1429,6 +1495,24 @@ export default async function handler(
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = sub.customer as string;
+
+        // This is the expected terminal event for a phone add-on. Releasing
+        // the matching number is correct; changing CRM subscriptionStatus is
+        // not.
+        if (isPhoneNumberSubscriptionRecord(sub)) {
+          try {
+            await releasePhoneNumbersForSubscription({
+              subscriptionId: sub.id,
+              customerId,
+              reason: "subscription_deleted",
+              cancelStripeSubscription: false,
+            });
+          } catch (e) {
+            console.error("customer.subscription.deleted phone cleanup error:", e);
+            throw e;
+          }
+          break;
+        }
 
         const user = await User.findOne({ stripeCustomerId: customerId });
         if (user) {
@@ -1521,6 +1605,8 @@ export default async function handler(
         const subscriptionId = inv.subscription as string;
         const customerId = inv.customer as string | undefined;
 
+        const phoneSubscription = await isPhoneNumberSubscription(subscriptionId);
+
         try {
           await releasePhoneNumbersForSubscription({
             subscriptionId,
@@ -1530,6 +1616,17 @@ export default async function handler(
           });
         } catch (e) {
           console.error("invoice.payment_failed cleanup error:", e);
+        }
+
+        // A failed phone add-on invoice should release that number, but must
+        // not block calling or mark the entire CRM plan delinquent.
+        if (phoneSubscription.ok) {
+          audit("phone subscription payment failure processed without CRM block", {
+            invoiceId: inv.id,
+            subscriptionId: subscriptionId || null,
+            customerId: customerId || null,
+          });
+          break;
         }
 
         // Enforce calling block on the CRM platform subscription payment failure.

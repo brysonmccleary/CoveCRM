@@ -63,6 +63,7 @@ describe("grandfathered AI survives customer.subscription.updated", () => {
     process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
     process.env.CoveCRM_Base = BASE_PLAN_PRICE_ID;
     process.env.CoveCRM_AI_Plan = AI_PLAN_PRICE_ID;
+    process.env.STRIPE_PHONE_PRICE_ID = LEGACY_PHONE_PRICE_ID;
     // Deliberately leave STRIPE_PRICE_ID_AI_MONTHLY / AI_Upgrade / CoveCRM_AI_Annual_Plan
     // unset so computeHasAIForCustomer's AI_PRICE_IDS only contains AI_PLAN_PRICE_ID.
 
@@ -128,7 +129,9 @@ describe("grandfathered AI survives customer.subscription.updated", () => {
     await webhookHandler(req, res);
 
     expect(res.statusCode).toBeLessThan(400);
-    expect(userDoc.save).toHaveBeenCalled();
+    // Phone renewals are unrelated to CRM access and must not write the CRM
+    // user record at all (a previous implementation clobbered plan fields).
+    expect(userDoc.save).not.toHaveBeenCalled();
     expect(userDoc.hasAI).toBe(true);
     expect(userDoc.aiEntitlementSource).toBe("grandfathered");
   });
