@@ -11,6 +11,7 @@ function isLegacyAccount(user: any): boolean {
 
 export function isAccountActivated(user: any): boolean {
   if (!user) return false;
+  if (user.accountDisabled === true) return false;
   if (user.role === "admin") return true;
   if (isLegacyAccount(user)) return true;
   if (user.emailVerified !== true) return false;

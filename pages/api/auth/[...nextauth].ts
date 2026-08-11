@@ -146,6 +146,10 @@ export const authOptions: NextAuthOptions = {
           user.email = email;
         }
 
+        if ((user as any).accountDisabled === true) {
+          throw new Error("This account has been disabled.");
+        }
+
         const currentHash = getCanonicalPasswordHash(user);
         if (!currentHash) {
           if (DBG) console.log("AUTH DEBUG: missing password hash", { email });
@@ -214,6 +218,10 @@ export const authOptions: NextAuthOptions = {
           user.email = email;
         }
 
+        if ((user as any).accountDisabled === true) {
+          throw new Error("This account has been disabled.");
+        }
+
         Promise.resolve(ensureUserTwilioIdentity(user.email)).catch(() => {});
         Promise.resolve(safeSyncA2PByEmail(user.email, false)).catch(() => {});
 
@@ -279,6 +287,15 @@ export const authOptions: NextAuthOptions = {
       try {
         await mongooseConnect();
         const u = await User.findOne({ email: (session.user as any).email });
+        if ((u as any)?.accountDisabled === true) {
+          // Clear the session identity so already-issued JWTs cannot access
+          // authenticated pages or APIs after an administrative lock.
+          (session.user as any).id = "";
+          (session.user as any).email = "";
+          (session.user as any).accountBlocked = true;
+          (session.user as any).accountActivated = false;
+          return session;
+        }
         (session.user as any).emailVerified = (u as any)?.emailVerified === true;
         (session.user as any).trialGranted = (u as any)?.trialGranted === true;
         (session.user as any).trialBlockedReason = (u as any)?.trialBlockedReason || null;

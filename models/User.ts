@@ -22,6 +22,10 @@ export interface IUser {
   trialActivatedAt?: Date | null;
   trialEmailUsed?: boolean;
   trialBlockedReason?: string | null;
+  /** Administrative safety lock for fraud, abuse, or security review. */
+  accountDisabled?: boolean;
+  accountDisabledReason?: string | null;
+  accountDisabledAt?: Date | null;
 
   numbers?: {
     sid: string;
@@ -442,6 +446,9 @@ const UserSchema = new Schema<IUser>({
   trialActivatedAt: { type: Date, default: null },
   trialEmailUsed: { type: Boolean, default: false },
   trialBlockedReason: { type: String, default: null },
+  accountDisabled: { type: Boolean, default: false, index: true },
+  accountDisabledReason: { type: String, default: null },
+  accountDisabledAt: { type: Date, default: null },
 
   numbers: [
     {
