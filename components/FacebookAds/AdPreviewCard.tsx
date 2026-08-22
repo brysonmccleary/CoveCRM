@@ -130,10 +130,58 @@ function CheckList({
   );
 }
 
-function getCreativeBackground(draft: any, leadType: string): string {
+// One-time-generated static photo pool per lead type (public/ad-backgrounds).
+// These are reused across every ad forever -- no per-ad generation cost.
+const STATIC_BACKGROUND_COUNTS: Record<string, number> = {
+  trucker: 40,
+  veteran: 40,
+  mortgage_protection: 40,
+};
+
+// A handful of layouts paint a near-opaque panel over the ENTIRE card
+// (clean_white_diagram, patriotic_notice, homeowner_table, and benefit_grid
+// specifically for veteran) -- any photo assigned to one of these would be
+// invisible under it. Photo eligibility must agree with the resolved layout,
+// not just leadType, or the photo pool silently goes to waste on those ads.
+function isLayoutPhotoFriendly(layoutFamily: string, leadType: string): boolean {
+  if (layoutFamily === "clean_white_diagram") return false;
+  if (layoutFamily === "patriotic_notice") return false;
+  if (layoutFamily === "homeowner_table") return false;
+  if (layoutFamily === "benefit_grid" && leadType === "veteran") return false;
+  // These three are deliberately fully-opaque decorative treatments
+  // (ornate frame, aged paper texture, halftone burst) -- a photo behind
+  // them would never be visible, so never waste one of the pool images here.
+  if (layoutFamily === "ornate_gold_frame") return false;
+  if (layoutFamily === "aged_parchment") return false;
+  if (layoutFamily === "pop_art_burst") return false;
+  return true;
+}
+
+// Real winning ads in these niches split roughly between photo backgrounds
+// and pure CSS/graphic cards (confirmed against live Meta Ad Library
+// examples) -- trucker skews more photo-heavy, veteran/mortgage closer to
+// even. Deciding off the already-seeded variantIndex keeps this deterministic
+// per draft without a separate random source.
+function isPhotoEligible(leadType: string, variantIndex: number, layoutFamily: string): boolean {
+  if (!STATIC_BACKGROUND_COUNTS[leadType]) return false;
+  if (!isLayoutPhotoFriendly(layoutFamily, leadType)) return false;
+  if (leadType === "trucker") return variantIndex % 3 !== 0;
+  return variantIndex % 2 === 0;
+}
+
+function getStaticBackgroundUrl(leadType: string, variantIndex: number): string {
+  const count = STATIC_BACKGROUND_COUNTS[leadType];
+  if (!count) return "";
+  const index = (variantIndex % count) + 1;
+  return `/ad-backgrounds/${leadType}/${index}.jpg`;
+}
+
+function getCreativeBackground(draft: any, leadType: string, variantIndex: number, layoutFamily: string): string {
   const imageUrl = cleanText(draft?.imageUrl);
   if (imageUrl) return imageUrl;
-  if (leadType === "mortgage_protection") return MORTGAGE_BACKGROUND;
+  if (isPhotoEligible(leadType, variantIndex, layoutFamily)) {
+    return getStaticBackgroundUrl(leadType, variantIndex);
+  }
   return "";
 }
 
@@ -289,7 +337,10 @@ type LayoutFamily =
   | "clean_white_diagram"
   | "patriotic_notice"
   | "homeowner_table"
-  | "trucker_highway";
+  | "trucker_highway"
+  | "ornate_gold_frame"
+  | "aged_parchment"
+  | "pop_art_burst";
 type IaFamily =
   | "amount_first"
   | "qualification_first"
@@ -369,11 +420,11 @@ type CreativeState = {
 };
 
 const LAYOUTS_BY_LEAD_TYPE: Record<string, LayoutFamily[]> = {
-  veteran: ["patriotic_badge", "amount_hero", "quiz_card", "split_panel", "checklist_first", "poster_stack", "advisory_notice", "benefit_grid", "age_selector", "patriotic_notice", "premium_dark_gold"],
-  trucker: ["split_panel", "dark_response", "selector_grid", "report_card", "messenger_prompt", "poster_stack", "mobile_native", "trucker_highway", "age_selector", "price_table", "premium_dark_gold"],
-  mortgage_protection: ["selector_grid", "comparison_table", "premium_card", "split_panel", "mobile_native", "report_card", "quiz_card", "price_table", "homeowner_table", "benefit_grid", "patriotic_notice"],
-  final_expense: ["amount_hero", "premium_card", "checklist_first", "quiz_card", "advisory_notice", "comparison_table", "dark_response", "trust_medical", "price_table", "age_selector", "benefit_grid", "patriotic_notice"],
-  iul: ["premium_card", "report_card", "split_panel", "trust_medical", "mobile_native", "checklist_first", "clean_white_diagram", "premium_dark_gold", "benefit_grid", "price_table"],
+  veteran: ["patriotic_badge", "amount_hero", "quiz_card", "split_panel", "checklist_first", "poster_stack", "advisory_notice", "benefit_grid", "age_selector", "patriotic_notice", "premium_dark_gold", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
+  trucker: ["split_panel", "dark_response", "selector_grid", "report_card", "messenger_prompt", "poster_stack", "mobile_native", "trucker_highway", "age_selector", "price_table", "premium_dark_gold", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
+  mortgage_protection: ["selector_grid", "comparison_table", "premium_card", "split_panel", "mobile_native", "report_card", "quiz_card", "price_table", "homeowner_table", "benefit_grid", "patriotic_notice", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
+  final_expense: ["amount_hero", "premium_card", "checklist_first", "quiz_card", "advisory_notice", "comparison_table", "dark_response", "trust_medical", "price_table", "age_selector", "benefit_grid", "patriotic_notice", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
+  iul: ["premium_card", "report_card", "split_panel", "trust_medical", "mobile_native", "checklist_first", "clean_white_diagram", "premium_dark_gold", "benefit_grid", "price_table", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
 };
 
 const IA_BY_LEAD_TYPE: Record<string, IaFamily[]> = {
@@ -583,7 +634,7 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     cta: clampCopy(overlay.ctaStrip || (spanish ? "Conozca sus opciones →" : "Learn more ->"), 42),
     eyebrow: getLeadEyebrow(leadType, iaFamily, spanish),
     amount: cleanText(draft?.displayAmount) || overlay.buttonLabels.find((label) => label.includes("$")) || (leadType === "veteran" ? "$50,000" : ""),
-    backgroundUrl: getCreativeBackground(draft, leadType),
+    backgroundUrl: getCreativeBackground(draft, leadType, variantIndex, layoutFamily),
     layoutFamily,
     iaFamily,
     frameStyle,
@@ -651,10 +702,10 @@ function HeadlineBlock({ state, compact = false }: { state: CreativeState; compa
       <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2, marginBottom: 5, textTransform: "uppercase" }}>
         {state.eyebrow}
       </div>
-      <div style={{ fontSize: compact ? state.headlineSize - 3 : state.headlineSize, fontWeight: 950, lineHeight: state.lineHeight, textTransform: "uppercase" }}>
+      <div style={{ fontSize: compact ? state.headlineSize - 3 : state.headlineSize, fontWeight: 950, lineHeight: state.lineHeight, textTransform: "uppercase", ...lineClampStyle(2) }}>
         {state.headline}
       </div>
-      {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: state.subSize, fontWeight: 800, lineHeight: 1.28, marginTop: 6 }}>{state.subheadline}</div>}
+      {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: state.subSize, fontWeight: 800, lineHeight: 1.28, marginTop: 6, ...lineClampStyle(2) }}>{state.subheadline}</div>}
     </div>
   );
 }
@@ -722,8 +773,8 @@ function renderSplitPanel(state: CreativeState) {
         </div>
         <Panel state={state} style={{ padding: 12, display: "flex", flexDirection: "column", justifyContent: "space-between", textAlign: "left" }}>
           <div>
-            <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" }}>{state.headline}</div>
-            {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.3, marginTop: 8 }}>{state.subheadline}</div>}
+            <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
+            {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.3, marginTop: 8 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
           </div>
           <div style={{ display: "grid", gap: 8 }}>
             <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
@@ -765,8 +816,8 @@ function renderChecklistFirst(state: CreativeState) {
         <MiniBenefits state={state} />
         <Panel state={state} style={{ padding: 12, marginTop: "auto", textAlign: "center" }}>
           <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2 }}>{state.eyebrow}</div>
-          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase", marginTop: 6 }}>{state.headline}</div>
-          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, marginTop: 7 }}>{state.subheadline}</div>}
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase", marginTop: 6 , ...lineClampStyle(2) }}>{state.headline}</div>
+          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, marginTop: 7 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
           <div style={{ marginTop: 10 }}><ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} /></div>
           {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="stacked_cta" />}
         </Panel>
@@ -786,8 +837,8 @@ function renderAmountHero(state: CreativeState) {
       <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, textAlign: "center", display: "flex", flexDirection: "column", gap: state.gap }}>
         <div style={{ color: state.palette.eyebrow, fontSize: 11, fontWeight: 950, letterSpacing: 2.2 }}>{state.eyebrow}</div>
         <div style={{ color: state.palette.accent, fontSize: 54, fontWeight: 950, lineHeight: 0.95, marginTop: 7, textShadow: "0 4px 18px rgba(0,0,0,0.65)" }}>{state.amount || "$50,000"}</div>
-        <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase" }}>{state.headline}</div>
-        {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: state.subSize, fontWeight: 800, lineHeight: 1.3, maxWidth: "88%", margin: "0 auto" }}>{state.subheadline}</div>}
+        <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
+        {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: state.subSize, fontWeight: 800, lineHeight: 1.3, maxWidth: "88%", margin: "0 auto" , ...lineClampStyle(2) }}>{state.subheadline}</div>}
         <div style={{ marginTop: "auto", display: "grid", gap: state.gap }}>
           <MiniBenefits state={state} columns={2} />
           <div style={{ color: state.palette.headline, fontSize: 10, fontWeight: 950, letterSpacing: 1.1, textTransform: "uppercase" }}>{selectionLabel}</div>
@@ -850,8 +901,8 @@ function renderDirectResponseOffer(state: CreativeState) {
         </div>
         <Panel state={state} style={{ padding: "12px 12px 11px" }}>
           {state.amount && <div style={{ color: state.palette.accent, fontSize: 39, fontWeight: 950, lineHeight: 0.98, letterSpacing: -1, textShadow: "0 3px 14px rgba(0,0,0,0.28)" }}>{state.amount}</div>}
-          <div style={{ color: state.palette.headline, fontSize: state.amount ? Math.max(19, state.headlineSize - 4) : state.headlineSize, fontWeight: 950, lineHeight: 1.03, textTransform: "uppercase", marginTop: state.amount ? 7 : 0 }}>{state.headline}</div>
-          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 11, fontWeight: 800, lineHeight: 1.28, marginTop: 7 }}>{state.subheadline}</div>}
+          <div style={{ color: state.palette.headline, fontSize: state.amount ? Math.max(19, state.headlineSize - 4) : state.headlineSize, fontWeight: 950, lineHeight: 1.03, textTransform: "uppercase", marginTop: state.amount ? 7 : 0 , ...lineClampStyle(2) }}>{state.headline}</div>
+          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 11, fontWeight: 800, lineHeight: 1.28, marginTop: 7 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
         </Panel>
         <div style={{ marginTop: "auto", display: "grid", gap: 8 }}>
           <MiniBenefits state={state} columns={2} />
@@ -873,7 +924,7 @@ function renderReportCard(state: CreativeState) {
           <div style={{ display: "flex", justifyContent: "space-between", color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.4 }}>
             <span>REVIEW</span><span>READY</span>
           </div>
-          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.04, textTransform: "uppercase", marginTop: 8 }}>{state.headline}</div>
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.04, textTransform: "uppercase", marginTop: 8 , ...lineClampStyle(2) }}>{state.headline}</div>
         </Panel>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <Panel state={state} style={{ padding: 10, color: state.palette.subheadline, fontSize: 11, fontWeight: 900 }}>Options<br /><span style={{ color: state.palette.accent, fontSize: 24 }}>✓</span></Panel>
@@ -893,8 +944,8 @@ function renderAdvisoryNotice(state: CreativeState) {
       <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap }}>
         <div style={{ background: state.palette.cta, color: "#fff", padding: "9px 12px", borderRadius: state.radius, fontSize: 12, fontWeight: 950, letterSpacing: 1 }}>IMPORTANT COVERAGE NOTICE</div>
         <Panel state={state} style={{ padding: 14, textAlign: "left" }}>
-          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.03, textTransform: "uppercase" }}>{state.headline}</div>
-          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.35, marginTop: 8 }}>{state.subheadline}</div>}
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.03, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
+          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.35, marginTop: 8 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
         </Panel>
         <MiniBenefits state={state} />
         <div style={{ marginTop: "auto" }}>{state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="inline_cta" />}</div>
@@ -908,8 +959,8 @@ function renderMessengerPrompt(state: CreativeState) {
   return (
     <CreativeShell state={state}>
       <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ alignSelf: "flex-start", maxWidth: "82%", background: state.palette.panel, border: `1px solid ${state.palette.panelBorder}`, borderRadius: "14px 14px 14px 4px", padding: 11, color: state.palette.headline, fontSize: 18, fontWeight: 950, lineHeight: 1.05 }}>{state.headline}</div>
-        {state.subheadline && <div style={{ alignSelf: "flex-end", maxWidth: "78%", background: state.palette.headlineBg, border: `1px solid ${state.palette.headlineBorder}`, borderRadius: "14px 14px 4px 14px", padding: 10, color: state.palette.subheadline, fontSize: 12, fontWeight: 850 }}>{state.subheadline}</div>}
+        <div style={{ alignSelf: "flex-start", maxWidth: "82%", background: state.palette.panel, border: `1px solid ${state.palette.panelBorder}`, borderRadius: "14px 14px 14px 4px", padding: 11, color: state.palette.headline, fontSize: 18, fontWeight: 950, lineHeight: 1.05 , ...lineClampStyle(2) }}>{state.headline}</div>
+        {state.subheadline && <div style={{ alignSelf: "flex-end", maxWidth: "78%", background: state.palette.headlineBg, border: `1px solid ${state.palette.headlineBorder}`, borderRadius: "14px 14px 4px 14px", padding: 10, color: state.palette.subheadline, fontSize: 12, fontWeight: 850 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
         <div style={{ marginTop: "auto", display: "grid", gap: 8 }}>
           {state.buttons.slice(0, 3).map((button) => <div key={button} style={{ background: state.palette.cta, color: "#fff", borderRadius: 999, padding: "9px 12px", textAlign: "center", fontSize: 12, fontWeight: 950 }}>{button}</div>)}
           {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="floating_cta" />}
@@ -934,7 +985,7 @@ function renderBenefitGrid(state: CreativeState) {
           <span style={{ color: state.palette.accent }}>{state.leadType === "iul" ? "EDUCATION" : "OPTIONS"}</span>
         </div>
         <div style={{ textAlign: "center" }}>
-          <div style={{ color: state.palette.headline, fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" }}>{state.headline}</div>
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
           {(state.amount || state.leadType === "veteran") && <div style={{ color: state.palette.accent, fontSize: 45, fontWeight: 950, lineHeight: 0.95, marginTop: 7 }}>{state.amount || "$40,000"}</div>}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, alignContent: "center" }}>
@@ -979,8 +1030,8 @@ function renderAgeSelector(state: CreativeState) {
     <CreativeShell state={state}>
       <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 16, paddingBottom: 54, display: "flex", flexDirection: "column", gap: 10, textAlign: "center" }}>
         <div style={{ color: state.palette.eyebrow, fontSize: 11, fontWeight: 950, letterSpacing: 2 }}>{state.eyebrow}</div>
-        <div style={{ color: state.palette.headline, fontSize: state.headlineSize + 2, fontWeight: 950, lineHeight: 0.98, textTransform: "uppercase" }}>{state.headline}</div>
-        {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 850, lineHeight: 1.25 }}>{state.subheadline}</div>}
+        <div style={{ color: state.palette.headline, fontSize: state.headlineSize + 2, fontWeight: 950, lineHeight: 0.98, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
+        {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 850, lineHeight: 1.25 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
         <div style={{ marginTop: "auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
           {state.buttons.slice(0, 4).map((button) => (
             <div key={button} style={{ background: state.palette.cta, color: "#fff", border: `2px solid ${state.palette.accent}`, borderRadius: 8, padding: "12px 8px", fontSize: 13, fontWeight: 950, boxShadow: "0 10px 22px rgba(0,0,0,0.24)" }}>
@@ -1000,7 +1051,7 @@ function renderPremiumDarkGold(state: CreativeState) {
       <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 18, paddingBottom: 56, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 12 }}>
         <div style={{ border: "1px solid rgba(201,168,76,0.55)", padding: 14, textAlign: "center", boxShadow: "inset 0 0 40px rgba(201,168,76,0.08)" }}>
           <div style={{ color: "#c9a84c", fontSize: 10, fontWeight: 950, letterSpacing: 2 }}>{state.leadType === "iul" ? "PREMIUM IUL EDUCATION" : "PREMIUM COVERAGE CHECK"}</div>
-          <div style={{ color: "#fff", fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", marginTop: 8 }}>{state.headline}</div>
+          <div style={{ color: "#fff", fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", marginTop: 8 , ...lineClampStyle(2) }}>{state.headline}</div>
         </div>
         <div style={{ display: "grid", gap: 8, alignContent: "center" }}>
           <MiniBenefits state={{ ...state, palette: { ...state.palette, panel: "rgba(0,0,0,0.64)", panelBorder: "rgba(201,168,76,0.34)", subheadline: "#e5d3a0", accent: "#c9a84c" } }} />
@@ -1043,8 +1094,8 @@ function renderPatrioticNotice(state: CreativeState) {
         </div>
         <div style={{ textAlign: "center", alignSelf: "center" }}>
           <div style={{ color: "#8b1a1a", fontSize: 10, fontWeight: 950, letterSpacing: 1.7 }}>{state.leadType === "mortgage_protection" ? "HOME PROTECTION CHECK" : state.leadType === "final_expense" ? "FINAL COST PLANNING" : "VETERAN COVERAGE OPTIONS"}</div>
-          <div style={{ color: "#1a2744", fontSize: state.headlineSize + 2, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", marginTop: 8 }}>{state.headline}</div>
-          {state.subheadline && <div style={{ color: "#334155", fontSize: 12, fontWeight: 850, lineHeight: 1.25, marginTop: 8 }}>{state.subheadline}</div>}
+          <div style={{ color: "#1a2744", fontSize: state.headlineSize + 2, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", marginTop: 8 , ...lineClampStyle(2) }}>{state.headline}</div>
+          {state.subheadline && <div style={{ color: "#334155", fontSize: 12, fontWeight: 850, lineHeight: 1.25, marginTop: 8 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
         </div>
         <ButtonGrid labels={state.buttons} styleType="red" />
       </div>
@@ -1058,7 +1109,7 @@ function renderHomeownerTable(state: CreativeState) {
   return (
     <CreativeShell state={state}>
       <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 14, paddingBottom: 52, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10, background: "linear-gradient(180deg, rgba(255,255,255,0.78), rgba(219,234,254,0.68))" }}>
-        <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" }}>{state.headline}</div>
+        <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
         <Panel state={state} style={{ overflow: "hidden", alignSelf: "center" }}>
           <div style={{ background: "#0f3b70", color: "#fff", padding: 10, fontSize: 11, fontWeight: 950, letterSpacing: 1 }}>MORTGAGE BALANCE</div>
           {rows.slice(0, 4).map((row, index) => (
@@ -1082,7 +1133,7 @@ function renderTruckerHighway(state: CreativeState) {
       <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 16, paddingBottom: 58, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10 }}>
         <div>
           <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2 }}>CDL DRIVER COVERAGE</div>
-          <div style={{ color: "#fff", fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", marginTop: 7 }}>{state.headline}</div>
+          <div style={{ color: "#fff", fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", marginTop: 7 , ...lineClampStyle(2) }}>{state.headline}</div>
         </div>
         <div style={{ alignSelf: "end", display: "grid", gap: 8 }}>
           <MiniBenefits state={state} />
@@ -1090,6 +1141,155 @@ function renderTruckerHighway(state: CreativeState) {
         </div>
       </div>
       <BottomBar color={state.palette.cta} label={state.cta} />
+    </CreativeShell>
+  );
+}
+
+/**
+ * Deep navy/black with a nested gold double-border and diamond corner
+ * accents -- matches the "STATE-APPROVED WHOLE LIFE" style of ornate,
+ * dignified gold-on-navy cards proven in the final expense / veteran niches.
+ * Deliberately fully opaque -- never assigned a photo (see isLayoutPhotoFriendly).
+ */
+function renderOrnateGoldFrame(state: CreativeState) {
+  const corner = (top: number | string, left: number | string) => (
+    <div
+      key={`${top}-${left}`}
+      style={{
+        position: "absolute",
+        top,
+        left,
+        width: 14,
+        height: 14,
+        border: "2px solid #c9a84c",
+        transform: "rotate(45deg)",
+        opacity: 0.85,
+      }}
+    />
+  );
+  return (
+    <CreativeShell state={{ ...state, overlayStyle: "deep_gradient", palette: { ...state.palette, fallback: "linear-gradient(160deg, #0a0a0a 0%, #16130a 100%)", overlay: "transparent", glow: "none" } }}>
+      <div
+        style={{
+          position: "absolute",
+          inset: 10,
+          border: "2px solid #c9a84c",
+          outline: "1px solid rgba(201,168,76,0.5)",
+          outlineOffset: 6,
+        }}
+      />
+      {corner(6, 6)}
+      {corner(6, "calc(100% - 20px)")}
+      {corner("calc(100% - 20px)", 6)}
+      {corner("calc(100% - 20px)", "calc(100% - 20px)")}
+      <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 26, paddingBottom: state.ctaFlow === "bottom_bar" ? 60 : 26, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 12, textAlign: "center" }}>
+        <div style={{ color: "#e03c3c", fontSize: 12, fontWeight: 950, letterSpacing: 2.4, textTransform: "uppercase" }}>{state.eyebrow}</div>
+        <div style={{ display: "grid", gap: 10, alignContent: "center" }}>
+          <div style={{ color: "#f5eddc", fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1.05, textTransform: "uppercase", ...lineClampStyle(2) }}>{state.headline}</div>
+          {state.amount && <div style={{ color: "#c9a84c", fontSize: 48, fontWeight: 950, lineHeight: 1, textShadow: "0 3px 12px rgba(201,168,76,0.35)" }}>{state.amount}</div>}
+          {state.subheadline && <div style={{ color: "#d7c58a", fontSize: 12, fontWeight: 700, lineHeight: 1.3, ...lineClampStyle(2) }}>{state.subheadline}</div>}
+        </div>
+        <div style={{ display: "grid", gap: 10 }}>
+          <ButtonGrid labels={state.buttons} styleType="gold" />
+          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
+        </div>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+const PARCHMENT_MOTIF: Record<string, string> = {
+  veteran: "\u{1F396}️",
+  mortgage_protection: "\u{1F3E0}",
+  final_expense: "\u{1F54A}️",
+  trucker: "\u{1F69B}",
+  iul: "\u{1F4C8}",
+};
+
+/**
+ * Warm cream "aged paper" texture with a torn-corner effect and a dark
+ * ribbon header -- matches the distressed/parchment style seen on real
+ * VA mortgage and burial-coverage winning ads. Fully opaque; never assigned
+ * a photo.
+ */
+function renderAgedParchment(state: CreativeState) {
+  const motif = PARCHMENT_MOTIF[state.leadType] || "✦";
+  return (
+    <CreativeShell state={{ ...state, overlayStyle: "deep_gradient", palette: { ...state.palette, fallback: "linear-gradient(160deg, #f2e6c8 0%, #e8d8ac 55%, #ddc98e 100%)", overlay: "transparent", glow: "none" } }}>
+      <div style={{ position: "absolute", top: 0, right: 0, width: 0, height: 0, borderTop: "42px solid rgba(0,0,0,0.14)", borderLeft: "42px solid transparent" }} />
+      <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateRows: "auto 1fr auto", gap: 12 }}>
+        <div style={{ background: "#1a2744", color: "#f2e6c8", padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 950, letterSpacing: 1.8, textTransform: "uppercase" }}>
+          {state.eyebrow}
+        </div>
+        <div style={{ padding: "0 20px", textAlign: "center", alignSelf: "center", display: "grid", gap: 10 }}>
+          <div style={{ fontSize: 30 }}>{motif}</div>
+          <div style={{ color: "#2d2410", fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.05, textTransform: "uppercase", ...lineClampStyle(2) }}>{state.headline}</div>
+          {state.amount && <div style={{ color: "#8b4513", fontSize: 40, fontWeight: 950, lineHeight: 1 }}>{state.amount}</div>}
+          {state.subheadline && <div style={{ color: "#4a3728", fontSize: 12, fontWeight: 700, lineHeight: 1.3, ...lineClampStyle(2) }}>{state.subheadline}</div>}
+        </div>
+        <div style={{ padding: "0 16px 16px", display: "grid", gap: 10 }}>
+          <ButtonGrid labels={state.buttons} styleType="cream" />
+          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
+        </div>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+/**
+ * Bold black background with radiating comic-burst rays and a halftone dot
+ * texture -- matches the pop-art "NO MEDICAL EXAM" style proven to stop the
+ * scroll in the trucker niche. Fully opaque; never assigned a photo.
+ */
+function renderPopArtBurst(state: CreativeState) {
+  const burstColor = state.palette.accent || "#f59e0b";
+  return (
+    <CreativeShell state={{ ...state, overlayStyle: "deep_gradient", palette: { ...state.palette, fallback: "#0a0a0a", overlay: "transparent", glow: "none" } }}>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: `repeating-conic-gradient(from 0deg, ${burstColor}33 0deg 9deg, transparent 9deg 18deg)`,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundImage: "radial-gradient(rgba(255,255,255,0.14) 1.5px, transparent 1.5px)",
+          backgroundSize: "10px 10px",
+        }}
+      />
+      <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 20, paddingBottom: state.ctaFlow === "bottom_bar" ? 58 : 20, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 12, textAlign: "center" }}>
+        <div style={{ color: burstColor, fontSize: 12, fontWeight: 950, letterSpacing: 1.6, textTransform: "uppercase" }}>{state.eyebrow}</div>
+        <div style={{ display: "grid", gap: 10, alignContent: "center" }}>
+          <div
+            style={{
+              color: "#ffffff",
+              fontSize: state.headlineSize + 3,
+              fontWeight: 950,
+              lineHeight: 1,
+              textTransform: "uppercase",
+              WebkitTextStroke: `2px ${burstColor}`,
+              ...lineClampStyle(2),
+            }}
+          >
+            {state.headline}
+          </div>
+          {state.subheadline && (
+            <div style={{ color: "#ffffff", background: burstColor, display: "inline-block", padding: "6px 12px", borderRadius: 4, fontSize: 12, fontWeight: 900, lineHeight: 1.25, justifySelf: "center", ...lineClampStyle(2) }}>
+              {state.subheadline}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "grid", gap: 10 }}>
+          <ButtonGrid labels={state.buttons} styleType="red" customStyle={{ background: burstColor, color: "#000000", border: "2px solid #ffffff", radius: 6 }} />
+          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
+        </div>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
     </CreativeShell>
   );
 }
@@ -1112,6 +1312,9 @@ function renderTemplateFamily(state: CreativeState) {
   if (state.layoutFamily === "patriotic_notice") return renderPatrioticNotice(state);
   if (state.layoutFamily === "homeowner_table") return renderHomeownerTable(state);
   if (state.layoutFamily === "trucker_highway") return renderTruckerHighway(state);
+  if (state.layoutFamily === "ornate_gold_frame") return renderOrnateGoldFrame(state);
+  if (state.layoutFamily === "aged_parchment") return renderAgedParchment(state);
+  if (state.layoutFamily === "pop_art_burst") return renderPopArtBurst(state);
   if (state.layoutFamily === "premium_card" || state.layoutFamily === "dark_response" || state.layoutFamily === "patriotic_badge") return renderPosterStack(state);
   return renderPosterStack(state);
 }
@@ -1128,6 +1331,22 @@ function FinishedCreativeRenderer({
   return renderTemplateFamily(buildCreativeState(draft, leadType, overlay));
 }
 
+/**
+ * This card is captured pixel-for-pixel (html-to-image) and uploaded to Meta
+ * as the literal ad creative -- there is no reflow or cropping step after
+ * this renders. AI-generated copy has no length guarantee, so every text
+ * block here must be hard-bounded or long copy pushes the CTA past the
+ * fixed 540x675 canvas and gets sliced off by the root `overflow: hidden`.
+ */
+function lineClampStyle(lines: number): React.CSSProperties {
+  return {
+    display: "-webkit-box",
+    WebkitBoxOrient: "vertical",
+    WebkitLineClamp: lines,
+    overflow: "hidden",
+  } as React.CSSProperties;
+}
+
 export function ProductionFeedCreative({
   draft,
   creativeRef,
@@ -1138,10 +1357,13 @@ export function ProductionFeedCreative({
   const overlay = getOverlay(draft);
   const leadType = cleanText(draft?.leadType || "final_expense");
   const accent = PAGE_ACCENTS[leadType] || "#1d4ed8";
-  const headline = cleanText(overlay.headline || draft?.headline);
-  const subheadline = cleanText(overlay.subheadline || draft?.description);
-  const ctaStrip = cleanText(overlay.ctaStrip || draft?.cta || "Learn more");
-  const bullets = cleanList(overlay.benefitBullets || draft?.bulletPoints).slice(0, 3);
+  const headline = clampCopy(cleanText(overlay.headline || draft?.headline), 64);
+  const headlineFontSize = headline.length > 40 ? 38 : 48;
+  const subheadline = clampCopy(cleanText(overlay.subheadline || draft?.description), 120);
+  const ctaStrip = cleanText(overlay.ctaStrip || draft?.cta || "Learn more").replace(/\s*→\s*$/, "");
+  const bullets = cleanList(overlay.benefitBullets || draft?.bulletPoints)
+    .slice(0, 3)
+    .map((bullet) => clampCopy(bullet, 80));
 
   return (
     <div
@@ -1162,17 +1384,17 @@ export function ProductionFeedCreative({
           <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minHeight: 34, padding: "0 18px", borderRadius: 999, background: `${accent}18`, color: accent, border: `1.5px solid ${accent}55`, fontSize: 17, fontWeight: 900, letterSpacing: 0.4, textTransform: "uppercase" }}>
             {LEAD_TYPE_LABELS[leadType] || PAGE_NAMES[leadType] || "Coverage Review"}
           </div>
-          <div style={{ color: "#0f172a", fontSize: 48, fontWeight: 950, lineHeight: 1.02, marginTop: 26 }}>
+          <div style={{ color: "#0f172a", fontSize: headlineFontSize, fontWeight: 950, lineHeight: 1.02, marginTop: 26, ...lineClampStyle(2) }}>
             {headline}
           </div>
           {subheadline && (
-            <div style={{ color: "#334155", fontSize: 22, fontWeight: 700, lineHeight: 1.25, marginTop: 18 }}>
+            <div style={{ color: "#334155", fontSize: 22, fontWeight: 700, lineHeight: 1.25, marginTop: 18, ...lineClampStyle(2) }}>
               {subheadline}
             </div>
           )}
         </div>
 
-        <div style={{ position: "relative", minHeight: 0, borderRadius: 28, overflow: "hidden", boxShadow: "0 22px 50px rgba(15,23,42,0.18)", border: "1px solid rgba(15,23,42,0.08)" }}>
+        <div style={{ position: "relative", minHeight: 90, borderRadius: 28, overflow: "hidden", boxShadow: "0 22px 50px rgba(15,23,42,0.18)", border: "1px solid rgba(15,23,42,0.08)" }}>
           <FinishedCreativeRenderer draft={draft} leadType={leadType} overlay={overlay} />
         </div>
 
@@ -1182,13 +1404,13 @@ export function ProductionFeedCreative({
               {bullets.map((bullet) => (
                 <div key={bullet} style={{ display: "flex", alignItems: "center", gap: 10, color: "#0f172a", fontSize: 19, fontWeight: 800, lineHeight: 1.15 }}>
                   <span style={{ width: 22, height: 22, borderRadius: 999, background: accent, color: "#ffffff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 950, flexShrink: 0 }}>✓</span>
-                  <span>{bullet}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bullet}</span>
                 </div>
               ))}
             </div>
           )}
-          <div style={{ height: 58, borderRadius: 999, background: accent, color: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 950, boxShadow: `0 16px 34px ${accent}44` }}>
-            {ctaStrip.replace(/\s*→\s*$/, "")}
+          <div style={{ minHeight: 58, borderRadius: 999, background: accent, color: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 950, boxShadow: `0 16px 34px ${accent}44`, padding: "0 22px", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+            {ctaStrip}
           </div>
         </div>
       </div>

@@ -26,9 +26,9 @@ const SUPPORT_DOCS = [
   {
     title: "How to connect Google Sheets",
     category: "imports",
-    tags: ["google sheets", "sheet", "import", "webhook"],
+    tags: ["google sheets", "sheet", "import", "webhook", "vendor"],
     content:
-      "To connect Google Sheets, paste the sheet URL, choose the target folder, then install the generated Apps Script webhook. After setup, new rows should flow into the selected folder automatically.",
+      "This is a real, working feature — never call it 'coming soon'. Click the 'Import Leads' button in the sidebar, then choose 'Connect Google Sheet' (not 'Import CSV'). Step 1: be logged into the same Google account used for CoveCRM; the lead vendor usually owns the sheet, the user just needs Editor access. Step 2: paste the full Google Sheet URL. Step 3: confirm the detected sheet and pick/create the destination folder. Step 4: check both acknowledgement boxes (Google's 'unverified app' warning is expected — Advanced -> Go to (unsafe) -> Allow; plus lead consent) and click 'Connect Sheet' to generate a custom Apps Script. Step 5: click 'Open Apps Script (New Project)', paste the generated script into Code.gs replacing everything, run it once. New rows then import automatically. Error 'owned by a service account' means they opened the vendor's script instead of a new one — send them back to Step 5.",
   },
   {
     title: "How AI calling works",
@@ -54,16 +54,16 @@ const SUPPORT_DOCS = [
   {
     title: "Buying numbers",
     category: "messaging",
-    tags: ["numbers", "twilio", "buy", "phone number"],
+    tags: ["numbers", "twilio", "buy", "phone number", "price", "cost", "free"],
     content:
-      "Numbers are managed from the Numbers screen. Search by US state or a specific three-digit area code, select a result, then click Confirm on that same result to purchase it. Calling is ready after a successful purchase; texting may remain unavailable until A2P registration is approved. If sending fails, confirm the number exists and is usable for the current flow.",
+      "Numbers are managed from the Numbers screen. Search by US state or a specific three-digit area code, select a result, then click Confirm on that same result to purchase it. Every number costs $1.15/month, including the very first one — there is no free number, and usage (texts + calls) is billed on top. Calling is ready after a successful purchase; texting may remain unavailable until A2P registration is approved. If sending fails, confirm the number exists and is usable for the current flow.",
   },
   {
     title: "Importing leads",
     category: "imports",
     tags: ["import", "csv", "sheets", "leads"],
     content:
-      "Lead imports can come from CSV, Google Sheets, or connected lead sources. When troubleshooting imports, inspect recent import records, field mapping issues, and whether rows are landing in the intended folder.",
+      "Lead imports can come from CSV ('Import Leads' -> 'Import CSV') or Google Sheets ('Import Leads' -> 'Connect Google Sheet' — see the separate Google Sheets doc for the exact steps). When troubleshooting imports, inspect recent import records, field mapping issues, and whether rows are landing in the intended folder.",
   },
   {
     title: "Drip campaigns",
@@ -78,6 +78,27 @@ const SUPPORT_DOCS = [
     tags: ["booking", "appointments", "calendar", "google calendar"],
     content:
       "Booking requires a working calendar connection plus valid lead details. If appointment creation or reminders fail, inspect Google Calendar connectivity, booking settings, and any SMS confirmation failures.",
+  },
+  {
+    title: "Voicemail drops",
+    category: "calling",
+    tags: ["voicemail", "drop", "voicemail drop"],
+    content:
+      "This is a real, working feature — never call it 'coming soon'. From a lead's call screen, a pre-recorded voicemail can be dropped instead of leaving one live, letting an agent cover more calls per hour on no-answers.",
+  },
+  {
+    title: "Team accounts",
+    category: "team",
+    tags: ["team", "invite", "teammate", "leaderboard"],
+    content:
+      "This is a real, working feature — never call it 'coming soon'. Found under the 'Team' section in the sidebar. A team leader invites teammates by email; the invitee accepts to join. Team leaders can see member stats and a leaderboard.",
+  },
+  {
+    title: "Affiliate program",
+    category: "billing",
+    tags: ["affiliate", "referral", "payout", "commission"],
+    content:
+      "Every user has a referral link. Referring a new paying user earns a $15/month recurring credit for as long as that referred user stays subscribed — it is NOT a one-time $25 bonus. Each month's credit has a 30-day hold before it becomes payable. Payouts are processed once a month (the 1st of the month) via Stripe Connect — not weekly, and not gated behind a minimum balance.",
   },
 ];
 

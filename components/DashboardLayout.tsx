@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useSession } from "next-auth/react";
 import { connectAndJoin } from "@/lib/socketClient";
 import IncomingCallBanner from "@/components/IncomingCallBanner"; // ← NEW
+import AddCardBanner from "@/components/AddCardBanner";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import SupportChatModal from "@/components/SupportChatModal";
@@ -274,6 +275,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       <main className="cove-app-main flex flex-1 flex-col overflow-y-auto">
         <div className="flex-1 px-3 py-5 sm:px-5 lg:px-6 lg:py-8">
+          <AddCardBanner />
           {children}
         </div>
       </main>

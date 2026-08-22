@@ -5,41 +5,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
-import { isPhoneNumberSubscription } from "@/lib/billing/stripePlanClassification";
-
-/**
- * Phone numbers are billed as their own Stripe subscriptions.  End each one
- * no later than its already-paid period when the CRM plan is cancelled, so an
- * add-on with a different renewal date can never bill again after cancellation.
- */
-async function schedulePhoneSubscriptionsToEnd(customerId: string) {
-  const subscriptions = await stripe.subscriptions.list({
-    customer: customerId,
-    status: "all",
-    limit: 100,
-    expand: ["data.items.data.price"],
-  });
-
-  const phoneSubscriptions = subscriptions.data.filter(
-    (subscription) =>
-      isPhoneNumberSubscription(subscription) &&
-      ["active", "trialing", "past_due", "incomplete"].includes(subscription.status) &&
-      !subscription.cancel_at_period_end,
-  );
-
-  await Promise.all(
-    phoneSubscriptions.map((subscription) =>
-      stripe.subscriptions.update(subscription.id, {
-        // This is intentionally the phone subscription's own period end rather
-        // than the CRM plan's. It prevents another phone renewal even when the
-        // two subscriptions have different billing anchors.
-        cancel_at_period_end: true,
-      }),
-    ),
-  );
-
-  return phoneSubscriptions.map((subscription) => subscription.id);
-}
+import { releaseUserPhoneNumbers } from "@/lib/billing/releaseUserPhoneNumbers";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -67,21 +33,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       cancel_at_period_end: true,
     });
 
-    // Phone-number billing is separate from the CRM subscription. Leaving it
-    // active here was the reason cancelled customers continued to be charged.
-    const phoneSubscriptionIds = await schedulePhoneSubscriptionsToEnd(
-      String((user as any).stripeCustomerId),
-    );
+    // Phone numbers cost money the moment they exist, and trial numbers have
+    // no Stripe subscription of their own, so both the Twilio numbers and any
+    // phone add-on subscriptions are torn down at cancel time — not period end.
+    const phoneCleanup = await releaseUserPhoneNumbers({
+      userId: String(user._id),
+      reason: "user_cancel",
+    });
 
     await User.updateOne(
       { _id: user._id },
-      { $set: { subscriptionStatus: "canceled" } },
+      {
+        $set: {
+          subscriptionStatus: "canceled",
+          // A canceled account must never trigger an automatic card charge.
+          aiDialerAutoReloadArmed: false,
+        },
+      },
     );
 
     return res.status(200).json({
       success: true,
       cancelAt: (subscription as any).cancel_at || null,
-      phoneSubscriptionsScheduledToCancel: phoneSubscriptionIds.length,
+      releasedNumbers: phoneCleanup.releasedNumbers.length,
+      phoneSubscriptionsCanceled: phoneCleanup.canceledPhoneSubscriptions.length,
     });
   } catch (err: any) {
     console.error("cancel-subscription error:", err?.message || err);

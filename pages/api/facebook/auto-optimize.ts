@@ -13,7 +13,6 @@ import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaH
 import { scoreAdPerformance } from "@/lib/facebook/scoreAdPerformance";
 import { hasEnoughData } from "@/lib/facebook/verdictGate";
 import { metaGraphUrl } from "@/lib/meta/graphApi";
-import { assertCampaignComplianceCurrent } from "@/lib/facebook/assertCampaignComplianceCurrent";
 
 type Summary = {
   processed: number;
@@ -58,7 +57,6 @@ const SKIP_CODES = {
   META_HEALTH: "metaHealthBlocked",
   NO_ACTION: "noAction",
   GUARDRAIL: "guardrail",
-  COMPLIANCE: "complianceApprovalBlocked",
 } as const;
 
 type SkipCode = (typeof SKIP_CODES)[keyof typeof SKIP_CODES];
@@ -908,24 +906,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!actionType) {
       recordSkip(summary, SKIP_CODES.NO_ACTION);
       continue;
-    }
-
-    if (actionType === "SCALE" || actionType === "DUPLICATE_TEST") {
-      try {
-        await assertCampaignComplianceCurrent({ campaign, userEmail: campaign.userEmail });
-      } catch (error: any) {
-        recordSkip(summary, SKIP_CODES.COMPLIANCE);
-        await CampaignActionLog.create({
-          userId: campaign.userId,
-          campaignId: campaign._id,
-          actionType,
-          oldBudget: dailyBudget,
-          newBudget,
-          metaResponse: { summary: { skipped: true, reason: error?.message || "Compliance approval is not current" } },
-          createdAt: now,
-        });
-        continue;
-      }
     }
 
     const guardrailReason = getGuardrailReason(campaign, {

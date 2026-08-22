@@ -716,6 +716,9 @@ export async function runHelpAssistant({
                 "- You may recommend fixes and tell the user what an admin can review, but do not claim A2P resubmission, email sending, billing changes, or other actions happened unless backend results explicitly confirm it.",
                 "- When using getA2PProposalStatus or getA2PSupportEmailStatus, only describe what the status field says. Never claim a resubmission was made or an email was sent based solely on proposal/draft status.",
                 "- Do not promise unsupported actions or guaranteed A2P approval.",
+                "- When a knowledgeDocs entry covers the user's question, follow its exact button labels, screen names, and steps — do not paraphrase them into vaguer generic language (e.g. do not say 'the integration setup' when the doc names a specific button).",
+                "- Never invent a screen, button, menu path, or setup flow that isn't named in knowledgeDocs, supportContext, or a tool result. If the user's question isn't covered by what you were given, say plainly that you're not certain and to contact support, rather than guessing at UI that may not exist.",
+                "- A feature is only 'coming soon' if a knowledgeDocs entry explicitly says so, or none exists and you are not certain it's built. Never call a feature 'coming soon' when a knowledgeDocs entry describes it as available.",
               ].join("\n"),
             },
             {

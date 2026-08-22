@@ -411,7 +411,10 @@ const purchaseBlockMessage = (data: any) => {
       return "Finish billing setup before purchasing a number.";
     case "no_active_subscription":
       return "Activate or restore your CoveCRM subscription before purchasing a number.";
+    case "billing_pending":
+    case "missing_payment_method":
+      return "Add a card in Billing to unlock your phone number.";
     default:
-      return data?.message || data?.error || "Error purchasing number";
+      return data?.message || "Something went wrong purchasing this number. Please try again.";
   }
 };

@@ -33,7 +33,7 @@ const qualified: RegisteredClaim = {
   approvedBy: "compliance",
 };
 
-describe("Meta claims publish gate", () => {
+describe("Meta claims advisory audit", () => {
   it("allows a current CLEAN claim without a landing qualifier", () => {
     expect(evaluateCreativeClaims({
       creativeText: "No medical exam",
@@ -58,45 +58,45 @@ describe("Meta claims publish gate", () => {
     }).matchedClaims).toHaveLength(1);
   });
 
-  it("blocks a QUALIFIED claim when the actual snapshot lacks the disclosure", () => {
-    expect(() => evaluateCreativeClaims({
+  it("warns without blocking when a QUALIFIED claim lacks the disclosure", () => {
+    expect(evaluateCreativeClaims({
       creativeText: "No 2 year wait",
       leadType: "final_expense",
       states: ["AZ"],
       landingPageSnapshot: "Headline only",
       claims: [qualified],
       now: new Date("2026-01-01"),
-    })).toThrow(/rendered landing-page disclosure/i);
+    }).warnings).toEqual(expect.arrayContaining([expect.stringMatching(/rendered landing-page disclosure/i)]));
   });
 
-  it("blocks expired and unregistered risky claims", () => {
-    expect(() => evaluateCreativeClaims({
+  it("warns without blocking for expired and unregistered claims", () => {
+    expect(evaluateCreativeClaims({
       creativeText: "No medical exam",
       leadType: "final_expense",
       states: ["AZ"],
       landingPageSnapshot: "Landing",
       claims: [{ ...clean, expiresAt: "2025-01-01" }],
       now: new Date("2026-01-01"),
-    })).toThrow(/expired/i);
-    expect(() => evaluateCreativeClaims({
+    }).warnings).toEqual(expect.arrayContaining([expect.stringMatching(/expired/i)]));
+    expect(evaluateCreativeClaims({
       creativeText: "Coverage up to $75,000",
       leadType: "final_expense",
       states: ["AZ"],
       landingPageSnapshot: "Landing",
       claims: [],
       now: new Date("2026-01-01"),
-    })).toThrow(/Unregistered risky claim/i);
+    }).warnings).toEqual(expect.arrayContaining([expect.stringMatching(/Unregistered claim/i)]));
   });
 
-  it("does not treat a system seed or vendor popularity as carrier approval", () => {
-    expect(() => evaluateCreativeClaims({
+  it("records a warning for a system seed without blocking publish", () => {
+    expect(evaluateCreativeClaims({
       creativeText: "No medical exam",
       leadType: "final_expense",
       states: ["AZ"],
       landingPageSnapshot: "Landing",
       claims: [{ ...clean, approvedBy: "system_seed_v1" }],
       now: new Date("2026-01-01"),
-    })).toThrow(/carrier\/compliance approval/i);
+    }).warnings).toEqual(expect.arrayContaining([expect.stringMatching(/no current CoveCRM approval/i)]));
   });
 
   it("applies only a current tenant-specific approval with evidence", () => {

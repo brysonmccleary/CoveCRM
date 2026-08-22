@@ -40,6 +40,7 @@ import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabl
 import { computeHasAIForCustomer } from "@/lib/billing/computeHasAIForCustomer";
 import { computeAIEntitlement } from "@/lib/billing/computeAIEntitlement";
 import { isPhoneNumberSubscription as isPhoneNumberSubscriptionRecord } from "@/lib/billing/stripePlanClassification";
+import { releaseUserPhoneNumbers } from "@/lib/billing/releaseUserPhoneNumbers";
 import {
   AFFILIATE_MONTHLY_CREDIT_CENTS,
   AFFILIATE_MONTHLY_CREDIT_USD,
@@ -1586,15 +1587,18 @@ export default async function handler(
           }
         }
 
-        try {
-          await releasePhoneNumbersForSubscription({
-            subscriptionId: sub.id,
-            customerId,
-            reason: "subscription_deleted",
-            cancelStripeSubscription: false,
-          });
-        } catch (e) {
-          console.error("customer.subscription.deleted phone cleanup error:", e);
+        // The CRM plan just ended, so tear down all of the user's numbers —
+        // including trial numbers that never had a phone subscription and
+        // would otherwise sit in Twilio forever.
+        if (user) {
+          try {
+            await releaseUserPhoneNumbers({
+              userId: String((user as any)._id),
+              reason: "subscription_deleted",
+            });
+          } catch (e) {
+            console.error("customer.subscription.deleted phone cleanup error:", e);
+          }
         }
 
         break;

@@ -20,13 +20,9 @@ import { buildLaunchFingerprint, requireDailyBudgetCents } from "@/lib/facebook/
 import { verifyMetaAdset } from "@/lib/facebook/metaAdsetVerification";
 import { claimLaunchCampaign, releaseLaunchCampaignClaim } from "@/lib/facebook/claimLaunchCampaign";
 import { signHostedAttributionToken } from "@/lib/facebook/hostedAttribution";
-import MetaClaimRegistry from "@/models/MetaClaimRegistry";
-import MetaClaimApproval, { COVECRM_PLATFORM_CLAIM_SCOPE } from "@/models/MetaClaimApproval";
 import {
   buildLandingPageSnapshot,
-  applyTenantClaimApprovals,
   DEFAULT_META_CLAIMS,
-  ensureDefaultMetaClaims,
   evaluateCreativeClaims,
   requiredQualifierTextsForCreative,
 } from "@/lib/facebook/claimsRegistry";
@@ -453,30 +449,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       qualifierTexts: [] as string[],
     };
 
-    // Compliance gate runs before CRM folder creation or any Meta object creation.
-    // Qualifiers are derived from registered claims and then verified against the
-    // same landing-page fields consumed by /f/[id], not a detached flag.
-    let registeredClaims: any[];
-    if (process.env.NODE_ENV === "test") {
-      registeredClaims = DEFAULT_META_CLAIMS as any[];
-    } else {
-      await ensureDefaultMetaClaims();
-      const [baseClaims, tenantApprovals] = await Promise.all([
-        MetaClaimRegistry.find({}).lean() as any,
-        MetaClaimApproval.find({
-          userEmail: { $in: [COVECRM_PLATFORM_CLAIM_SCOPE, userEmail] },
-          revokedAt: null,
-        }).lean() as any,
-      ]);
-      // Apply the platform approval first; a narrower tenant approval can
-      // override it when one intentionally exists.
-      const orderedApprovals = [...(tenantApprovals as any[])].sort((a, b) => {
-        const aPlatform = a.userEmail === COVECRM_PLATFORM_CLAIM_SCOPE ? 0 : 1;
-        const bPlatform = b.userEmail === COVECRM_PLATFORM_CLAIM_SCOPE ? 0 : 1;
-        return aPlatform - bPlatform;
-      });
-      registeredClaims = applyTenantClaimApprovals(baseClaims as any[], orderedApprovals);
-    }
+    // Copy review is advisory only. Qualifiers are still derived from recognized
+    // claims and rendered on the hosted funnel, but CoveCRM never blocks publish.
+    // Keep automatic disclosures and the immutable audit archive, but do not
+    // make publishing depend on CoveCRM-maintained approval records. Meta is the
+    // final authority for ad review.
+    const registeredClaims = DEFAULT_META_CLAIMS as any[];
     const creativeClaimText = normalizedDrafts.map((draft) => [
       draft?.primaryText,
       draft?.headline,

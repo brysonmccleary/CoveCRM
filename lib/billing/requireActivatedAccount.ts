@@ -20,6 +20,11 @@ export function isAccountActivated(user: any): boolean {
   if (user.trialGranted === true) return true;
   // hasEverPaid is set only after invoice.payment_succeeded webhook fires
   if (user.hasEverPaid === true) return true;
+  // Card-less trial: verified users may explore the app until their trial
+  // window closes. Money paths stay behind requireBillingReady, and phone
+  // numbers are not provisioned until a card is on file.
+  const trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt).getTime() : 0;
+  if (trialEndsAt > Date.now()) return true;
   return false;
 }
 

@@ -150,26 +150,31 @@ export function evaluateCreativeClaims(input: {
 }) {
   const now = input.now || new Date();
   const matched = input.claims.filter((claim) => new RegExp(claim.pattern, "i").test(input.creativeText));
+  const warnings: string[] = [];
   for (const claim of matched) {
     if (!String(claim.approvedBy || "").trim() || /^system[_ -]/i.test(String(claim.approvedBy))) {
-      throw new Error(`Claim requires current carrier/compliance approval before publishing: ${claim.claimText}`);
+      warnings.push(`Claim has no current CoveCRM approval record: ${claim.claimText}`);
     }
     if (!String(claim.carrierBasis || "").trim()) {
-      throw new Error(`Claim is missing carrier substantiation: ${claim.claimText}`);
+      warnings.push(`Claim is missing stored carrier substantiation: ${claim.claimText}`);
     }
     if (!String(claim.approvalEvidence || "").trim() && claim.approvedBy !== "compliance") {
-      throw new Error(`Claim approval is missing evidence: ${claim.claimText}`);
+      warnings.push(`Claim approval has no stored evidence: ${claim.claimText}`);
     }
-    if (new Date(claim.expiresAt).getTime() <= now.getTime()) throw new Error(`Claim registry entry expired: ${claim.claimText}`);
-    if (!claim.eligibleProducts.includes(input.leadType)) throw new Error(`Claim is not registered for ${input.leadType}: ${claim.claimText}`);
+    if (new Date(claim.expiresAt).getTime() <= now.getTime()) {
+      warnings.push(`Claim registry entry is expired: ${claim.claimText}`);
+    }
+    if (!claim.eligibleProducts.includes(input.leadType)) {
+      warnings.push(`Claim is not registered for ${input.leadType}: ${claim.claimText}`);
+    }
     const allowedStates = new Set(claim.states || []);
     if (!allowedStates.has("*") && input.states.some((state) => !allowedStates.has(state))) {
-      throw new Error(`Claim is not registered for every selected state: ${claim.claimText}`);
+      warnings.push(`Claim is not registered for every selected state: ${claim.claimText}`);
     }
     if (claim.classification === "QUALIFIED") {
       const qualifier = String(claim.requiredQualifierText || "").trim();
       if (!qualifier || !input.landingPageSnapshot.includes(qualifier)) {
-        throw new Error(`Qualified claim requires this rendered landing-page disclosure: ${qualifier || claim.claimText}`);
+        warnings.push(`Qualified claim is missing its rendered landing-page disclosure: ${qualifier || claim.claimText}`);
       }
     }
   }
@@ -189,7 +194,7 @@ export function evaluateCreativeClaims(input: {
   });
   if (unmatchedRisky) {
     const sample = input.creativeText.match(unmatchedRisky)?.[0] || "risky claim";
-    throw new Error(`Unregistered risky claim '${sample}'. Add a current substantiated claim registry entry before publishing.`);
+    warnings.push(`Unregistered claim detected for review: ${sample}`);
   }
   return {
     matchedClaims: matched,
@@ -197,5 +202,6 @@ export function evaluateCreativeClaims(input: {
       .filter((claim) => claim.classification === "QUALIFIED")
       .map((claim) => String(claim.requiredQualifierText || "").trim())
       .filter(Boolean))),
+    warnings,
   };
 }

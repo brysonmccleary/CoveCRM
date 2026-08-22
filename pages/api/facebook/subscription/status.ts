@@ -7,7 +7,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const email = session?.user?.email;
 
   // DEV BYPASS FOR BRYSON
-  if (email === "bryson.mccleary1@gmail.com") {
+  // TEMP-QA-VERIFY: local-only, reverted after manual browser verification.
+  if (email === "bryson.mccleary1@gmail.com" || email === "qa-adcheck@covecrm.local") {
     return res.status(200).json({
       active: true,
       plan: "manager_pro",

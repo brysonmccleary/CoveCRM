@@ -348,6 +348,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       leadType: normalizedLeadType,
       leadSource: "facebook_funnel",
       sourceType: "facebook_funnel",
+      realTimeEligible: true,
       stateRestrictionWarning: !!(outsideLicensedArea || stateRestrictionWarning),
       stateOutsidePrimaryLicensedArea: !!(outsideLicensedArea || stateOutsidePrimaryLicensedArea),
     });

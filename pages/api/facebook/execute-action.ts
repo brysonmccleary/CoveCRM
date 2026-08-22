@@ -10,7 +10,6 @@ import User from "@/models/User";
 import CampaignActionLog from "@/models/CampaignActionLog";
 import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 import { metaGraphUrl } from "@/lib/meta/graphApi";
-import { assertCampaignComplianceCurrent } from "@/lib/facebook/assertCampaignComplianceCurrent";
 
 type ActionType = "PAUSE" | "RESUME" | "SCALE" | "DECREASE" | "FIX" | "DUPLICATE_TEST" | "SET_BUDGET";
 
@@ -209,14 +208,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!campaign) {
     return res.status(404).json({ error: "Campaign not found" });
-  }
-
-  if (["RESUME", "SCALE", "DUPLICATE_TEST"].includes(String(actionType))) {
-    try {
-      await assertCampaignComplianceCurrent({ campaign, userEmail: email });
-    } catch (error: any) {
-      return res.status(400).json({ error: error?.message || "Campaign compliance approval is not current" });
-    }
   }
 
   const accessToken = String(user.metaSystemUserToken || user.metaAccessToken || "").trim();

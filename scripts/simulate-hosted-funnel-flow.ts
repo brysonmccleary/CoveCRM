@@ -166,8 +166,8 @@ async function main() {
     check("hosted funnel stores state", standardLead.State === "AZ", `State=${standardLead.State || "(blank)"}`);
     check(
       "hosted funnel stores source",
-      standardLead.leadSource === "facebook_realtime" && standardLead.sourceType === "facebook_funnel",
-      `leadSource=${standardLead.leadSource || "(blank)"}, sourceType=${standardLead.sourceType || "(blank)"}`,
+      standardLead.leadSource === "facebook_funnel" && standardLead.sourceType === "facebook_funnel" && standardLead.realTimeEligible === true,
+      `leadSource=${standardLead.leadSource || "(blank)"}, sourceType=${standardLead.sourceType || "(blank)"}, realTimeEligible=${String(standardLead.realTimeEligible)}`,
     );
 
     const otpCode = "482731";

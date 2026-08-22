@@ -33,7 +33,7 @@ const FALLBACK_PROMPTS: Record<string, string> = {
   iul:
     "Premium direct-response IUL education ad creative background, blue gold white clean graphic layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean background with space for overlay, no readable text inside image, NOT lifestyle stock-photo style, no logos",
   trucker:
-    "Direct-response trucker insurance ad creative background, large semi truck hero image on highway, poster composition, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean graphic background with space for overlay, no readable text inside image, high contrast neon amber blue or patriotic palette, NOT stock-photo style, NO home-family scenes, no logos",
+    "Direct-response trucker insurance ad creative background, a large realistic commercial semi truck (18-wheeler tractor-trailer) as the clear hero subject on an open American highway, dramatic sunset or neon-lit night sky, wide poster composition, blank reserved headline area at the top for app-rendered text, blank reserved CTA/button area at the bottom for app-rendered UI, the truck itself must be plainly recognizable and not obscured, no readable text inside image, no logos or brand names on the truck, high contrast neon amber/cyan or patriotic red-white-blue palette, NOT stock-photo style, NO home-family scenes, NO people in the frame",
 };
 
 const SAFE_PUBLIC_ERROR =

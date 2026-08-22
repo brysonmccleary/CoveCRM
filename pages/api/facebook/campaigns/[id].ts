@@ -8,7 +8,6 @@ import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 import { metaGraphUrl } from "@/lib/meta/graphApi";
-import { assertCampaignComplianceCurrent } from "@/lib/facebook/assertCampaignComplianceCurrent";
 
 async function updateMetaObjectStatus(
   objectId: string,
@@ -106,14 +105,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           error: metaHealth.reason,
           metaHealth,
         });
-      }
-
-      if (requestedMetaStatus === "ACTIVE") {
-        try {
-          await assertCampaignComplianceCurrent({ campaign, userEmail: session.user.email });
-        } catch (error: any) {
-          return res.status(400).json({ error: error?.message || "Campaign compliance approval is not current" });
-        }
       }
 
       try {

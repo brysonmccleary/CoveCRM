@@ -29,8 +29,8 @@ export default function VerifyEmailPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) throw new Error(data?.error || "Verification failed");
-      toast.success("Email verified. Continue to billing.");
-      window.location.href = `/billing?email=${encodeURIComponent(email)}&trial=1`;
+      toast.success("Email verified. Log in to get started!");
+      window.location.href = `/auth/signin?callbackUrl=${encodeURIComponent("/dashboard")}`;
     } catch (err: any) {
       toast.error(err?.message || "Verification failed");
     } finally {
