@@ -8,6 +8,10 @@ import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 import { metaGraphUrl } from "@/lib/meta/graphApi";
+import {
+  getMetaActivationPublicMessage,
+  getMetaBudgetPublicMessage,
+} from "@/lib/facebook/publicMetaErrors";
 
 async function updateMetaObjectStatus(
   objectId: string,
@@ -72,9 +76,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (campaignName !== undefined) updates.campaignName = campaignName;
     if (requestedMetaStatus === "ACTIVE" || requestedMetaStatus === "PAUSED") {
       const metaCampaignId = String((campaign as any).metaCampaignId || "").trim();
-      if (!metaCampaignId) return res.status(400).json({ error: "Campaign is missing metaCampaignId" });
+      if (!metaCampaignId) return res.status(400).json({ error: "Campaign setup is incomplete. Please create the ad again." });
       const metaAdsetId = String((campaign as any).metaAdsetId || "").trim();
-      if (!metaAdsetId) return res.status(400).json({ error: "Campaign is missing metaAdsetId" });
+      if (!metaAdsetId) return res.status(400).json({ error: "Campaign setup is incomplete. Please create the ad again." });
       const currentAds = Array.isArray((campaign as any).ads) ? [ ...(campaign as any).ads ] : [];
       const metaAdIds = Array.from(
         new Set(
@@ -84,13 +88,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ].filter(Boolean)
         )
       );
-      if (!metaAdIds.length) return res.status(400).json({ error: "Campaign is missing metaAdId" });
+      if (!metaAdIds.length) return res.status(400).json({ error: "Campaign setup is incomplete. Please create the ad again." });
 
       const user = await User.findOne({ email: session.user.email.toLowerCase() })
         .select("_id email metaSystemUserToken metaAccessToken metaAdAccountId metaPageId metaReconnectNeeded metaHealthStatus lastMetaHealthError metaHealthCooldownUntil metaLastSuccessfulHealthCheckAt")
         .lean() as any;
       const accessToken = String(user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
-      if (!accessToken) return res.status(400).json({ error: "Meta access token missing" });
+      if (!accessToken) return res.status(400).json({ error: "Reconnect Facebook in CoveCRM, then try again." });
 
       const metaHealth = await checkMetaWriteReadiness({
         user,
@@ -145,8 +149,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }).catch(() => {});
         return res.status(500).json({
           ok: false,
-          error: "Meta status update failed",
-          failedObject: failure,
+          error: getMetaActivationPublicMessage(failure.metaError),
         });
       }
       updates.status = requestedMetaStatus === "ACTIVE" ? "active" : "paused";
@@ -191,7 +194,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             console.error("[campaign-patch] Meta budget update failed:", JSON.stringify(budgetJson).slice(0, 500));
             return res.status(400).json({
               ok: false,
-              error: `Meta rejected budget update: ${budgetJson?.error?.message || "unknown error"}`,
+              error: getMetaBudgetPublicMessage(budgetJson?.error),
             });
           }
           console.info(`[campaign-patch] Budget updated on Meta adset ${metaAdsetId}: $${(campaign as any).dailyBudget ?? "?"} → $${budgetDollars}`);

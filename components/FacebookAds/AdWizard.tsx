@@ -3,6 +3,10 @@ import { toPng } from "html-to-image";
 import AdPreviewCard, { ProductionFeedCreative } from "@/components/FacebookAds/AdPreviewCard";
 import StateSelector from "@/components/FacebookAds/StateSelector";
 import { US_STATES } from "@/lib/facebook/geo/usStates";
+import {
+  getMetaActivationPublicMessage,
+  getMetaLaunchPublicMessage,
+} from "@/lib/facebook/publicMetaErrors";
 
 const LEAD_TYPE_LABELS: Record<string, string> = {
   final_expense: "Final Expense",
@@ -504,11 +508,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
       });
       const json = await response.json();
       if (!response.ok || json?.ok === false) {
-        const metaError = String(json?.metaError || json?.details || json?.error || "");
-        if (metaError.includes("1359188")) {
-          throw new Error("Your Meta ad account has no payment method. Add one at business.facebook.com/billing then try again.");
-        }
-        throw new Error(metaError || "Launch failed");
+        throw new Error(getMetaLaunchPublicMessage(json?.error));
       }
       setResult(json);
       setStep(5);
@@ -534,7 +534,9 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         body: JSON.stringify({ status: "ACTIVE" }),
       });
       const json = await response.json();
-      if (!response.ok || json?.ok === false) throw new Error(json?.error || "Activation failed");
+      if (!response.ok || json?.ok === false) {
+        throw new Error(getMetaActivationPublicMessage(json?.error));
+      }
       setResult((current: any) => ({ ...(current || {}), status: "active" }));
     } catch (err: any) {
       setError(err?.message || "Activation failed");

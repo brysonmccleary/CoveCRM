@@ -35,6 +35,10 @@ import {
   verifyNativeLeadFormQualitySettings,
   type NativeLeadFormSpecification,
 } from "@/lib/facebook/metaLeadFormTemplate";
+import {
+  buildMetaCreativeEnhancementSpec,
+  getMetaLaunchPublicMessage,
+} from "@/lib/facebook/publicMetaErrors";
 
 export const config = {
   api: {
@@ -987,12 +991,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const creativeParams = new URLSearchParams();
           creativeParams.set("name", `${safeName} Creative ${index + 1}`);
           creativeParams.set("object_story_spec", JSON.stringify(objectStorySpec));
-          creativeParams.set("degrees_of_freedom_spec", JSON.stringify({
-            creative_features_spec: {
-              multi_advertiser_ads: { enroll_status: "OPT_OUT" },
-              standard_enhancements: { enroll_status: "OPT_OUT" },
-            },
-          }));
+          creativeParams.set(
+            "degrees_of_freedom_spec",
+            JSON.stringify(buildMetaCreativeEnhancementSpec())
+          );
           creativeParams.set("access_token", accessToken);
 
           const metaCreativeResp = await fetch(metaGraphUrl(`act_${adAccountIdFinal}/adcreatives`), {
@@ -1139,13 +1141,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (metaPublishStatus === "failed") {
       return res.status(500).json({
         ok: false,
-        error: "Meta publish failed",
-        metaError,
-        metaCampaignId,
-        metaAdsetId,
-        metaFormId,
-        metaAdId,
-        campaignId,
+        // Raw Meta payloads stay in server logs and campaign diagnostics. They
+        // must never be rendered in the customer-facing launch flow.
+        error: getMetaLaunchPublicMessage(metaError),
       });
     }
 
@@ -1166,6 +1164,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
   } catch (err: any) {
     console.error("[publish-ad] error:", err?.message);
-    return res.status(500).json({ ok: false, error: "Failed to create campaign", details: err?.message });
+    return res.status(500).json({
+      ok: false,
+      error: getMetaLaunchPublicMessage(err?.message),
+    });
   }
 }
