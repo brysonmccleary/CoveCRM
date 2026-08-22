@@ -107,13 +107,13 @@ function hashString(value: string): number {
 
 function visualVariantCount(leadType: string): number {
   const counts: Record<string, number> = {
-    veteran: 24,
-    trucker: 24,
-    final_expense: 24,
-    mortgage_protection: 24,
-    iul: 24,
+    veteran: 40,
+    trucker: 40,
+    final_expense: 40,
+    mortgage_protection: 40,
+    iul: 40,
   };
-  return counts[leadType] || 24;
+  return counts[leadType] || 40;
 }
 
 function sanitizeCreativeText(value: string, leadType: string): string {

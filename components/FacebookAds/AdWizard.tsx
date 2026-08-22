@@ -66,6 +66,7 @@ type CaptureValidation = {
 };
 
 const CAPTURE_ERROR = "Ad image capture failed. Please try again.";
+const FIT_ERROR = "This ad did not fit safely. Regenerate it before launching.";
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -124,6 +125,33 @@ async function waitForCaptureReady(node: HTMLElement) {
   if (rect.width <= 0 || rect.height <= 0) {
     throw new Error("Creative capture node has no layout size");
   }
+}
+
+function validateCreativeDomFit(node: HTMLElement) {
+  const rootRect = node.getBoundingClientRect();
+  const tolerance = 2;
+  const failures: string[] = [];
+  const leaves = Array.from(node.querySelectorAll<HTMLElement>("*"))
+    .filter((element) => element.childElementCount === 0 && Boolean(element.textContent?.trim()));
+
+  for (const element of leaves) {
+    const style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+    const rect = element.getBoundingClientRect();
+    const outside = rect.left < rootRect.left - tolerance
+      || rect.top < rootRect.top - tolerance
+      || rect.right > rootRect.right + tolerance
+      || rect.bottom > rootRect.bottom + tolerance;
+    const clippedVertically = element.scrollHeight > element.clientHeight + 1
+      && ["hidden", "clip"].includes(style.overflowY);
+    const clippedHorizontally = element.scrollWidth > element.clientWidth + 1
+      && ["hidden", "clip"].includes(style.overflowX);
+    if (outside || clippedVertically || clippedHorizontally) {
+      failures.push(String(element.textContent || "").trim().slice(0, 80));
+    }
+  }
+
+  return { ok: failures.length === 0, failures };
 }
 
 function decodeImage(dataUrl: string) {
@@ -356,7 +384,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
       setError("Licensed states required");
       return;
     }
-    if (isRegenerate && regenerateAttempts >= 3) return;
     setLoading(true);
     setError("");
     setImageError("");
@@ -433,6 +460,14 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         let renderedCreativeDataUrl = "";
         try {
           await waitForCaptureReady(node);
+          const domFit = validateCreativeDomFit(node);
+          if (!domFit.ok) {
+            if (process.env.NODE_ENV === "development") {
+              console.warn("[AdWizard] creative fit validation failed", { index, failures: domFit.failures });
+            }
+            setError(FIT_ERROR);
+            return;
+          }
           renderedCreativeDataUrl = await toPng(node, {
             quality: 0.92,
             pixelRatio: 2,
@@ -773,7 +808,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	              disabled={loading || imageGenerating}
 	              className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-white text-sm font-semibold disabled:opacity-50"
 	            >
-	              {loading ? "Regenerating..." : `Regenerate Set (${3 - regenerateAttempts} left)`}
+	              {loading ? "Regenerating..." : "Regenerate Set"}
 	            </button>
 	          </div>
 	          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-4 gap-4">

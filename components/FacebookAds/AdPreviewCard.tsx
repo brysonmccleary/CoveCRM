@@ -169,6 +169,12 @@ function isPhotoEligible(leadType: string, variantIndex: number, layoutFamily: s
   return variantIndex % 2 === 0;
 }
 
+function getVisualLeadType(draft: any, leadType: string): string {
+  const audienceSegment = cleanText(draft?.audienceSegment).toLowerCase();
+  if (audienceSegment === "veteran" || audienceSegment === "trucker") return audienceSegment;
+  return leadType;
+}
+
 function getStaticBackgroundUrl(leadType: string, variantIndex: number): string {
   const count = STATIC_BACKGROUND_COUNTS[leadType];
   if (!count) return "";
@@ -179,8 +185,9 @@ function getStaticBackgroundUrl(leadType: string, variantIndex: number): string 
 function getCreativeBackground(draft: any, leadType: string, variantIndex: number, layoutFamily: string): string {
   const imageUrl = cleanText(draft?.imageUrl);
   if (imageUrl) return imageUrl;
-  if (isPhotoEligible(leadType, variantIndex, layoutFamily)) {
-    return getStaticBackgroundUrl(leadType, variantIndex);
+  const visualLeadType = getVisualLeadType(draft, leadType);
+  if (isPhotoEligible(visualLeadType, variantIndex, layoutFamily)) {
+    return getStaticBackgroundUrl(visualLeadType, variantIndex);
   }
   return "";
 }
@@ -220,7 +227,7 @@ function pickVisualVariant(draft: any, leadType: string, count: number): number 
   return (hashString(getVariationSeed(draft, leadType)) + attemptOffset) % safeCount;
 }
 
-const VISUAL_VARIANT_COUNT = 24;
+const VISUAL_VARIANT_COUNT = 40;
 
 function ButtonGrid({
   labels,
@@ -232,6 +239,7 @@ function ButtonGrid({
   customStyle?: { background: string; color: string; border: string; radius?: number };
 }) {
   if (!labels.length) return null;
+  const compactLabels = labels.some((label) => label.length > 10);
 
   const styles: Record<string, { background: string; color: string; border: string; radius: number }> = {
     navy: { background: "#1a2744", color: "#ffffff", border: "1px solid rgba(255,255,255,0.22)", radius: 999 },
@@ -243,7 +251,7 @@ function ButtonGrid({
   const selected = customStyle ? { ...customStyle, radius: customStyle.radius ?? styles[styleType].radius } : styles[styleType];
 
   return (
-    <div style={{ display: "flex", gap: 7, justifyContent: "center", flexWrap: "wrap" }}>
+    <div style={{ display: compactLabels ? "grid" : "flex", gridTemplateColumns: compactLabels ? "1fr 1fr" : undefined, gap: 7, justifyContent: "center", flexWrap: compactLabels ? undefined : "wrap", width: "100%" }}>
       {labels.slice(0, 4).map((label) => (
         <div
           key={label}
@@ -252,13 +260,13 @@ function ButtonGrid({
             color: selected.color,
             border: selected.border,
             borderRadius: selected.radius,
-            padding: "9px 13px",
-            minWidth: styleType === "red" ? 92 : undefined,
+            padding: compactLabels ? "7px 6px" : "9px 13px",
+            minWidth: compactLabels ? 0 : styleType === "red" ? 92 : undefined,
             textAlign: "center",
-            fontSize: 12,
+            fontSize: compactLabels ? 11 : 12,
             fontWeight: 900,
             lineHeight: 1,
-            whiteSpace: "nowrap",
+            whiteSpace: compactLabels ? "normal" : "nowrap",
             boxShadow: "0 8px 18px rgba(0,0,0,0.18)",
           }}
         >
@@ -419,12 +427,17 @@ type CreativeState = {
   spanish: boolean;
 };
 
+// Curated from the supplied top-vendor references. These are the existing
+// Cove layouts that already match the proven direct-response structures:
+// amount hero, age selector, rate table, benefit grid, audience photo, and
+// one clear CTA. Weak generic/mobile/chat/pop-art treatments remain in the
+// renderer for backwards compatibility but are no longer selected for new ads.
 const LAYOUTS_BY_LEAD_TYPE: Record<string, LayoutFamily[]> = {
-  veteran: ["patriotic_badge", "amount_hero", "quiz_card", "split_panel", "checklist_first", "poster_stack", "advisory_notice", "benefit_grid", "age_selector", "patriotic_notice", "premium_dark_gold", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
-  trucker: ["split_panel", "dark_response", "selector_grid", "report_card", "messenger_prompt", "poster_stack", "mobile_native", "trucker_highway", "age_selector", "price_table", "premium_dark_gold", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
-  mortgage_protection: ["selector_grid", "comparison_table", "premium_card", "split_panel", "mobile_native", "report_card", "quiz_card", "price_table", "homeowner_table", "benefit_grid", "patriotic_notice", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
-  final_expense: ["amount_hero", "premium_card", "checklist_first", "quiz_card", "advisory_notice", "comparison_table", "dark_response", "trust_medical", "price_table", "age_selector", "benefit_grid", "patriotic_notice", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
-  iul: ["premium_card", "report_card", "split_panel", "trust_medical", "mobile_native", "checklist_first", "clean_white_diagram", "premium_dark_gold", "benefit_grid", "price_table", "ornate_gold_frame", "aged_parchment", "pop_art_burst"],
+  veteran: ["amount_hero", "age_selector", "benefit_grid", "patriotic_notice", "aged_parchment", "premium_dark_gold"],
+  trucker: ["trucker_highway", "age_selector", "price_table", "premium_dark_gold", "amount_hero"],
+  mortgage_protection: ["price_table", "homeowner_table", "benefit_grid", "selector_grid", "amount_hero", "comparison_table"],
+  final_expense: ["amount_hero", "age_selector", "premium_dark_gold", "price_table", "ornate_gold_frame", "benefit_grid"],
+  iul: ["clean_white_diagram", "benefit_grid", "premium_dark_gold", "price_table"],
 };
 
 const IA_BY_LEAD_TYPE: Record<string, IaFamily[]> = {
@@ -441,11 +454,64 @@ function pickSeeded<T>(values: T[], seed: number, salt: string): T {
 
 const EXPLICIT_LAYOUT_BY_FAMILY_ID: Record<string, LayoutFamily> = {
   fe_senior_benefit_card: "amount_hero",
+  fe_no_exam_age_card: "age_selector",
+  fe_coverage_price_table: "price_table",
+  fe_private_burial_fund: "ornate_gold_frame",
+  mp_amount_button_card: "selector_grid",
+  mp_rate_table_card: "price_table",
+  mp_clean_navy_price_table: "price_table",
+  mp_simple_benefit_card: "homeowner_table",
+  mp_living_benefits_alert: "price_table",
+  mp_with_without_coverage: "comparison_table",
+  mp_family_home_warmth: "amount_hero",
+  mp_veteran_family_home: "aged_parchment",
+  mp_veteran_living_benefits: "patriotic_notice",
+  mp_trucker_home_on_road: "trucker_highway",
+  mp_trucker_income_gap: "trucker_highway",
+  vet_patriotic_amount_card: "amount_hero",
+  vet_age_qualifier_card: "age_selector",
+  vet_benefit_unlock_long_copy: "premium_dark_gold",
+  vet_branch_selector: "age_selector",
+  vet_spouse_security: "amount_hero",
+  vet_benefit_grid_notice: "benefit_grid",
+  vet_whole_life_bold_white: "patriotic_notice",
+  vet_coverage_up_to_100k: "amount_hero",
+  vet_legacy_protection_cards: "benefit_grid",
+  vet_spouse_family_private: "amount_hero",
+  vet_notice_paper_border: "aged_parchment",
+  trk_neon_card: "trucker_highway",
+  trk_patriotic_card: "trucker_highway",
+  trk_blue_highway_clean: "trucker_highway",
+  trk_sunset_highway_gold: "trucker_highway",
+  trk_dark_purple_sky: "trucker_highway",
+  trk_patriotic_rate_table: "price_table",
+  trk_truck_stop_lifestyle: "trucker_highway",
+  trk_view_options_age_card: "age_selector",
+  trk_family_home_base: "trucker_highway",
+  trk_black_gold_premium: "premium_dark_gold",
+  iul_clean_triangle_diagram: "clean_white_diagram",
+  iul_family_legacy: "benefit_grid",
+  iul_market_loss_protection: "benefit_grid",
+  iul_flexible_cash_access: "benefit_grid",
+  iul_black_gold_retirement: "premium_dark_gold",
+  iul_veteran_triangle_legacy: "clean_white_diagram",
+  iul_veteran_black_gold: "premium_dark_gold",
+  iul_trucker_blue_highway: "trucker_highway",
+  iul_trucker_sunset_gold: "trucker_highway",
+  iul_trucker_premium_black_gold: "premium_dark_gold",
+  iul_trucker_dark_purple_sky: "trucker_highway",
 };
 
 export function resolveCreativeLayoutFamily(draft: any, leadType: string, seed: number, variantIndex: number): LayoutFamily {
   const explicitLayout = EXPLICIT_LAYOUT_BY_FAMILY_ID[cleanText(draft?.winningFamilyId)];
   if (explicitLayout) return explicitLayout;
+  const audienceSegment = cleanText(draft?.audienceSegment).toLowerCase();
+  if (audienceSegment === "trucker" && (leadType === "iul" || leadType === "mortgage_protection")) {
+    return pickSeeded(["trucker_highway", "price_table", "premium_dark_gold"], seed + variantIndex * 11, "layout");
+  }
+  if (audienceSegment === "veteran" && leadType === "mortgage_protection") {
+    return pickSeeded(["aged_parchment", "patriotic_notice", "benefit_grid"], seed + variantIndex * 11, "layout");
+  }
   return pickSeeded(
     LAYOUTS_BY_LEAD_TYPE[leadType] || LAYOUTS_BY_LEAD_TYPE.final_expense,
     seed + variantIndex * 11,
@@ -453,9 +519,47 @@ export function resolveCreativeLayoutFamily(draft: any, leadType: string, seed: 
   );
 }
 
+function getProductLabel(leadType: string, audienceSegment: string, spanish = false): string {
+  if (spanish) {
+    if (leadType === "mortgage_protection") return "SEGURO DE PROTECCIÓN HIPOTECARIA";
+    if (leadType === "iul") return "SEGURO DE VIDA UNIVERSAL INDEXADO (IUL)";
+    return "SEGURO DE GASTOS FINALES";
+  }
+  if (leadType === "veteran") return "LIFE INSURANCE FOR VETERANS";
+  if (leadType === "trucker") return "LIFE INSURANCE FOR CDL DRIVERS";
+  if (leadType === "mortgage_protection") {
+    if (audienceSegment === "veteran") return "MORTGAGE PROTECTION FOR VETERANS";
+    if (audienceSegment === "trucker") return "MORTGAGE PROTECTION FOR CDL DRIVERS";
+    return "MORTGAGE PROTECTION INSURANCE";
+  }
+  if (leadType === "iul") {
+    if (audienceSegment === "veteran") return "IUL LIFE INSURANCE FOR VETERANS";
+    if (audienceSegment === "trucker") return "TRUCKERS IUL LIFE INSURANCE";
+    return "INDEXED UNIVERSAL LIFE INSURANCE";
+  }
+  return "FINAL EXPENSE INSURANCE";
+}
+
+function isProductClear(value: string, leadType: string, spanish = false): boolean {
+  const text = cleanText(value).toLowerCase();
+  if (spanish) {
+    if (leadType === "mortgage_protection") return /hipotecar|hipoteca/.test(text);
+    if (leadType === "iul") return /iul|universal indexad|valor en efectivo/.test(text);
+    return /gastos finales|funeral|entierro|vida entera/.test(text);
+  }
+  if (leadType === "mortgage_protection") return /mortgage protection/.test(text);
+  if (leadType === "iul") return /\biul\b|indexed universal life|cash value life insurance/.test(text);
+  if (leadType === "veteran") return /life insurance|whole life|burial|final expense/.test(text);
+  if (leadType === "trucker") return /life insurance|\biul\b|burial|final expense/.test(text);
+  return /final expense|burial insurance|whole life|funeral expense/.test(text);
+}
+
 function clampCopy(value: string, maxLength: number): string {
   const text = cleanText(value);
-  return text.length > maxLength ? `${text.slice(0, maxLength - 3).trim()}...` : text;
+  if (text.length <= maxLength) return text;
+  const candidate = text.slice(0, maxLength + 1);
+  const lastSpace = candidate.lastIndexOf(" ");
+  return candidate.slice(0, lastSpace >= Math.floor(maxLength * 0.65) ? lastSpace : maxLength).trim();
 }
 
 function getLeadFallbackHeadline(leadType: string, spanish = false): string {
@@ -581,15 +685,43 @@ function getPalettes(leadType: string): Palette[] {
       makePalette("charcoal_gold_iul", "#2a2a2a", "#ffd700", "#ffffff", "#d4b800", "#ffd700", "#000000"),
     ],
   };
-  return base[leadType] || base.final_expense;
+  const referencePaletteNames: Record<string, string[]> = {
+    veteran: ["navy_gold_cream", "distressed_flag_dark", "dark_premium_gold", "black_champagne_veteran", "cream_paper_patriotic"],
+    trucker: ["navy_orange", "neon_cyan_amber", "diesel_bronze", "black_orange_trucker"],
+    mortgage_protection: ["red_white_navy", "cream_gold_navy", "blue_trust", "brown_cream_mortgage", "clean_blue_mortgage"],
+    final_expense: ["black_gold", "cream_gold", "dark_navy_gold", "green_final_expense", "black_gold_final_expense"],
+    iul: ["deep_blue_gold", "black_champagne", "clean_blue_white", "charcoal_gold_iul"],
+  };
+  const palettes = base[leadType] || base.final_expense;
+  const allowed = new Set(referencePaletteNames[leadType] || referencePaletteNames.final_expense);
+  return palettes.filter((palette) => allowed.has(palette.name));
 }
 
 function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<typeof getOverlay>): CreativeState {
   const spanish = draft?.audienceSegment === "spanish";
+  const audienceSegment = cleanText(draft?.audienceSegment || "standard").toLowerCase();
   const seed = hashString(getVariationSeed(draft, leadType));
   const variantIndex = pickVisualVariant(draft, leadType, VISUAL_VARIANT_COUNT);
-  const palette = getPalettes(leadType)[variantIndex % getPalettes(leadType).length];
+  const basePalette = getPalettes(leadType)[variantIndex % getPalettes(leadType).length];
   const layoutFamily = resolveCreativeLayoutFamily(draft, leadType, seed, variantIndex);
+  const backgroundUrl = getCreativeBackground(draft, leadType, variantIndex, layoutFamily);
+  const palette = backgroundUrl
+    ? {
+        ...basePalette,
+        eyebrow: "#f8cf5a",
+        headline: "#ffffff",
+        headlineBg: "rgba(0,0,0,0.66)",
+        headlineBorder: "rgba(255,255,255,0.24)",
+        subheadline: "#ffffff",
+        accent: "#f8cf5a",
+        panel: "rgba(0,0,0,0.66)",
+        panelBorder: "rgba(255,255,255,0.24)",
+        buttonBg: basePalette.cta,
+        buttonText: "#ffffff",
+        buttonBorder: "1.5px solid rgba(255,255,255,0.55)",
+        benefit: "dark" as const,
+      }
+    : basePalette;
   const iaFamily = pickSeeded(IA_BY_LEAD_TYPE[leadType] || IA_BY_LEAD_TYPE.final_expense, seed + variantIndex * 17, "ia");
   const densityStyle = pickSeeded<DensityStyle>(["compact", "balanced", "roomy"], seed + variantIndex, "density");
   const typographyStyle = pickSeeded<TypographyStyle>(["condensed_poster", "premium_clean", "utility_ui", "aggressive_response", "trust_editorial", "modern_minimal"], seed + variantIndex, "type");
@@ -599,18 +731,22 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
   const fp = String(draft?.uniquenessFingerprint || "");
   const hash2 = Math.abs(hashString(`${fp}pad`));
   const hash3 = Math.abs(hashString(`${fp}gap`));
-  const hash4 = Math.abs(hashString(`${fp}cta`));
   const padOptions = [14, 18, 22, 26];
   const gapOptions = [8, 10, 12, 14];
-  const ctaFlow: CtaFlow = hash4 % 2 === 0 ? "inline_cta" : "bottom_bar";
+  const ctaFlow: CtaFlow = "bottom_bar";
   const density = {
     compact: { pad: padOptions[hash2 % 4], gap: gapOptions[hash3 % 4], lineHeight: 1.03 },
     balanced: { pad: padOptions[hash2 % 4], gap: gapOptions[hash3 % 4], lineHeight: 1.08 },
     roomy: { pad: padOptions[hash2 % 4], gap: gapOptions[hash3 % 4], lineHeight: 1.12 },
   }[densityStyle];
   void seededCtaFlow;
+  const productLabel = getProductLabel(leadType, audienceSegment, spanish);
   const headlineRaw = overlay.headline || cleanText(draft?.headline) || getLeadFallbackHeadline(leadType, spanish);
-  const headline = clampCopy(headlineRaw, headlineRaw.length > 46 ? 50 : 58);
+  const productClear = isProductClear(headlineRaw, leadType, spanish);
+  const headline = clampCopy(productClear ? headlineRaw : productLabel, 58);
+  const subheadlineRaw = productClear
+    ? overlay.subheadline
+    : [headlineRaw, overlay.subheadline].map(cleanText).filter(Boolean).join(" · ");
   const headlineBase = typographyStyle === "aggressive_response" ? 30 : typographyStyle === "utility_ui" ? 24 : typographyStyle === "modern_minimal" ? 25 : 27;
   const headlineSize = Math.max(20, headlineBase - (headline.length > 42 ? 3 : 0) - (densityStyle === "compact" ? 1 : 0));
   const fallbackButtons = leadType === "mortgage_protection"
@@ -628,13 +764,13 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     draft,
     leadType,
     headline,
-    subheadline: clampCopy(overlay.subheadline, 82),
+    subheadline: clampCopy(subheadlineRaw, 82),
     buttons: (overlay.buttonLabels.length ? overlay.buttonLabels : localizedFallbackButtons).slice(0, 4),
     bullets: overlay.benefitBullets.slice(0, 3),
     cta: clampCopy(overlay.ctaStrip || (spanish ? "Conozca sus opciones →" : "Learn more ->"), 42),
-    eyebrow: getLeadEyebrow(leadType, iaFamily, spanish),
+    eyebrow: productLabel,
     amount: cleanText(draft?.displayAmount) || overlay.buttonLabels.find((label) => label.includes("$")) || (leadType === "veteran" ? "$50,000" : ""),
-    backgroundUrl: getCreativeBackground(draft, leadType, variantIndex, layoutFamily),
+    backgroundUrl,
     layoutFamily,
     iaFamily,
     frameStyle,
@@ -656,6 +792,9 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
 }
 
 function getOverlayBackground(state: CreativeState): string {
+  if (state.backgroundUrl) {
+    return "linear-gradient(180deg, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.20) 46%, rgba(0,0,0,0.72) 100%)";
+  }
   if (state.overlayStyle === "soft_gradient") return "linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(0,0,0,0.62) 100%)";
   if (state.overlayStyle === "hard_vignette") return "radial-gradient(circle at 50% 24%, rgba(255,255,255,0.1) 0%, rgba(0,0,0,0.8) 72%)";
   if (state.overlayStyle === "paper_wash") return "linear-gradient(180deg, rgba(255,255,255,0.72) 0%, rgba(0,0,0,0.42) 100%)";
@@ -697,11 +836,14 @@ function Panel({ state, children, style = {} }: { state: CreativeState; children
 }
 
 function HeadlineBlock({ state, compact = false }: { state: CreativeState; compact?: boolean }) {
+  const showEyebrow = state.eyebrow.toLowerCase() !== state.headline.toLowerCase();
   return (
     <div style={{ color: state.palette.headline, background: state.palette.headlineBg, border: `1px solid ${state.palette.headlineBorder}`, borderRadius: state.radius, padding: compact ? "8px 10px" : "10px 12px" }}>
-      <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2, marginBottom: 5, textTransform: "uppercase" }}>
-        {state.eyebrow}
-      </div>
+      {showEyebrow && (
+        <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2, marginBottom: 5, textTransform: "uppercase" }}>
+          {state.eyebrow}
+        </div>
+      )}
       <div style={{ fontSize: compact ? state.headlineSize - 3 : state.headlineSize, fontWeight: 950, lineHeight: state.lineHeight, textTransform: "uppercase", ...lineClampStyle(2) }}>
         {state.headline}
       </div>
@@ -843,7 +985,7 @@ function renderAmountHero(state: CreativeState) {
           <MiniBenefits state={state} columns={2} />
           <div style={{ color: state.palette.headline, fontSize: 10, fontWeight: 950, letterSpacing: 1.1, textTransform: "uppercase" }}>{selectionLabel}</div>
           <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
-          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="floating_cta" />}
+          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="stacked_cta" />}
         </div>
       </div>
       {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
@@ -865,7 +1007,7 @@ function renderComparisonTable(state: CreativeState) {
             </div>
           ))}
         </Panel>
-        <CtaUnit state={state} flow={state.ctaFlow === "bottom_bar" ? "comparison_cta" : state.ctaFlow} />
+        {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow={state.ctaFlow} />}
       </div>
       {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
     </CreativeShell>
@@ -1331,19 +1473,13 @@ function FinishedCreativeRenderer({
   return renderTemplateFamily(buildCreativeState(draft, leadType, overlay));
 }
 
-/**
- * This card is captured pixel-for-pixel (html-to-image) and uploaded to Meta
- * as the literal ad creative -- there is no reflow or cropping step after
- * this renders. AI-generated copy has no length guarantee, so every text
- * block here must be hard-bounded or long copy pushes the CTA past the
- * fixed 540x675 canvas and gets sliced off by the root `overflow: hidden`.
- */
+// Text is never visually clamped. Copy is shortened at word boundaries, and
+// the launch flow rejects any remaining DOM overflow before image capture.
 function lineClampStyle(lines: number): React.CSSProperties {
+  void lines;
   return {
-    display: "-webkit-box",
-    WebkitBoxOrient: "vertical",
-    WebkitLineClamp: lines,
-    overflow: "hidden",
+    overflowWrap: "break-word",
+    wordBreak: "normal",
   } as React.CSSProperties;
 }
 
@@ -1356,63 +1492,37 @@ export function ProductionFeedCreative({
 }) {
   const overlay = getOverlay(draft);
   const leadType = cleanText(draft?.leadType || "final_expense");
-  const accent = PAGE_ACCENTS[leadType] || "#1d4ed8";
-  const headline = clampCopy(cleanText(overlay.headline || draft?.headline), 64);
-  const headlineFontSize = headline.length > 40 ? 38 : 48;
-  const subheadline = clampCopy(cleanText(overlay.subheadline || draft?.description), 120);
-  const ctaStrip = cleanText(overlay.ctaStrip || draft?.cta || "Learn more").replace(/\s*→\s*$/, "");
-  const bullets = cleanList(overlay.benefitBullets || draft?.bulletPoints)
-    .slice(0, 3)
-    .map((bullet) => clampCopy(bullet, 80));
+  const designWidth = 375;
+  const designHeight = 468.75;
+  const productionScale = 540 / designWidth;
 
   return (
     <div
       ref={creativeRef}
+      data-creative-root="true"
       style={{
         width: 540,
         height: 675,
         position: "relative",
         overflow: "hidden",
-        background: "#ffffff",
+        background: "#0f172a",
         fontFamily:
           "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
       }}
     >
-      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, #f8fafc 0%, #ffffff 46%, #eef2ff 100%)" }} />
-      <div style={{ position: "absolute", inset: 42, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 24 }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minHeight: 34, padding: "0 18px", borderRadius: 999, background: `${accent}18`, color: accent, border: `1.5px solid ${accent}55`, fontSize: 17, fontWeight: 900, letterSpacing: 0.4, textTransform: "uppercase" }}>
-            {LEAD_TYPE_LABELS[leadType] || PAGE_NAMES[leadType] || "Coverage Review"}
-          </div>
-          <div style={{ color: "#0f172a", fontSize: headlineFontSize, fontWeight: 950, lineHeight: 1.02, marginTop: 26, ...lineClampStyle(2) }}>
-            {headline}
-          </div>
-          {subheadline && (
-            <div style={{ color: "#334155", fontSize: 22, fontWeight: 700, lineHeight: 1.25, marginTop: 18, ...lineClampStyle(2) }}>
-              {subheadline}
-            </div>
-          )}
-        </div>
-
-        <div style={{ position: "relative", minHeight: 90, borderRadius: 28, overflow: "hidden", boxShadow: "0 22px 50px rgba(15,23,42,0.18)", border: "1px solid rgba(15,23,42,0.08)" }}>
+      <div
+        data-creative-design-canvas="true"
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: designWidth,
+          height: designHeight,
+          transform: `scale(${productionScale})`,
+          transformOrigin: "top left",
+        }}
+      >
           <FinishedCreativeRenderer draft={draft} leadType={leadType} overlay={overlay} />
-        </div>
-
-        <div style={{ display: "grid", gap: 14 }}>
-          {bullets.length > 0 && (
-            <div style={{ display: "grid", gap: 8 }}>
-              {bullets.map((bullet) => (
-                <div key={bullet} style={{ display: "flex", alignItems: "center", gap: 10, color: "#0f172a", fontSize: 19, fontWeight: 800, lineHeight: 1.15 }}>
-                  <span style={{ width: 22, height: 22, borderRadius: 999, background: accent, color: "#ffffff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 950, flexShrink: 0 }}>✓</span>
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bullet}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div style={{ minHeight: 58, borderRadius: 999, background: accent, color: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 950, boxShadow: `0 16px 34px ${accent}44`, padding: "0 22px", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-            {ctaStrip}
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -2090,7 +2200,7 @@ function CreativeRenderer({
 export default function AdPreviewCard({
   draft,
   selectedStates: _selectedStates = [],
-  regenerateAttempts = 0,
+  regenerateAttempts: _regenerateAttempts = 0,
   regenerating = false,
   onRegenerate,
   creativeRef,
@@ -2102,7 +2212,7 @@ export default function AdPreviewCard({
   onRegenerate: () => void;
   creativeRef?: React.RefObject<HTMLDivElement | null>;
 }) {
-  const canRegenerate = regenerateAttempts < 3 && !regenerating;
+  const canRegenerate = !regenerating;
   const overlay = getOverlay(draft);
   const leadType = cleanText(draft?.leadType || "final_expense");
   const pageName = PAGE_NAMES[leadType] || "Insurance Info Center";
@@ -2204,17 +2314,18 @@ export default function AdPreviewCard({
       )}
 
       <div
-        ref={creativeRef}
         style={{
           position: "relative",
           width: 375,
-          height: 375,
+          height: 468.75,
           overflow: "hidden",
-          background: "#ffffff",
+          background: "#0f172a",
           flexShrink: 0,
         }}
       >
-        <FinishedCreativeRenderer draft={draft} leadType={leadType} overlay={overlay} />
+        <div style={{ width: 540, height: 675, transform: `scale(${375 / 540})`, transformOrigin: "top left" }}>
+          <ProductionFeedCreative draft={draft} creativeRef={creativeRef} />
+        </div>
       </div>
 
       <div
@@ -2301,9 +2412,7 @@ export default function AdPreviewCard({
         >
           {regenerating
             ? "Regenerating…"
-            : canRegenerate
-            ? `↺  Regenerate (${3 - regenerateAttempts} left)`
-            : "No regenerations left"}
+            : "↺  Regenerate"}
         </button>
       </div>
     </div>
