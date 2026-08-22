@@ -51,6 +51,31 @@ import {
   buildInboundReasonAndRapport,
   shouldUseInboundFlow,
 } from "./flows/inbound";
+import {
+  adaptivePacingMs,
+  authoritativeRoutingText,
+  envFlagEnabled,
+  isFreshPrefetchedContext,
+  PrefetchedContextEntry,
+  scopedFeatureEnabled,
+  scriptWordingLevel,
+  ScriptWordingLevel,
+} from "./lib/naturalConversation";
+import {
+  beginCallerSpeech,
+  buildVoiceMetricsSnapshot,
+  createVoiceTelemetry,
+  currentResponseMetric,
+  endCallerSpeech,
+  recordResponseCreate,
+  VoiceFeatureFlags,
+  VoiceTelemetryState,
+} from "./lib/voiceTelemetry";
+import {
+  appendDurableTranscriptTurn,
+  DurableTranscriptTurn,
+  finalTranscriptTurns,
+} from "./lib/durableTranscript";
 
 /**
  * ENV + config
@@ -80,6 +105,20 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_REALTIME_MODEL =
   process.env.OPENAI_REALTIME_MODEL || "gpt-realtime-mini";
 const OPENAI_REALTIME_AUDIO_FORMAT = "audio/pcmu";
+
+const VOICE_PREFETCH_CONTEXT_V1 = envFlagEnabled(process.env.VOICE_PREFETCH_CONTEXT_V1);
+const VOICE_ADAPTIVE_PACING_V1 = envFlagEnabled(process.env.VOICE_ADAPTIVE_PACING_V1);
+const VOICE_NATURAL_SCRIPT_V1 = envFlagEnabled(process.env.VOICE_NATURAL_SCRIPT_V1);
+const VOICE_PHASE1_TEST_EMAILS = new Set(
+  String(process.env.VOICE_PHASE1_TEST_EMAILS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+);
+const VOICE_PREFETCH_CONTEXT_TEST_V1 = envFlagEnabled(process.env.VOICE_PREFETCH_CONTEXT_TEST_V1);
+const VOICE_ADAPTIVE_PACING_TEST_V1 = envFlagEnabled(process.env.VOICE_ADAPTIVE_PACING_TEST_V1);
+const VOICE_NATURAL_SCRIPT_TEST_V1 = envFlagEnabled(process.env.VOICE_NATURAL_SCRIPT_TEST_V1);
+const PREFETCH_CONTEXT_MAX_AGE_MS = 90_000;
 
 console.log("[AI-VOICE] Realtime model resolved:", OPENAI_REALTIME_MODEL, "(env:", process.env.OPENAI_REALTIME_MODEL ? "set" : "default", ")");
 console.log("[AI-VOICE] Realtime GA session mode enabled");
@@ -131,6 +170,7 @@ const OUTCOME_URL = new URL(
 ).toString();
 const USAGE_URL = new URL("/api/ai-calls/usage", COVECRM_BASE_URL).toString();
 const TRANSCRIPT_URL = new URL("/api/ai-calls/transcript", COVECRM_BASE_URL).toString();
+const METRICS_URL = new URL("/api/ai-calls/metrics", COVECRM_BASE_URL).toString();
 const TRANSFER_TWIML_URL = new URL("/api/ai-calls/transfer-twiml", COVECRM_BASE_URL).toString();
 
 /**
@@ -231,6 +271,9 @@ type CallState = {
   finalOutcomeSent?: boolean;
   finalOutcome?: string;
   transcriptSaveAttempted?: boolean;
+  metricsSaveAttempted?: boolean;
+  telemetry?: VoiceTelemetryState;
+  phase1Flags?: VoiceFeatureFlags;
 
   callStartedAtMs?: number;
   meterStoppedAtMs?: number;
@@ -389,6 +432,8 @@ type CallState = {
   // ── Conversation memory (ChatGPT-voice parity) ──
   // Ring buffer of last 3 exchanges: {role, text, stepIndex?}
   recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
+  // Complete, ordered call transcript. This is never used as live model context.
+  durableTranscriptTurns?: DurableTranscriptTurn[];
   // Repeat-objection tracking
   lastObjectionKind?: string;
   objectionRepeatCount?: number;
@@ -414,6 +459,61 @@ type CallState = {
 };
 
 const calls = new Map<WebSocket, CallState>();
+const prefetchedContexts = new Map<string, PrefetchedContextEntry<AICallContext>>();
+
+function contextPrefetchKey(sessionId: string, leadId: string): string {
+  return `${String(sessionId || "").trim()}:${String(leadId || "").trim()}`;
+}
+
+async function fetchAiCallContext(sessionId: string, leadId: string, callSid?: string): Promise<AICallContext> {
+  const url = new URL("/api/ai-calls/context", COVECRM_BASE_URL);
+  url.searchParams.set("sessionId", sessionId);
+  url.searchParams.set("leadId", leadId);
+  url.searchParams.set("key", AI_DIALER_CRON_KEY);
+  if (callSid) url.searchParams.set("callSid", callSid);
+
+  const resp = await fetch(url.toString());
+  const json: any = await resp.json().catch(() => ({}));
+  if (!resp.ok || !json?.ok || !json?.context) {
+    throw new Error(String(json?.error || resp.statusText || "Failed to fetch AI context"));
+  }
+  return json.context as AICallContext;
+}
+
+function recordResponseCreateTelemetry(state: CallState, reason: string): void {
+  recordResponseCreate(state.telemetry, Date.now(), reason);
+}
+
+function resolveVoiceFeatureFlags(userEmailRaw?: string): VoiceFeatureFlags {
+  const userEmail = String(userEmailRaw || "").trim().toLowerCase();
+  return {
+    contextPrefetchV1: scopedFeatureEnabled({
+      globalEnabled: VOICE_PREFETCH_CONTEXT_V1,
+      internalTestEnabled: VOICE_PREFETCH_CONTEXT_TEST_V1,
+      internalEmails: VOICE_PHASE1_TEST_EMAILS,
+      userEmail,
+    }),
+    adaptivePacingV1: scopedFeatureEnabled({
+      globalEnabled: VOICE_ADAPTIVE_PACING_V1,
+      internalTestEnabled: VOICE_ADAPTIVE_PACING_TEST_V1,
+      internalEmails: VOICE_PHASE1_TEST_EMAILS,
+      userEmail,
+    }),
+    naturalScriptV1: scopedFeatureEnabled({
+      globalEnabled: VOICE_NATURAL_SCRIPT_V1,
+      internalTestEnabled: VOICE_NATURAL_SCRIPT_TEST_V1,
+      internalEmails: VOICE_PHASE1_TEST_EMAILS,
+      userEmail,
+    }),
+  };
+}
+
+function phase1FeatureEnabled(
+  state: CallState,
+  feature: keyof VoiceFeatureFlags
+): boolean {
+  return !!state.phase1Flags?.[feature];
+}
 
 /**
  * ✅ Canonical script normalization (defensive)
@@ -811,6 +911,11 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
 
         const payload = frame.toString("base64");
 
+        const responseMetric = currentResponseMetric(live.telemetry);
+        if (responseMetric && !responseMetric.firstTwilioOutboundAudioAtMs) {
+          responseMetric.firstTwilioOutboundAudioAtMs = Date.now();
+        }
+
         twilioWs.send(
           JSON.stringify({
             event: "media",
@@ -867,6 +972,11 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
           buf.copy(frame, 0, 0, Math.min(remaining, TWILIO_FRAME_BYTES));
           live.outboundMuLawBuffer = Buffer.alloc(0);
 
+          const responseMetric = currentResponseMetric(live.telemetry);
+          if (responseMetric && !responseMetric.firstTwilioOutboundAudioAtMs) {
+            responseMetric.firstTwilioOutboundAudioAtMs = Date.now();
+          }
+
           twilioWs.send(
             JSON.stringify({
               event: "media",
@@ -918,6 +1028,11 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         const frame = Buffer.alloc(TWILIO_FRAME_BYTES, 0xFF);
         buf.copy(frame, 0, 0, Math.min(buf.length, TWILIO_FRAME_BYTES));
         live.outboundMuLawBuffer = Buffer.alloc(0);
+
+        const responseMetric = currentResponseMetric(live.telemetry);
+        if (responseMetric && !responseMetric.firstTwilioOutboundAudioAtMs) {
+          responseMetric.firstTwilioOutboundAudioAtMs = Date.now();
+        }
 
         twilioWs.send(
           JSON.stringify({
@@ -1365,8 +1480,12 @@ async function replayPendingCommittedTurn(
       state.lastUserTranscript = turnFinalization.transcript;
       return;
     }
-    lastUserText = turnFinalization.transcript;
-    if (lastUserText) state.lastUserTranscript = lastUserText;
+    const finalizedTranscriptText = turnFinalization.transcript;
+    lastUserText = authoritativeRoutingText(
+      finalizedTranscriptText,
+      phase1FeatureEnabled(state, "naturalScriptV1")
+    );
+    if (finalizedTranscriptText) state.lastUserTranscript = finalizedTranscriptText;
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
     const questionKind = !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
     const objectionOrQuestionKind = objectionKind || questionKind;
@@ -1393,7 +1512,7 @@ async function replayPendingCommittedTurn(
 
     const humanPause = async () => {
       try {
-        await sleep(randInt(120, 220));
+        await sleep(adaptivePacingMs(lastUserText, phase1FeatureEnabled(state, "adaptivePacingV1")));
       } catch {}
     };
 
@@ -1447,6 +1566,7 @@ async function replayPendingCommittedTurn(
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex =
           typeof state.awaitingAnswerForStepIndex === "number" ? state.awaitingAnswerForStepIndex : 0;
+        recordResponseCreateTelemetry(state, "replay_duplicate_guard");
         state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_dupInstr, { temperature: 0.6 })));
       }
       return;
@@ -1501,6 +1621,7 @@ async function replayPendingCommittedTurn(
           typeof state.awaitingAnswerForStepIndex === "number"
             ? state.awaitingAnswerForStepIndex
             : 0;
+        recordResponseCreateTelemetry(state, "replay_objection_or_question");
         state.openAiWs.send(
           JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 }))
         );
@@ -1563,6 +1684,7 @@ async function replayPendingCommittedTurn(
       const instr = buildExactScriptLineInstruction(lineToSay, {
         userText: lastUserText || "",
         recentExchanges: state.recentExchanges,
+        naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -1596,6 +1718,7 @@ async function replayPendingCommittedTurn(
         turnKey,
       });
       noteAiOutputSpoken(state, lineToSay);
+      recordResponseCreateTelemetry(state, "replay_script_step");
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
 
       state.phase = "in_call";
@@ -8581,6 +8704,7 @@ function buildResponseFromPolicy(
       return buildExactScriptLineInstruction(line, {
         userText: decision.userText || "",
         recentExchanges: state.recentExchanges,
+        naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -8595,6 +8719,7 @@ function buildResponseFromPolicy(
     return buildExactScriptLineInstruction(decision.lineToSay || "", {
       userText: decision.userText || "",
       recentExchanges: state.recentExchanges,
+      naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
       scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
       agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
       leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -8671,8 +8796,12 @@ function buildResponseFromPolicy(
       closingPivot: decision.requiredClosingPivot,
     });
   }
-  if (decision.lineToSay) return buildExactScriptLineInstruction(decision.lineToSay, {});
-  return buildExactScriptLineInstruction(getStateAwareClosingPivot(state), {});
+  if (decision.lineToSay) return buildExactScriptLineInstruction(decision.lineToSay, {
+    naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+  });
+  return buildExactScriptLineInstruction(getStateAwareClosingPivot(state), {
+    naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+  });
 }
 
 function maybeFireServerSideBookingTrigger(state: CallState): string | null {
@@ -8841,7 +8970,11 @@ async function handleConversationTurn(
   turnKey: string,
   humanPause: () => Promise<void>
 ): Promise<boolean> {
-  const text = normalizeRawTranscript(String(lastUserText || "").trim());
+  const transcriptText = normalizeRawTranscript(String(lastUserText || "").trim());
+  const text = authoritativeRoutingText(
+    transcriptText,
+    phase1FeatureEnabled(state, "naturalScriptV1")
+  );
   if (!text) return false;
 
   state.coverageSubjectSetThisTurn = false;
@@ -9069,6 +9202,7 @@ async function handleConversationTurn(
       instr = buildExactScriptLineInstruction(bookingClarificationLine, {
         userText: text,
         recentExchanges: state.recentExchanges,
+        naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -9076,7 +9210,7 @@ async function handleConversationTurn(
     }
   }
 
-  pushExchange(state, "user", text, stepCtx.expectedAnswerIdx);
+  pushExchange(state, "user", transcriptText, stepCtx.expectedAnswerIdx);
   pushExchange(state, "ai", lineToSay, stepCtx.expectedAnswerIdx);
 
   state.userAudioMsBuffered = 0;
@@ -9103,6 +9237,7 @@ async function handleConversationTurn(
   });
   noteAiOutputSpoken(state, lineToSay);
 
+  recordResponseCreateTelemetry(state, `policy:${decision.routeKind || "handled"}`);
   state.openAiWs?.send(JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 })));
 
   if (!("awaitingUserAnswer" in decision.stateWrites)) {
@@ -10017,6 +10152,23 @@ VARIETY RULE: Do not open with "I understand" or "Got it" every single turn. Mix
 
 // ── Conversation memory helpers ──
 
+function recordDurableTranscriptTurn(
+  state: CallState,
+  role: "ai" | "lead",
+  textRaw: unknown,
+  source: "controller" | "realtime",
+  itemId?: string,
+  atMs = Date.now()
+): void {
+  state.durableTranscriptTurns = appendDurableTranscriptTurn(state.durableTranscriptTurns, {
+    role,
+    text: textRaw,
+    source,
+    itemId,
+    atMs,
+  });
+}
+
 function pushExchange(
   state: CallState,
   role: "ai" | "user",
@@ -10024,6 +10176,7 @@ function pushExchange(
   stepIndex?: number
 ) {
   if (!text.trim()) return;
+  recordDurableTranscriptTurn(state, role === "ai" ? "ai" : "lead", text, "controller");
   if (!state.recentExchanges) state.recentExchanges = [];
   state.recentExchanges.push({ role, text: text.trim(), stepIndex });
   // Keep only last 6 entries (3 full exchanges)
@@ -10033,6 +10186,10 @@ function pushExchange(
 }
 
 function buildFinalTranscriptTurns(state: CallState) {
+  if ((state.durableTranscriptTurns || []).length > 0) {
+    return finalTranscriptTurns(state.durableTranscriptTurns || []);
+  }
+
   const turns: Array<{ role: "ai" | "lead"; text: string; timestamp: string }> = [];
   const endedAt = new Date().toISOString();
   const seen = new Set<string>();
@@ -10126,6 +10283,50 @@ async function saveFinalTranscriptQuietly(state: CallState, reason: string) {
       callSid: state.callSid,
       reason,
       message: err?.message || err,
+    });
+  }
+}
+
+async function saveVoiceMetricsQuietly(state: CallState, reason: string) {
+  if (state.metricsSaveAttempted) return;
+  state.metricsSaveAttempted = true;
+
+  try {
+    const ctx = state.context;
+    if (!ctx || !state.callSid || !state.telemetry || !AI_DIALER_AGENT_KEY) return;
+    const metrics = buildVoiceMetricsSnapshot(
+      state.telemetry,
+      Date.now(),
+      AI_DIALER_VENDOR_COST_PER_MIN_USD
+    );
+    const resp = await fetch(METRICS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-agent-key": AI_DIALER_AGENT_KEY,
+      },
+      body: JSON.stringify({
+        callSid: state.callSid,
+        userEmail: ctx.userEmail,
+        sessionId: ctx.sessionId,
+        leadId: ctx.leadId,
+        metrics,
+      }),
+    });
+    const json: any = await resp.json().catch(() => ({}));
+    if (!resp.ok || !json?.ok) {
+      console.warn("[AI-VOICE][METRICS] final save failed", {
+        callSid: state.callSid,
+        status: resp.status,
+        reason,
+        message: json?.error || resp.statusText,
+      });
+    }
+  } catch (err: any) {
+    console.warn("[AI-VOICE][METRICS] final save error", {
+      callSid: state.callSid,
+      reason,
+      error: err?.message || err,
     });
   }
 }
@@ -10724,6 +10925,8 @@ function buildExactScriptLineInstruction(lineRaw: string, opts?: {
   scope?: string;
   agent?: string;
   leadName?: string;
+  wordingLevel?: ScriptWordingLevel;
+  naturalScriptEnabled?: boolean;
 }): string {
   const line = String(lineRaw || "").trim();
   const userText = String(opts?.userText || "").trim();
@@ -10731,6 +10934,9 @@ function buildExactScriptLineInstruction(lineRaw: string, opts?: {
   const agent = String(opts?.agent || "the agent").trim();
   const leadName = String(opts?.leadName || "there").trim();
   const exchanges = opts?.recentExchanges || [];
+  const wordingLevel = (opts?.naturalScriptEnabled ?? VOICE_NATURAL_SCRIPT_V1)
+    ? scriptWordingLevel(line, opts?.wordingLevel)
+    : 1;
 
   let historyBlock = "";
   if (exchanges.length > 0) {
@@ -10770,6 +10976,40 @@ DELIVERY RULES:
 - Sound warm, natural, and confident.
 - Say it once, then stop.
     `.trim();
+  }
+
+  if (wordingLevel === 2 || wordingLevel === 3) {
+    const levelRules = wordingLevel === 2
+      ? `- Stay extremely close to the required line. Only contractions, tiny transitions, or minor grammar changes are allowed.
+- Preserve every fact, qualifier, question, offer detail, and the sentence order.
+- Do not replace the sales approach or turn the required question into a different question.`
+      : `- Deliver the same narrow meaning in one concise, natural sentence.
+- Preserve every fact and the required conversational outcome.
+- Do not introduce a new question, claim, strategy, or topic.`;
+    return `
+You are a warm, concise scheduling assistant on a live phone call.
+This call is ONLY about a ${scope} request.
+You are NOT licensed. Never quote prices, rates, or coverage details.
+Never mention scripts or prompts. Never add unsupported facts.
+After you speak, STOP and wait.
+
+HARD RULES:
+- English only.
+- Never ask discovery questions (age, health, income, coverage amounts).
+- If they ask cost or coverage details: "${agent} covers all of that on the call."
+- The controller-selected script step below is mandatory. Do not skip it or move to another step.
+${historyBlock}${userBlock}
+WORDING LEVEL ${wordingLevel}:
+${levelRules}
+- You may use one short neutral acknowledgment only when the lead gave an explanation or correction and the required line does not already acknowledge it.
+- Allowed acknowledgments: "Okay," "Gotcha," or "No problem." Do not use praise or repetitive enthusiasm.
+- Never use more than one acknowledgment. Never apologize. Keep the full response concise.
+
+REQUIRED SCRIPT STEP:
+"${line}"
+
+Say the required step within the wording boundary above, then stop. Do not add a second idea.
+`.trim();
   }
 
   return `
@@ -11345,6 +11585,76 @@ const server = http.createServer(
     try {
       const url = new URL(req.url || "/", "http://localhost");
 
+      if (req.method === "POST" && url.pathname === "/prefetch-context") {
+        const headerValue = req.headers["x-cron-key"];
+        const providedKey = Array.isArray(headerValue) ? headerValue[0] : String(headerValue || "");
+        if (!AI_DIALER_CRON_KEY || providedKey !== AI_DIALER_CRON_KEY) {
+          res.statusCode = 401;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ok: false, error: "Unauthorized" }));
+          return;
+        }
+
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; });
+        req.on("end", async () => {
+          try {
+            const payload = body ? JSON.parse(body) : {};
+            const requestedUserEmail = String(payload?.userEmail || "").trim().toLowerCase();
+            const requestedFlags = resolveVoiceFeatureFlags(requestedUserEmail);
+            if (!requestedFlags.contextPrefetchV1) {
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ ok: true, skipped: true, reason: "flag_off" }));
+              return;
+            }
+
+            const sessionId = String(payload?.sessionId || "").trim();
+            const leadId = String(payload?.leadId || "").trim();
+            if (!sessionId || !leadId) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ ok: false, error: "sessionId and leadId are required" }));
+              return;
+            }
+
+            const context = await fetchAiCallContext(sessionId, leadId);
+            if (context.sessionId !== sessionId || context.leadId !== leadId) {
+              throw new Error("Prefetched context identity mismatch");
+            }
+            if (
+              requestedUserEmail &&
+              String(context.userEmail || "").trim().toLowerCase() !== requestedUserEmail
+            ) {
+              throw new Error("Prefetched context owner mismatch");
+            }
+
+            const nowMs = Date.now();
+            for (const [key, entry] of prefetchedContexts.entries()) {
+              if (nowMs - entry.fetchedAtMs > PREFETCH_CONTEXT_MAX_AGE_MS) prefetchedContexts.delete(key);
+            }
+            prefetchedContexts.set(contextPrefetchKey(sessionId, leadId), {
+              context,
+              fetchedAtMs: nowMs,
+              sessionId,
+              leadId,
+            });
+
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true, prefetchedAt: new Date(nowMs).toISOString() }));
+          } catch (err: any) {
+            console.warn("[AI-VOICE][PREFETCH] context prefetch failed", {
+              error: err?.message || err,
+            });
+            res.statusCode = 502;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: false, error: "Context prefetch failed" }));
+          }
+        });
+        return;
+      }
+
       if (req.method === "POST" && url.pathname === "/start-session") {
         let body = "";
         req.on("data", (chunk) => {
@@ -11631,6 +11941,7 @@ wss.on("connection", (ws: WebSocket) => {
       }
 
       void saveFinalTranscriptQuietly(st, "twilio_ws_close");
+      void saveVoiceMetricsQuietly(st, "twilio_ws_close");
     }
 
     if (st?.openAiWs) {
@@ -11723,6 +12034,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
       const lineToSay = `Okay, looks like ${agentFirst} isn’t available right this second. What time works later today or tomorrow?`;
       const instr = buildExactScriptLineInstruction(lineToSay, {
         recentExchanges: state.recentExchanges,
+        naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -11755,6 +12067,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
       state.lastPromptLine = lineToSay;
       state.lastResponseCreateAtMs = Date.now();
       state.phase = "in_call";
+      recordResponseCreateTelemetry(state, "live_transfer_recovery");
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
       state.awaitingUserAnswer = true;
 
@@ -11782,6 +12095,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
       setAiSpeaking(state, true, "live-transfer speak");
       setResponseInFlight(state, true, "live-transfer speak");
       state.outboundOpenAiDone = false;
+      recordResponseCreateTelemetry(state, "live_transfer_intro");
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(
         `Say EXACTLY this sentence and nothing else: "${transferLine}" Then stop completely.`
       )));
@@ -11918,6 +12232,13 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callSid = msg.start.callSid;
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
+  state.metricsSaveAttempted = false;
+  state.phase1Flags = resolveVoiceFeatureFlags();
+  state.telemetry = createVoiceTelemetry({
+    callStartedAtMs: state.callStartedAtMs,
+    resolvedRealtimeModel: OPENAI_REALTIME_MODEL,
+    featureFlags: state.phase1Flags,
+  });
 
   // Safety: auto-close call after 20 minutes to prevent runaway costs
   setTimeout(() => {
@@ -11990,6 +12311,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
 
   // ── conversation memory reset ──
   state.recentExchanges = [];
+  state.durableTranscriptTurns = [];
   state.lastObjectionKind = undefined;
   state.objectionRepeatCount = 0;
 
@@ -12025,24 +12347,46 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   }
 
   try {
-    const url = new URL("/api/ai-calls/context", COVECRM_BASE_URL);
-    url.searchParams.set("sessionId", sessionId);
-    url.searchParams.set("leadId", leadId);
-    url.searchParams.set("key", AI_DIALER_CRON_KEY);
-    url.searchParams.set("callSid", state.callSid);
-
-    const resp = await fetch(url.toString());
-    const json: any = await resp.json();
-
-    if (!resp.ok || !json.ok) {
-      console.error(
-        "[AI-VOICE] Failed to fetch AI context:",
-        json?.error || resp.statusText
-      );
-      return;
+    let context: AICallContext | undefined;
+    const key = contextPrefetchKey(sessionId, leadId);
+    const entry = prefetchedContexts.get(key);
+    prefetchedContexts.delete(key);
+    if (isFreshPrefetchedContext(entry, sessionId, leadId, Date.now(), PREFETCH_CONTEXT_MAX_AGE_MS)) {
+      context = entry.context;
+      if (state.telemetry) state.telemetry.contextSource = "prefetch";
+      console.log("[AI-VOICE][PREFETCH] using fresh prefetched context", {
+        callSid: state.callSid,
+        sessionId,
+        leadId,
+        ageMs: Date.now() - entry.fetchedAtMs,
+      });
+    } else if (entry && state.telemetry) {
+      state.telemetry.prefetchFallbackReason = "stale_or_invalid";
     }
 
-    const context: AICallContext = json.context;
+    if (!context) {
+      context = await fetchAiCallContext(sessionId, leadId, state.callSid);
+      if (state.telemetry) state.telemetry.contextSource = "on_answer";
+    }
+
+    state.phase1Flags = resolveVoiceFeatureFlags(context.userEmail);
+    if (state.telemetry) {
+      state.telemetry.featureFlags = state.phase1Flags;
+      if (
+        state.phase1Flags.contextPrefetchV1 &&
+        state.telemetry.contextSource !== "prefetch" &&
+        !state.telemetry.prefetchFallbackReason
+      ) {
+        state.telemetry.prefetchFallbackReason = "missing";
+      }
+    }
+    console.log("[AI-VOICE][PHASE1] effective per-call flags", {
+      callSid: state.callSid,
+      contextPrefetchV1: state.phase1Flags.contextPrefetchV1,
+      adaptivePacingV1: state.phase1Flags.adaptivePacingV1,
+      naturalScriptV1: state.phase1Flags.naturalScriptV1,
+    });
+
     (context as any).scriptKey = normalizeScriptKey((context as any).scriptKey);
     if (callDirection && !(context as any).callDirection) {
       (context as any).callDirection = callDirection;
@@ -12243,6 +12587,9 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       state.phase !== "awaiting_greeting_reply"
     ) {
       // Track sustained caller speech while AI is speaking.
+      if (!state.bargeInDetected && state.telemetry) {
+        state.telemetry.interruptionAttempts += 1;
+      }
       state.bargeInDetected = true;
       state.bargeInAudioMsBuffered = Math.min(
         800,
@@ -12511,6 +12858,7 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
   }
 
   void saveFinalTranscriptQuietly(state, "twilio_stop");
+  void saveVoiceMetricsQuietly(state, "twilio_stop");
 
   calls.delete(ws);
 }
@@ -12784,6 +13132,7 @@ async function handleOpenAiEvent(
     } catch {}
 
     state.lastUserSpeechStartedAtMs = Date.now();
+    beginCallerSpeech(state.telemetry, state.lastUserSpeechStartedAtMs);
     state.lastTranscriptDeltaAtMs = undefined;
     state.lastTranscriptCompletedAtMs = undefined;
     (state as any).listenWarmupUntilMs = 0;
@@ -12916,7 +13265,8 @@ async function handleOpenAiEvent(
       }, 450);
     } catch {}
 
-state.lastUserSpeechStoppedAtMs = Date.now();
+    state.lastUserSpeechStoppedAtMs = Date.now();
+    endCallerSpeech(state.telemetry, state.lastUserSpeechStoppedAtMs);
     return;
   }
 
@@ -12966,11 +13316,19 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       } else if (typeLower === "conversation.item.input_audio_transcription.completed") {
         const tr = String((event as any)?.transcript || "").trim();
         if (itemId && tr) {
-          state.lastTranscriptCompletedAtMs = Date.now();
+          const completedAtMs = Date.now();
+          state.lastTranscriptCompletedAtMs = completedAtMs;
+          if (state.telemetry) {
+            state.telemetry.transcriptFinalTimestampsMs.push(completedAtMs);
+            if ((event as any)?.usage && typeof (event as any).usage === "object") {
+              state.telemetry.transcriptionUsage.push((event as any).usage);
+            }
+          }
           const clean = tr.replace(/\s+/g, " ").trim();
           state.lastUserTranscriptByItemId[itemId] = clean;
           state.lastUserTranscriptPartialByItemId[itemId] = "";
           state.lastUserTranscript = clean;
+          recordDurableTranscriptTurn(state, "lead", clean, "realtime", itemId, completedAtMs);
           // ✅ FIX: If a user turn was committed before transcription arrived,
           // replay it as soon as we have ANY transcript text (delta or completed).
           try {
@@ -13023,6 +13381,29 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       }
     }
   } catch {}
+
+  if (
+    t === "response.output_audio_transcript.done" ||
+    t === "response.audio_transcript.done"
+  ) {
+    const transcript = String(
+      event?.transcript || event?.text || event?.item?.transcript || ""
+    ).trim();
+    const itemId = String(event?.item_id || event?.item?.id || event?.response_id || "").trim();
+    recordDurableTranscriptTurn(state, "ai", transcript, "realtime", itemId);
+  }
+
+  if (t === "response.done") {
+    const responseMetric = currentResponseMetric(state.telemetry);
+    if (responseMetric && !responseMetric.responseDoneAtMs) {
+      const doneAtMs = Date.now();
+      responseMetric.responseDoneAtMs = doneAtMs;
+      responseMetric.responseDurationMs = Math.max(0, doneAtMs - responseMetric.responseCreateAtMs);
+      if (event?.response?.usage && typeof event.response.usage === "object") {
+        responseMetric.usage = event.response.usage;
+      }
+    }
+  }
 
   if (t === "session.updated" && !state.openAiConfigured) {
     state.openAiConfigured = true;
@@ -13197,6 +13578,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         liveState.lastPromptLine = "GREETING";
         liveState.lastResponseCreateAtMs = Date.now();
 
+        recordResponseCreateTelemetry(liveState, "greeting");
         liveState.openAiWs.send(
           JSON.stringify(buildRealtimeResponseCreate(greetingInstr))
         );
@@ -13627,8 +14009,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.lastUserTranscript = turnFinalization.transcript;
       return;
     }
-    lastUserText = turnFinalization.transcript;
-    if (lastUserText) state.lastUserTranscript = lastUserText;
+    const finalizedTranscriptText = turnFinalization.transcript;
+    lastUserText = authoritativeRoutingText(
+      finalizedTranscriptText,
+      phase1FeatureEnabled(state, "naturalScriptV1")
+    );
+    if (finalizedTranscriptText) state.lastUserTranscript = finalizedTranscriptText;
     const objectionKind = !isGreetingReply && lastUserText ? detectObjection(lastUserText) : null;
 
     const questionKind = !isGreetingReply && !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
@@ -13646,7 +14032,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     // ✅ small human pause like ChatGPT voice (only when we are about to speak)
     const humanPause = async () => {
       try {
-        await sleep(randInt(120, 220));
+        await sleep(adaptivePacingMs(lastUserText, phase1FeatureEnabled(state, "adaptivePacingV1")));
       } catch {}
     };
 
@@ -13700,6 +14086,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex =
           typeof state.awaitingAnswerForStepIndex === "number" ? state.awaitingAnswerForStepIndex : 0;
+        recordResponseCreateTelemetry(state, "main_duplicate_guard");
         state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(_dupInstr, { temperature: 0.6 })));
       }
       return;
@@ -13754,6 +14141,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           typeof state.awaitingAnswerForStepIndex === "number"
             ? state.awaitingAnswerForStepIndex
             : 0;
+        recordResponseCreateTelemetry(state, "main_objection_or_question");
         state.openAiWs.send(
           JSON.stringify(buildRealtimeResponseCreate(instr, { temperature: 0.6 }))
         );
@@ -13816,6 +14204,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       const instr = buildExactScriptLineInstruction(lineToSay, {
         userText: lastUserText || "",
         recentExchanges: state.recentExchanges,
+        naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -13849,6 +14238,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         turnKey,
       });
       noteAiOutputSpoken(state, lineToSay);
+      recordResponseCreateTelemetry(state, "main_script_step");
       state.openAiWs.send(JSON.stringify(buildRealtimeResponseCreate(instr)));
 
       state.phase = "in_call";
@@ -13943,6 +14333,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     if (payloadBase64) {
       // ✅ OpenAI is configured to return g711_ulaw now (Twilio-ready). Do NOT convert.
       const mulawBytes = Buffer.from(payloadBase64, "base64");
+      const responseMetric = currentResponseMetric(state.telemetry);
+      const audioAtMs = Date.now();
+      if (responseMetric) {
+        if (!responseMetric.firstOpenAiAudioAtMs) responseMetric.firstOpenAiAudioAtMs = audioAtMs;
+        if (!responseMetric.firstCoveOutboundAudioAtMs) responseMetric.firstCoveOutboundAudioAtMs = audioAtMs;
+        responseMetric.audioBytes += mulawBytes.length;
+      }
+      if (state.telemetry) state.telemetry.aiSpeechDurationMs += mulawBytes.length / 8;
 
       if (!state.debugLoggedFirstOutputAudio) {
         console.log("[AI-VOICE] First OpenAI audio delta received", {

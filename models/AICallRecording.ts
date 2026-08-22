@@ -37,6 +37,8 @@ export interface IAICallRecording extends Document {
   summary?: string | null;
   transcribedAt?: Date | null;
   billingOrigin?: "dialer" | "regular";
+  voiceMetrics?: Record<string, unknown> | null;
+  voiceMetricsUpdatedAt?: Date | null;
 
   createdAt: Date;
   updatedAt: Date;
@@ -93,6 +95,8 @@ const AICallRecordingSchema = new Schema<IAICallRecording>(
     summary: { type: String, default: null },
     transcribedAt: { type: Date, default: null },
     billingOrigin: { type: String, enum: ["dialer", "regular"], default: "dialer", index: true },
+    voiceMetrics: { type: Schema.Types.Mixed, default: null },
+    voiceMetricsUpdatedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

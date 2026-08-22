@@ -27,6 +27,23 @@ const BASE = (
 // OR CRON_SECRET (Vercel native cron secret / your existing cron pattern)
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
+const VOICE_PREFETCH_CONTEXT_V1 = ["1", "true", "yes", "on"].includes(
+  String(process.env.VOICE_PREFETCH_CONTEXT_V1 || "").trim().toLowerCase()
+);
+const VOICE_PREFETCH_CONTEXT_TEST_V1 = ["1", "true", "yes", "on"].includes(
+  String(process.env.VOICE_PREFETCH_CONTEXT_TEST_V1 || "").trim().toLowerCase()
+);
+const VOICE_PHASE1_TEST_EMAILS = new Set(
+  String(process.env.VOICE_PHASE1_TEST_EMAILS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+);
+const AI_VOICE_HTTP_BASE = String(process.env.AI_VOICE_STREAM_URL || "")
+  .trim()
+  .replace(/^wss:/i, "https:")
+  .replace(/^ws:/i, "http:")
+  .replace(/\/$/, "");
 
 // ✅ GLOBAL HARD KILL SWITCH (ENV)
 const AI_DIALER_DISABLED_RAW = String(process.env.AI_DIALER_DISABLED || "").trim();
@@ -62,6 +79,45 @@ const isBypassAmdEmail = (email?: string | null) => {
 };
 
 const LOCAL_PRESENCE_FROM_SENTINEL = "LOCAL_PRESENCE";
+
+async function prefetchVoiceContextBeforeDial(
+  sessionId: string,
+  leadId: string,
+  userEmailRaw: string
+): Promise<void> {
+  const userEmail = String(userEmailRaw || "").trim().toLowerCase();
+  const internalTestEnabled =
+    VOICE_PREFETCH_CONTEXT_TEST_V1 && VOICE_PHASE1_TEST_EMAILS.has(userEmail);
+  if (
+    (!VOICE_PREFETCH_CONTEXT_V1 && !internalTestEnabled) ||
+    !AI_VOICE_HTTP_BASE ||
+    !AI_DIALER_CRON_KEY
+  ) return;
+  try {
+    const response = await fetch(`${AI_VOICE_HTTP_BASE}/prefetch-context`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-cron-key": AI_DIALER_CRON_KEY,
+      },
+      body: JSON.stringify({ sessionId, leadId, userEmail }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) {
+      console.warn("[AI WORKER][PREFETCH] context unavailable; on-answer fallback will be used", {
+        sessionId,
+        leadId,
+        status: response.status,
+      });
+    }
+  } catch (err: any) {
+    console.warn("[AI WORKER][PREFETCH] request failed; on-answer fallback will be used", {
+      sessionId,
+      leadId,
+      error: err?.message || err,
+    });
+  }
+}
 
 function normalizeE164(p?: string) {
   const raw = String(p || "");
@@ -956,6 +1012,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         callCreate.asyncAmdStatusCallback = aiCallStatusUrl(userEmail, sessionId, leadIdStr);
         callCreate.asyncAmdStatusCallbackMethod = "POST";
       }
+
+      // Cove/CRM-only work may happen before dialing. Realtime remains answer-gated
+      // in ai-voice-server/handleStart after Twilio opens the Media Stream.
+      await prefetchVoiceContextBeforeDial(String(sessionId), leadIdStr, userEmail);
 
       const call = await client.calls.create(callCreate);
       const recordingFromNumber = recordingFromNumberFor(callCreate.from);
