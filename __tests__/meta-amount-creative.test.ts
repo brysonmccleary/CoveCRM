@@ -137,53 +137,62 @@ describe("Exhaustive generated-creative quality gate", () => {
       for (const variantType of variants) {
         const variant = generated[variantType];
         for (let visualVariantIndex = 0; visualVariantIndex < 40; visualVariantIndex += 1) {
-          const draft = {
-            ...variant,
-            audienceSegment: family.audienceSegment || "standard",
-            winningFamilyId: variant.familyId,
-            creativeArchetype: variant.archetype,
-            visualVariantIndex,
-            visualTreatment: "photo",
-          };
-          const layout = resolveCreativeLayoutFamily(draft, family.leadType, 17, visualVariantIndex);
-          const markup = renderToStaticMarkup(React.createElement(ProductionFeedCreative, { draft }));
-          const visualLeadType = family.audienceSegment === "veteran" || family.audienceSegment === "trucker"
-            ? family.audienceSegment
-            : family.leadType;
+          for (const visualTreatment of ["photo", "graphic"] as const) {
+            const draft = {
+              ...variant,
+              audienceSegment: family.audienceSegment || "standard",
+              winningFamilyId: variant.familyId,
+              creativeArchetype: variant.archetype,
+              visualVariantIndex,
+              visualTreatment,
+            };
+            const layout = resolveCreativeLayoutFamily(draft, family.leadType, 17, visualVariantIndex);
+            const markup = renderToStaticMarkup(React.createElement(ProductionFeedCreative, { draft }));
+            const visualLeadType = family.audienceSegment === "veteran" || family.audienceSegment === "trucker"
+              ? family.audienceSegment
+              : family.leadType;
 
-          expect(markup).not.toMatch(/Under \$150k|Menos de \$150k|\$150k[-–]\$300k/i);
-          expect(markup).not.toContain("...");
+            expect(markup).not.toMatch(/Under \$150k|Menos de \$150k|\$150k[-–]\$300k/i);
+            expect(markup).not.toContain("...");
+            expect(markup).not.toContain("rotate(-11deg)");
 
-          if (paidPools.has(visualLeadType)) {
-            expect(forbiddenLayouts).not.toContain(layout);
-            expect(markup).toContain(`/ad-backgrounds/${visualLeadType}/${visualVariantIndex + 1}.jpg`);
-          }
-
-          if (family.leadType === "mortgage_protection") {
-            expect(markup).toMatch(/MORTGAGE PROTECTION|PROTECCIÓN HIPOTECARIA/);
-            expect(markup).toMatch(/MORTGAGE BALANCE|SALDO (?:DE SU )?HIPOTECA|SALDO HIPOTECARIO/);
-            for (const label of draft.landingPageConfig.buttonLabels) {
-              const normalized = label.toLowerCase().replace(/,/g, "").trim();
-              const amountMatch = normalized.match(/^\$(\d+)(k|\s*mil)?$/);
-              expect(amountMatch).not.toBeNull();
-              const amount = Number(amountMatch?.[1] || 0) * (amountMatch?.[2] ? 1000 : 1);
-              expect([250000, 400000, 600000]).toContain(amount);
+            if (visualTreatment === "graphic") {
+              expect(markup).toContain('data-creative-layout="graphic-direct-response"');
+              expect(markup).not.toMatch(/\/ad-backgrounds\/(veteran|trucker|mortgage_protection)\//);
+            } else if (paidPools.has(visualLeadType)) {
+              expect(forbiddenLayouts).not.toContain(layout);
+              expect(markup).toContain('data-creative-layout="photo-direct-response"');
+              expect(markup).toContain(`/ad-backgrounds/${visualLeadType}/${visualVariantIndex + 1}.jpg`);
+            } else {
+              expect(markup).toContain('data-creative-layout="graphic-direct-response"');
             }
+
+            if (family.leadType === "mortgage_protection") {
+              expect(markup).toMatch(/MORTGAGE PROTECTION|PROTECCIÓN HIPOTECARIA/);
+              expect(markup).toMatch(/MORTGAGE BALANCE|SALDO (?:DE SU )?HIPOTECA|SALDO HIPOTECARIO/);
+              for (const label of draft.landingPageConfig.buttonLabels) {
+                const normalized = label.toLowerCase().replace(/,/g, "").trim();
+                const amountMatch = normalized.match(/^\$(\d+)(k|\s*mil)?$/);
+                expect(amountMatch).not.toBeNull();
+                const amount = Number(amountMatch?.[1] || 0) * (amountMatch?.[2] ? 1000 : 1);
+                expect([250000, 400000, 600000]).toContain(amount);
+              }
+            }
+            if (family.leadType === "veteran") expect(markup).toContain("LIFE INSURANCE FOR VETERANS");
+            if (family.leadType === "trucker") expect(markup).toContain("LIFE INSURANCE FOR CDL DRIVERS");
+            if (family.leadType === "iul") expect(markup).toMatch(/INDEXED UNIVERSAL LIFE|IUL LIFE INSURANCE|TRUCKERS IUL|UNIVERSAL INDEXADO/);
+            if (family.leadType === "final_expense") expect(markup).toMatch(/FINAL EXPENSE INSURANCE|SEGURO DE GASTOS FINALES/);
+            if (draft.landingPageConfig.buttonLabels.some((label: string) => /\$/.test(label)) && family.leadType === "veteran") {
+              expect(markup).toMatch(/CHOOSE A COVERAGE AMOUNT|ELIJA UN MONTO DE COBERTURA/);
+              expect(markup).not.toMatch(/TAP YOUR AGE|SELECT YOUR AGE|ELIJA SU EDAD/);
+            }
+            rendered += 1;
           }
-          if (family.leadType === "veteran") expect(markup).toContain("LIFE INSURANCE FOR VETERANS");
-          if (family.leadType === "trucker") expect(markup).toContain("LIFE INSURANCE FOR CDL DRIVERS");
-          if (family.leadType === "iul") expect(markup).toMatch(/INDEXED UNIVERSAL LIFE|IUL LIFE INSURANCE|TRUCKERS IUL|UNIVERSAL INDEXADO/);
-          if (family.leadType === "final_expense") expect(markup).toMatch(/FINAL EXPENSE INSURANCE|SEGURO DE GASTOS FINALES/);
-          if (draft.landingPageConfig.buttonLabels.some((label: string) => /\$/.test(label)) && family.leadType === "veteran") {
-            expect(markup).toMatch(/CHOOSE A COVERAGE AMOUNT|ELIJA UN MONTO DE COBERTURA/);
-            expect(markup).not.toMatch(/TAP YOUR AGE|SELECT YOUR AGE|ELIJA SU EDAD/);
-          }
-          rendered += 1;
         }
       }
     }
 
-    expect(rendered).toBeGreaterThan(8000);
+    expect(rendered).toBeGreaterThan(16000);
   }, 60000);
 
   test("graphic treatments intentionally keep strong number-led layouts photo-free", () => {

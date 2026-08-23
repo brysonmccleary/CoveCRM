@@ -574,6 +574,46 @@ function clampCopy(value: string, maxLength: number): string {
   return candidate.slice(0, lastSpace >= Math.floor(maxLength * 0.65) ? lastSpace : maxLength).trim();
 }
 
+const VISUAL_SUBHEADLINES: Record<string, string[]> = {
+  veteran: [
+    "Private life insurance options for veterans and their families.",
+    "Review life insurance options available for those who served.",
+    "Compare private coverage options by age and state.",
+  ],
+  trucker: [
+    "Life insurance options designed for professional drivers.",
+    "Compare private coverage options built around life on the road.",
+    "Review life insurance options for CDL drivers and their families.",
+  ],
+  mortgage_protection: [
+    "Mortgage protection options for your family and home.",
+    "Compare coverage options based on your mortgage balance.",
+    "Coverage may help your family protect the place they call home.",
+  ],
+  final_expense: [
+    "Whole life options designed to help with final expenses.",
+    "Compare private coverage options for funeral and final costs.",
+    "Review final expense coverage options by age and state.",
+  ],
+  iul: [
+    "Learn how indexed universal life insurance may work.",
+    "Review life insurance protection and cash value potential.",
+    "Compare IUL features, costs, and policy terms.",
+  ],
+};
+
+function getVisualSubheadline(leadType: string, audienceSegment: string, seed: number, spanish: boolean): string {
+  if (spanish) {
+    if (leadType === "mortgage_protection") return "Compare opciones de protección hipotecaria para su hogar.";
+    if (leadType === "iul") return "Conozca la protección y el valor en efectivo potencial de IUL.";
+    return "Compare opciones privadas para gastos finales por edad y estado.";
+  }
+
+  void audienceSegment;
+  const options = VISUAL_SUBHEADLINES[leadType] || VISUAL_SUBHEADLINES.final_expense;
+  return pickSeeded(options, seed, "visual-subheadline");
+}
+
 function getLeadFallbackHeadline(leadType: string, spanish = false): string {
   if (spanish) {
     if (leadType === "mortgage_protection") return "Proteja el hogar de su familia";
@@ -735,32 +775,25 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
       }
     : basePalette;
   const iaFamily = pickSeeded(IA_BY_LEAD_TYPE[leadType] || IA_BY_LEAD_TYPE.final_expense, seed + variantIndex * 17, "ia");
-  const densityStyle = pickSeeded<DensityStyle>(["compact", "balanced", "roomy"], seed + variantIndex, "density");
-  const typographyStyle = pickSeeded<TypographyStyle>(["condensed_poster", "premium_clean", "utility_ui", "aggressive_response", "trust_editorial", "modern_minimal"], seed + variantIndex, "type");
-  const seededCtaFlow = pickSeeded<CtaFlow>(["bottom_bar", "floating_cta", "panel_cta", "selector_cta", "stacked_cta", "inline_cta", "comparison_cta", "quiz_cta"], seed + variantIndex, "cta");
-  const frameStyle = pickSeeded<FrameStyle>(["full_bleed", "inset_card", "bottom_sheet", "top_banner", "split_overlay", "corner_badge", "diagonal_band", "soft_glass"], seed + variantIndex, "frame");
-  const overlayStyle = pickSeeded<OverlayStyle>(["deep_gradient", "soft_gradient", "hard_vignette", "paper_wash", "neon_glow"], seed + variantIndex, "overlay");
+  // Creative quality must not depend on decorative randomness. The old frame
+  // roulette could place diagonal bands and corner badges directly through
+  // copy. Keep the variation in the actual offer, photo, palette and layout.
+  const densityStyle: DensityStyle = "balanced";
+  const typographyStyle: TypographyStyle = "premium_clean";
+  const frameStyle: FrameStyle = "full_bleed";
+  const overlayStyle: OverlayStyle = "deep_gradient";
   const fp = String(draft?.uniquenessFingerprint || "");
   const hash2 = Math.abs(hashString(`${fp}pad`));
   const hash3 = Math.abs(hashString(`${fp}gap`));
   const padOptions = [14, 18, 22, 26];
   const gapOptions = [8, 10, 12, 14];
   const ctaFlow: CtaFlow = "bottom_bar";
-  const density = {
-    compact: { pad: padOptions[hash2 % 4], gap: gapOptions[hash3 % 4], lineHeight: 1.03 },
-    balanced: { pad: padOptions[hash2 % 4], gap: gapOptions[hash3 % 4], lineHeight: 1.08 },
-    roomy: { pad: padOptions[hash2 % 4], gap: gapOptions[hash3 % 4], lineHeight: 1.12 },
-  }[densityStyle];
-  void seededCtaFlow;
+  const density = { pad: padOptions[hash2 % 4], gap: gapOptions[hash3 % 4], lineHeight: 1.08 };
   const productLabel = getProductLabel(leadType, audienceSegment, spanish);
   const headlineRaw = overlay.headline || cleanText(draft?.headline) || getLeadFallbackHeadline(leadType, spanish);
   const productClear = isProductClear(headlineRaw, leadType, spanish);
   const headline = clampCopy(productClear ? headlineRaw : productLabel, 58);
-  const subheadlineRaw = productClear
-    ? overlay.subheadline
-    : [headlineRaw, overlay.subheadline].map(cleanText).filter(Boolean).join(" · ");
-  const headlineBase = typographyStyle === "aggressive_response" ? 30 : typographyStyle === "utility_ui" ? 24 : typographyStyle === "modern_minimal" ? 25 : 27;
-  const headlineSize = Math.max(20, headlineBase - (headline.length > 42 ? 3 : 0) - (densityStyle === "compact" ? 1 : 0));
+  const headlineSize = Math.max(20, 27 - (headline.length > 42 ? 3 : 0));
   const fallbackButtons = leadType === "mortgage_protection"
     ? ["$250,000", "$400,000", "$600,000"]
     : leadType === "trucker"
@@ -776,7 +809,9 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     draft,
     leadType,
     headline,
-    subheadline: clampCopy(subheadlineRaw, 82),
+    // Feed-image copy must always be a complete, product-specific thought.
+    // Longer funnel copy remains available in the post and landing page.
+    subheadline: getVisualSubheadline(leadType, audienceSegment, seed + variantIndex, spanish),
     buttons: (overlay.buttonLabels.length ? overlay.buttonLabels : localizedFallbackButtons).slice(0, 4),
     bullets: overlay.benefitBullets.slice(0, 3),
     cta: clampCopy(overlay.ctaStrip || (spanish ? "Conozca sus opciones →" : "Learn more ->"), 42),
@@ -796,10 +831,10 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     seed,
     variantIndex,
     headlineSize,
-    subSize: densityStyle === "compact" ? 11 : 12,
+    subSize: 12,
     gap: density.gap,
     pad: density.pad,
-    radius: frameStyle === "corner_badge" ? 3 : frameStyle === "soft_glass" ? 14 : 8,
+    radius: 8,
     lineHeight: density.lineHeight,
     spanish,
   };
@@ -825,8 +860,6 @@ function CreativeShell({ state, children }: { state: CreativeState; children: an
     <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
       <div style={{ position: "absolute", inset: 0, background: getOverlayBackground(state) }} />
       <div style={{ position: "absolute", inset: 0, boxShadow: state.palette.glow }} />
-      {state.frameStyle === "diagonal_band" && <div style={{ position: "absolute", left: -50, right: -50, top: 142, height: 64, transform: "rotate(-11deg)", background: state.palette.cta, opacity: 0.84 }} />}
-      {state.frameStyle === "corner_badge" && <div style={{ position: "absolute", top: 0, right: 0, borderTop: `76px solid ${state.palette.cta}`, borderLeft: "76px solid transparent" }} />}
       {children}
     </div>
   );
@@ -1197,18 +1230,121 @@ function renderPriceTable(state: CreativeState) {
 }
 
 function renderAgeSelector(state: CreativeState) {
+  const showEyebrow = state.eyebrow.toLowerCase() !== state.headline.toLowerCase();
   return (
     <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 16, paddingBottom: 54, display: "flex", flexDirection: "column", gap: 10, textAlign: "center" }}>
-        <div style={{ color: state.palette.eyebrow, fontSize: 11, fontWeight: 950, letterSpacing: 2 }}>{state.eyebrow}</div>
-        <div style={{ color: state.palette.headline, fontSize: state.headlineSize + 2, fontWeight: 950, lineHeight: 0.98, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
-        {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 850, lineHeight: 1.25 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
-        <div style={{ marginTop: "auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+      <div data-creative-layout="graphic-age-selector" style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 16, paddingBottom: 54, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10, textAlign: "center" }}>
+        <Panel state={state} style={{ padding: "12px 13px" }}>
+          {showEyebrow && <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2, textTransform: "uppercase" }}>{state.eyebrow}</div>}
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", marginTop: showEyebrow ? 6 : 0, ...lineClampStyle(2) }}>{state.headline}</div>
+          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 11, fontWeight: 850, lineHeight: 1.25, marginTop: 7, ...lineClampStyle(2) }}>{state.subheadline}</div>}
+        </Panel>
+        <div data-creative-zone="offer" style={{ alignSelf: "center", display: "grid", gap: 9 }}>
+          {state.amount && <div style={{ color: state.palette.accent, fontSize: 45, fontWeight: 950, lineHeight: 0.95, textShadow: "0 3px 14px rgba(0,0,0,0.34)" }}>{state.amount}</div>}
+          <MiniBenefits state={state} columns={2} />
+          <div style={{ color: state.palette.headline, fontSize: 11, fontWeight: 950, letterSpacing: 1.2, textTransform: "uppercase" }}>{getSelectorPrompt(state)}</div>
+        </div>
+        <div data-creative-zone="selector" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
           {state.buttons.slice(0, 4).map((button) => (
-            <div key={button} style={{ background: state.palette.cta, color: "#fff", border: `2px solid ${state.palette.accent}`, borderRadius: 8, padding: "12px 8px", fontSize: 13, fontWeight: 950, boxShadow: "0 10px 22px rgba(0,0,0,0.24)" }}>
+            <div key={button} style={{ background: state.palette.cta, color: "#fff", border: `2px solid ${state.palette.accent}`, borderRadius: 8, padding: "11px 8px", fontSize: 13, fontWeight: 950, boxShadow: "0 10px 22px rgba(0,0,0,0.24)" }}>
               {button}
             </div>
           ))}
+        </div>
+      </div>
+      <CtaUnit state={state} />
+    </CreativeShell>
+  );
+}
+
+function renderPhotoDirectResponse(state: CreativeState) {
+  const audienceSegment = cleanText(state.draft?.audienceSegment).toLowerCase();
+  const visualLeadType = audienceSegment === "veteran" || audienceSegment === "trucker"
+    ? audienceSegment
+    : state.leadType;
+  const themes: Record<string, { header: string; surface: string; ink: string; accent: string; cta: string }> = {
+    veteran: { header: "#101d38", surface: "#f5f0e8", ink: "#17233d", accent: "#d4af37", cta: "#b4232f" },
+    trucker: { header: "#07131f", surface: "#f3f6f8", ink: "#102235", accent: "#f59e0b", cta: "#b45309" },
+    mortgage_protection: { header: "#123b63", surface: "#f8fbff", ink: "#17324d", accent: "#5fbf9f", cta: "#2477a8" },
+    final_expense: { header: "#1f2937", surface: "#faf7f1", ink: "#2d2418", accent: "#d4a017", cta: "#8a5a12" },
+    iul: { header: "#0b2345", surface: "#f5f9ff", ink: "#10294a", accent: "#5ba9e6", cta: "#2563a6" },
+  };
+  const theme = themes[visualLeadType] || themes[state.leadType] || themes.final_expense;
+  const showEyebrow = state.eyebrow.toLowerCase() !== state.headline.toLowerCase();
+  const selectorColumns = state.buttons.length === 3 ? "repeat(3, 1fr)" : "1fr 1fr";
+
+  return (
+    <div data-creative-layout="photo-direct-response" style={{ position: "absolute", inset: 0, overflow: "hidden", background: theme.surface, color: theme.ink }}>
+      <div style={{ height: "100%", boxSizing: "border-box", paddingBottom: 44, display: "grid", gridTemplateRows: "auto minmax(168px, 1fr) auto" }}>
+        <div data-creative-zone="headline" style={{ background: theme.header, color: "#ffffff", padding: "12px 16px 11px", textAlign: "center", borderBottom: `4px solid ${theme.accent}` }}>
+          {showEyebrow && <div style={{ color: theme.accent, fontSize: 9, fontWeight: 950, letterSpacing: 1.9, textTransform: "uppercase", marginBottom: 5 }}>{state.eyebrow}</div>}
+          <div style={{ fontSize: Math.min(27, state.headlineSize + 1), fontWeight: 950, lineHeight: 1.01, textTransform: "uppercase", ...lineClampStyle(2) }}>{state.headline}</div>
+          <div style={{ color: "#e8edf5", fontSize: 11, fontWeight: 750, lineHeight: 1.25, marginTop: 6, ...lineClampStyle(2) }}>{state.subheadline}</div>
+        </div>
+        <div
+          data-creative-zone="photo"
+          data-creative-photo="true"
+          style={{
+            position: "relative",
+            minHeight: 168,
+            backgroundImage: `url("${state.backgroundUrl}")`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            backgroundRepeat: "no-repeat",
+            boxShadow: "inset 0 -36px 38px rgba(0,0,0,0.34)",
+          }}
+        >
+          {state.amount && (
+            <div style={{ position: "absolute", left: 14, bottom: 12, background: "rgba(7,19,31,0.88)", color: "#ffffff", border: `2px solid ${theme.accent}`, borderRadius: 8, padding: "7px 11px", fontSize: 30, fontWeight: 950, lineHeight: 1 }}>
+              {state.amount}
+            </div>
+          )}
+        </div>
+        <div data-creative-zone="selector" style={{ background: theme.surface, padding: "9px 14px 11px", borderTop: `1px solid ${theme.accent}66` }}>
+          <div style={{ color: theme.ink, fontSize: 10, fontWeight: 950, letterSpacing: 1.1, textAlign: "center", textTransform: "uppercase", marginBottom: 7 }}>{getSelectorPrompt(state)}</div>
+          <div style={{ display: "grid", gridTemplateColumns: selectorColumns, gap: 7 }}>
+            {state.buttons.slice(0, 4).map((button) => (
+              <div key={button} style={{ minHeight: 34, display: "flex", alignItems: "center", justifyContent: "center", background: theme.header, color: "#ffffff", border: `2px solid ${theme.accent}`, borderRadius: 7, padding: "5px 6px", textAlign: "center", fontSize: button.length > 11 ? 10 : 12, fontWeight: 950, lineHeight: 1.05 }}>
+                {button}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <BottomBar color={theme.cta} label={state.cta} />
+    </div>
+  );
+}
+
+function renderGraphicDirectResponse(state: CreativeState) {
+  const selectionLabel = getSelectorPrompt(state);
+  const showAmount = Boolean(state.amount);
+  const compactButtons = state.buttons.some((button) => button.length > 11);
+
+  return (
+    <CreativeShell state={state}>
+      <div data-creative-layout="graphic-direct-response" style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 16, paddingBottom: 54, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10, textAlign: "center" }}>
+        <HeadlineBlock state={state} compact />
+        <div data-creative-zone="offer" style={{ alignSelf: "stretch", display: "grid", alignContent: "center", gap: 10 }}>
+          {showAmount && (
+            <div>
+              <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.3, textTransform: "uppercase" }}>
+                {state.spanish ? "OPCIONES DE COBERTURA HASTA" : "COVERAGE OPTIONS UP TO"}
+              </div>
+              <div style={{ color: state.palette.accent, fontSize: 48, fontWeight: 950, lineHeight: 0.98, marginTop: 5, textShadow: "0 4px 18px rgba(0,0,0,0.42)" }}>{state.amount}</div>
+            </div>
+          )}
+          <MiniBenefits state={state} columns={showAmount ? 2 : 1} />
+        </div>
+        <div data-creative-zone="selector" style={{ display: "grid", gap: 8 }}>
+          <div style={{ color: state.palette.headline, fontSize: 10, fontWeight: 950, letterSpacing: 1.15, textTransform: "uppercase" }}>{selectionLabel}</div>
+          <div style={{ display: "grid", gridTemplateColumns: state.buttons.length === 3 && !compactButtons ? "repeat(3, 1fr)" : "1fr 1fr", gap: 7 }}>
+            {state.buttons.slice(0, 4).map((button) => (
+              <div key={button} style={{ minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", background: state.palette.buttonBg || state.palette.cta, color: state.palette.buttonText || "#ffffff", border: state.palette.buttonBorder || `2px solid ${state.palette.accent}`, borderRadius: 7, padding: "6px", fontSize: button.length > 12 ? 10 : 12, fontWeight: 950, lineHeight: 1.05, boxShadow: "0 8px 18px rgba(0,0,0,0.2)" }}>
+                {button}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
       <CtaUnit state={state} />
@@ -1467,6 +1603,15 @@ function renderPopArtBurst(state: CreativeState) {
 }
 
 function renderTemplateFamily(state: CreativeState) {
+  // Wide paid/generated backgrounds are shown in a dedicated image zone.
+  // This preserves the subject and keeps all copy outside the crop instead of
+  // stretching a landscape photo behind a portrait ad.
+  if (state.backgroundUrl) return renderPhotoDirectResponse(state);
+  // Graphic ads use a single audited direct-response skeleton. Layout and
+  // palette data still create variety, but no enabled family can fall back to
+  // a sparse legacy poster with an empty or collision-prone center.
+  if (state.draft?.renderLegacyCreative !== true) return renderGraphicDirectResponse(state);
+  // Explicit opt-in retained only for exact rendering of archived drafts.
   if (state.layoutFamily === "split_panel") return renderSplitPanel(state);
   if (state.layoutFamily === "selector_grid") return renderSelectorGrid(state);
   if (state.layoutFamily === "checklist_first" || state.layoutFamily === "trust_medical") return renderChecklistFirst(state);
