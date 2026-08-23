@@ -67,6 +67,7 @@ type CaptureValidation = {
 
 const CAPTURE_ERROR = "Ad image capture failed. Please try again.";
 const FIT_ERROR = "This ad did not fit safely. Regenerate it before launching.";
+const CREATIVE_UI_VERSION = 2;
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -409,6 +410,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           licensedStates: states,
           location: stateLabel,
           mode: "wizard",
+          clientCreativeVersion: CREATIVE_UI_VERSION,
           dailyBudget,
           variantCount,
           regenerationAttempt: nextAttempt,

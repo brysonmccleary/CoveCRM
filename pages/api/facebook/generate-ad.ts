@@ -189,6 +189,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: "Unauthorized" });
   }
 
+  // A tab left open across a deployment keeps running its old JavaScript.
+  // Fail closed instead of letting that stale renderer keep generating the
+  // retired layouts; the message is intentionally plain and user-facing.
+  if ((req.body as any)?.mode === "wizard" && Number((req.body as any)?.clientCreativeVersion || 0) < 2) {
+    return res.status(409).json({
+      ok: false,
+      error: "CoveCRM was updated. Refresh this page once to load the improved ad builder.",
+    });
+  }
+
   const {
     leadType = "mortgage_protection",
     location: locationParam = "",

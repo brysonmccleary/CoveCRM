@@ -1,7 +1,11 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import AdPreviewCard, { ProductionFeedCreative, resolveCreativeLayoutFamily } from "@/components/FacebookAds/AdPreviewCard";
-import { generateWinningVariants, getWinningFamilyById } from "@/lib/facebook/winningAdLibrary";
+import {
+  WINNING_AD_LIBRARY,
+  generateWinningVariants,
+  getWinningFamilyById,
+} from "@/lib/facebook/winningAdLibrary";
 
 describe("Final Expense amount-focused creative", () => {
   test("Senior Benefit Card deterministically selects amount_hero and renders displayAmount with a CTA", () => {
@@ -28,7 +32,7 @@ describe("Final Expense amount-focused creative", () => {
     const markup = renderToStaticMarkup(React.createElement(ProductionFeedCreative, { draft }));
     expect(markup).toContain("$50,000");
     expect(markup).toMatch(/No exam required|No medical exam options available|Fixed rates|Rates never increase with age|Simple qualification/);
-    expect(markup).toContain("TAP YOUR AGE TO EXPLORE OPTIONS");
+    expect(markup).toContain("SELECT YOUR AGE");
     expect(markup).toMatch(/See What I Qualify For|Check My Options|Learn More/);
   });
 
@@ -104,4 +108,80 @@ describe("Final Expense amount-focused creative", () => {
     expect(markup).toContain("↺  Regenerate");
     expect(markup).not.toContain("No regenerations left");
   });
+});
+
+describe("Exhaustive generated-creative quality gate", () => {
+  test("every enabled family and visual variant stays product-clear, avoids fake hero ranges, and exposes every paid background", () => {
+    const paidPools = new Set(["veteran", "trucker", "mortgage_protection"]);
+    const forbiddenLayouts = new Set([
+      "quiz_card",
+      "messenger_prompt",
+      "mobile_native",
+      "pop_art_burst",
+      "aged_parchment",
+      "patriotic_notice",
+      "homeowner_table",
+    ]);
+    const variants = ["emotional", "logical", "curiosity"] as const;
+    let rendered = 0;
+
+    for (const family of WINNING_AD_LIBRARY.filter((candidate) => !candidate.disabled)) {
+      const generated = generateWinningVariants({
+        leadType: family.leadType,
+        audienceSegment: family.audienceSegment || "standard",
+        userId: "exhaustive-quality-gate",
+        campaignName: `quality-${family.id}`,
+        familyIdOverride: family.id,
+      });
+
+      for (const variantType of variants) {
+        const variant = generated[variantType];
+        for (let visualVariantIndex = 0; visualVariantIndex < 40; visualVariantIndex += 1) {
+          const draft = {
+            ...variant,
+            audienceSegment: family.audienceSegment || "standard",
+            winningFamilyId: variant.familyId,
+            creativeArchetype: variant.archetype,
+            visualVariantIndex,
+          };
+          const layout = resolveCreativeLayoutFamily(draft, family.leadType, 17, visualVariantIndex);
+          const markup = renderToStaticMarkup(React.createElement(ProductionFeedCreative, { draft }));
+          const visualLeadType = family.audienceSegment === "veteran" || family.audienceSegment === "trucker"
+            ? family.audienceSegment
+            : family.leadType;
+
+          expect(markup).not.toMatch(/Under \$150k|Menos de \$150k|\$150k[-–]\$300k/i);
+          expect(markup).not.toContain("...");
+
+          if (paidPools.has(visualLeadType)) {
+            expect(forbiddenLayouts).not.toContain(layout);
+            expect(markup).toContain(`/ad-backgrounds/${visualLeadType}/${visualVariantIndex + 1}.jpg`);
+          }
+
+          if (family.leadType === "mortgage_protection") {
+            expect(markup).toMatch(/MORTGAGE PROTECTION|PROTECCIÓN HIPOTECARIA/);
+            expect(markup).toMatch(/MORTGAGE BALANCE|SALDO (?:DE SU )?HIPOTECA|SALDO HIPOTECARIO/);
+            for (const label of draft.landingPageConfig.buttonLabels) {
+              const normalized = label.toLowerCase().replace(/,/g, "").trim();
+              const amountMatch = normalized.match(/^\$(\d+)(k|\s*mil)?$/);
+              expect(amountMatch).not.toBeNull();
+              const amount = Number(amountMatch?.[1] || 0) * (amountMatch?.[2] ? 1000 : 1);
+              expect([250000, 400000, 600000]).toContain(amount);
+            }
+          }
+          if (family.leadType === "veteran") expect(markup).toContain("LIFE INSURANCE FOR VETERANS");
+          if (family.leadType === "trucker") expect(markup).toContain("LIFE INSURANCE FOR CDL DRIVERS");
+          if (family.leadType === "iul") expect(markup).toMatch(/INDEXED UNIVERSAL LIFE|IUL LIFE INSURANCE|TRUCKERS IUL|UNIVERSAL INDEXADO/);
+          if (family.leadType === "final_expense") expect(markup).toMatch(/FINAL EXPENSE INSURANCE|SEGURO DE GASTOS FINALES/);
+          if (draft.landingPageConfig.buttonLabels.some((label: string) => /\$/.test(label)) && family.leadType === "veteran") {
+            expect(markup).toMatch(/CHOOSE A COVERAGE AMOUNT|ELIJA UN MONTO DE COBERTURA/);
+            expect(markup).not.toMatch(/TAP YOUR AGE|SELECT YOUR AGE|ELIJA SU EDAD/);
+          }
+          rendered += 1;
+        }
+      }
+    }
+
+    expect(rendered).toBeGreaterThan(8000);
+  }, 60000);
 });

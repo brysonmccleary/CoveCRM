@@ -469,8 +469,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Select your mortgage amount below",
       ],
       buttonLabelsPool: [
-        ["$100,000", "$200,000", "$300,000", "$400,000"],
-        ["$200,000", "$300,000", "$400,000", "$500,000"],
+        ["$250,000", "$400,000", "$600,000"],
+        ["$250k", "$400k", "$600k"],
       ],
       benefitBulletsPool: [
         ["No exam options available", "May qualify in minutes", "Covers your mortgage if the unexpected happens"],
@@ -517,9 +517,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
       ctaPool: ["See My Rate →", "Check My Options →", "Learn More →"],
       amountButtonPools: [
-        ["$100,000", "$200,000", "$300,000", "$400,000"],
-        ["$200,000", "$300,000", "$400,000", "$500,000"],
-        ["$250,000", "$400,000", "$500,000", "$600,000"],
+        ["$250,000", "$400,000", "$600,000"],
+        ["$250k", "$400k", "$600k"],
       ],
       approvedCoverageAmounts: [100000, 200000, 250000, 300000, 400000, 500000, 600000],
     },
@@ -540,9 +539,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "See options in seconds",
       ],
       buttonLabelsPool: [
-        ["$100,000", "$200,000", "$300,000", "$400,000"],
-        ["$200,000", "$300,000", "$400,000", "$500,000"],
-        ["$250,000", "$400,000", "$500,000", "$600,000"],
+        ["$250,000", "$400,000", "$600,000"],
+        ["$250k", "$400k", "$600k"],
       ],
       benefitBulletsPool: [
         ["Cover your mortgage if something happens", "Living benefits included", "No exam options may be available"],
@@ -589,8 +587,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
       ctaPool: ["See My Rate →", "Check My Options →", "Learn More →"],
       amountButtonPools: [
-        ["$100K", "$200K", "$300K", "$500K"],
-        ["$150K", "$250K", "$400K", "$600K"],
+        ["$250,000", "$400,000", "$600,000"],
+        ["$250k", "$400k", "$600k"],
       ],
       approvedCoverageAmounts: [100000, 200000, 250000, 300000, 400000, 500000],
       approvedPremiumExamples: ["as low as $29/mo", "starting at $39/mo", "from $49/mo"],
@@ -608,8 +606,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "No exam options may be available",
       ],
       buttonLabelsPool: [
-        ["$100K", "$200K", "$300K", "$500K"],
-        ["$150K", "$250K", "$400K", "$600K"],
+        ["$250,000", "$400,000", "$600,000"],
+        ["$250k", "$400k", "$600k"],
       ],
       benefitBulletsPool: [
         ["Protect your family from losing your home", "No exam options available", "Affordable monthly premiums"],
@@ -669,8 +667,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Mortgage protection options for homeowners",
       ],
       buttonLabelsPool: [
-        ["$100,000", "$200,000", "$300,000", "$400,000"],
-        ["$200,000", "$300,000", "$400,000", "$500,000"],
+        ["$250,000", "$400,000", "$600,000"],
+        ["$250k", "$400k", "$600k"],
       ],
       benefitBulletsPool: [
         ["Cover your mortgage if something happens", "No exam options available", "Fast approval"],
@@ -1744,7 +1742,7 @@ function buildSpanishWinningAdFamilies(): WinningAdFamily[] {
   });
 
   const seniorAges = [["50–59", "60–69", "70–79", "80+"], ["45–54", "55–64", "65–74", "75–85"]];
-  const mortgageAmounts = [["Menos de $150k", "$150k–$300k", "$300k–$500k", "$500k+"], ["$100k", "$250k", "$500k", "$750k+"]];
+  const mortgageAmounts = [["$250,000", "$400,000", "$600,000"], ["$250 mil", "$400 mil", "$600 mil"]];
   const iulChoices = [["Protección", "Valor en efectivo", "Jubilación", "Legado"], ["Aprender IUL", "Protección", "Planificación", "Revisión"]];
 
   return [
@@ -1985,7 +1983,7 @@ function buildAdditionalWinningAdFamilies(): WinningAdFamily[] {
 
   const ageSenior = [["50-59", "60-69", "70-79", "80+"], ["45-54", "55-64", "65-74", "75-85"]];
   const ageAdult = [["35-44", "45-54", "55-64", "65+"], ["30-44", "45-54", "55-64", "65+"]];
-  const mortgageAmounts = [["$150k", "$300k", "$500k", "$750k+"], ["Under $150k", "$150k-$300k", "$300k-$500k", "$500k+"]];
+  const mortgageAmounts = [["$250,000", "$400,000", "$600,000"], ["$250k", "$400k", "$600k"]];
   const iulButtons = [["Protection", "Growth Potential", "Access", "Legacy"], ["Retirement", "Family", "Cash Value", "Review"]];
 
   return [

@@ -157,16 +157,14 @@ function isLayoutPhotoFriendly(layoutFamily: string, leadType: string): boolean 
   return true;
 }
 
-// Real winning ads in these niches split roughly between photo backgrounds
-// and pure CSS/graphic cards (confirmed against live Meta Ad Library
-// examples) -- trucker skews more photo-heavy, veteran/mortgage closer to
-// even. Deciding off the already-seeded variantIndex keeps this deterministic
-// per draft without a separate random source.
+// These three pools are paid, purpose-built creative assets. If a layout can
+// expose a photo, always use the corresponding asset instead of silently
+// falling back to a generic CSS treatment.
 function isPhotoEligible(leadType: string, variantIndex: number, layoutFamily: string): boolean {
   if (!STATIC_BACKGROUND_COUNTS[leadType]) return false;
   if (!isLayoutPhotoFriendly(layoutFamily, leadType)) return false;
-  if (leadType === "trucker") return variantIndex % 3 !== 0;
-  return variantIndex % 2 === 0;
+  void variantIndex;
+  return true;
 }
 
 function getVisualLeadType(draft: any, leadType: string): string {
@@ -433,9 +431,9 @@ type CreativeState = {
 // one clear CTA. Weak generic/mobile/chat/pop-art treatments remain in the
 // renderer for backwards compatibility but are no longer selected for new ads.
 const LAYOUTS_BY_LEAD_TYPE: Record<string, LayoutFamily[]> = {
-  veteran: ["amount_hero", "age_selector", "benefit_grid", "patriotic_notice", "aged_parchment", "premium_dark_gold"],
+  veteran: ["amount_hero", "age_selector", "premium_dark_gold"],
   trucker: ["trucker_highway", "age_selector", "price_table", "premium_dark_gold", "amount_hero"],
-  mortgage_protection: ["price_table", "homeowner_table", "benefit_grid", "selector_grid", "amount_hero", "comparison_table"],
+  mortgage_protection: ["price_table", "selector_grid", "comparison_table"],
   final_expense: ["amount_hero", "age_selector", "premium_dark_gold", "price_table", "ornate_gold_frame", "benefit_grid"],
   iul: ["clean_white_diagram", "benefit_grid", "premium_dark_gold", "price_table"],
 };
@@ -460,12 +458,12 @@ const EXPLICIT_LAYOUT_BY_FAMILY_ID: Record<string, LayoutFamily> = {
   mp_amount_button_card: "selector_grid",
   mp_rate_table_card: "price_table",
   mp_clean_navy_price_table: "price_table",
-  mp_simple_benefit_card: "homeowner_table",
+  mp_simple_benefit_card: "selector_grid",
   mp_living_benefits_alert: "price_table",
   mp_with_without_coverage: "comparison_table",
-  mp_family_home_warmth: "amount_hero",
-  mp_veteran_family_home: "aged_parchment",
-  mp_veteran_living_benefits: "patriotic_notice",
+  mp_family_home_warmth: "selector_grid",
+  mp_veteran_family_home: "selector_grid",
+  mp_veteran_living_benefits: "price_table",
   mp_trucker_home_on_road: "trucker_highway",
   mp_trucker_income_gap: "trucker_highway",
   vet_patriotic_amount_card: "amount_hero",
@@ -473,12 +471,12 @@ const EXPLICIT_LAYOUT_BY_FAMILY_ID: Record<string, LayoutFamily> = {
   vet_benefit_unlock_long_copy: "premium_dark_gold",
   vet_branch_selector: "age_selector",
   vet_spouse_security: "amount_hero",
-  vet_benefit_grid_notice: "benefit_grid",
-  vet_whole_life_bold_white: "patriotic_notice",
+  vet_benefit_grid_notice: "premium_dark_gold",
+  vet_whole_life_bold_white: "age_selector",
   vet_coverage_up_to_100k: "amount_hero",
-  vet_legacy_protection_cards: "benefit_grid",
+  vet_legacy_protection_cards: "premium_dark_gold",
   vet_spouse_family_private: "amount_hero",
-  vet_notice_paper_border: "aged_parchment",
+  vet_notice_paper_border: "age_selector",
   trk_neon_card: "trucker_highway",
   trk_patriotic_card: "trucker_highway",
   trk_blue_highway_clean: "trucker_highway",
@@ -494,7 +492,7 @@ const EXPLICIT_LAYOUT_BY_FAMILY_ID: Record<string, LayoutFamily> = {
   iul_market_loss_protection: "benefit_grid",
   iul_flexible_cash_access: "benefit_grid",
   iul_black_gold_retirement: "premium_dark_gold",
-  iul_veteran_triangle_legacy: "clean_white_diagram",
+  iul_veteran_triangle_legacy: "premium_dark_gold",
   iul_veteran_black_gold: "premium_dark_gold",
   iul_trucker_blue_highway: "trucker_highway",
   iul_trucker_sunset_gold: "trucker_highway",
@@ -509,8 +507,11 @@ export function resolveCreativeLayoutFamily(draft: any, leadType: string, seed: 
   if (audienceSegment === "trucker" && (leadType === "iul" || leadType === "mortgage_protection")) {
     return pickSeeded(["trucker_highway", "price_table", "premium_dark_gold"], seed + variantIndex * 11, "layout");
   }
+  if (audienceSegment === "veteran" && leadType === "iul") {
+    return "premium_dark_gold";
+  }
   if (audienceSegment === "veteran" && leadType === "mortgage_protection") {
-    return pickSeeded(["aged_parchment", "patriotic_notice", "benefit_grid"], seed + variantIndex * 11, "layout");
+    return pickSeeded(["selector_grid", "price_table", "comparison_table"], seed + variantIndex * 11, "layout");
   }
   return pickSeeded(
     LAYOUTS_BY_LEAD_TYPE[leadType] || LAYOUTS_BY_LEAD_TYPE.final_expense,
@@ -750,13 +751,13 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
   const headlineBase = typographyStyle === "aggressive_response" ? 30 : typographyStyle === "utility_ui" ? 24 : typographyStyle === "modern_minimal" ? 25 : 27;
   const headlineSize = Math.max(20, headlineBase - (headline.length > 42 ? 3 : 0) - (densityStyle === "compact" ? 1 : 0));
   const fallbackButtons = leadType === "mortgage_protection"
-    ? ["Under $150k", "$150k-$300k", "$300k-$500k", "$500k+"]
+    ? ["$250,000", "$400,000", "$600,000"]
     : leadType === "trucker"
     ? ["35-44", "45-54", "55-64", "65+"]
     : ["Under 50", "50-60", "61-70", "71+"];
   const localizedFallbackButtons = spanish
     ? (leadType === "mortgage_protection"
-      ? ["Menos de $150k", "$150k-$300k", "$300k-$500k", "$500k+"]
+      ? ["$250,000", "$400,000", "$600,000"]
       : ["Menos de 50", "50-60", "61-70", "71+"])
     : fallbackButtons;
 
@@ -769,7 +770,9 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     bullets: overlay.benefitBullets.slice(0, 3),
     cta: clampCopy(overlay.ctaStrip || (spanish ? "Conozca sus opciones →" : "Learn more ->"), 42),
     eyebrow: productLabel,
-    amount: cleanText(draft?.displayAmount) || overlay.buttonLabels.find((label) => label.includes("$")) || (leadType === "veteran" ? "$50,000" : ""),
+    // A selector answer is not a coverage promise. Only an amount explicitly
+    // approved on the winning family may become the hero value.
+    amount: cleanText(draft?.displayAmount),
     backgroundUrl,
     layoutFamily,
     iaFamily,
@@ -929,13 +932,27 @@ function renderSplitPanel(state: CreativeState) {
   );
 }
 
+function getSelectorPrompt(state: CreativeState): string {
+  const hasAmountChoices = state.buttons.some((label) => /\$/.test(label));
+  if (state.leadType === "mortgage_protection") {
+    return state.spanish ? "ELIJA EL SALDO DE SU HIPOTECA" : "SELECT YOUR MORTGAGE BALANCE";
+  }
+  if (hasAmountChoices) {
+    return state.spanish ? "ELIJA UN MONTO DE COBERTURA" : "CHOOSE A COVERAGE AMOUNT";
+  }
+  if (state.leadType === "iul") {
+    return state.spanish ? "ELIJA LO QUE DESEA CONOCER" : "CHOOSE WHAT YOU WANT TO LEARN";
+  }
+  return state.spanish ? "ELIJA SU EDAD" : "SELECT YOUR AGE";
+}
+
 function renderSelectorGrid(state: CreativeState) {
   return (
     <CreativeShell state={state}>
       <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "grid", gridTemplateRows: "auto 1fr auto", gap: state.gap, textAlign: "center" }}>
         <HeadlineBlock state={state} compact />
         <Panel state={state} style={{ padding: 11, alignSelf: "center" }}>
-          <div style={{ color: state.palette.accent, fontSize: 12, fontWeight: 950, marginBottom: 9, letterSpacing: 1 }}>SELECT ONE OPTION</div>
+          <div style={{ color: state.palette.accent, fontSize: 12, fontWeight: 950, marginBottom: 9, letterSpacing: 1 }}>{getSelectorPrompt(state)}</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             {state.buttons.map((label) => (
               <div key={label} style={{ background: state.palette.headlineBg, color: state.palette.headline, border: `1.5px solid ${state.palette.accent}`, borderRadius: state.radius, padding: "10px 7px", fontSize: 12, fontWeight: 950, lineHeight: 1 }}>
@@ -970,16 +987,16 @@ function renderChecklistFirst(state: CreativeState) {
 }
 
 function renderAmountHero(state: CreativeState) {
-  const selectionLabel = state.leadType === "mortgage_protection"
-    ? (state.spanish ? "ELIJA EL RANGO DE SU HIPOTECA" : "CHOOSE YOUR MORTGAGE RANGE")
-    : (state.spanish ? "ELIJA SU EDAD PARA VER OPCIONES" : "TAP YOUR AGE TO EXPLORE OPTIONS");
+  const selectionLabel = getSelectorPrompt(state);
 
   return (
     <CreativeShell state={state}>
       <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, textAlign: "center", display: "flex", flexDirection: "column", gap: state.gap }}>
         <div style={{ color: state.palette.eyebrow, fontSize: 11, fontWeight: 950, letterSpacing: 2.2 }}>{state.eyebrow}</div>
-        <div style={{ color: state.palette.accent, fontSize: 54, fontWeight: 950, lineHeight: 0.95, marginTop: 7, textShadow: "0 4px 18px rgba(0,0,0,0.65)" }}>{state.amount || "$50,000"}</div>
-        <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
+        {state.amount && (
+          <div style={{ color: state.palette.accent, fontSize: 54, fontWeight: 950, lineHeight: 0.95, marginTop: 7, textShadow: "0 4px 18px rgba(0,0,0,0.65)" }}>{state.amount}</div>
+        )}
+        <div style={{ color: state.palette.headline, fontSize: state.amount ? state.headlineSize : Math.max(30, state.headlineSize + 5), fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase", marginTop: state.amount ? 0 : 12, ...lineClampStyle(2) }}>{state.headline}</div>
         {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: state.subSize, fontWeight: 800, lineHeight: 1.3, maxWidth: "88%", margin: "0 auto" , ...lineClampStyle(2) }}>{state.subheadline}</div>}
         <div style={{ marginTop: "auto", display: "grid", gap: state.gap }}>
           <MiniBenefits state={state} columns={2} />
@@ -1000,10 +1017,11 @@ function renderComparisonTable(state: CreativeState) {
       <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "grid", gridTemplateRows: "auto 1fr auto", gap: state.gap }}>
         <HeadlineBlock state={state} compact />
         <Panel state={state} style={{ padding: 10 }}>
+          <div style={{ color: state.palette.accent, fontSize: 10, fontWeight: 950, letterSpacing: 1.2, textTransform: "uppercase", padding: "2px 6px 7px" }}>{getSelectorPrompt(state)}</div>
           {rows.slice(0, 4).map((row, index) => (
             <div key={row} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 6px", borderBottom: index === rows.length - 1 ? "none" : `1px solid ${state.palette.panelBorder}`, color: state.palette.subheadline, fontSize: 12, fontWeight: 900 }}>
               <span>{row}</span>
-              <span style={{ color: state.palette.accent }}>{index === 0 ? (state.spanish ? "Mejor" : "Best") : (state.spanish ? "Ver" : "View")}</span>
+              <span style={{ color: state.palette.accent }}>{state.spanish ? "Ver opciones" : "View options"}</span>
             </div>
           ))}
         </Panel>
@@ -1029,11 +1047,7 @@ function renderDirectResponseOffer(state: CreativeState) {
     final_expense: "FINAL EXPENSE COVERAGE",
     iul: "INDEXED UNIVERSAL LIFE",
   };
-  const selectorLabel = state.leadType === "mortgage_protection"
-    ? (state.spanish ? "ELIJA EL RANGO DE SU HIPOTECA" : "CHOOSE YOUR MORTGAGE RANGE")
-    : state.leadType === "iul"
-    ? (state.spanish ? "CONOZCA SUS OPCIONES" : "EXPLORE YOUR OPTIONS")
-    : (state.spanish ? "ELIJA SU EDAD PARA VER OPCIONES" : "TAP YOUR AGE TO EXPLORE OPTIONS");
+  const selectorLabel = getSelectorPrompt(state);
 
   return (
     <CreativeShell state={state}>
@@ -1145,18 +1159,22 @@ function renderBenefitGrid(state: CreativeState) {
 }
 
 function renderPriceTable(state: CreativeState) {
-  const rows = state.buttons.length ? state.buttons : state.leadType === "final_expense" ? ["$5k", "$10k", "$15k", "$25k"] : ["$150k", "$300k", "$500k", "$750k+"];
+  const rows = state.buttons.length ? state.buttons : state.leadType === "final_expense" ? ["$5k", "$10k", "$15k", "$25k"] : ["$250,000", "$400,000", "$600,000"];
+  const amountLabel = state.leadType === "mortgage_protection"
+    ? (state.spanish ? "SALDO HIPOTECARIO" : "MORTGAGE BALANCE")
+    : (state.spanish ? "COBERTURA" : "COVERAGE OPTION");
+  const reviewLabel = state.spanish ? "VER OPCIONES" : "VIEW OPTIONS";
   return (
     <CreativeShell state={state}>
       <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 15, paddingBottom: 52, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10 }}>
         <HeadlineBlock state={state} compact />
         <Panel state={state} style={{ alignSelf: "center", overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.8fr 0.8fr", background: state.palette.cta, color: "#fff", padding: "9px 10px", fontSize: 10, fontWeight: 950, letterSpacing: 1 }}>
-            <span>AMOUNT</span><span>REVIEW</span><span>STATUS</span>
+          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", background: state.palette.cta, color: "#fff", padding: "9px 10px", fontSize: 10, fontWeight: 950, letterSpacing: 1 }}>
+            <span>{amountLabel}</span><span>{reviewLabel}</span>
           </div>
           {rows.slice(0, 4).map((row, index) => (
-            <div key={`${row}-${index}`} style={{ display: "grid", gridTemplateColumns: "1.1fr 0.8fr 0.8fr", padding: "9px 10px", borderBottom: index === rows.length - 1 ? "none" : `1px solid ${state.palette.panelBorder}`, color: state.palette.subheadline, fontSize: 12, fontWeight: 900, background: index % 2 === 0 ? "rgba(255,255,255,0.08)" : "transparent" }}>
-              <span>{row}</span><span>Fast</span><span style={{ color: state.palette.accent }}>View</span>
+            <div key={`${row}-${index}`} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", padding: "9px 10px", borderBottom: index === rows.length - 1 ? "none" : `1px solid ${state.palette.panelBorder}`, color: state.palette.subheadline, fontSize: 12, fontWeight: 900, background: index % 2 === 0 ? "rgba(255,255,255,0.08)" : "transparent" }}>
+              <span>{row}</span><span style={{ color: state.palette.accent }}>{reviewLabel}</span>
             </div>
           ))}
         </Panel>
@@ -1192,7 +1210,7 @@ function renderPremiumDarkGold(state: CreativeState) {
     <CreativeShell state={{ ...state, palette: { ...state.palette, fallback: "linear-gradient(145deg, #050505 0%, #1a1200 100%)", accent: "#c9a84c", cta: "#b8860b", headline: "#ffffff", subheadline: "#e5d3a0", panel: "rgba(0,0,0,0.64)", panelBorder: "rgba(201,168,76,0.34)" } }}>
       <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 18, paddingBottom: 56, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 12 }}>
         <div style={{ border: "1px solid rgba(201,168,76,0.55)", padding: 14, textAlign: "center", boxShadow: "inset 0 0 40px rgba(201,168,76,0.08)" }}>
-          <div style={{ color: "#c9a84c", fontSize: 10, fontWeight: 950, letterSpacing: 2 }}>{state.leadType === "iul" ? "PREMIUM IUL EDUCATION" : "PREMIUM COVERAGE CHECK"}</div>
+          <div style={{ color: "#c9a84c", fontSize: 10, fontWeight: 950, letterSpacing: 2 }}>{state.eyebrow}</div>
           <div style={{ color: "#fff", fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", marginTop: 8 , ...lineClampStyle(2) }}>{state.headline}</div>
         </div>
         <div style={{ display: "grid", gap: 8, alignContent: "center" }}>
@@ -1247,7 +1265,7 @@ function renderPatrioticNotice(state: CreativeState) {
 }
 
 function renderHomeownerTable(state: CreativeState) {
-  const rows = state.buttons.length ? state.buttons : ["Under $150k", "$150k-$300k", "$300k-$500k", "$500k+"];
+  const rows = state.buttons.length ? state.buttons : ["$250,000", "$400,000", "$600,000"];
   return (
     <CreativeShell state={state}>
       <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 14, paddingBottom: 52, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10, background: "linear-gradient(180deg, rgba(255,255,255,0.78), rgba(219,234,254,0.68))" }}>
@@ -1274,11 +1292,12 @@ function renderTruckerHighway(state: CreativeState) {
       <div style={{ position: "absolute", left: 0, right: 0, bottom: 54, height: 72, background: "linear-gradient(90deg, rgba(255,255,255,0.12), rgba(245,158,11,0.24), rgba(255,255,255,0.12))", clipPath: "polygon(36% 0, 64% 0, 100% 100%, 0 100%)" }} />
       <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 16, paddingBottom: 58, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10 }}>
         <div>
-          <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2 }}>CDL DRIVER COVERAGE</div>
+          <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2 }}>{state.eyebrow}</div>
           <div style={{ color: "#fff", fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", marginTop: 7 , ...lineClampStyle(2) }}>{state.headline}</div>
         </div>
         <div style={{ alignSelf: "end", display: "grid", gap: 8 }}>
           <MiniBenefits state={state} />
+          <div style={{ color: state.palette.headline, fontSize: 10, fontWeight: 950, letterSpacing: 1.1, textAlign: "center", textTransform: "uppercase" }}>{getSelectorPrompt(state)}</div>
           <ButtonGrid labels={state.buttons} styleType="cyan" customStyle={getButtonStyle(state)} />
         </div>
       </div>
