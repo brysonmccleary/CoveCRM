@@ -12,6 +12,12 @@ const INTERNAL_VOICE_METADATA =
 export function sanitizeLeadNoteForDisplay(value: unknown): string {
   if (typeof value !== "string") return "";
 
+  // Older hosted-funnel submissions serialized every answer, consent text,
+  // and attribution source into Notes. Those values now live in structured
+  // fields and immutable audit records, so never render the legacy dump as a
+  // customer note.
+  if (/^Source:\s*CoveCRM hosted funnel\b/im.test(value)) return "";
+
   const visibleLines: string[] = [];
   let insideAiOutcomeBlock = false;
 

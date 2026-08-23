@@ -15,6 +15,8 @@ import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 import { stableLeadEventId } from "@/lib/facebook/hostedAttribution";
 import { enqueueMetaLifecycleEventSafely } from "@/lib/meta/capi";
+import { buildStructuredLeadFields } from "@/lib/leads/structuredLeadFields";
+import { sendNewLeadNotificationEmail } from "@/lib/email";
 
 const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   final_expense: "Final Expense",
@@ -300,15 +302,26 @@ export async function processMetaLead(
   const bestCallTime = getRawField("best_call_time", "best_time_for_a_licensed_agent_to_call");
 
   const coverageAmountFinal = coverageAmount || mortgageBalance || "";
-
-  const contextualNotes = [
-    militaryBranch ? `Military Branch: ${militaryBranch}` : "",
-    cdlStatus ? `CDL Status: ${cdlStatus}` : "",
-    iulGoal ? `IUL Goal: ${iulGoal}` : "",
-    bestCallTime ? `Best Call Time: ${bestCallTime}` : "",
-    leadData.productInterest ? `Interest: ${leadData.productInterest}` : "",
-    leadData.zip ? `Zip: ${leadData.zip}` : "",
-  ].filter(Boolean).join("\n");
+  const nativeAnswers = Object.fromEntries(
+    rawFields.map((field: any) => [
+      String(field?.name || ""),
+      Array.isArray(field?.values) ? field.values : field?.values?.[0],
+    ])
+  );
+  const structuredLeadFields = buildStructuredLeadFields({
+    answers: {
+      ...nativeAnswers,
+      ...(leadData.city ? { city: leadData.city } : {}),
+      ...(leadData.zip ? { zip: leadData.zip } : {}),
+      ...(leadData.productInterest ? { productInterest: leadData.productInterest } : {}),
+      ...(militaryBranch ? { militaryBranch } : {}),
+      ...(cdlStatus ? { cdlStatus } : {}),
+      ...(iulGoal ? { iulGoal } : {}),
+      ...(bestCallTime ? { bestTime: bestCallTime } : {}),
+    },
+    selectedOption: coverageAmountFinal,
+    leadType: (campaign as any).leadType,
+  });
 
   const newLead = await Lead.create({
     "First Name": leadData.firstName,
@@ -319,10 +332,11 @@ export async function processMetaLead(
     phoneLast10: normalizedPhone.slice(-10),
     normalizedPhone: normalizedPhone.slice(-10),
     State: leadData.state || "",
-    Notes: contextualNotes || undefined,
+    Notes: "",
     Age: ageValue || undefined,
-    Beneficiary: beneficiary || undefined,
-    "Coverage Amount": coverageAmountFinal || undefined,
+    ...structuredLeadFields,
+    Beneficiary: structuredLeadFields.Beneficiary || beneficiary || undefined,
+    "Coverage Amount": structuredLeadFields["Requested Coverage"] || undefined,
     userEmail,
     ownerEmail: userEmail,
     folderId: (folder as any)._id,
@@ -351,6 +365,28 @@ export async function processMetaLead(
     { _id: (entry as any)._id },
     { $set: { crmLeadId: (newLead as any)._id, importedToCrm: true, importedAt: new Date() } }
   );
+
+  try {
+    const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || "https://www.covecrm.com").replace(/\/$/, "");
+    const leadName = `${String(leadData.firstName || "").trim()} ${String(leadData.lastName || "").trim()}`.trim() || "New lead";
+    const emailResult = await sendNewLeadNotificationEmail({
+      to: userEmail,
+      leadName,
+      leadPhone: leadData.phone,
+      leadEmail: leadData.email,
+      state: leadData.state,
+      age: String(ageValue || ""),
+      leadType: crmLeadType,
+      campaignName: String((campaign as any).campaignName || ""),
+      details: structuredLeadFields,
+      leadUrl: `${appUrl}/lead/${String((newLead as any)._id)}`,
+    });
+    if (!emailResult.ok) {
+      console.warn("[processMetaLead] new lead email failed (non-blocking):", emailResult.error);
+    }
+  } catch (emailErr: any) {
+    console.warn("[processMetaLead] new lead email failed (non-blocking):", emailErr?.message);
+  }
 
   // Mark event fully processed with CRM lead reference
   await updateEventStatus(leadgenId, {

@@ -18,6 +18,7 @@ jest.mock("@/lib/leads/scoreLead", () => ({ scoreLeadOnArrival: jest.fn().mockRe
 jest.mock("@/lib/leads/checkDuplicate", () => ({ checkDuplicate: jest.fn() }));
 jest.mock("@/lib/ai/triggerAIFirstCall", () => ({ triggerAIFirstCall: jest.fn().mockResolvedValue(undefined) }));
 jest.mock("@/lib/drips/enrollOnNewLead", () => ({ enrollOnNewLeadIfWatched: jest.fn().mockResolvedValue(undefined) }));
+jest.mock("@/lib/email", () => ({ sendNewLeadNotificationEmail: jest.fn().mockResolvedValue({ ok: true }) }));
 
 jest.mock("@/models/MetaLeadWebhookEvent", () => ({
   __esModule: true,

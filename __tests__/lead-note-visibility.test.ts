@@ -32,4 +32,16 @@ describe("lead note visibility", () => {
     const note = "Spoke with John.\nHe wants $250,000 in coverage.";
     expect(sanitizeLeadNoteForDisplay(note)).toBe(note);
   });
+
+  it("hides legacy hosted-funnel answer dumps", () => {
+    const legacyDump = [
+      "Selected: $10k - $25k",
+      "Lead Type: Veteran",
+      "dob: 1997-12-01",
+      "smsConsentText: long compliance disclosure",
+      "Source: CoveCRM hosted funnel — General Veteran Leads",
+    ].join("\n");
+
+    expect(sanitizeLeadNoteForDisplay(legacyDump)).toBe("");
+  });
 });

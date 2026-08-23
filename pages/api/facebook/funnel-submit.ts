@@ -14,7 +14,7 @@ import FBLeadEntry from "@/models/FBLeadEntry";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import SmsConsentEvidence from "@/models/SmsConsentEvidence";
-import { isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
+import { isStateAllowed, normalizeStateCode } from "@/lib/facebook/geo/usStates";
 import { buildLeadSheetPayload } from "@/lib/facebook/sheets/mapLeadToSheetRow";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
@@ -22,6 +22,8 @@ import { resolveHostedAttribution, stableLeadEventId } from "@/lib/facebook/host
 import { buildHostedConsentEvidence, requestIp } from "@/lib/facebook/hostedConsent";
 import { scoreHostedLeadOnArrival } from "@/lib/facebook/hostedLeadScoring";
 import { enqueueMetaLifecycleEventSafely } from "@/lib/meta/capi";
+import { buildStructuredLeadFields } from "@/lib/leads/structuredLeadFields";
+import { sendNewLeadNotificationEmail } from "@/lib/email";
 
 const LEAD_TYPE_MAP: Record<string, string> = {
   final_expense: "Final Expense",
@@ -294,19 +296,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Notes field: capture which option they selected (age band or coverage amount)
-    const notesLines: string[] = [];
-    if (selectedOption) notesLines.push(`Selected: ${selectedOption}`);
-    if (normalizedLeadType) notesLines.push(`Lead Type: ${normalizedLeadType}`);
-    if (outsideLicensedArea || stateRestrictionWarning || stateOutsidePrimaryLicensedArea) {
-      notesLines.push(`State Restriction Warning: ${stateLabel(normalizedState)} is outside the campaign's primary licensed states.`);
-    }
-    for (const [key, value] of Object.entries(answerMap)) {
-      if (value !== undefined && value !== null && String(value).trim()) {
-        notesLines.push(`${key}: ${String(value)}`);
-      }
-    }
-    notesLines.push(`Source: CoveCRM hosted funnel — ${campaign.campaignName}`);
+    const structuredLeadFields = buildStructuredLeadFields({
+      answers: answerMap,
+      selectedOption,
+      leadType: campaign.leadType,
+    });
 
     const rawPhone = String(phone || "").trim();
     const phoneLast10 = rawPhone.replace(/\D+/g, "").slice(-10);
@@ -327,7 +321,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       normalizedPhone: phoneLast10,
       State: String(state || "").trim(),
       Age: String(age || "").trim(),
-      Notes: notesLines.join("\n"),
+      ...structuredLeadFields,
+      "Coverage Amount": structuredLeadFields["Requested Coverage"] || undefined,
+      Notes: "",
       userEmail,
       ownerEmail: userEmail,
       folderId,
@@ -356,6 +352,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { _id: (rawSubmission as any)._id, createdLeadId: null },
       { $set: { createdLeadId: (lead as any)._id } }
     );
+
+    try {
+      const leadName = `${String(firstName || "").trim()} ${String(lastName || "").trim()}`.trim() || "New lead";
+      const emailResult = await sendNewLeadNotificationEmail({
+        to: userEmail,
+        leadName,
+        leadPhone: rawPhone,
+        leadEmail: normalizedEmail,
+        state: normalizedState || String(state || "").trim(),
+        age: String(age || "").trim(),
+        leadType: normalizedLeadType,
+        campaignName: String(campaign.campaignName || ""),
+        details: structuredLeadFields,
+        leadUrl: `${appUrl}/lead/${String((lead as any)._id)}`,
+      });
+      if (!emailResult.ok) {
+        console.warn("[funnel-submit] new lead email failed (non-blocking):", emailResult.error);
+      }
+    } catch (emailErr: any) {
+      console.warn("[funnel-submit] new lead email failed (non-blocking):", emailErr?.message);
+    }
 
     try {
       await scoreHostedLeadOnArrival(String((lead as any)._id));
@@ -422,7 +439,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           lastName: String(lastName || "").trim(),
           email: String(email || "").trim().toLowerCase(),
           phone: String(phone || "").trim(),
-          notes: notesLines.join("\n"),
+          notes: "",
           status: "New",
         });
         await fetch(String(campaign.appsScriptUrl), {

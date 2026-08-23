@@ -215,6 +215,7 @@ function looksLikeNotesKey(rawKey: string) {
 
 function looksLikeSystemKey(rawKey: string) {
   const nk = normalizeKey(rawKey);
+  if (nk.startsWith("meta")) return true;
   const blockedExact = new Set([
     "_id",
     "id",
@@ -231,6 +232,13 @@ function looksLikeSystemKey(rawKey: string) {
     "interactionhistory",
     "normalizedphone",
     "phonelast10",
+    "campaignid",
+    "owneremail",
+    "leadsource",
+    "sourcetype",
+    "realtimeeligible",
+    "staterestrictionwarning",
+    "stateoutsideprimarylicensedarea",
   ]);
   if (blockedExact.has(nk)) return true;
   return false;
@@ -783,6 +791,7 @@ export default function LeadProfileDial() {
       if (!v) return;
 
       usedNorm.add(nk);
+      aliases.forEach((alias) => usedNorm.add(normalizeKey(alias)));
       rows.push({ label, key: found.key, value: v, editable: true });
     };
 
@@ -805,13 +814,25 @@ export default function LeadProfileDial() {
     pushField("State", ["State", "state", "ST", "RR State", "RRState"]);
     pushField("Zip", ["Zip", "ZIP", "ZIP code", "Zip code", "postal", "postalCode"]);
 
-    pushField("Mortgage Amount", ["Mortgage Amount", "mortgage amount", "Mortgage Balance", "mortgage balance", "Mortgage", "mortgage"]);
+    pushField("Mortgage Balance", ["Mortgage Balance", "mortgage balance", "Mortgage Amount", "mortgage amount", "Mortgage", "mortgage"]);
     pushField("Mortgage Payment", ["Mortgage Payment", "mortgage payment"]);
     pushField(
-      "Coverage Amount",
-      ["Coverage Amount", "coverageAmount", "coverage", "How Much Coverage Do You Need?"],
+      "Requested Coverage",
+      ["Requested Coverage", "Coverage Amount", "coverageAmount", "coverage", "Desired Coverage", "How Much Coverage Do You Need?"],
       (value) => value === "0" ? "—" : value,
     );
+
+    pushField("Marital Status", ["Marital Status", "maritalStatus", "Marriage Status"]);
+    pushField("Military Status", ["Military Status", "militaryStatus", "Veteran Status"]);
+    pushField("Military Branch", ["Military Branch", "militaryBranch", "Branch Of Service", "Branch"]);
+    pushField("CDL Status", ["CDL Status", "cdlStatus", "CDL Driver Status", "Driver Type"]);
+    pushField("Best Time To Call", ["Best Time To Call", "bestTime", "Best Time To Contact", "Best Call Time"]);
+    pushField("Health Issues", ["Health Issues", "healthIssues", "Health Notes"]);
+    pushField("Household Income", ["Household Income", "householdIncome", "Income Range"]);
+    pushField("Current Coverage", ["Current Coverage", "currentCoverage"]);
+    pushField("Reason Interested", ["Reason Interested", "reasonInterested", "Interest Type"]);
+    pushField("Why Interested", ["Why Interested", "whyInterested"]);
+    pushField("IUL Goal", ["IUL Goal", "iulGoal"]);
 
     pushField("Lender", ["Lender", "lender"]);
     pushField("County", ["County", "county"]);
@@ -861,6 +882,32 @@ export default function LeadProfileDial() {
       "externalid",
       "source",
       "status",
+      "contactattempts",
+      "score",
+      "scoredat",
+      "soldatapproximate",
+      "revenuepending",
+      "campaignid",
+      "owneremail",
+      "leadsource",
+      "stateoutsideprimarylicensedarea",
+      "staterestrictionwarning",
+      "metaleadgenid",
+      "metaformid",
+      "metaadid",
+      "metacreativeid",
+      "metavariantid",
+      "metacreativefamily",
+      "metaleadeventid",
+      "metafbclid",
+      "metafbc",
+      "metafbp",
+      "metautm",
+      "metaadsetid",
+      "metacampaignid",
+      "metapageid",
+      "metacreatedtime",
+      "metarawpayload",
     ]);
 
     const alreadyUsedAliasesNorm = new Set<string>();

@@ -2141,6 +2141,7 @@ export default function DialSession() {
       if (isMeaninglessZero(found.key, raw)) return;
 
       usedNorm.add(nk);
+      aliases.forEach((alias) => usedNorm.add(normalizeKey(alias)));
       rows.push({ label, key: found.key, value: raw });
     };
 
@@ -2162,9 +2163,20 @@ export default function DialSession() {
     pushField("State", ["State", "state", "ST"]);
     pushField("Zip", ["Zip", "ZIP", "Zip code", "postal", "postalCode"]);
 
-    pushField("Mortgage Amount", ["Mortgage Amount", "Mortgage Balance", "mortgage amount", "mortgage balance", "Mortgage", "mortgage"]);
+    pushField("Mortgage Balance", ["Mortgage Balance", "Mortgage Amount", "mortgage amount", "mortgage balance", "Mortgage", "mortgage"]);
     pushField("Mortgage Payment", ["Mortgage Payment", "mortgage payment"]);
-    pushField("Coverage Amount", ["Coverage Amount", "coverageAmount", "coverage", "How Much Coverage Do You Need?"]);
+    pushField("Requested Coverage", ["Requested Coverage", "Coverage Amount", "coverageAmount", "coverage", "Desired Coverage", "How Much Coverage Do You Need?"]);
+    pushField("Marital Status", ["Marital Status", "maritalStatus", "Marriage Status"]);
+    pushField("Military Status", ["Military Status", "militaryStatus", "Veteran Status"]);
+    pushField("Military Branch", ["Military Branch", "militaryBranch", "Branch Of Service", "Branch"]);
+    pushField("CDL Status", ["CDL Status", "cdlStatus", "CDL Driver Status", "Driver Type"]);
+    pushField("Best Time To Call", ["Best Time To Call", "bestTime", "Best Time To Contact", "Best Call Time"]);
+    pushField("Health Issues", ["Health Issues", "healthIssues", "Health Notes"]);
+    pushField("Household Income", ["Household Income", "householdIncome", "Income Range"]);
+    pushField("Current Coverage", ["Current Coverage", "currentCoverage"]);
+    pushField("Reason Interested", ["Reason Interested", "reasonInterested", "Interest Type"]);
+    pushField("Why Interested", ["Why Interested", "whyInterested"]);
+    pushField("IUL Goal", ["IUL Goal", "iulGoal"]);
 
     // ---- Extras (imported/custom), deduped + filtered ----
     const hardBlockNorm = new Set<string>([
@@ -2179,6 +2191,8 @@ export default function DialSession() {
       "donotcall","donotcallat","leadtype","reminderssent","isaiengaged",
       "aifirstcallattemptdat","aifirstcallattemptedat","aifirstcalltriggeredat",
       "aiprioritycategory","aipriorityscore","externalid","source","status",
+      "contactattempts","score","scoredat","soldatapproximate","revenuepending",
+      "campaignid","owneremail","leadsource","stateoutsideprimarylicensedarea","staterestrictionwarning",
     ]);
 
     const bannedTopNorm = new Set<string>();
@@ -2196,8 +2210,10 @@ export default function DialSession() {
       .filter(([k, v]) => {
         const nk = normalizeKey(k);
         if (!k) return false;
+        if (nk.startsWith("meta")) return false;
         if (hardBlockNorm.has(nk)) return false;
         if (bannedTopNorm.has(nk)) return false;
+        if (usedNorm.has(nk)) return false;
 
         // hide common junk keys seen in the screenshot
         if (nk.includes("aidhistory")) return false;

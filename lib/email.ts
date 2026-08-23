@@ -5,6 +5,7 @@
 const nodemailer = require("nodemailer") as any;
 import { Resend } from "resend";
 import { DateTime } from "luxon";
+import { orderedStructuredLeadEntries } from "@/lib/leads/structuredLeadFields";
 
 const {
   // SMTP (fallback)
@@ -154,6 +155,72 @@ function formatDateTimeFriendly(timeISO: string, agentTz?: string | null) {
   } catch {
     return timeISO;
   }
+}
+
+/* ---------- New lead notification ---------- */
+
+export function renderNewLeadNotificationEmail(opts: {
+  leadName: string;
+  leadPhone?: string;
+  leadEmail?: string;
+  state?: string;
+  age?: string;
+  leadType?: string;
+  campaignName?: string;
+  details?: Record<string, unknown>;
+  leadUrl?: string;
+}) {
+  const row = (label: string, value: unknown) => {
+    const text = String(value ?? "").trim();
+    if (!text) return "";
+    return `<tr><td style="padding:7px 10px;color:#64748b;width:170px;border-bottom:1px solid #e2e8f0">${escapeHtml(label)}</td><td style="padding:7px 10px;font-weight:600;border-bottom:1px solid #e2e8f0">${escapeHtml(text)}</td></tr>`;
+  };
+
+  const detailRows = orderedStructuredLeadEntries(opts.details || {})
+    .filter(([label]) => !["First Name", "Last Name", "Phone", "Email", "State", "Age", "Lead Type", "DOB"].includes(label))
+    .map(([label, value]) => row(label, value))
+    .join("");
+
+  return `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a;max-width:640px">
+      <p style="margin:0 0 4px;font-size:13px;font-weight:800;letter-spacing:.12em;color:#2563eb">NEW LEAD</p>
+      <h2 style="margin:0 0 18px;font-size:26px">${escapeHtml(opts.leadName || "New lead")}</h2>
+      <table style="width:100%;border-collapse:collapse;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px">
+        ${row("Name", opts.leadName)}
+        ${row("Phone", opts.leadPhone)}
+        ${row("Email", opts.leadEmail)}
+        ${row("DOB", opts.details?.DOB)}
+        ${row("Age", opts.age)}
+        ${row("State", opts.state)}
+        ${row("Lead Type", opts.leadType)}
+        ${row("Campaign", opts.campaignName)}
+        ${detailRows}
+      </table>
+      ${opts.leadUrl ? `<p style="margin:20px 0 0"><a href="${escapeHtml(opts.leadUrl)}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;font-weight:700;padding:11px 18px;border-radius:8px">Open Lead in Cove CRM</a></p>` : ""}
+    </div>
+  `;
+}
+
+export async function sendNewLeadNotificationEmail(opts: {
+  to: string;
+  leadName: string;
+  leadPhone?: string;
+  leadEmail?: string;
+  state?: string;
+  age?: string;
+  leadType?: string;
+  campaignName?: string;
+  details?: Record<string, unknown>;
+  leadUrl?: string;
+}): Promise<SendEmailResult> {
+  const identifyingDetail = [opts.leadType, opts.state].filter(Boolean).join(" · ");
+  const subject = `NEW LEAD — ${opts.leadName || "New lead"}${identifyingDetail ? ` — ${identifyingDetail}` : ""}`;
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html: renderNewLeadNotificationEmail(opts),
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
 /**

@@ -110,7 +110,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const age = leadDoc.age ?? toNumber(pick(leadDoc, ["Age", "Client Age"]));
     const coverageAmount =
       leadDoc.coverageAmount ??
-      toNumber(pick(leadDoc, ["Coverage Amount", "Coverage", "Policy Amount", "Face Amount"]));
+      pick(leadDoc, ["Requested Coverage", "Coverage Amount", "Coverage", "Policy Amount", "Face Amount"]);
     const notes =
       typeof leadDoc.notes === "string" ? leadDoc.notes : pick(leadDoc, ["Notes", "Comments", "Remarks"]);
     const status = leadDoc.status || "New";
@@ -137,6 +137,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ RETURN FULL LEAD DOC so UI can show ALL imported/synced fields
     // (This does NOT change imports — only what the API returns.)
     const full = typeof leadDoc.toObject === "function" ? leadDoc.toObject() : { ...leadDoc };
+    // Attribution remains stored for analytics/CAPI, but it is operational
+    // metadata—not lead information—and should never leak into the agent-facing
+    // lead workspace payload.
+    for (const key of Object.keys(full)) {
+      const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "");
+      if (normalized.startsWith("meta") || normalized === "campaignid" || normalized === "owneremail") {
+        delete full[key];
+      }
+    }
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({
