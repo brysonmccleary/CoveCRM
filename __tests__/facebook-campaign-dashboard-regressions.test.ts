@@ -36,11 +36,7 @@ describe("Facebook campaign dashboard regressions", () => {
         lean: jest.fn().mockResolvedValue([{ _id: CAMPAIGN_ID, campaignName: "Veteran Campaign" }]),
       }),
     });
-    (MetaLaunchArchive.find as jest.Mock).mockReturnValue({
-      select: jest.fn().mockReturnValue({
-        lean: jest.fn().mockResolvedValue([{ campaignId: CAMPAIGN_ID }]),
-      }),
-    });
+    (MetaLaunchArchive as any).aggregate = jest.fn().mockResolvedValue([{ campaignId: CAMPAIGN_ID, imageCount: 3 }]);
 
     const { req, res } = createMocks({ method: "GET" });
     await campaignsHandler(req as any, res as any);
@@ -50,6 +46,11 @@ describe("Facebook campaign dashboard regressions", () => {
     expect(JSON.parse(res._getData()).campaigns[0].creativePreviewUrl).toBe(
       `/api/facebook/campaigns/${CAMPAIGN_ID}/creative-preview`
     );
+    expect(JSON.parse(res._getData()).campaigns[0].creativePreviewUrls).toEqual([
+      `/api/facebook/campaigns/${CAMPAIGN_ID}/creative-preview?variant=0`,
+      `/api/facebook/campaigns/${CAMPAIGN_ID}/creative-preview?variant=1`,
+      `/api/facebook/campaigns/${CAMPAIGN_ID}/creative-preview?variant=2`,
+    ]);
   });
 
   test("creative preview returns the exact archived bytes uploaded to Meta", async () => {

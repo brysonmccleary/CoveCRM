@@ -45,6 +45,7 @@ interface FBCampaign {
   metaAdsetId?: string | null;
   metaLastSyncedAt?: string | null;
   creativePreviewUrl?: string;
+  creativePreviewUrls?: string[];
   licensedStates?: string[];
   landingPageConfig?: {
     imageUrl?: string;
@@ -1688,7 +1689,7 @@ function CampaignCard({
   const [deleting, setDeleting] = useState(false);
   const [showManage, setShowManage] = useState(false);
   const [exportingCSV, setExportingCSV] = useState(false);
-  const [imageFailed, setImageFailed] = useState(false);
+  const [failedImageUrls, setFailedImageUrls] = useState<string[]>([]);
 
   // Update Stats inline form
   const [showStatsForm, setShowStatsForm] = useState(false);
@@ -1717,12 +1718,17 @@ function CampaignCard({
     : 0;
 
   const cplBenchmark = CPL_BENCHMARKS[campaign.leadType] ?? 20;
-  const campaignImageUrl =
-    campaign.creativePreviewUrl?.trim() ||
+  const fallbackCampaignImageUrl =
     campaign.ads?.find((ad) => ad.imageUrl?.trim())?.imageUrl?.trim() ||
     campaign.landingPageConfig?.imageUrl?.trim() ||
     "";
-  useEffect(() => setImageFailed(false), [campaignImageUrl]);
+  const campaignImageUrls = (
+    campaign.creativePreviewUrls?.length
+      ? campaign.creativePreviewUrls
+      : [campaign.creativePreviewUrl || fallbackCampaignImageUrl]
+  ).map((url) => String(url || "").trim()).filter(Boolean);
+  const visibleCampaignImageUrls = campaignImageUrls.filter((url) => !failedImageUrls.includes(url));
+  useEffect(() => setFailedImageUrls([]), [campaignImageUrls.join("|")]);
   const appointments = Number(campaign.appointments || 0);
   const campaignSales = Number(campaign.sales || 0);
   const costPerAppointment = Number(campaign.costPerAppointment || 0) ||
@@ -1926,26 +1932,31 @@ function CampaignCard({
       <div className="space-y-4 rounded-2xl border border-white/10 bg-[#1e293b] p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex min-w-0 gap-4">
-            {campaignImageUrl && !imageFailed ? (
-              <a
-                href={campaignImageUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="group relative aspect-[4/5] w-24 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-[#0f172a] sm:w-28"
-                title="Open campaign creative"
-              >
-                <img
-                  src={campaignImageUrl}
-                  alt={`${campaign.campaignName} ad creative`}
-                  loading="lazy"
-                  decoding="async"
-                  className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.03]"
-                  onError={() => setImageFailed(true)}
-                />
-                <span className="absolute inset-x-2 bottom-2 rounded-md bg-black/65 px-2 py-1 text-center text-[10px] font-medium text-white opacity-0 backdrop-blur transition group-hover:opacity-100">
-                  View creative
-                </span>
-              </a>
+            {visibleCampaignImageUrls.length ? (
+              <div className="flex max-w-[46vw] shrink-0 gap-2 overflow-x-auto pb-1 sm:max-w-none">
+                {visibleCampaignImageUrls.slice(0, 4).map((imageUrl, index) => (
+                  <a
+                    key={imageUrl}
+                    href={imageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group relative aspect-[4/5] w-20 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-[#0f172a] sm:w-24"
+                    title={`Open campaign creative ${index + 1}`}
+                  >
+                    <img
+                      src={imageUrl}
+                      alt={`${campaign.campaignName} ad creative ${index + 1}`}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.03]"
+                      onError={() => setFailedImageUrls((current) => current.includes(imageUrl) ? current : [...current, imageUrl])}
+                    />
+                    <span className="absolute inset-x-2 bottom-2 rounded-md bg-black/65 px-2 py-1 text-center text-[10px] font-medium text-white opacity-0 backdrop-blur transition group-hover:opacity-100">
+                      Ad {index + 1}
+                    </span>
+                  </a>
+                ))}
+              </div>
             ) : (
               <div className="flex aspect-[4/5] w-24 shrink-0 flex-col items-center justify-center rounded-xl border border-dashed border-white/15 bg-[#0f172a]/70 px-2 text-center sm:w-28">
                 <span className="text-xl" aria-hidden="true">🖼️</span>

@@ -32,18 +32,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // lightweight even when an account has hundreds of campaigns.
     const campaignIds = campaigns.map((campaign: any) => campaign._id);
     const archivedCampaigns = campaignIds.length
-      ? await MetaLaunchArchive.find({
-          userEmail: session.user.email.toLowerCase(),
-          campaignId: { $in: campaignIds },
-        })
-          .select("campaignId")
-          .lean()
+      ? await MetaLaunchArchive.aggregate([
+          {
+            $match: {
+              userEmail: session.user.email.toLowerCase(),
+              campaignId: { $in: campaignIds },
+            },
+          },
+          {
+            $project: {
+              campaignId: 1,
+              imageCount: { $size: { $ifNull: ["$images", []] } },
+            },
+          },
+        ])
       : [];
-    const archivedIds = new Set(archivedCampaigns.map((archive: any) => String(archive.campaignId)));
+    const archiveImageCounts = new Map(
+      archivedCampaigns.map((archive: any) => [String(archive.campaignId), Number(archive.imageCount || 0)])
+    );
     const campaignRows = campaigns.map((campaign: any) => ({
       ...campaign,
-      ...(archivedIds.has(String(campaign._id))
-        ? { creativePreviewUrl: `/api/facebook/campaigns/${campaign._id}/creative-preview` }
+      ...(archiveImageCounts.has(String(campaign._id))
+        ? {
+            creativePreviewUrl: `/api/facebook/campaigns/${campaign._id}/creative-preview`,
+            creativePreviewUrls: Array.from(
+              { length: Math.min(4, archiveImageCounts.get(String(campaign._id)) || 0) },
+              (_, index) => `/api/facebook/campaigns/${campaign._id}/creative-preview?variant=${index}`
+            ),
+          }
         : {}),
     }));
 

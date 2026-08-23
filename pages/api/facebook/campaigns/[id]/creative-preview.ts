@@ -23,12 +23,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const id = String(req.query.id || "").trim();
   if (!mongoose.isValidObjectId(id)) return res.status(404).json({ error: "Creative preview not found" });
+  const requestedVariant = Number(Array.isArray(req.query.variant) ? req.query.variant[0] : req.query.variant);
+  const variantIndex = Number.isInteger(requestedVariant) && requestedVariant >= 0 && requestedVariant < 4
+    ? requestedVariant
+    : 0;
 
   await mongooseConnect();
   const archive = await MetaLaunchArchive.findOne({
     campaignId: id,
     userEmail: session.user.email.toLowerCase(),
-  }, { images: { $slice: 1 } })
+  }, { images: { $slice: [variantIndex, 1] } })
     .select("images")
     .lean() as any;
   const firstImage = Array.isArray(archive?.images) ? archive.images[0] : null;

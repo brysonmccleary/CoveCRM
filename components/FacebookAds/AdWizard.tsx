@@ -97,12 +97,56 @@ function getBackgroundImageUrls(node: HTMLElement) {
 }
 
 function preloadImage(url: string) {
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve();
-    image.onerror = () => resolve();
+    image.onerror = () => reject(new Error("Creative background could not be loaded"));
     image.src = url;
   });
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Creative background could not be embedded"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+// html-to-image can silently omit a CSS background while still producing a
+// valid-looking PNG. Embed every expected photo into the hidden production DOM
+// first so the flattened upload cannot lose the person/home/truck image.
+async function inlineBackgroundImages(node: HTMLElement) {
+  const elements = [node, ...Array.from(node.querySelectorAll<HTMLElement>("*"))];
+  const backgrounds = elements
+    .map((element) => ({ element, value: window.getComputedStyle(element).backgroundImage || "" }))
+    .filter(({ value }) => value.includes("url("));
+  const urls = Array.from(new Set(
+    backgrounds.flatMap(({ value }) =>
+      Array.from(value.matchAll(/url\(["']?([^"')]+)["']?\)/g)).map((match) => String(match[1] || "").trim())
+    )
+  )).filter(Boolean);
+  const embedded = new Map<string, string>();
+
+  for (const url of urls) {
+    if (url.startsWith("data:image/")) {
+      embedded.set(url, url);
+      continue;
+    }
+    const absoluteUrl = new URL(url, window.location.href).toString();
+    const response = await fetch(absoluteUrl, { credentials: "same-origin", cache: "force-cache" });
+    if (!response.ok) throw new Error("Creative background could not be loaded");
+    const dataUrl = await blobToDataUrl(await response.blob());
+    if (!dataUrl.startsWith("data:image/")) throw new Error("Creative background could not be embedded");
+    embedded.set(url, dataUrl);
+  }
+
+  for (const { element, value } of backgrounds) {
+    let nextValue = value;
+    for (const [url, dataUrl] of embedded) nextValue = nextValue.split(url).join(dataUrl);
+    element.style.backgroundImage = nextValue;
+  }
 }
 
 async function waitForBackgroundImages(node: HTMLElement) {
@@ -461,6 +505,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         }
         let renderedCreativeDataUrl = "";
         try {
+          await inlineBackgroundImages(node);
           await waitForCaptureReady(node);
           const domFit = validateCreativeDomFit(node);
           if (!domFit.ok) {
