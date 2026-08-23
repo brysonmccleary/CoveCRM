@@ -18,6 +18,7 @@ interface FBCampaign {
   _id: string;
   campaignName: string;
   leadType: string;
+  campaignType?: "native_form" | "hosted_funnel" | "hosted_funnel_otp";
   status: string;
   dailyBudget: number;
   totalSpend: number;
@@ -1709,6 +1710,13 @@ function CampaignCard({
   const [savingStates, setSavingStates] = useState(false);
   const [statesSaved, setStatesSaved] = useState(false);
 
+  // Manage panel — hosted landing page
+  const [landingPageType, setLandingPageType] = useState<"hosted_funnel" | "hosted_funnel_otp">(
+    campaign.campaignType === "hosted_funnel_otp" ? "hosted_funnel_otp" : "hosted_funnel"
+  );
+  const [savingLandingPage, setSavingLandingPage] = useState(false);
+  const [landingPageMessage, setLandingPageMessage] = useState("");
+
   // Manage panel — duplicate
   const [duplicating, setDuplicating] = useState(false);
   const [duplicateMsg, setDuplicateMsg] = useState("");
@@ -1899,6 +1907,32 @@ function CampaignCard({
       onUpdate();
     } finally {
       setSavingStates(false);
+    }
+  };
+
+  const saveLandingPageType = async () => {
+    setSavingLandingPage(true);
+    setLandingPageMessage("");
+    try {
+      const response = await fetch(`/api/facebook/campaigns/${campaign._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignType: landingPageType }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || json?.ok === false) {
+        throw new Error(json?.error || "Landing page could not be updated.");
+      }
+      setLandingPageMessage(
+        landingPageType === "hosted_funnel_otp"
+          ? "Phone verification is now required."
+          : "Standard landing page is now active."
+      );
+      onUpdate();
+    } catch (error: any) {
+      setLandingPageMessage(error?.message || "Landing page could not be updated.");
+    } finally {
+      setSavingLandingPage(false);
     }
   };
 
@@ -2167,6 +2201,55 @@ function CampaignCard({
         {/* Manage Campaign expandable panel */}
         {showManage && (
           <div style={{ background: "var(--cove-card)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 14 }}>
+
+            {/* Hosted landing-page mode. The Meta destination URL does not change. */}
+            <div style={{ paddingBottom: 14, marginBottom: 14, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <p style={{ color: "var(--cove-muted)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Landing Page</p>
+              {campaign.campaignType === "native_form" ? (
+                <p style={{ color: "var(--cove-muted)", fontSize: 12 }}>
+                  This campaign uses a Facebook Native Form. Its destination cannot be changed after creation.
+                </p>
+              ) : (
+                <>
+                  <p style={{ color: "var(--cove-muted)", fontSize: 12, marginBottom: 10 }}>
+                    Switch this campaign between the standard form and phone verification. The ad stays paused or active exactly as it is.
+                  </p>
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                    <select
+                      value={landingPageType}
+                      onChange={(event) => {
+                        setLandingPageType(event.target.value as "hosted_funnel" | "hosted_funnel_otp");
+                        setLandingPageMessage("");
+                      }}
+                      style={{ background: "var(--cove-surface-hover)", border: "1px solid rgba(255,255,255,0.15)", color: "var(--cove-text)", borderRadius: 6, padding: "7px 10px", fontSize: 12 }}
+                    >
+                      <option value="hosted_funnel">Standard landing page</option>
+                      <option value="hosted_funnel_otp">Landing page + phone verification</option>
+                    </select>
+                    <button
+                      onClick={saveLandingPageType}
+                      disabled={savingLandingPage}
+                      style={{ background: "#0ea5e9", color: "#ffffff", border: "none", borderRadius: 6, padding: "7px 14px", fontSize: 12, cursor: "pointer", opacity: savingLandingPage ? 0.6 : 1 }}
+                    >
+                      {savingLandingPage ? "Saving…" : "Save Landing Page"}
+                    </button>
+                    <a
+                      href={`/f/${campaign._id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: "var(--cove-purple)", fontSize: 12, textDecoration: "underline" }}
+                    >
+                      Open landing page
+                    </a>
+                  </div>
+                  {landingPageMessage && (
+                    <p style={{ color: landingPageMessage.includes("now") ? "var(--cove-success)" : "var(--cove-danger)", fontSize: 12, marginTop: 8 }}>
+                      {landingPageMessage}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
 
             {/* Sub-section A: Budget */}
             <div style={{ paddingBottom: 14, marginBottom: 14, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>

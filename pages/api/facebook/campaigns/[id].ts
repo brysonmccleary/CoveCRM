@@ -58,9 +58,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === "PATCH") {
-    const { campaignName, status, dailyBudget, totalSpend, totalLeads, totalClicks, cpl, notes, facebookCampaignId } =
+    const { campaignName, campaignType, status, dailyBudget, totalSpend, totalLeads, totalClicks, cpl, notes, facebookCampaignId } =
       req.body as Partial<{
         campaignName: string;
+        campaignType: "hosted_funnel" | "hosted_funnel_otp";
         status: string;
         dailyBudget: number;
         totalSpend: number;
@@ -74,6 +75,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const updates: Record<string, any> = {};
     const requestedMetaStatus = String(status || "").toUpperCase();
     if (campaignName !== undefined) updates.campaignName = campaignName;
+    if (campaignType !== undefined) {
+      const currentCampaignType = String((campaign as any).campaignType || "hosted_funnel");
+      if (currentCampaignType === "native_form") {
+        return res.status(400).json({
+          error: "Facebook Native Form campaigns cannot be changed to a hosted landing page after creation.",
+        });
+      }
+      if (campaignType !== "hosted_funnel" && campaignType !== "hosted_funnel_otp") {
+        return res.status(400).json({ error: "Choose a valid hosted landing-page type." });
+      }
+      // Both hosted modes use the same permanent /f/{campaignId} destination
+      // already attached to the Meta creative. The funnel reads this value on
+      // every visit, so changing it safely enables/disables OTP in place.
+      updates.campaignType = campaignType;
+    }
     if (requestedMetaStatus === "ACTIVE" || requestedMetaStatus === "PAUSED") {
       const metaCampaignId = String((campaign as any).metaCampaignId || "").trim();
       if (!metaCampaignId) return res.status(400).json({ error: "Campaign setup is incomplete. Please create the ad again." });
