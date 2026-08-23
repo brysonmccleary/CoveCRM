@@ -15,6 +15,11 @@ describe("customer-safe Meta errors", () => {
     expect(message).not.toMatch(/[{}]|OAuth|fbtrace|degrees_of_freedom_spec/);
   });
 
+  test("global creative collision gets a plain regenerate message", () => {
+    expect(getMetaLaunchPublicMessage("That exact ad was just reserved or launched by another agent."))
+      .toBe("That exact ad was just reserved or launched by another agent. Regenerate once to receive a fresh set.");
+  });
+
   test("raw activation payload becomes a plain paused-state message", () => {
     const message = getMetaActivationPublicMessage({
       error: { message: "Unsupported post request", code: 100 },

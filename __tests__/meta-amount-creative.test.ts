@@ -111,7 +111,7 @@ describe("Final Expense amount-focused creative", () => {
 });
 
 describe("Exhaustive generated-creative quality gate", () => {
-  test("every enabled family and visual variant stays product-clear, avoids fake hero ranges, and exposes every paid background", () => {
+  test("every enabled family and photo visual stays product-clear, avoids fake hero ranges, and exposes every paid background", () => {
     const paidPools = new Set(["veteran", "trucker", "mortgage_protection"]);
     const forbiddenLayouts = new Set([
       "quiz_card",
@@ -143,6 +143,7 @@ describe("Exhaustive generated-creative quality gate", () => {
             winningFamilyId: variant.familyId,
             creativeArchetype: variant.archetype,
             visualVariantIndex,
+            visualTreatment: "photo",
           };
           const layout = resolveCreativeLayoutFamily(draft, family.leadType, 17, visualVariantIndex);
           const markup = renderToStaticMarkup(React.createElement(ProductionFeedCreative, { draft }));
@@ -184,4 +185,26 @@ describe("Exhaustive generated-creative quality gate", () => {
 
     expect(rendered).toBeGreaterThan(8000);
   }, 60000);
+
+  test("graphic treatments intentionally keep strong number-led layouts photo-free", () => {
+    const variant = generateWinningVariants({
+      leadType: "veteran",
+      audienceSegment: "standard",
+      userId: "graphic-veteran",
+      campaignName: "graphic-veteran",
+      familyIdOverride: "vet_patriotic_amount_card",
+    }).logical;
+    const markup = renderToStaticMarkup(React.createElement(ProductionFeedCreative, {
+      draft: {
+        ...variant,
+        winningFamilyId: variant.familyId,
+        creativeArchetype: variant.archetype,
+        visualVariantIndex: 8,
+        visualTreatment: "graphic",
+      },
+    }));
+
+    expect(markup).toContain("LIFE INSURANCE FOR VETERANS");
+    expect(markup).not.toContain("/ad-backgrounds/veteran/");
+  });
 });

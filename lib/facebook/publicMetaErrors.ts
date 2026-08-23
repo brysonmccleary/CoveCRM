@@ -7,6 +7,9 @@ const RECONNECT_MESSAGE =
 const PERMISSION_MESSAGE =
   "Facebook needs one more account permission before CoveCRM can finish this action.";
 
+const CREATIVE_USED_MESSAGE =
+  "That exact ad was just reserved or launched by another agent. Regenerate once to receive a fresh set.";
+
 export const META_LAUNCH_ERROR_MESSAGE =
   "Facebook couldn’t finish creating the ad. Nothing was activated. Please try Launch again.";
 
@@ -27,6 +30,13 @@ function errorText(value: unknown): string {
 
 function sharedPublicMessage(value: unknown): string | null {
   const text = errorText(value).toLowerCase();
+  if (
+    text.includes("exact ad was just reserved") ||
+    text.includes("same creative twice") ||
+    text.includes("creative uniqueness")
+  ) {
+    return CREATIVE_USED_MESSAGE;
+  }
   if (
     text.includes("1359188") ||
     text.includes("funding source") ||

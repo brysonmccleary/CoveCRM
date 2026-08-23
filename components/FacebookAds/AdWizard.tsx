@@ -67,7 +67,7 @@ type CaptureValidation = {
 
 const CAPTURE_ERROR = "Ad image capture failed. Please try again.";
 const FIT_ERROR = "This ad did not fit safely. Regenerate it before launching.";
-const CREATIVE_UI_VERSION = 2;
+const CREATIVE_UI_VERSION = 3;
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -501,8 +501,15 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           winningFamilyId: currentDraft.winningFamilyId,
           variationType: currentDraft.variationType,
           uniquenessFingerprint: currentDraft.uniquenessFingerprint,
+          creativeSignature: currentDraft.creativeSignature,
           vendorStyleTag: currentDraft.vendorStyleTag,
           displayAmount: currentDraft.displayAmount,
+          visualVariantIndex: currentDraft.visualVariantIndex,
+          visualTreatment: currentDraft.visualTreatment,
+          generationNonce: currentDraft.generationNonce,
+          regenerationAttempt: currentDraft.regenerationAttempt,
+          buttonLabels: currentDraft.buttonLabels,
+          bulletPoints: currentDraft.bulletPoints,
           landingPageConfig: currentDraft.landingPageConfig,
         });
       }

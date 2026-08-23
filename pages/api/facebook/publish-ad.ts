@@ -39,6 +39,12 @@ import {
   buildMetaCreativeEnhancementSpec,
   getMetaLaunchPublicMessage,
 } from "@/lib/facebook/publicMetaErrors";
+import {
+  claimCreativeSet,
+  finalizeCreativeReservation,
+  releaseCreativeSet,
+  type CreativeReservation,
+} from "@/lib/facebook/creativeUsage";
 
 export const config = {
   api: {
@@ -229,9 +235,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       winningFamilyId?: string;
       variationType?: string;
       uniquenessFingerprint?: string;
+      creativeSignature?: string;
       vendorStyleTag?: string;
       creativeArchetype?: string;
       displayAmount?: string;
+      visualVariantIndex?: number;
+      visualTreatment?: "photo" | "graphic";
+      generationNonce?: string;
+      regenerationAttempt?: number;
+      buttonLabels?: string[];
+      bulletPoints?: string[];
       landingPageConfig?: Record<string, any>;
     }>;
     creativeArchetype?: string;
@@ -292,6 +305,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    await mongooseConnect();
     const launchValidation = await validateLaunchInput({
       userEmail: session.user.email,
       body: req.body,
@@ -622,6 +636,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }> = [];
     let metaPublishStatus: "not_attempted" | "skipped_missing_meta_connection" | "success" | "failed" = "not_attempted";
     let metaError: string | null = null;
+    let creativeClaimToken = "";
+    let creativeReservations: CreativeReservation[] = [];
 
     try {
       const fullUser = user as any;
@@ -670,6 +686,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           error: metaHealth.reason,
           metaHealth,
         });
+      }
+
+      if (!isAlreadyPublished) {
+        const creativeClaim = await claimCreativeSet({
+          userEmail,
+          campaignId: campaign._id,
+          leadType: String(leadType),
+          drafts: normalizedDrafts,
+        });
+        creativeClaimToken = creativeClaim.claimToken;
+        creativeReservations = creativeClaim.reservations;
       }
 
       if (!metaCampaignId) {
@@ -1009,6 +1036,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           const creativeId = String(metaCreativeJson.id);
 
+          // Once Meta has accepted the creative object, permanently consume
+          // this design even if a later ad-object request fails. Reusing it
+          // after a partial Meta publish would violate the global guarantee.
+          await finalizeCreativeReservation({
+            claimToken: creativeClaimToken,
+            creativeFingerprint: creativeReservations[index]?.creativeFingerprint || "",
+            metaAdId: "",
+            metaCreativeId: creativeId,
+          });
+
           const adParams = new URLSearchParams();
           adParams.set("name", `${safeName} Ad ${index + 1}`);
           adParams.set("adset_id", metaAdsetId);
@@ -1111,6 +1148,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (err: any) {
       metaPublishStatus = "failed";
       metaError = err?.message || "Meta publish failed";
+      await releaseCreativeSet(creativeClaimToken).catch(() => {});
       await markMetaHealthFailure({
         user,
         userEmail,

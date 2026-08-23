@@ -157,9 +157,9 @@ function isLayoutPhotoFriendly(layoutFamily: string, leadType: string): boolean 
   return true;
 }
 
-// These three pools are paid, purpose-built creative assets. If a layout can
-// expose a photo, always use the corresponding asset instead of silently
-// falling back to a generic CSS treatment.
+// New drafts explicitly choose either a photo-backed or graphic treatment.
+// This keeps the paid photo pools visible without flattening the library into
+// one look: proven number-led/poster ads intentionally remain photo-free.
 function isPhotoEligible(leadType: string, variantIndex: number, layoutFamily: string): boolean {
   if (!STATIC_BACKGROUND_COUNTS[leadType]) return false;
   if (!isLayoutPhotoFriendly(layoutFamily, leadType)) return false;
@@ -184,7 +184,16 @@ function getCreativeBackground(draft: any, leadType: string, variantIndex: numbe
   const imageUrl = cleanText(draft?.imageUrl);
   if (imageUrl) return imageUrl;
   const visualLeadType = getVisualLeadType(draft, leadType);
+  const visualTreatment = cleanText(draft?.visualTreatment).toLowerCase();
+  if (visualTreatment === "graphic") return "";
   if (isPhotoEligible(visualLeadType, variantIndex, layoutFamily)) {
+    // Legacy drafts predate visualTreatment. Preserve a healthy mix for those
+    // instead of forcing every old creative onto a photograph.
+    if (!visualTreatment) {
+      const photoModulo = visualLeadType === "trucker" ? 4 : 5;
+      const photoSlots = visualLeadType === "trucker" ? 3 : 3;
+      if (variantIndex % photoModulo >= photoSlots) return "";
+    }
     return getStaticBackgroundUrl(visualLeadType, variantIndex);
   }
   return "";
@@ -200,6 +209,8 @@ function hashString(value: string): number {
 }
 
 function getVariationSeed(draft: any, leadType: string): string {
+  const creativeSignature = cleanText(draft?.creativeSignature);
+  if (creativeSignature) return creativeSignature;
   const compositeSeed = [
     draft?.uniquenessFingerprint,
     draft?.creativeArchetype,

@@ -5,14 +5,15 @@ import {
   type AudienceSegment,
   buildWinningFunnelConfig,
   generateWinningVariantList,
-  generateWinningVariants,
   isWinnerSupportedLeadType,
-  selectRecommendedVariant,
 } from "@/lib/facebook/winningAdLibrary";
 import {
   applyGlobalWinnerHints,
   loadGlobalGenerationHints,
 } from "@/lib/facebook/globalIntelligence/anonymizedLearning";
+import mongooseConnect from "@/lib/mongooseConnect";
+import MetaCreativeUsage from "@/models/MetaCreativeUsage";
+import { buildCreativeGenerationSignature } from "@/lib/facebook/creativeIdentity";
 
 const LEAD_FORM_QUESTIONS = {
   mortgage_protection: [
@@ -192,7 +193,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // A tab left open across a deployment keeps running its old JavaScript.
   // Fail closed instead of letting that stale renderer keep generating the
   // retired layouts; the message is intentionally plain and user-facing.
-  if ((req.body as any)?.mode === "wizard" && Number((req.body as any)?.clientCreativeVersion || 0) < 2) {
+  if ((req.body as any)?.mode === "wizard" && Number((req.body as any)?.clientCreativeVersion || 0) < 3) {
     return res.status(409).json({
       ok: false,
       error: "CoveCRM was updated. Refresh this page once to load the improved ad builder.",
@@ -247,14 +248,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     `nonce:${generationNonce}`,
   ].join("|");
 
-  const variants = generateWinningVariants({
-    leadType,
-    audienceSegment,
-    userId: userEmail,
-    campaignName: campaignNameSeeded,
-    location,
-  });
-  const libraryRecommendedVariant = selectRecommendedVariant(leadType, variants);
   const selectedVariantsFromLibrary = generateWinningVariantList({
     leadType,
     audienceSegment,
@@ -268,25 +261,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     stateCodes: Array.isArray(licensedStates) ? licensedStates : [],
   });
   const selectedVariants = applyGlobalWinnerHints(selectedVariantsFromLibrary, globalLearningHints);
-  const selectedVariant = selectedVariants[0] || libraryRecommendedVariant;
   const budgetDollars = Number(dailyBudget);
   if (!Number.isFinite(budgetDollars) || budgetDollars < 5) {
     return res.status(400).json({ ok: false, error: "dailyBudget must be a finite number >= 5" });
   }
   const dailyBudgetCents = Math.round(budgetDollars * 100);
-  const buildDraftFromVariant = (variant: typeof variants.emotional, index = 0) => {
+  const buildDraftFromVariant = (
+    variant: (typeof selectedVariants)[number],
+    index = 0,
+    draftNonce = generationNonce,
+    candidateBatch = 0
+  ) => {
     const landingPageConfig = buildWinningFunnelConfig(variant);
     const visualVariantBaseSeed = [
       userEmail,
       leadType,
       audienceSegment,
-      generationNonce,
+      draftNonce,
       String(index),
       String(regenerationAttempt),
     ].join("|");
     const visualVariantIndex = Math.abs(hashString(visualVariantBaseSeed)) % visualVariantCount(leadType);
+    const visualLeadType = audienceSegment === "veteran" || audienceSegment === "trucker"
+      ? audienceSegment
+      : leadType;
+    const photoPercent = visualLeadType === "trucker"
+      ? 75
+      : visualLeadType === "veteran"
+      ? 60
+      : visualLeadType === "mortgage_protection"
+      ? 65
+      : 0;
+    const visualTreatment = Math.abs(hashString(`${visualVariantBaseSeed}|treatment`)) % 100 < photoPercent
+      ? "photo"
+      : "graphic";
 
-    return {
+    const draft = {
       leadType,
       audienceSegment,
       campaignName,
@@ -298,7 +308,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       imagePrompt: sanitizeCreativeText(
         [
           variant.imagePrompt,
-          `Creative variation seed ${generationNonce}. Use a noticeably different direct-response background treatment, palette, composition, and subject framing from prior attempts. Leave blank reserved headline and CTA areas for app-rendered text. No readable text inside image.`,
+          `Creative variation seed ${draftNonce}. Use a noticeably different direct-response background treatment, palette, composition, and subject framing from prior attempts. Leave blank reserved headline and CTA areas for app-rendered text. No readable text inside image.`,
         ].join(" "),
         leadType
       ),
@@ -319,21 +329,74 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       winningFamilyId: variant.familyId,
       variationType: variant.variantType,
       uniquenessFingerprint: variant.uniquenessFingerprint,
-      generationNonce,
+      generationNonce: draftNonce,
       regenerationAttempt,
       visualVariantIndex,
+      visualTreatment,
+      candidateBatch,
       vendorStyleTag: variant.vendorStyleTag,
       displayAmount: variant.displayAmount,
       generatedBy: "winner_library",
       copySource: "winner_library",
     };
+    return {
+      ...draft,
+      creativeSignature: buildCreativeGenerationSignature(draft),
+    };
   };
-  const recommendedDraft = buildDraftFromVariant(selectedVariant, 0);
-  const selectedDrafts = selectedVariants.map(buildDraftFromVariant);
+
+  // Build a deep candidate bench, then remove every semantic design already
+  // reserved or published anywhere on CoveCRM. A final rendered-byte claim at
+  // publish time remains the atomic authority for concurrent requests.
+  const candidateDrafts: Array<Record<string, any>> = [];
+  for (let batch = 0; batch < 32; batch++) {
+    const batchNonce = batch === 0 ? generationNonce : `${generationNonce}|bench:${batch}`;
+    const batchCampaignSeed = [
+      campaignName,
+      userEmail,
+      leadType,
+      audienceSegment,
+      location,
+      `attempt:${regenerationAttempt}`,
+      `nonce:${batchNonce}`,
+    ].join("|");
+    const batchVariants = batch === 0
+      ? selectedVariants
+      : applyGlobalWinnerHints(generateWinningVariantList({
+          leadType,
+          audienceSegment,
+          userId: userEmail,
+          campaignName: batchCampaignSeed,
+          location,
+          variantCount: 4,
+        }), globalLearningHints);
+    batchVariants.forEach((variant, index) => {
+      candidateDrafts.push(buildDraftFromVariant(variant, index, batchNonce, batch));
+    });
+  }
+
+  const uniqueCandidates = Array.from(
+    new Map(candidateDrafts.map((draft) => [draft.creativeSignature, draft])).values()
+  );
+  await mongooseConnect();
+  const usedRows = await MetaCreativeUsage.find({
+    generationSignature: { $in: uniqueCandidates.map((draft) => draft.creativeSignature) },
+  }).select("generationSignature -_id").lean();
+  const usedSignatures = new Set((usedRows as any[]).map((row) => String(row.generationSignature || "")));
+  const selectedDrafts = uniqueCandidates
+    .filter((draft) => !usedSignatures.has(String(draft.creativeSignature)))
+    .slice(0, requestedVariantCount);
+
+  if (selectedDrafts.length < requestedVariantCount) {
+    return res.status(409).json({
+      ok: false,
+      error: "The fresh creative pool is temporarily exhausted for this selection. Regenerate once for a new set.",
+    });
+  }
 
   return res.status(200).json({
     ok: true,
-    draft: selectedDrafts[0] || recommendedDraft,
+    draft: selectedDrafts[0],
     drafts: selectedDrafts,
     variantCount: selectedDrafts.length,
     globalLearningHints,
