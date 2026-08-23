@@ -581,7 +581,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
       if (!response.ok || json?.ok === false) {
         throw new Error(getMetaActivationPublicMessage(json?.error));
       }
-      setResult((current: any) => ({ ...(current || {}), status: "active" }));
+      window.location.assign(`/facebook-leads?tab=campaigns&refresh=${Date.now()}`);
     } catch (err: any) {
       setError(err?.message || "Activation failed");
     } finally {
@@ -934,7 +934,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
               </button>
               <button
                 type="button"
-                className="px-5 py-2.5 rounded-lg bg-white/10 text-gray-200 text-sm font-semibold cursor-default"
+                onClick={() => window.location.assign(`/facebook-leads?tab=campaigns&refresh=${Date.now()}`)}
+                className="px-5 py-2.5 rounded-lg bg-white/10 hover:bg-white/15 text-gray-200 text-sm font-semibold"
               >
                 Keep Paused
               </button>

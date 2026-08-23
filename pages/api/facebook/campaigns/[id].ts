@@ -224,40 +224,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === "DELETE") {
-    if ((campaign as any).metaCampaignId) {
+    // Remove the local record first. A disconnected or slow Meta account must
+    // never make a campaign reappear in CoveCRM after the user deletes it.
+    const metaCampaignId = String((campaign as any).metaCampaignId || "").trim();
+    await campaign.deleteOne();
+
+    if (metaCampaignId) {
       try {
         const user = await User.findOne({ email: session.user.email.toLowerCase() })
-          .select("_id email metaSystemUserToken metaAccessToken metaAdAccountId metaPageId metaReconnectNeeded metaHealthStatus lastMetaHealthError metaHealthCooldownUntil metaLastSuccessfulHealthCheckAt")
+          .select("_id metaSystemUserToken metaAccessToken")
           .lean() as any;
         const accessToken = String(user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
         if (accessToken) {
-          const metaHealth = await checkMetaWriteReadiness({
-            user,
-            userEmail: session.user.email.toLowerCase(),
-            accessToken,
-            pageId: String((campaign as any).facebookPageId || user?.metaPageId || "").trim(),
-            adAccountId: String((campaign as any).adAccountId || user?.metaAdAccountId || "").trim(),
+          const params = new URLSearchParams();
+          params.set("status", "DELETED");
+          params.set("access_token", accessToken);
+          await fetch(metaGraphUrl(metaCampaignId), {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: params.toString(),
+            signal: AbortSignal.timeout(5000),
           });
-          if (metaHealth.ok) {
-            await fetch(
-              metaGraphUrl((campaign as any).metaCampaignId),
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  status: "DELETED",
-                  access_token: accessToken,
-                }),
-              }
-            );
-          }
         }
       } catch (e) {
-        // Non-fatal — proceed with local delete
+        // Non-fatal: the CoveCRM deletion already succeeded. Meta cleanup can
+        // fail when an account is disconnected without resurrecting the card.
         console.error("[campaign delete] Meta archive failed:", e);
       }
     }
-    await campaign.deleteOne();
+    res.setHeader("Cache-Control", "private, no-store, max-age=0");
     return res.status(200).json({ ok: true });
   }
 

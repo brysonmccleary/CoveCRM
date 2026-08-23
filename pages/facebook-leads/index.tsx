@@ -44,6 +44,7 @@ interface FBCampaign {
   metaCampaignId?: string | null;
   metaAdsetId?: string | null;
   metaLastSyncedAt?: string | null;
+  creativePreviewUrl?: string;
   licensedStates?: string[];
   landingPageConfig?: {
     imageUrl?: string;
@@ -1717,9 +1718,11 @@ function CampaignCard({
 
   const cplBenchmark = CPL_BENCHMARKS[campaign.leadType] ?? 20;
   const campaignImageUrl =
+    campaign.creativePreviewUrl?.trim() ||
     campaign.ads?.find((ad) => ad.imageUrl?.trim())?.imageUrl?.trim() ||
     campaign.landingPageConfig?.imageUrl?.trim() ||
     "";
+  useEffect(() => setImageFailed(false), [campaignImageUrl]);
   const appointments = Number(campaign.appointments || 0);
   const campaignSales = Number(campaign.sales || 0);
   const costPerAppointment = Number(campaign.costPerAppointment || 0) ||
@@ -1845,9 +1848,19 @@ function CampaignCard({
   const deleteCampaign = async () => {
     if (!confirm(`Delete campaign "${campaign.campaignName}"? This cannot be undone.`)) return;
     setDeleting(true);
-    await fetch(`/api/facebook/campaigns/${campaign._id}`, { method: "DELETE" });
-    setDeleting(false);
+    // Remove the card immediately; the API performs durable local deletion
+    // before attempting best-effort Meta cleanup.
     onDelete();
+    try {
+      const response = await fetch(`/api/facebook/campaigns/${campaign._id}`, {
+        method: "DELETE",
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Campaign deletion failed");
+    } catch {
+      alert("The campaign could not be deleted. The list will refresh so you can try again.");
+      window.location.reload();
+    }
   };
 
   const saveBudget = async () => {
@@ -1924,6 +1937,8 @@ function CampaignCard({
                 <img
                   src={campaignImageUrl}
                   alt={`${campaign.campaignName} ad creative`}
+                  loading="lazy"
+                  decoding="async"
                   className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.03]"
                   onError={() => setImageFailed(true)}
                 />
@@ -2511,9 +2526,17 @@ export default function FacebookLeadsPage() {
     router.replace({ pathname: router.pathname, query: rest }, undefined, { shallow: true });
   }, [router.isReady, router.query.meta, router.query.reason]);
 
+  useEffect(() => {
+    if (!router.isReady) return;
+    const requestedTab = typeof router.query.tab === "string" ? router.query.tab : "";
+    if (requestedTab === "campaigns" || requestedTab === "leads" || requestedTab === "setup") {
+      setHubTab(requestedTab);
+    }
+  }, [router.isReady, router.query.tab]);
+
   const loadCampaigns = async () => {
     try {
-      const res = await fetch("/api/facebook/campaigns");
+      const res = await fetch(`/api/facebook/campaigns?refresh=${Date.now()}`, { cache: "no-store" });
       const data = await res.json();
       const cList: FBCampaign[] = data.campaigns ?? [];
       setCampaigns(cList);
@@ -2649,7 +2672,7 @@ export default function FacebookLeadsPage() {
                 key={campaign._id}
                 campaign={campaign}
                 onUpdate={() => loadCampaigns()}
-                onDelete={() => loadCampaigns()}
+                onDelete={() => setCampaigns((current) => current.filter((item) => item._id !== campaign._id))}
               />
             ))
           )}

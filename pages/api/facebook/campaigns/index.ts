@@ -6,6 +6,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
+import MetaLaunchArchive from "@/models/MetaLaunchArchive";
 import User from "@/models/User";
 import mongoose from "mongoose";
 import { normalizeStateCodes } from "@/lib/facebook/geo/usStates";
@@ -18,6 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await mongooseConnect();
 
   if (req.method === "GET") {
+    res.setHeader("Cache-Control", "private, no-store, max-age=0");
     const filter: Record<string, any> = { userEmail: session.user.email.toLowerCase() };
     if (req.query.leadType) filter.leadType = req.query.leadType;
 
@@ -25,7 +27,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .sort({ createdAt: -1 })
       .lean();
 
-    return res.status(200).json({ campaigns });
+    // The immutable launch archive contains the exact flattened image uploaded
+    // to Meta. Only return a protected URL here so the campaign list stays
+    // lightweight even when an account has hundreds of campaigns.
+    const campaignIds = campaigns.map((campaign: any) => campaign._id);
+    const archivedCampaigns = campaignIds.length
+      ? await MetaLaunchArchive.find({
+          userEmail: session.user.email.toLowerCase(),
+          campaignId: { $in: campaignIds },
+        })
+          .select("campaignId")
+          .lean()
+      : [];
+    const archivedIds = new Set(archivedCampaigns.map((archive: any) => String(archive.campaignId)));
+    const campaignRows = campaigns.map((campaign: any) => ({
+      ...campaign,
+      ...(archivedIds.has(String(campaign._id))
+        ? { creativePreviewUrl: `/api/facebook/campaigns/${campaign._id}/creative-preview` }
+        : {}),
+    }));
+
+    return res.status(200).json({ campaigns: campaignRows });
   }
 
   if (req.method === "POST") {
