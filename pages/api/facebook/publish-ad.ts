@@ -45,6 +45,7 @@ import {
   releaseCreativeSet,
   type CreativeReservation,
 } from "@/lib/facebook/creativeUsage";
+import { hasRequiredCreativeTreatmentMix } from "@/lib/facebook/creativeCandidateSelection";
 
 export const config = {
   api: {
@@ -302,6 +303,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (!stateRestrictionNoticeAccepted) {
     return res.status(400).json({ error: "State restriction notice must be acknowledged before publishing." });
+  }
+  if (Array.isArray(drafts) && drafts.length > 0) {
+    const launchVisualLeadType = audienceSegment === "veteran" || audienceSegment === "trucker"
+      ? audienceSegment
+      : leadType;
+    const photoPoolAvailable = ["veteran", "trucker", "mortgage_protection"].includes(launchVisualLeadType);
+    if (!hasRequiredCreativeTreatmentMix(drafts, photoPoolAvailable)) {
+      return res.status(409).json({
+        ok: false,
+        error: "This generated set is missing its required photo/graphic mix. Refresh once and regenerate before launching.",
+      });
+    }
   }
 
   try {

@@ -162,6 +162,8 @@ describe("Exhaustive generated-creative quality gate", () => {
             } else if (paidPools.has(visualLeadType)) {
               expect(forbiddenLayouts).not.toContain(layout);
               expect(markup).toContain('data-creative-layout="photo-direct-response"');
+              expect(markup).toContain('<img');
+              expect(markup).toContain('data-creative-photo="true"');
               expect(markup).toContain(`/ad-backgrounds/${visualLeadType}/${visualVariantIndex + 1}.jpg`);
             } else {
               expect(markup).toContain('data-creative-layout="graphic-direct-response"');

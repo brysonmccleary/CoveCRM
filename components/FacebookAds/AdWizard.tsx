@@ -63,11 +63,14 @@ type CaptureValidation = {
   ok: boolean;
   width: number;
   height: number;
+  photoDetected?: boolean;
 };
+
+type NormalizedRect = { left: number; top: number; width: number; height: number };
 
 const CAPTURE_ERROR = "Ad image capture failed. Please try again.";
 const FIT_ERROR = "This ad did not fit safely. Regenerate it before launching.";
-const CREATIVE_UI_VERSION = 3;
+const CREATIVE_UI_VERSION = 4;
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -114,10 +117,10 @@ function blobToDataUrl(blob: Blob) {
   });
 }
 
-// html-to-image can silently omit a CSS background while still producing a
-// valid-looking PNG. Embed every expected photo into the hidden production DOM
-// first so the flattened upload cannot lose the person/home/truck image.
-async function inlineBackgroundImages(node: HTMLElement) {
+// html-to-image can silently omit a CSS background or <img> while still
+// producing a valid-looking CSS-only PNG. Embed every image into the hidden
+// production DOM first so the flattened upload cannot lose the paid photo.
+async function inlineCreativeImages(node: HTMLElement) {
   const elements = [node, ...Array.from(node.querySelectorAll<HTMLElement>("*"))];
   const backgrounds = elements
     .map((element) => ({ element, value: window.getComputedStyle(element).backgroundImage || "" }))
@@ -129,10 +132,11 @@ async function inlineBackgroundImages(node: HTMLElement) {
   )).filter(Boolean);
   const embedded = new Map<string, string>();
 
-  for (const url of urls) {
+  const embedUrl = async (url: string) => {
+    if (embedded.has(url)) return embedded.get(url)!;
     if (url.startsWith("data:image/")) {
       embedded.set(url, url);
-      continue;
+      return url;
     }
     const absoluteUrl = new URL(url, window.location.href).toString();
     const response = await fetch(absoluteUrl, { credentials: "same-origin", cache: "force-cache" });
@@ -140,6 +144,11 @@ async function inlineBackgroundImages(node: HTMLElement) {
     const dataUrl = await blobToDataUrl(await response.blob());
     if (!dataUrl.startsWith("data:image/")) throw new Error("Creative background could not be embedded");
     embedded.set(url, dataUrl);
+    return dataUrl;
+  };
+
+  for (const url of urls) {
+    await embedUrl(url);
   }
 
   for (const { element, value } of backgrounds) {
@@ -147,6 +156,33 @@ async function inlineBackgroundImages(node: HTMLElement) {
     for (const [url, dataUrl] of embedded) nextValue = nextValue.split(url).join(dataUrl);
     element.style.backgroundImage = nextValue;
   }
+
+  const imageElements = Array.from(node.querySelectorAll<HTMLImageElement>("img"));
+  for (const image of imageElements) {
+    const source = String(image.currentSrc || image.getAttribute("src") || "").trim();
+    if (!source) continue;
+    image.src = await embedUrl(source);
+    if (!image.complete || image.naturalWidth <= 0) {
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error("Creative photo could not be decoded"));
+      });
+    }
+  }
+}
+
+function getNormalizedPhotoRect(node: HTMLElement): NormalizedRect | null {
+  const photo = node.querySelector<HTMLElement>('[data-creative-photo="true"]');
+  if (!photo) return null;
+  const rootRect = node.getBoundingClientRect();
+  const photoRect = photo.getBoundingClientRect();
+  if (rootRect.width <= 0 || rootRect.height <= 0 || photoRect.width <= 0 || photoRect.height <= 0) return null;
+  return {
+    left: (photoRect.left - rootRect.left) / rootRect.width,
+    top: (photoRect.top - rootRect.top) / rootRect.height,
+    width: photoRect.width / rootRect.width,
+    height: photoRect.height / rootRect.height,
+  };
 }
 
 async function waitForBackgroundImages(node: HTMLElement) {
@@ -208,7 +244,7 @@ function decodeImage(dataUrl: string) {
   });
 }
 
-async function validateCapturedImage(dataUrl: string): Promise<CaptureValidation> {
+async function validateCapturedImage(dataUrl: string, photoRect: NormalizedRect | null = null): Promise<CaptureValidation> {
   if (!dataUrl.startsWith("data:image/")) {
     return { ok: false, width: 0, height: 0 };
   }
@@ -270,10 +306,41 @@ async function validateCapturedImage(dataUrl: string): Promise<CaptureValidation
   const blankWhite = meanLuminance > 238 && luminanceStdDev < 10;
   const blankGray = grayishRatio > 0.92 && channelRange < 22 && luminanceStdDev < 10;
 
+  let photoDetected = !photoRect;
+  if (photoRect) {
+    const startX = Math.max(0, Math.floor(photoRect.left * width));
+    const startY = Math.max(0, Math.floor(photoRect.top * height));
+    const regionWidth = Math.max(1, Math.floor(photoRect.width * width));
+    const regionHeight = Math.max(1, Math.floor(photoRect.height * height));
+    const photoStepX = Math.max(1, Math.floor(regionWidth / 24));
+    const photoStepY = Math.max(1, Math.floor(regionHeight / 18));
+    const colors = new Set<string>();
+    let photoCount = 0;
+    let photoLumaSum = 0;
+    let photoLumaSquares = 0;
+    for (let y = startY + Math.floor(photoStepY / 2); y < Math.min(height, startY + regionHeight); y += photoStepY) {
+      for (let x = startX + Math.floor(photoStepX / 2); x < Math.min(width, startX + regionWidth); x += photoStepX) {
+        const [r, g, b] = context.getImageData(x, y, 1, 1).data;
+        colors.add(`${r >> 4}:${g >> 4}:${b >> 4}`);
+        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        photoCount += 1;
+        photoLumaSum += luma;
+        photoLumaSquares += luma * luma;
+      }
+    }
+    const photoMean = photoCount ? photoLumaSum / photoCount : 0;
+    const photoVariance = photoCount ? Math.max(0, photoLumaSquares / photoCount - photoMean * photoMean) : 0;
+    // Some paid backgrounds intentionally use restrained palettes. The photo
+    // area beneath the image is a flat color, so even conservative photos are
+    // safely distinguishable without rejecting those lower-contrast assets.
+    photoDetected = colors.size >= 8 && Math.sqrt(photoVariance) >= 6;
+  }
+
   return {
-    ok: opaqueRatio > 0.8 && !solidLike && !blankWhite && !blankGray,
+    ok: opaqueRatio > 0.8 && !solidLike && !blankWhite && !blankGray && photoDetected,
     width,
     height,
+    photoDetected,
   };
 }
 
@@ -285,6 +352,33 @@ function logCaptureValidation(index: number, validation: CaptureValidation) {
     height: validation.height,
     validationPassed: validation.ok,
   });
+}
+
+export async function captureProductionCreative(node: HTMLElement, index = 0) {
+  await inlineCreativeImages(node);
+  await waitForCaptureReady(node);
+  const photoRect = getNormalizedPhotoRect(node);
+  const domFit = validateCreativeDomFit(node);
+  if (!domFit.ok) {
+    if (process.env.NODE_ENV === "development") {
+      console.warn("[AdWizard] creative fit validation failed", { index, failures: domFit.failures });
+    }
+    throw new Error(FIT_ERROR);
+  }
+
+  const renderedCreativeDataUrl = await toPng(node, {
+    quality: 0.92,
+    pixelRatio: 2,
+    cacheBust: true,
+  });
+  const validation = await validateCapturedImage(renderedCreativeDataUrl, photoRect);
+  logCaptureValidation(index, validation);
+  if (!validation.ok) {
+    throw new Error(photoRect && !validation.photoDetected
+      ? "The ad photo did not survive image capture. Please try again."
+      : CAPTURE_ERROR);
+  }
+  return { renderedCreativeDataUrl, validation, photoExpected: Boolean(photoRect) };
 }
 
 export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (leadType: string) => void }) {
@@ -446,6 +540,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode: "wizard",
+          clientCreativeVersion: CREATIVE_UI_VERSION,
           leadType,
           audienceSegment,
           requestedLeadType: leadType,
@@ -453,8 +549,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           campaignTypeLabel,
           licensedStates: states,
           location: stateLabel,
-          mode: "wizard",
-          clientCreativeVersion: CREATIVE_UI_VERSION,
           dailyBudget,
           variantCount,
           regenerationAttempt: nextAttempt,
@@ -505,30 +599,10 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         }
         let renderedCreativeDataUrl = "";
         try {
-          await inlineBackgroundImages(node);
-          await waitForCaptureReady(node);
-          const domFit = validateCreativeDomFit(node);
-          if (!domFit.ok) {
-            if (process.env.NODE_ENV === "development") {
-              console.warn("[AdWizard] creative fit validation failed", { index, failures: domFit.failures });
-            }
-            setError(FIT_ERROR);
-            return;
-          }
-          renderedCreativeDataUrl = await toPng(node, {
-            quality: 0.92,
-            pixelRatio: 2,
-            cacheBust: true,
-          });
-          const validation = await validateCapturedImage(renderedCreativeDataUrl);
-          logCaptureValidation(index, validation);
-          if (!validation.ok) {
-            setError(CAPTURE_ERROR);
-            return;
-          }
+          renderedCreativeDataUrl = (await captureProductionCreative(node, index)).renderedCreativeDataUrl;
         } catch (captureErr) {
           console.warn("[AdWizard] CSS capture failed:", captureErr);
-          setError(CAPTURE_ERROR);
+          setError(captureErr instanceof Error ? captureErr.message : CAPTURE_ERROR);
           return;
         }
         if (!renderedCreativeDataUrl) {
@@ -565,6 +639,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode: "wizard",
+          clientCreativeVersion: CREATIVE_UI_VERSION,
           leadType,
           audienceSegment,
           campaignType,

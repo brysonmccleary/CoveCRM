@@ -14,6 +14,7 @@ import {
 import mongooseConnect from "@/lib/mongooseConnect";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
 import { buildCreativeGenerationSignature } from "@/lib/facebook/creativeIdentity";
+import { selectCreativeTreatmentMix } from "@/lib/facebook/creativeCandidateSelection";
 
 const LEAD_FORM_QUESTIONS = {
   mortgage_protection: [
@@ -193,7 +194,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // A tab left open across a deployment keeps running its old JavaScript.
   // Fail closed instead of letting that stale renderer keep generating the
   // retired layouts; the message is intentionally plain and user-facing.
-  if ((req.body as any)?.mode === "wizard" && Number((req.body as any)?.clientCreativeVersion || 0) < 3) {
+  if ((req.body as any)?.mode === "wizard" && Number((req.body as any)?.clientCreativeVersion || 0) < 4) {
     return res.status(409).json({
       ok: false,
       error: "CoveCRM was updated. Refresh this page once to load the improved ad builder.",
@@ -383,9 +384,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     generationSignature: { $in: uniqueCandidates.map((draft) => draft.creativeSignature) },
   }).select("generationSignature -_id").lean();
   const usedSignatures = new Set((usedRows as any[]).map((row) => String(row.generationSignature || "")));
-  const selectedDrafts = uniqueCandidates
-    .filter((draft) => !usedSignatures.has(String(draft.creativeSignature)))
-    .slice(0, requestedVariantCount);
+  const freshCandidates = uniqueCandidates
+    .filter((draft) => !usedSignatures.has(String(draft.creativeSignature)));
+  const visualLeadType = audienceSegment === "veteran" || audienceSegment === "trucker"
+    ? audienceSegment
+    : leadType;
+  const selectedDrafts = selectCreativeTreatmentMix(
+    freshCandidates,
+    requestedVariantCount,
+    ["veteran", "trucker", "mortgage_protection"].includes(visualLeadType)
+  );
 
   if (selectedDrafts.length < requestedVariantCount) {
     return res.status(409).json({

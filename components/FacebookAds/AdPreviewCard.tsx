@@ -1283,17 +1283,30 @@ function renderPhotoDirectResponse(state: CreativeState) {
         </div>
         <div
           data-creative-zone="photo"
-          data-creative-photo="true"
           style={{
             position: "relative",
             minHeight: 168,
-            backgroundImage: `url("${state.backgroundUrl}")`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            backgroundRepeat: "no-repeat",
+            overflow: "hidden",
+            background: theme.header,
             boxShadow: "inset 0 -36px 38px rgba(0,0,0,0.34)",
           }}
         >
+          <img
+            src={state.backgroundUrl}
+            alt=""
+            aria-hidden="true"
+            data-creative-photo="true"
+            data-creative-photo-src={state.backgroundUrl}
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              display: "block",
+              objectFit: "cover",
+              objectPosition: "center",
+            }}
+          />
           {state.amount && (
             <div style={{ position: "absolute", left: 14, bottom: 12, background: "rgba(7,19,31,0.88)", color: "#ffffff", border: `2px solid ${theme.accent}`, borderRadius: 8, padding: "7px 11px", fontSize: 30, fontWeight: 950, lineHeight: 1 }}>
               {state.amount}

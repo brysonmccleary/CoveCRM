@@ -55,6 +55,39 @@ describe("publish-ad exact-match reuse", () => {
     (releaseLaunchCampaignClaim as jest.Mock).mockResolvedValue(undefined);
   });
 
+  test("blocks a one-ad veteran set when a stale client selected only a graphic treatment", async () => {
+    const { req, res } = createMocks({
+      method: "POST",
+      body: {
+        leadType: "veteran",
+        audienceSegment: "standard",
+        campaignType: "hosted_funnel",
+        campaignName: "Veteran Coverage Campaign",
+        dailyBudgetCents: 500,
+        primaryText: "Review private life insurance coverage options for veterans.",
+        headline: "Life Insurance For Veterans",
+        cta: "LEARN_MORE",
+        renderedCreativeDataUrl: "data:image/png;base64,AAAA",
+        licensedStates: ["AZ"],
+        stateRestrictionNoticeAccepted: true,
+        drafts: [{
+          leadType: "veteran",
+          visualTreatment: "graphic",
+          primaryText: "Review private life insurance coverage options for veterans.",
+          headline: "Life Insurance For Veterans",
+          cta: "LEARN_MORE",
+          renderedCreativeDataUrl: "data:image/png;base64,AAAA",
+        }],
+      },
+    });
+
+    await handler(req as any, res as any);
+
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res._getData()).error).toContain("required photo/graphic mix");
+    expect(validateLaunchInput).not.toHaveBeenCalled();
+  });
+
   test("an exact published fingerprint verifies the live Meta ad set before returning reuse success", async () => {
     const targeting = {
       geo_locations: { regions: [{ key: "3845" }], location_types: ["home"] },
