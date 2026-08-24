@@ -4,9 +4,10 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
-import twilioClient from "@/lib/twilioClient";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { stripe } from "@/lib/stripe";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
+import { releaseLastNumberA2PResources } from "@/lib/billing/releaseUserPhoneNumbers";
 
 function normalizeE164(p: string) {
   const digits = (p || "").replace(/\D/g, "");
@@ -65,15 +66,26 @@ export default async function handler(
     const twilioSid = target.sid || sid;
     const phone = target.phoneNumber || normalizedPhone || phoneNumber;
 
-    // 1) Cancel Stripe subscription (best-effort)
-    try {
-      if (target.subscriptionId) {
+    // Keep the number if its recurring add-on cannot be stopped. This makes
+    // cancellation fail closed and safe to retry instead of creating a ghost charge.
+    if (target.subscriptionId) {
+      try {
         assertStripeWritesEnabled();
         await stripe.subscriptions.cancel(target.subscriptionId);
+      } catch (err: any) {
+        const message = String(err?.message || err || "");
+        if (err?.code === "resource_missing" || /no such subscription|already canceled/i.test(message)) {
+          // The recurring charge is already gone; continue with Twilio cleanup.
+        } else {
+          console.error("Stripe number subscription cancellation failed:", err);
+          return res.status(502).json({
+            message: "Could not stop number billing; the number was kept so you can retry safely",
+          });
+        }
       }
-    } catch (err) {
-      console.warn("⚠️ Stripe subscription cancellation warning:", err);
     }
+
+    const { client: twilioClient } = await getClientForUser(String(user.email));
 
     // 2) Unlink from ANY Messaging Service sender pool so it can be reused later
     try {
@@ -116,7 +128,8 @@ export default async function handler(
       console.warn("⚠️ Unlink from Messaging Services warning:", err);
     }
 
-    // 3) Release the number in Twilio (best-effort)
+    // 3) Release the number in the user's isolated Twilio account. Do not
+    // clear ownership locally unless the provider accepted the release.
     try {
       if (twilioSid) {
         await twilioClient.incomingPhoneNumbers(twilioSid).remove();
@@ -129,8 +142,13 @@ export default async function handler(
           await twilioClient.incomingPhoneNumbers(matches[0].sid).remove();
         }
       }
-    } catch (err) {
-      console.warn("⚠️ Twilio number release warning:", err);
+    } catch (err: any) {
+      if (err?.status !== 404 && err?.code !== 20404 && !/not found|no record/i.test(String(err?.message || err))) {
+        console.error("Twilio number release failed:", err);
+        return res.status(502).json({
+          message: err?.message || "Could not release the Twilio number; please retry",
+        });
+      }
     }
 
     // 4) Remove from user.numbers[]
@@ -142,6 +160,11 @@ export default async function handler(
           : true),
     );
     await user.save();
+
+    const a2pCleanup = await releaseLastNumberA2PResources({
+      userId: String(user._id),
+      reason: "legacy_cancel_number",
+    });
 
     // 5) Delete PhoneNumber doc(s) (tidy)
     try {
@@ -160,6 +183,7 @@ export default async function handler(
 
     return res.status(200).json({
       message: `Number ${phone || twilioSid} cancelled, unlinked, released, and removed`,
+      a2pCleanup,
     });
   } catch (err: any) {
     console.error("Cancel number error:", err);

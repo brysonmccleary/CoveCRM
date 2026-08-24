@@ -8,6 +8,7 @@ import { stripe } from "@/lib/stripe";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefault";
+import { releaseLastNumberA2PResources } from "@/lib/billing/releaseUserPhoneNumbers";
 
 type Json = Record<string, any>;
 
@@ -26,9 +27,12 @@ async function tryCancelStripeSubscription(subscriptionId?: string | null) {
     await stripe.subscriptions.cancel(subscriptionId);
     return { canceled: true };
   } catch (e: any) {
-    // Benign if already canceled/invalid; log and move on.
+    const msg = String(e?.message || e || "");
+    if (e?.code === "resource_missing" || /no such subscription|already canceled/i.test(msg)) {
+      return { canceled: true, alreadyCanceled: true };
+    }
     console.warn("⚠️ Stripe subscription cancel warning:", e?.message || e);
-    return { canceled: false, warn: String(e?.message || e) };
+    return { canceled: false, warn: msg };
   }
 }
 
@@ -59,12 +63,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const entry = numbers.find((n: any) => n?.phoneNumber === normalized || n?.phoneNumber === String(rawPhoneParam));
 
     if (!entry) {
+      const a2pCleanup = await releaseLastNumberA2PResources({
+        userId: String(user._id),
+        reason: "number_already_released",
+      });
       // If it’s already gone from our account, return idempotent success.
       return res.status(200).json({
         ok: true,
         info: "Number not present on user; treated as released.",
         alreadyReleased: true,
         phoneNumber: normalized,
+        a2pCleanup,
       });
     }
 
@@ -80,6 +89,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     // 1) Stop platform billing (if any)
     const stripeResult = await tryCancelStripeSubscription(entry.subscriptionId);
+    if (entry.subscriptionId && !stripeResult.canceled) {
+      return res.status(502).json({
+        ok: false,
+        error: "Phone billing could not be canceled; number was kept so the operation can be retried safely.",
+        stripe: stripeResult,
+      });
+    }
 
     // 2) Detach from Messaging Service (prefer known MS, else scan)
     let msDetachTried = false;
@@ -129,7 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     } catch (e: any) {
       // If it’s already gone, treat as success; otherwise carry a warning.
       const msg = String(e?.message || e || "");
-      if (msg.toLowerCase().includes("resource not found") || msg.toLowerCase().includes("no record")) {
+      if (/not found|no record/i.test(msg)) {
         released = true;
       } else {
         releaseWarn = msg;
@@ -137,7 +153,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
     }
 
-    // 4) Local cleanup (always)
+    if (releaseWarn) {
+      return res.status(502).json({
+        ok: false,
+        error: "Twilio could not release the number; local ownership was kept for a safe retry.",
+        twilio: { released: false, numberSid: numberSid || null, warning: releaseWarn },
+        stripe: stripeResult,
+      });
+    }
+
+    // 4) Local cleanup only after Twilio confirms the number is absent.
     const defaultId = String((user as any).defaultSmsNumberId || "");
     const removedNumberId = String((entry as any)?._id || "");
     const removedNumberSid = String(entry?.sid || "");
@@ -154,6 +179,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
     await resolvePreferredSmsDefault(user, { save: false });
     await user.save();
+
+    const a2pCleanup = await releaseLastNumberA2PResources({
+      userId: String(user._id),
+      reason: "last_number_released",
+    });
 
     try {
       await PhoneNumber.deleteOne({ userId: user._id, phoneNumber: normalized });
@@ -173,6 +203,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       },
       stripe: stripeResult,
       local: { removedFromUser: true },
+      a2pCleanup,
     };
 
     return res.status(200).json(payload);

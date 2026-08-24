@@ -7,6 +7,7 @@ import PhoneNumber from "@/models/PhoneNumber";
 import { stripe } from "@/lib/stripe";
 import { assertStripeWritesEnabled } from "@/lib/billing/assertStripeWritesEnabled";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { releaseLastNumberA2PResources } from "@/lib/billing/releaseUserPhoneNumbers";
 
 type Json = Record<string, any>;
 
@@ -44,8 +45,12 @@ async function tryCancelStripeSubscription(subscriptionId?: string | null) {
     await stripe.subscriptions.cancel(subscriptionId);
     return { canceled: true };
   } catch (e: any) {
+    const msg = String(e?.message || e || "");
+    if (e?.code === "resource_missing" || /no such subscription|already canceled/i.test(msg)) {
+      return { canceled: true, alreadyCanceled: true };
+    }
     console.warn("⚠️ Stripe subscription cancel warning:", e?.message || e);
-    return { canceled: false, warn: String(e?.message || e) };
+    return { canceled: false, warn: msg };
   }
 }
 
@@ -87,11 +92,16 @@ export default async function handler(
     );
 
     if (!entry) {
+      const a2pCleanup = await releaseLastNumberA2PResources({
+        userId: String(user._id),
+        reason: "mobile_number_already_released",
+      });
       return res.status(200).json({
         ok: true,
         info: "Number not present on user; treated as released.",
         alreadyReleased: true,
         phoneNumber: normalized,
+        a2pCleanup,
       });
     }
 
@@ -109,6 +119,13 @@ export default async function handler(
     const stripeResult = await tryCancelStripeSubscription(
       entry.subscriptionId,
     );
+    if (entry.subscriptionId && !stripeResult.canceled) {
+      return res.status(502).json({
+        ok: false,
+        error: "Phone billing could not be canceled; number was kept so the operation can be retried safely.",
+        stripe: stripeResult,
+      });
+    }
 
     let msDetachTried = false;
     let msDetached = false;
@@ -165,15 +182,21 @@ export default async function handler(
       }
     } catch (e: any) {
       const msg = String(e?.message || e || "");
-      if (
-        msg.toLowerCase().includes("resource not found") ||
-        msg.toLowerCase().includes("no record")
-      ) {
+      if (/not found|no record/i.test(msg)) {
         released = true;
       } else {
         releaseWarn = msg;
         console.warn("⚠️ Twilio release warning:", msg);
       }
+    }
+
+    if (releaseWarn) {
+      return res.status(502).json({
+        ok: false,
+        error: "Twilio could not release the number; local ownership was kept for a safe retry.",
+        twilio: { released: false, numberSid: numberSid || null, warning: releaseWarn },
+        stripe: stripeResult,
+      });
     }
 
     user.numbers = numbers.filter(
@@ -182,6 +205,11 @@ export default async function handler(
         n?.phoneNumber !== String(rawPhoneParam),
     );
     await user.save();
+
+    const a2pCleanup = await releaseLastNumberA2PResources({
+      userId: String(user._id),
+      reason: "mobile_last_number_released",
+    });
 
     try {
       await PhoneNumber.deleteOne({ userId: user._id, phoneNumber: normalized });
@@ -204,6 +232,7 @@ export default async function handler(
       },
       stripe: stripeResult,
       local: { removedFromUser: true },
+      a2pCleanup,
     };
 
     return res.status(200).json(payload);

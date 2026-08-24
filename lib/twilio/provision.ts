@@ -313,6 +313,15 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
 
     const userEmail = String(user.email || email || "").toLowerCase();
     const adminBypass = (user as any).role === "admin" || isAdmin(userEmail);
+    if ((user as any).subscriptionStatus !== "active" && !adminBypass) {
+      console.log(`[Twilio] Skipping number provisioning for ${email} — CRM subscription inactive`);
+      return {
+        ok: false,
+        provisioned: false,
+        reason: "inactive_subscription",
+        message: "An active CRM subscription is required.",
+      };
+    }
     if ((user as any).cardOnFile !== true && !adminBypass) {
       console.log(`[Twilio] Skipping number provisioning for ${email} — no card on file`);
       return {

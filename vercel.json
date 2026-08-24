@@ -97,6 +97,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/reconcile-telephony-resources",
+      "schedule": "30 8 * * *"
+    },
+    {
       "path": "/api/cron/recruiting-cloud-worker",
       "schedule": "* * * * *"
     }

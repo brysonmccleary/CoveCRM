@@ -1419,7 +1419,10 @@ export default async function handler(
           break;
         }
 
-        if (sub.cancel_at_period_end || (sub as any).cancel_at) {
+        const cancellationRequested = Boolean(
+          sub.cancel_at_period_end || (sub as any).cancel_at,
+        );
+        if (cancellationRequested) {
           const scheduledPhoneSubscriptionIds = await schedulePhoneSubscriptionsToCancel(customerId);
           audit("CRM cancellation scheduled phone subscriptions to end", {
             subscriptionId: sub.id,
@@ -1429,7 +1432,8 @@ export default async function handler(
         }
 
         const activeLike =
-          sub.status === "active" || sub.status === "trialing";
+          !cancellationRequested &&
+          (sub.status === "active" || sub.status === "trialing");
 
         const user = await User.findOne({ stripeCustomerId: customerId });
         if (user) {
@@ -1489,6 +1493,22 @@ export default async function handler(
           }
 
           await user.save();
+
+          if (cancellationRequested) {
+            const cleanup = await releaseUserPhoneNumbers({
+              userId: String((user as any)._id),
+              reason: "subscription_cancellation_scheduled",
+            });
+            audit("CRM cancellation telephony teardown", {
+              subscriptionId: sub.id,
+              customerId,
+              releasedNumbers: cleanup.releasedNumbers.length,
+              deletedA2PCampaigns: cleanup.deletedA2PCampaigns.length,
+              closedSubaccount: Boolean(cleanup.closedSubaccount),
+              complete: cleanup.complete,
+              failureCount: cleanup.failures.length,
+            });
+          }
         }
         break;
       }

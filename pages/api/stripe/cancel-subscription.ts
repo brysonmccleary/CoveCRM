@@ -33,14 +33,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       cancel_at_period_end: true,
     });
 
-    // Phone numbers cost money the moment they exist, and trial numbers have
-    // no Stripe subscription of their own, so both the Twilio numbers and any
-    // phone add-on subscriptions are torn down at cancel time — not period end.
-    const phoneCleanup = await releaseUserPhoneNumbers({
-      userId: String(user._id),
-      reason: "user_cancel",
-    });
-
+    // Mark terminal before remote cleanup so the provisioning cron can never
+    // race this request and replace a number we just released.
     await User.updateOne(
       { _id: user._id },
       {
@@ -52,11 +46,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     );
 
+    // Phone numbers and A2P Campaigns both carry recurring fees. Tear down the
+    // complete tenant telephony stack at cancel time, not at period end.
+    const phoneCleanup = await releaseUserPhoneNumbers({
+      userId: String(user._id),
+      reason: "user_cancel",
+    });
+
     return res.status(200).json({
       success: true,
       cancelAt: (subscription as any).cancel_at || null,
       releasedNumbers: phoneCleanup.releasedNumbers.length,
       phoneSubscriptionsCanceled: phoneCleanup.canceledPhoneSubscriptions.length,
+      a2pCampaignsDeleted: phoneCleanup.deletedA2PCampaigns.length,
+      messagingServicesDeleted: phoneCleanup.deletedMessagingServices.length,
+      twilioSubaccountClosed: Boolean(phoneCleanup.closedSubaccount),
+      cleanupComplete: phoneCleanup.complete,
+      cleanupFailures: phoneCleanup.failures,
     });
   } catch (err: any) {
     console.error("cancel-subscription error:", err?.message || err);

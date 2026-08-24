@@ -25,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { numbers: { $size: 0 } },
       ],
     })
-      .select({ email: 1, role: 1, cardOnFile: 1, twilio: 1, numbers: 1, numberProvisionedAt: 1 })
+      .select({ email: 1, role: 1, subscriptionStatus: 1, cardOnFile: 1, twilio: 1, numbers: 1, numberProvisionedAt: 1 })
       .lean()
       .cursor();
 
@@ -33,10 +33,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for await (const u of cursor as any) {
       const email = String(u.email || "").toLowerCase();
       try {
+        const adminBypass = u.role === "admin" || isAdmin(email);
+        const hasActiveCrmPlan = u.subscriptionStatus === "active";
+        if (!hasActiveCrmPlan && !adminBypass) {
+          console.log(`[ensure-twilio] skipping inactive account ${email}`);
+          continue;
+        }
+
         const identity = await ensureUserTwilioIdentity(email);
         const hasNumber = (Array.isArray(u.numbers) && u.numbers.length > 0) || Boolean(u.numberProvisionedAt);
-        const adminBypass = u.role === "admin" || isAdmin(email);
-        const shouldBuyNumber = !hasNumber && (u.cardOnFile === true || adminBypass);
+        const shouldBuyNumber =
+          !hasNumber &&
+          (hasActiveCrmPlan || adminBypass) &&
+          (u.cardOnFile === true || adminBypass);
 
         let r = identity;
         if (shouldBuyNumber) {
