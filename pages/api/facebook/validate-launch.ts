@@ -9,6 +9,11 @@ import { validateWinningVariantMetadata } from "@/lib/facebook/winningAdLibrary"
 import { requireDailyBudgetCents } from "@/lib/facebook/launchFingerprint";
 import { hasRecentMetaQualitySignal, isCapiEnabled } from "@/lib/meta/capi";
 import { assertNativeFormComplianceMode } from "@/lib/facebook/metaLeadFormTemplate";
+import {
+  assertAudienceCreativeMatch,
+  resolveAudienceSegment,
+  type MetaLeadType,
+} from "@/lib/facebook/audienceTargeting";
 
 const VALID_LEAD_TYPES = [
   "final_expense",
@@ -33,6 +38,10 @@ export async function validateLaunchInput(params: {
 
   const accessToken = String(user.metaSystemUserToken || user.metaAccessToken || "").trim();
   const leadType = String(body.leadType || "").trim();
+  const audienceSegment = resolveAudienceSegment({
+    leadType,
+    audienceSegment: body.audienceSegment,
+  });
   const adAccountId = String(
     body.adAccountId ||
       user.metaAdAccountId ||
@@ -75,11 +84,20 @@ export async function validateLaunchInput(params: {
     throw new Error("Funnel required");
   }
 
+  const landingPageText = JSON.stringify(body.landingPageConfig || body.winnerLandingPageConfig || {});
+  assertAudienceCreativeMatch({
+    leadType,
+    audienceSegment,
+    creativeText: [body.primaryText, body.headline, body.description].filter(Boolean).join("\n"),
+    landingPageText,
+  });
+
   const structure = buildCampaignStructure({
     campaignName: body.campaignName,
+    leadType: leadType as MetaLeadType,
     licensedStates,
     dailyBudgetCents: requireDailyBudgetCents(body.dailyBudgetCents),
-    audienceSegment: String(body.audienceSegment || "").trim() || undefined,
+    audienceSegment,
     performanceGoal,
     creatives: [
       {
@@ -105,6 +123,7 @@ export async function validateLaunchInput(params: {
     adAccountId: adAccountId.replace(/^act_/, ""),
     pageId,
     licensedStates,
+    audienceSegment,
     structure,
   };
 }

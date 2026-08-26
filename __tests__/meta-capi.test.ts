@@ -82,6 +82,7 @@ describe("Meta CAPI", () => {
   it("keeps lead generation as default and allows an explicit conversion-leads goal", () => {
     const base = {
       campaignName: "Test",
+      leadType: "final_expense" as const,
       licensedStates: ["AZ"],
       dailyBudgetCents: 500,
       creatives: [{ primaryText: "Text", headline: "Headline" }],

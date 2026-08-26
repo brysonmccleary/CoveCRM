@@ -102,6 +102,13 @@ describe("publish-ad exact-match reuse", () => {
       pageId: "page-1",
       licensedStates: ["AZ"],
       structure: {
+        targetingProfile: {
+          key: "final_expense:standard",
+          policyVersion: "financial-services-us-v1-2026-08-25",
+          qualificationMode: "product_interest",
+          locales: [],
+          interestGroups: [],
+        },
         campaign: {
           name: "Final Expense - Arizona Campaign",
           objective: "OUTCOME_LEADS",
@@ -135,7 +142,7 @@ describe("publish-ad exact-match reuse", () => {
       ok: true,
       json: jest.fn().mockResolvedValue({
         daily_budget: "500",
-        targeting: { geo_locations: { regions: [{ key: "3845" }] } },
+        targeting,
       }),
     });
     global.fetch = fetchMock as any;

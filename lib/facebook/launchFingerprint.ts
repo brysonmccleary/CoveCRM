@@ -37,10 +37,11 @@ export function buildLaunchFingerprint(input: {
   funnelType?: unknown;
   performanceGoal?: unknown;
   nativeFormSchemaVersion?: unknown;
+  targetingPolicyVersion?: unknown;
   creatives: LaunchFingerprintCreative[];
 }): string {
   const canonical = {
-    launchSchemaVersion: "insurance-launch-v2",
+    launchSchemaVersion: "insurance-launch-v3",
     adAccountId: String(input.adAccountId || "").trim().replace(/^act_/, ""),
     pageId: String(input.pageId || "").trim(),
     leadType: String(input.leadType || "").trim(),
@@ -53,6 +54,7 @@ export function buildLaunchFingerprint(input: {
     nativeFormSchemaVersion: input.campaignType === "native_form"
       ? String(input.nativeFormSchemaVersion || "insurance-native-v1").trim()
       : "",
+    targetingPolicyVersion: String(input.targetingPolicyVersion || "").trim(),
     creatives: input.creatives.map((creative) => ({
       primaryText: String(creative.primaryText || ""),
       headline: String(creative.headline || ""),

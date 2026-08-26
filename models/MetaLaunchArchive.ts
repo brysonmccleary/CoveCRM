@@ -6,6 +6,8 @@ const MetaLaunchArchiveSchema = new Schema(
     campaignId: { type: Schema.Types.ObjectId, ref: "FBLeadCampaign", required: true, immutable: true },
     launchFingerprint: { type: String, required: true, immutable: true },
     leadType: { type: String, required: true, immutable: true },
+    audienceSegment: { type: String, default: "standard", immutable: true },
+    targetingProfile: { type: Schema.Types.Mixed, default: {}, immutable: true },
     licensedStates: { type: [String], required: true, immutable: true },
     adCopy: { type: Schema.Types.Mixed, required: true, immutable: true },
     images: { type: [Schema.Types.Mixed], required: true, immutable: true },

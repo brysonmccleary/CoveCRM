@@ -16,6 +16,9 @@ const FBLeadCampaignSchema = new Schema(
       enum: ["standard", "veteran", "trucker", "spanish"],
       default: "standard",
     },
+    targetingProfileKey: { type: String, default: "" },
+    targetingPolicyVersion: { type: String, default: "" },
+    targetingQualificationMode: { type: String, default: "" },
     campaignType: {
       type: String,
       enum: ["native_form", "hosted_funnel", "hosted_funnel_otp"],

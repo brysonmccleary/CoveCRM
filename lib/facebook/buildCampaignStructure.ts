@@ -1,6 +1,11 @@
 import { buildMetaStateTargeting } from "@/lib/facebook/geo/metaTargeting";
 import { validateStates } from "@/lib/facebook/guardrails";
 import { requireDailyBudgetCents } from "@/lib/facebook/launchFingerprint";
+import {
+  applyMetaAudienceProfile,
+  getMetaAudienceProfile,
+  type MetaLeadType,
+} from "@/lib/facebook/audienceTargeting";
 
 export type CampaignStructureCreative = {
   primaryText: string;
@@ -12,30 +17,9 @@ export type CampaignStructureCreative = {
   templateId?: string;
 };
 
-// Interest names for audience segments. IDs must be verified via the Meta API's
-// /search?type=adinterest endpoint before use. Names alone may be resolved by Meta
-// but ID-based targeting is more reliable.
-// TODO: call the centrally versioned Meta Graph /search?type=adinterest endpoint
-// to obtain verified numeric interest IDs for each name before production use.
-const AUDIENCE_SEGMENT_INTERESTS: Record<string, { name: string }[]> = {
-  veteran: [
-    { name: "United States Armed Forces" },
-    { name: "Veteran" },
-    { name: "Veterans of Foreign Wars" },
-    { name: "American Legion" },
-    { name: "Military" },
-  ],
-  trucker: [
-    { name: "Trucking" },
-    { name: "Commercial Driver's License" },
-    { name: "Owner-operator (trucking)" },
-    { name: "American Trucking Associations" },
-    { name: "Commercial vehicle" },
-  ],
-};
-
 export function buildCampaignStructure(input: {
   campaignName: string;
+  leadType: MetaLeadType;
   licensedStates: unknown;
   dailyBudgetCents: number;
   creatives: CampaignStructureCreative[];
@@ -51,17 +35,15 @@ export function buildCampaignStructure(input: {
     throw new Error("Template creative required");
   }
 
-  const targeting = buildMetaStateTargeting(licensedStates);
-  if (!targeting?.geo_locations || (targeting.geo_locations as any).countries) {
+  const baseTargeting = buildMetaStateTargeting(licensedStates);
+  if (!baseTargeting?.geo_locations || (baseTargeting.geo_locations as any).countries) {
     throw new Error("Valid state targeting required");
   }
-
-  const segmentInterests = input.audienceSegment
-    ? AUDIENCE_SEGMENT_INTERESTS[input.audienceSegment]
-    : undefined;
-  // Interest name-only targeting removed — Meta requires verified numeric IDs.
-  // TODO: replace with { id, name } objects from /search?type=adinterest endpoint.
-  const segmentTargeting = targeting;
+  const targetingProfile = getMetaAudienceProfile({
+    leadType: input.leadType,
+    audienceSegment: input.audienceSegment,
+  });
+  const segmentTargeting = applyMetaAudienceProfile(baseTargeting, targetingProfile);
 
   return {
     campaign: {
@@ -71,6 +53,7 @@ export function buildCampaignStructure(input: {
       buying_type: "AUCTION",
       status: "PAUSED",
     },
+    targetingProfile,
     adSet: {
       name: `${String(input.campaignName || "").trim()} Ad Set`,
       daily_budget: requireDailyBudgetCents(input.dailyBudgetCents),

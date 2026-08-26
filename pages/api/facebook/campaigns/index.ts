@@ -11,6 +11,7 @@ import User from "@/models/User";
 import mongoose from "mongoose";
 import { normalizeStateCodes } from "@/lib/facebook/geo/usStates";
 import { getCanonicalHeaders, getLeadSheetType } from "@/lib/facebook/sheets/sheetHeaders";
+import { resolveAudienceSegment } from "@/lib/facebook/audienceTargeting";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -103,6 +104,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "State restriction notice must be acknowledged before creating a campaign." });
     }
     const sheetType = getLeadSheetType(leadType);
+    let audienceSegment = "standard";
+    try {
+      audienceSegment = resolveAudienceSegment({ leadType, audienceSegment: req.body?.audienceSegment });
+    } catch (err: any) {
+      return res.status(400).json({ error: err?.message || "Invalid audience segment" });
+    }
     const funnelSlug = String(campaignName)
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -113,6 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       userId: (user as any)._id,
       userEmail: session.user.email.toLowerCase(),
       leadType,
+      audienceSegment,
       campaignName,
       dailyBudget: dailyBudget ?? 0,
       plan: plan ?? "manager",

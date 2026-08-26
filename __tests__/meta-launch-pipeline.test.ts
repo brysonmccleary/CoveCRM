@@ -3,7 +3,7 @@ import { claimLaunchCampaign } from "@/lib/facebook/claimLaunchCampaign";
 import { buildMetaStateTargeting } from "@/lib/facebook/geo/metaTargeting";
 import { META_REGION_MAP } from "@/lib/facebook/geo/metaRegionMap";
 import { buildLaunchFingerprint, requireDailyBudgetCents } from "@/lib/facebook/launchFingerprint";
-import { verifyMetaAdset } from "@/lib/facebook/metaAdsetVerification";
+import { assertMetaAdsetMatches, verifyMetaAdset } from "@/lib/facebook/metaAdsetVerification";
 
 const SEVENTEEN_STATES = [
   "AL", "GA", "WA", "UT", "TX", "OH", "NC", "NM", "LA",
@@ -108,6 +108,7 @@ describe("Meta launch identity, budget, targeting, and verification", () => {
     const cents = requireDailyBudgetCents(5 * 100);
     const structure = buildCampaignStructure({
       campaignName: "Five Dollar Test",
+      leadType: "final_expense",
       licensedStates: ["AZ"],
       dailyBudgetCents: cents,
       creatives: [{ headline: "Coverage", primaryText: "Coverage options for Arizona residents." }],
@@ -148,7 +149,9 @@ describe("Meta launch identity, budget, targeting, and verification", () => {
       json: jest.fn().mockResolvedValue({
         daily_budget: "500",
         targeting: {
+          ...expectedTargeting,
           geo_locations: {
+            ...expectedTargeting.geo_locations,
             regions: [...expectedTargeting.geo_locations.regions].reverse(),
           },
         },
@@ -202,5 +205,17 @@ describe("Meta launch identity, budget, targeting, and verification", () => {
       expectedTargeting,
       fetchImpl: fetchImpl as any,
     })).rejects.toThrow("expected region keys");
+  });
+
+  test("readback fails when Meta drops detailed audience interests", () => {
+    const expectedTargeting = {
+      ...buildMetaStateTargeting(["AZ"]),
+      flexible_spec: [{ interests: [{ id: "6003141785766", name: "Mortgage loans" }] }],
+    };
+    expect(() => assertMetaAdsetMatches({
+      actual: { daily_budget: "500", targeting: buildMetaStateTargeting(["AZ"]) },
+      expectedDailyBudgetCents: 500,
+      expectedTargeting,
+    })).toThrow("interestGroups");
   });
 });

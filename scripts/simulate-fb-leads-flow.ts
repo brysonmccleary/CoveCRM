@@ -212,6 +212,8 @@ async function main() {
 
     const structure = buildCampaignStructure({
       campaignName: draft.campaignName,
+      leadType: draft.leadType,
+      audienceSegment: draft.audienceSegment,
       licensedStates: ["AZ"],
       dailyBudgetCents: draft.dailyBudgetCents,
       creatives: [

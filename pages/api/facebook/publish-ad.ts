@@ -46,6 +46,7 @@ import {
   type CreativeReservation,
 } from "@/lib/facebook/creativeUsage";
 import { hasRequiredCreativeTreatmentMix } from "@/lib/facebook/creativeCandidateSelection";
+import { resolveAudienceSegment } from "@/lib/facebook/audienceTargeting";
 
 export const config = {
   api: {
@@ -273,7 +274,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     performanceGoal?: "LEAD_GENERATION" | "QUALITY_LEAD";
   };
 
-  const audienceSegment = String((req.body as any).audienceSegment || "standard").trim();
+  let audienceSegment = "standard";
+  try {
+    audienceSegment = resolveAudienceSegment({
+      leadType,
+      audienceSegment: (req.body as any).audienceSegment,
+    });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || "Invalid audience segment" });
+  }
   const campaignType = String((req.body as any).campaignType || "hosted_funnel").trim();
 
   // Validate required fields
@@ -426,6 +435,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       pageId: resolvedPageId,
       leadType,
       audienceSegment,
+      targetingPolicyVersion: lockedStructure.targetingProfile.policyVersion,
       campaignType,
       licensedStates: normalizedLicensedStates,
       dailyBudgetCents: budgetCents,
@@ -567,6 +577,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           campaignName: safeName,
           leadType,
           audienceSegment,
+          targetingProfileKey: lockedStructure.targetingProfile.key,
+          targetingPolicyVersion: lockedStructure.targetingProfile.policyVersion,
+          targetingQualificationMode: lockedStructure.targetingProfile.qualificationMode,
           campaignType,
           performanceGoal: performanceGoal === "QUALITY_LEAD" ? "QUALITY_LEAD" : "LEAD_GENERATION",
           nativeFormConfiguration: campaignType === "native_form" ? {
@@ -1104,6 +1117,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               campaignId: campaign._id,
               launchFingerprint,
               leadType,
+              audienceSegment,
+              targetingProfile: lockedStructure.targetingProfile,
               licensedStates: normalizedLicensedStates,
               adCopy: normalizedDrafts.map((draft) => ({
                 primaryText: String(draft?.primaryText || ""),

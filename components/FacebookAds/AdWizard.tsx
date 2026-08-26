@@ -21,19 +21,19 @@ const MAIN_CATEGORY_OPTIONS = [
   { id: "final_expense", label: "Final Expense", leadType: "final_expense", audienceSegment: "standard", needsSubType: false },
   { id: "mortgage_protection", label: "Mortgage Protection", leadType: "mortgage_protection", audienceSegment: "standard", needsSubType: false },
   { id: "iul", label: "IUL", leadType: "iul", audienceSegment: "standard", needsSubType: false },
-  { id: "veteran", label: "Veteran Leads", leadType: "veteran", audienceSegment: "standard", needsSubType: true },
-  { id: "trucker", label: "Trucker Leads", leadType: "trucker", audienceSegment: "standard", needsSubType: true },
+  { id: "veteran", label: "Veteran Leads", leadType: "veteran", audienceSegment: "veteran", needsSubType: true },
+  { id: "trucker", label: "Trucker Leads", leadType: "trucker", audienceSegment: "trucker", needsSubType: true },
   { id: "spanish", label: "Spanish-Language Leads", leadType: "final_expense", audienceSegment: "spanish", needsSubType: true },
 ] as const;
 
 const SUBTYPE_OPTIONS: Record<string, { label: string; leadType: string; audienceSegment: string }[]> = {
   veteran: [
-    { label: "General Veteran Leads", leadType: "veteran", audienceSegment: "standard" },
+    { label: "General Veteran Leads", leadType: "veteran", audienceSegment: "veteran" },
     { label: "Veteran Mortgage Leads", leadType: "mortgage_protection", audienceSegment: "veteran" },
     { label: "Veteran IUL Leads", leadType: "iul", audienceSegment: "veteran" },
   ],
   trucker: [
-    { label: "General Trucker Leads", leadType: "trucker", audienceSegment: "standard" },
+    { label: "General Trucker Leads", leadType: "trucker", audienceSegment: "trucker" },
     { label: "Trucker Mortgage Leads", leadType: "mortgage_protection", audienceSegment: "trucker" },
     { label: "Trucker IUL Leads", leadType: "iul", audienceSegment: "trucker" },
   ],
