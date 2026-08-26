@@ -80,7 +80,7 @@ const FBLeadCampaignSchema = new Schema(
     borderStateBehavior: {
       type: String,
       enum: ["allow_with_warning", "block"],
-      default: "block",
+      default: "allow_with_warning",
     },
     leadSheetType: {
       type: String,

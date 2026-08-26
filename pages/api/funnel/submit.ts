@@ -10,8 +10,10 @@ import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { getLeadTypeFolderName } from "@/lib/leadTypeConfig";
-import { isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
+import { stateLabel } from "@/lib/facebook/geo/usStates";
 import { buildLeadSheetPayload } from "@/lib/facebook/sheets/mapLeadToSheetRow";
+import { classifySubmissionState } from "@/lib/leads/submissionStatePolicy";
+import { sendRepeatOptInNotificationEmail } from "@/lib/email";
 
 const LEAD_TYPE_TO_CRM: Record<string, string> = {
   final_expense: "Final Expense",
@@ -76,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       campaign = await (FBLeadCampaign as any).findOne({
         _id: campaignId,
       })
-        .select("webhookKey metaCampaignId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet")
+        .select("webhookKey metaCampaignId campaignName licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet")
         .lean() as any;
 
       if (!campaign) {
@@ -85,15 +87,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (!req.query.key || req.query.key !== campaign.webhookKey) {
         return res.status(403).json({ error: "Invalid webhook key" });
-      }
-      const normalizedState = normalizeStateCode(cleanState);
-      const outsideLicensedArea =
-        !!normalizedState &&
-        Array.isArray(campaign.licensedStates) &&
-        campaign.licensedStates.length > 0 &&
-        !isStateAllowed(normalizedState, campaign.licensedStates);
-      if (outsideLicensedArea && campaign.borderStateBehavior !== "allow_with_warning") {
-        return res.status(403).json({ error: "We currently do not service your state for this campaign." });
       }
     }
 
@@ -134,6 +127,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (dupCheck?.isDuplicate) {
+      try {
+        const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || "https://www.covecrm.com").replace(/\/$/, "");
+        const emailResult = await sendRepeatOptInNotificationEmail({
+          to: userEmail,
+          leadName: `${cleanFirst} ${cleanLast}`.trim() || dupCheck.existingName || "Your lead",
+          leadPhone: cleanPhone,
+          leadEmail: cleanEmail,
+          state: cleanState,
+          leadType: LEAD_TYPE_TO_CRM[leadType] || leadType,
+          campaignName: String(campaign?.campaignName || (funnel as any).name || ""),
+          leadUrl: dupCheck.existingLeadId ? `${appUrl}/lead/${dupCheck.existingLeadId}` : undefined,
+        });
+        if (!emailResult.ok) {
+          console.warn("[funnel/submit] repeat opt-in email failed (non-blocking):", emailResult.error);
+        }
+      } catch (emailErr: any) {
+        console.warn("[funnel/submit] repeat opt-in email failed (non-blocking):", emailErr?.message);
+      }
       return res.status(200).json({
         ok: true,
         duplicate: true,
@@ -144,13 +155,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const normalizedPhone = cleanPhone.replace(/\D+/g, "");
     const crmLeadType = LEAD_TYPE_TO_CRM[leadType] || "Final Expense";
-    const normalizedState = normalizeStateCode(cleanState);
-    const outsideLicensedArea =
-      !!campaign &&
-      !!normalizedState &&
-      Array.isArray(campaign.licensedStates) &&
-      campaign.licensedStates.length > 0 &&
-      !isStateAllowed(normalizedState, campaign.licensedStates);
+    const { normalizedState, outsideLicensedArea } = classifySubmissionState({
+      state: cleanState,
+      licensedStates: campaign?.licensedStates,
+    });
     const notes = outsideLicensedArea
       ? `State Restriction Warning: ${stateLabel(normalizedState)} is outside the campaign's primary licensed states.`
       : "";

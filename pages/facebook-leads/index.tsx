@@ -521,7 +521,7 @@ function SetupWizard({
   const [dailyBudget, setDailyBudget] = useState("20");
   const [licensedStates, setLicensedStates] = useState<string[]>([]);
   const [stateSearch, setStateSearch] = useState("");
-  const [borderStateBehavior, setBorderStateBehavior] = useState<"allow_with_warning" | "block">("block");
+  const borderStateBehavior = "allow_with_warning" as const;
   const [stateNoticeAccepted, setStateNoticeAccepted] = useState(false);
   const [creating, setCreating] = useState(false);
 
@@ -1218,14 +1218,9 @@ function SetupWizard({
                   </div>
                   <div>
                     <label className="text-xs text-gray-400 mb-1 block">If someone selects a state outside this campaign</label>
-                    <select
-                      value={borderStateBehavior}
-                      onChange={(e) => setBorderStateBehavior(e.target.value === "allow_with_warning" ? "allow_with_warning" : "block")}
-                      className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-sm"
-                    >
-                      <option value="block">Block submission</option>
-                      <option value="allow_with_warning">Allow with warning</option>
-                    </select>
+                    <div className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-sm">
+                      Accept the lead and flag the state for the agent
+                    </div>
                   </div>
                   <label className="flex items-start gap-2 text-xs text-gray-300">
                     <input

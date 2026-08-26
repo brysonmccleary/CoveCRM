@@ -7,6 +7,7 @@ import Lead from "@/models/Lead";
 import FunnelSubmission from "@/models/FunnelSubmission";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { sendSms } from "@/lib/twilio/sendSMS";
+import { sendRepeatOptInNotificationEmail } from "@/lib/email";
 
 const KAYLA_SIGNUP_URL =
   process.env.KAYLA_SIGNUP_URL ||
@@ -266,6 +267,23 @@ export default async function handler(
         },
       },
     );
+    try {
+      const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || "https://www.covecrm.com").replace(/\/$/, "");
+      const emailResult = await sendRepeatOptInNotificationEmail({
+        to: ownerEmail,
+        leadName: cleanFullName,
+        leadPhone: normalizedPhone,
+        leadEmail: cleanEmail,
+        leadType: "Kayla Lead",
+        campaignName: "Kayla Landing Page",
+        leadUrl: `${appUrl}/lead/${existingLeadId}`,
+      });
+      if (!emailResult.ok) {
+        console.warn("[KAYLA] repeat opt-in email failed (non-blocking):", emailResult.error);
+      }
+    } catch (emailErr: any) {
+      console.warn("[KAYLA] repeat opt-in email failed (non-blocking):", emailErr?.message);
+    }
   } else {
     const lead = await Lead.create({
       "First Name": firstName,

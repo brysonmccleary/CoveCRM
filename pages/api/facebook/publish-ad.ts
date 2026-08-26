@@ -206,7 +206,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     buttonLabels: winnerButtonLabels,
     vendorStyleTag,
     licensedStates,
-    borderStateBehavior,
     stateRestrictionNoticeAccepted,
     publicAgentProfile,
     complianceProfile,
@@ -266,7 +265,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     buttonLabels?: string[];
     vendorStyleTag?: string;
     licensedStates?: string[];
-    borderStateBehavior?: "allow_with_warning" | "block";
     stateRestrictionNoticeAccepted?: boolean;
     publicAgentProfile?: Record<string, string>;
     complianceProfile?: Record<string, string>;
@@ -604,7 +602,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           funnelVersion: "2026-04-production-v1",
           landingPageConfig: funnelData,
           licensedStates: normalizedLicensedStates,
-          borderStateBehavior: borderStateBehavior === "allow_with_warning" ? "allow_with_warning" : "block",
+          borderStateBehavior: "allow_with_warning",
           stateRestrictionNoticeAccepted: true,
           publicAgentProfile: {
             displayName: advertiserDisplayName,

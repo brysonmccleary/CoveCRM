@@ -756,7 +756,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           creativeArchetype: selectedDraft.creativeArchetype || selectedDraft.archetype || "",
           licensedStates: states,
           stateRestrictionNoticeAccepted: true,
-          borderStateBehavior: "block",
+          borderStateBehavior: "allow_with_warning",
           funnelType: selectedDraft.funnelType || "lead_form",
           winningFamilyId: selectedDraft.winningFamilyId,
           variationType: selectedDraft.variationType,

@@ -10,6 +10,7 @@ import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+import { sendRepeatOptInNotificationEmail } from "@/lib/email";
 
 jest.mock("@/lib/mongooseConnect", () => jest.fn());
 
@@ -18,7 +19,10 @@ jest.mock("@/lib/leads/scoreLead", () => ({ scoreLeadOnArrival: jest.fn().mockRe
 jest.mock("@/lib/leads/checkDuplicate", () => ({ checkDuplicate: jest.fn() }));
 jest.mock("@/lib/ai/triggerAIFirstCall", () => ({ triggerAIFirstCall: jest.fn().mockResolvedValue(undefined) }));
 jest.mock("@/lib/drips/enrollOnNewLead", () => ({ enrollOnNewLeadIfWatched: jest.fn().mockResolvedValue(undefined) }));
-jest.mock("@/lib/email", () => ({ sendNewLeadNotificationEmail: jest.fn().mockResolvedValue({ ok: true }) }));
+jest.mock("@/lib/email", () => ({
+  sendNewLeadNotificationEmail: jest.fn().mockResolvedValue({ ok: true }),
+  sendRepeatOptInNotificationEmail: jest.fn().mockResolvedValue({ ok: true }),
+}));
 
 jest.mock("@/models/MetaLeadWebhookEvent", () => ({
   __esModule: true,
@@ -58,6 +62,7 @@ const mockedFolder = Folder as unknown as { findOne: jest.Mock; create: jest.Moc
 const mockedRetrieve = retrieveMetaLead as jest.Mock;
 const mockedTriggerAIFirstCall = triggerAIFirstCall as jest.Mock;
 const mockedCheckDuplicate = checkDuplicate as jest.Mock;
+const mockedRepeatOptInEmail = sendRepeatOptInNotificationEmail as jest.Mock;
 
 function lean(value: unknown) {
   return { lean: jest.fn().mockResolvedValue(value) };
@@ -145,6 +150,33 @@ describe("Meta webhook lead-creation idempotency", () => {
     await processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now());
 
     expect(mockedLead.create).toHaveBeenCalledTimes(1);
+  });
+
+  test("a new opt-in from an existing contact emails the agent and links the event without creating another CRM lead", async () => {
+    statefulEventStore("received");
+    mockedCheckDuplicate.mockResolvedValue({
+      isDuplicate: true,
+      matchType: "both",
+      existingLeadId: "existing-lead-1",
+      existingName: "Jane Doe",
+    });
+
+    await processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now());
+
+    expect(mockedLead.create).not.toHaveBeenCalled();
+    expect(mockedRepeatOptInEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "agent@example.com",
+      leadName: "Jane Doe",
+      leadUrl: expect.stringContaining("/lead/existing-lead-1"),
+    }));
+    expect(mockedEntry.updateOne).toHaveBeenCalledWith(
+      { _id: "entry1" },
+      { $set: { crmLeadId: "existing-lead-1" } }
+    );
+    expect(mockedEvent.updateOne).toHaveBeenCalledWith(
+      { leadgenId: "LG1" },
+      expect.objectContaining({ $set: expect.objectContaining({ processingStatus: "duplicate" }) })
+    );
   });
 
   test("if the atomic claim write itself throws, processing aborts rather than proceeding unguarded", async () => {

@@ -223,6 +223,60 @@ export async function sendNewLeadNotificationEmail(opts: {
   });
 }
 
+/* ---------- Repeat lead opt-in notification ---------- */
+
+export function renderRepeatOptInNotificationEmail(opts: {
+  leadName: string;
+  leadPhone?: string;
+  leadEmail?: string;
+  state?: string;
+  leadType?: string;
+  campaignName?: string;
+  leadUrl?: string;
+}) {
+  const leadName = String(opts.leadName || "Your lead").trim() || "Your lead";
+  const detail = (label: string, value: unknown) => {
+    const text = String(value ?? "").trim();
+    if (!text) return "";
+    return `<p style="margin:5px 0"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(text)}</p>`;
+  };
+
+  return `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a;max-width:640px">
+      <p style="margin:0 0 4px;font-size:13px;font-weight:800;letter-spacing:.12em;color:#dc2626">REPEAT OPT-IN</p>
+      <h2 style="margin:0 0 12px;font-size:26px">${escapeHtml(leadName)} opted in again</h2>
+      <p style="margin:0 0 18px;font-size:18px;font-weight:700">Your lead ${escapeHtml(leadName)} opted in again. Call them.</p>
+      <div style="padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px">
+        ${detail("Phone", opts.leadPhone)}
+        ${detail("Email", opts.leadEmail)}
+        ${detail("State", opts.state)}
+        ${detail("Lead Type", opts.leadType)}
+        ${detail("Campaign", opts.campaignName)}
+      </div>
+      ${opts.leadUrl ? `<p style="margin:20px 0 0"><a href="${escapeHtml(opts.leadUrl)}" style="display:inline-block;background:#dc2626;color:#fff;text-decoration:none;font-weight:800;padding:11px 18px;border-radius:8px">Open Existing Lead and Call</a></p>` : ""}
+    </div>
+  `;
+}
+
+export async function sendRepeatOptInNotificationEmail(opts: {
+  to: string;
+  leadName: string;
+  leadPhone?: string;
+  leadEmail?: string;
+  state?: string;
+  leadType?: string;
+  campaignName?: string;
+  leadUrl?: string;
+}): Promise<SendEmailResult> {
+  const leadName = String(opts.leadName || "Your lead").trim() || "Your lead";
+  return sendViaResend({
+    to: opts.to,
+    subject: `CALL THEM — ${leadName} opted in again`,
+    html: renderRepeatOptInNotificationEmail(opts),
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
+}
+
 /**
  * ✅ Robust lead display-name resolver.
  * - Checks many common field shapes (`First Name`/`Last Name`, `firstName`/`lastName`, `Name`, `Full Name`, etc.)

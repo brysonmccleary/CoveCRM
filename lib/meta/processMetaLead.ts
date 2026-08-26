@@ -16,7 +16,7 @@ import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 import { stableLeadEventId } from "@/lib/facebook/hostedAttribution";
 import { enqueueMetaLifecycleEventSafely } from "@/lib/meta/capi";
 import { buildStructuredLeadFields } from "@/lib/leads/structuredLeadFields";
-import { sendNewLeadNotificationEmail } from "@/lib/email";
+import { sendNewLeadNotificationEmail, sendRepeatOptInNotificationEmail } from "@/lib/email";
 
 const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   final_expense: "Final Expense",
@@ -262,10 +262,38 @@ export async function processMetaLead(
 
   if (dupCheck.isDuplicate) {
     console.info(`[processMetaLead] Duplicate CRM lead for ${leadgenId} — FBLeadEntry created, CRM lead skipped`);
+    if (dupCheck.existingLeadId) {
+      await FBLeadEntry.updateOne(
+        { _id: (entry as any)._id },
+        { $set: { crmLeadId: dupCheck.existingLeadId } }
+      );
+    }
+    try {
+      const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || "https://www.covecrm.com").replace(/\/$/, "");
+      const leadName = `${String(leadData.firstName || "").trim()} ${String(leadData.lastName || "").trim()}`.trim()
+        || dupCheck.existingName
+        || "Your lead";
+      const emailResult = await sendRepeatOptInNotificationEmail({
+        to: userEmail,
+        leadName,
+        leadPhone: leadData.phone,
+        leadEmail: leadData.email,
+        state: leadData.state,
+        leadType: FB_LEAD_TYPE_TO_CRM[(campaign as any).leadType] ?? String((campaign as any).leadType || ""),
+        campaignName: String((campaign as any).campaignName || ""),
+        leadUrl: dupCheck.existingLeadId ? `${appUrl}/lead/${dupCheck.existingLeadId}` : undefined,
+      });
+      if (!emailResult.ok) {
+        console.warn("[processMetaLead] repeat opt-in email failed (non-blocking):", emailResult.error);
+      }
+    } catch (emailErr: any) {
+      console.warn("[processMetaLead] repeat opt-in email failed (non-blocking):", emailErr?.message);
+    }
     await updateEventStatus(leadgenId, {
       processingStatus: "duplicate",
       processedAt: now,
       fbLeadEntryId: (entry as any)._id,
+      ...(dupCheck.existingLeadId ? { crmLeadId: dupCheck.existingLeadId } : {}),
       lastError: "",
     });
     return;

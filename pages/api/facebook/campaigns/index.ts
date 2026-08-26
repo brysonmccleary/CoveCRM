@@ -75,7 +75,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       plan,
       notes,
       licensedStates,
-      borderStateBehavior,
       stateRestrictionNoticeAccepted,
     } = req.body as {
       leadType: string;
@@ -84,7 +83,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       plan?: string;
       notes?: string;
       licensedStates?: string[];
-      borderStateBehavior?: "allow_with_warning" | "block";
       stateRestrictionNoticeAccepted?: boolean;
     };
 
@@ -133,7 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       facebookPageName: String(user.metaPageName || "").trim(),
       adAccountId: String(user.metaAdAccountId || "").trim().replace(/^act_/, ""),
       licensedStates: normalizedStates,
-      borderStateBehavior: borderStateBehavior === "allow_with_warning" ? "allow_with_warning" : "block",
+      borderStateBehavior: "allow_with_warning",
       stateRestrictionNoticeAccepted: true,
       leadSheetType: sheetType,
       expectedSheetHeaders: getCanonicalHeaders(sheetType),

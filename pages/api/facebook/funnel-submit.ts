@@ -14,7 +14,7 @@ import FBLeadEntry from "@/models/FBLeadEntry";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import SmsConsentEvidence from "@/models/SmsConsentEvidence";
-import { isStateAllowed, normalizeStateCode } from "@/lib/facebook/geo/usStates";
+import { classifySubmissionState } from "@/lib/leads/submissionStatePolicy";
 import { buildLeadSheetPayload } from "@/lib/facebook/sheets/mapLeadToSheetRow";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
@@ -23,7 +23,7 @@ import { buildHostedConsentEvidence, requestIp } from "@/lib/facebook/hostedCons
 import { scoreHostedLeadOnArrival } from "@/lib/facebook/hostedLeadScoring";
 import { enqueueMetaLifecycleEventSafely } from "@/lib/meta/capi";
 import { buildStructuredLeadFields } from "@/lib/leads/structuredLeadFields";
-import { sendNewLeadNotificationEmail } from "@/lib/email";
+import { sendNewLeadNotificationEmail, sendRepeatOptInNotificationEmail } from "@/lib/email";
 
 const LEAD_TYPE_MAP: Record<string, string> = {
   final_expense: "Final Expense",
@@ -117,15 +117,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...(state ? { state } : {}),
       ...(selectedOption ? { selectedOption } : {}),
     };
-    const normalizedState = normalizeStateCode(answerMap.state || state);
-    const outsideLicensedArea =
-      !!normalizedState &&
-      Array.isArray(campaign.licensedStates) &&
-      campaign.licensedStates.length > 0 &&
-      !isStateAllowed(normalizedState, campaign.licensedStates);
-    if (outsideLicensedArea && campaign.borderStateBehavior !== "allow_with_warning") {
-      return res.status(403).json({ error: "We currently do not service your state for this campaign." });
-    }
+    const { normalizedState, outsideLicensedArea } = classifySubmissionState({
+      state: answerMap.state || state,
+      licensedStates: campaign.licensedStates,
+    });
 
     const userEmail = String(campaign.userEmail || "").toLowerCase();
     if (!userEmail) {
@@ -290,6 +285,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await SmsConsentEvidence.create(consentEvidence);
 
     if (duplicateLead) {
+      try {
+        const leadName = `${String(firstName || "").trim()} ${String(lastName || "").trim()}`.trim() || "Your lead";
+        const emailResult = await sendRepeatOptInNotificationEmail({
+          to: userEmail,
+          leadName,
+          leadPhone: String(phone || "").trim(),
+          leadEmail: normalizedEmail,
+          state: normalizedState || String(state || "").trim(),
+          leadType: normalizedLeadType,
+          campaignName: String(campaign.campaignName || ""),
+          leadUrl: `${appUrl}/lead/${String((duplicateLead as any)._id)}`,
+        });
+        if (!emailResult.ok) {
+          console.warn("[funnel-submit] repeat opt-in email failed (non-blocking):", emailResult.error);
+        }
+      } catch (emailErr: any) {
+        console.warn("[funnel-submit] repeat opt-in email failed (non-blocking):", emailErr?.message);
+      }
       return res.status(200).json({
         ok: true,
         duplicate: true,

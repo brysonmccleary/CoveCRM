@@ -7,7 +7,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 import { getFunnelTemplate, FunnelStep } from "@/lib/facebook/funnels/funnelTemplates";
-import { US_STATES, isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
+import { US_STATES, normalizeStateCode } from "@/lib/facebook/geo/usStates";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
 import { buildHostedConsentText } from "@/lib/facebook/hostedConsent";
 
@@ -221,10 +221,6 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
       : step1BaseBullets;
   const submitButtonLabel = funnelData.ctaStrip || (isSpanish ? "Enviar solicitud" : "Submit Request");
   const selectedState = normalizeStateCode(answers.state);
-  const blockedState =
-    !!selectedState &&
-    !isStateAllowed(selectedState, funnelData.licensedStates) &&
-    funnelData.borderStateBehavior === "block";
 
   // ── Per-step validation ─────────────────────────────────────────────────────
   // Returns error string or "" when valid. `override` lets choice/contact handlers
@@ -274,10 +270,6 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
       setSubmitError(err);
       return;
     }
-    if (currentStep?.id === "state" && blockedState) {
-      setSubmitError(isSpanish ? "Actualmente no atendemos su estado para esta campaña." : "We currently do not service your state for this campaign.");
-      return;
-    }
     if (stepIndex < steps.length - 1) {
       setStepIndex(stepIndex + 1);
       return;
@@ -286,10 +278,6 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   };
 
   const submit = async () => {
-    if (blockedState) {
-      setSubmitError(isSpanish ? "Actualmente no atendemos su estado para esta campaña." : "We currently do not service your state for this campaign.");
-      return;
-    }
     const finalAnswers = {
       ...answers,
       smsConsentGiven: smsConsentGiven ? "yes" : "no",
@@ -677,13 +665,6 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               {/* Step content */}
               {renderStep(currentStep)}
 
-              {/* Blocked state error (hard block — no soft warning shown) */}
-              {blockedState && (
-                <p style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginTop: 14 }}>
-                  We currently do not service {stateLabel(selectedState)} for this campaign.
-                </p>
-              )}
-
               {/* Validation / submit error */}
               {submitError && (
                 <p style={{ color: "#dc2626", fontSize: 13, marginTop: 12, fontWeight: 500 }}>
@@ -695,7 +676,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               {!isChoiceStep && !isConsentStep && (
                 <button
                   onClick={() => next()}
-                  disabled={submitting || blockedState}
+                  disabled={submitting}
                   style={{
                     width: "100%",
                     marginTop: 18,
@@ -706,8 +687,8 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
                     color: theme.buttonText,
                     fontSize: 16,
                     fontWeight: 800,
-                    cursor: submitting || blockedState ? "not-allowed" : "pointer",
-                    opacity: submitting || blockedState ? 0.65 : 1,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    opacity: submitting ? 0.65 : 1,
                     letterSpacing: "0.01em",
                   }}
                 >
