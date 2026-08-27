@@ -51,7 +51,7 @@ FunnelSubmissionSchema.index(
   { userEmail: 1, submissionEventId: 1 },
   {
     unique: true,
-    partialFilterExpression: { submissionEventId: { $type: "string", $ne: "" } },
+    partialFilterExpression: { submissionEventId: { $type: "string", $gt: "" } },
     name: "funnel_submission_event_unique",
   }
 );
