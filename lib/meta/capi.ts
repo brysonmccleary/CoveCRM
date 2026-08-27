@@ -6,6 +6,10 @@ import MetaCAPIDailyUsage from "@/models/MetaCAPIDailyUsage";
 import { metaGraphUrl } from "@/lib/meta/graphApi";
 
 export type MetaLifecycleEventName =
+  | "Lead"
+  | "QualifiedLead"
+  | "BookedAppointment"
+  | "SoldPolicy"
   | "LeadAccepted"
   | "Contacted"
   | "Qualified"
@@ -51,6 +55,16 @@ export function lifecycleEventId(leadEventId: string, eventName: MetaLifecycleEv
   return crypto.createHash("sha256").update(`${leadEventId}:${eventName}`).digest("hex");
 }
 
+export function resolveMetaCapiEventId(input: {
+  leadEventId: string;
+  eventName: MetaLifecycleEventName;
+  deduplicationEventId?: string;
+}): string {
+  return input.eventName === "Lead" && String(input.deduplicationEventId || "").trim()
+    ? String(input.deduplicationEventId).trim().slice(0, 100)
+    : lifecycleEventId(input.leadEventId, input.eventName);
+}
+
 export function buildMetaCapiEventPayload(input: {
   eventName: MetaLifecycleEventName;
   eventId: string;
@@ -61,6 +75,8 @@ export function buildMetaCapiEventPayload(input: {
   fbc?: string;
   fbp?: string;
   eventSourceUrl?: string;
+  clientIpAddress?: string;
+  clientUserAgent?: string;
   metaCampaignId?: string;
   metaAdId?: string;
   metaCreativeId?: string;
@@ -75,12 +91,14 @@ export function buildMetaCapiEventPayload(input: {
   if (externalId) userData.external_id = [externalId];
   if (input.fbc) userData.fbc = String(input.fbc).slice(0, 500);
   if (input.fbp) userData.fbp = String(input.fbp).slice(0, 500);
+  if (input.clientIpAddress) userData.client_ip_address = String(input.clientIpAddress).slice(0, 100);
+  if (input.clientUserAgent) userData.client_user_agent = String(input.clientUserAgent).slice(0, 1000);
 
   return {
     event_name: input.eventName,
     event_time: input.eventTime || Math.floor(Date.now() / 1000),
     event_id: input.eventId,
-    action_source: "system_generated",
+    action_source: input.eventName === "Lead" ? "website" : "system_generated",
     ...(input.eventSourceUrl ? { event_source_url: String(input.eventSourceUrl).slice(0, 1000) } : {}),
     user_data: userData,
     custom_data: {
@@ -159,7 +177,13 @@ export async function processMetaCapiEventById(
     const response = await fetchFn(metaGraphUrl(`${encodeURIComponent(datasetId)}/events`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data: [claimed.payload], access_token: accessToken }),
+      body: JSON.stringify({
+        data: [claimed.payload],
+        access_token: accessToken,
+        ...(String(process.env.META_TEST_EVENT_CODE || "").trim()
+          ? { test_event_code: String(process.env.META_TEST_EVENT_CODE).trim() }
+          : {}),
+      }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body?.error) throw new Error(body?.error?.message || `Meta CAPI HTTP ${response.status}`);
@@ -190,12 +214,15 @@ export async function enqueueMetaLifecycleEvent(input: {
   userEmail: string;
   leadId: string;
   leadEventId: string;
+  deduplicationEventId?: string;
   eventName: MetaLifecycleEventName;
   email?: string;
   phone?: string;
   fbc?: string;
   fbp?: string;
   eventSourceUrl?: string;
+  clientIpAddress?: string;
+  clientUserAgent?: string;
   metaCampaignId?: string;
   metaAdId?: string;
   metaCreativeId?: string;
@@ -209,7 +236,7 @@ export async function enqueueMetaLifecycleEvent(input: {
     .lean() as any;
   if (!user?.metaCapiEnabled || !String(user.metaDatasetId || "").trim()) return { status: "not_configured" };
 
-  const eventId = lifecycleEventId(input.leadEventId, input.eventName);
+  const eventId = resolveMetaCapiEventId(input);
   const payload = buildMetaCapiEventPayload({
     ...input,
     eventId,

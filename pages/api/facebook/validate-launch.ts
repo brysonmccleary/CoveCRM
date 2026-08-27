@@ -10,7 +10,7 @@ import { requireDailyBudgetCents } from "@/lib/facebook/launchFingerprint";
 import { hasRecentMetaQualitySignal, isCapiEnabled } from "@/lib/meta/capi";
 import { assertNativeFormComplianceMode } from "@/lib/facebook/metaLeadFormTemplate";
 import {
-  assertAudienceCreativeMatch,
+  assertAllAudienceCreativeMatches,
   resolveAudienceSegment,
   type MetaLeadType,
 } from "@/lib/facebook/audienceTargeting";
@@ -55,7 +55,12 @@ export async function validateLaunchInput(params: {
 
   if (!accessToken || !adAccountId) throw new Error("Ad account connection required");
   if (!pageId) throw new Error("Facebook page connection required");
-  if (String(body.campaignType || "") === "native_form") assertNativeFormComplianceMode();
+  const campaignType = String(body.campaignType || "hosted_funnel");
+  if (campaignType === "native_form") assertNativeFormComplianceMode();
+  const datasetId = String(user.metaDatasetId || "").trim();
+  if (campaignType !== "native_form" && !datasetId) {
+    throw new Error("Website lead campaigns require a connected Meta Pixel/dataset and standard Lead conversion event");
+  }
 
   if (!VALID_LEAD_TYPES.includes(leadType)) throw new Error("Lead type required");
   const performanceGoal = body.performanceGoal === "QUALITY_LEAD" ? "QUALITY_LEAD" : "LEAD_GENERATION";
@@ -85,10 +90,21 @@ export async function validateLaunchInput(params: {
   }
 
   const landingPageText = JSON.stringify(body.landingPageConfig || body.winnerLandingPageConfig || {});
-  assertAudienceCreativeMatch({
+  const creativesToValidate = Array.isArray(body.drafts) && body.drafts.length
+    ? body.drafts
+    : [{
+        primaryText: body.primaryText,
+        headline: body.headline,
+        description: body.description,
+        cta: body.cta,
+        imageUrl: body.imageUrl,
+        imagePrompt: body.imagePrompt,
+        templateId: body.winningFamilyId,
+      }];
+  assertAllAudienceCreativeMatches({
     leadType,
     audienceSegment,
-    creativeText: [body.primaryText, body.headline, body.description].filter(Boolean).join("\n"),
+    creatives: creativesToValidate,
     landingPageText,
   });
 
@@ -98,18 +114,20 @@ export async function validateLaunchInput(params: {
     licensedStates,
     dailyBudgetCents: requireDailyBudgetCents(body.dailyBudgetCents),
     audienceSegment,
+    mortgageTargetingVariant: body.mortgageTargetingVariant,
     performanceGoal,
-    creatives: [
-      {
-        primaryText: body.primaryText,
-        headline: body.headline,
-        description: body.description,
-        cta: body.cta,
-        imageUrl: body.imageUrl,
-        imagePrompt: body.imagePrompt,
-        templateId: winningFamily.id,
-      },
-    ],
+    campaignType: campaignType === "native_form" || campaignType === "hosted_funnel_otp"
+      ? campaignType
+      : "hosted_funnel",
+    creatives: creativesToValidate.map((creative: any) => ({
+      primaryText: creative?.primaryText,
+      headline: creative?.headline,
+      description: creative?.description,
+      cta: creative?.cta,
+      imageUrl: creative?.imageUrl,
+      imagePrompt: creative?.imagePrompt,
+      templateId: creative?.templateId || creative?.winningFamilyId || winningFamily.id,
+    })),
   });
 
   if (!structure.campaign?.objective || !structure.adSet?.targeting?.geo_locations || !structure.ads.length) {
@@ -122,6 +140,7 @@ export async function validateLaunchInput(params: {
     accessToken,
     adAccountId: adAccountId.replace(/^act_/, ""),
     pageId,
+    datasetId,
     licensedStates,
     audienceSegment,
     structure,

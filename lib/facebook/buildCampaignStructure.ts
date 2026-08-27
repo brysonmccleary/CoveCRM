@@ -24,7 +24,9 @@ export function buildCampaignStructure(input: {
   dailyBudgetCents: number;
   creatives: CampaignStructureCreative[];
   audienceSegment?: string;
+  mortgageTargetingVariant?: "mortgage_loans" | "mortgage_insurance";
   performanceGoal?: "LEAD_GENERATION" | "QUALITY_LEAD";
+  campaignType?: "native_form" | "hosted_funnel" | "hosted_funnel_otp";
 }) {
   const licensedStates = validateStates(input.licensedStates);
   const creatives = (Array.isArray(input.creatives) ? input.creatives : [])
@@ -42,6 +44,7 @@ export function buildCampaignStructure(input: {
   const targetingProfile = getMetaAudienceProfile({
     leadType: input.leadType,
     audienceSegment: input.audienceSegment,
+    mortgageTargetingVariant: input.mortgageTargetingVariant,
   });
   const segmentTargeting = applyMetaAudienceProfile(baseTargeting, targetingProfile);
 
@@ -57,7 +60,9 @@ export function buildCampaignStructure(input: {
     adSet: {
       name: `${String(input.campaignName || "").trim()} Ad Set`,
       daily_budget: requireDailyBudgetCents(input.dailyBudgetCents),
-      optimization_goal: input.performanceGoal === "QUALITY_LEAD" ? "QUALITY_LEAD" : "LEAD_GENERATION",
+      optimization_goal: input.campaignType === "native_form"
+        ? (input.performanceGoal === "QUALITY_LEAD" ? "QUALITY_LEAD" : "LEAD_GENERATION")
+        : "OFFSITE_CONVERSIONS",
       billing_event: "IMPRESSIONS",
       bid_strategy: "LOWEST_COST_WITHOUT_CAP",
       status: "PAUSED",

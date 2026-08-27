@@ -35,6 +35,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     "trucker_iul",
     "trucker_mortgage",
     "generic_life",
+    "spanish_final_expense",
+    "spanish_mortgage",
+    "spanish_iul",
   ];
 
   const existingFolder = await Folder.findOne({ _id: new Types.ObjectId(folderId), userEmail: email });

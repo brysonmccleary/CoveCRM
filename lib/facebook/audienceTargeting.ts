@@ -8,6 +8,10 @@ export type MetaLeadType =
   | "trucker";
 
 export type AudienceSegment = "standard" | "veteran" | "trucker" | "spanish";
+export type MortgageTargetingVariant = "mortgage_loans" | "mortgage_insurance";
+
+export const VETERAN_TARGETING_MODE =
+  "BROAD_META_DELIVERY_WITH_VETERAN_CREATIVE_FUNNEL_QUALIFICATION" as const;
 
 type MetaInterest = { id: string; name: string };
 
@@ -21,6 +25,8 @@ export type MetaAudienceProfile = {
     | "language_and_product_interest"
     | "identity_creative_and_funnel"
     | "interest_plus_identity_creative_and_funnel";
+  deliveryMode: "META_DETAILED_TARGETING" | typeof VETERAN_TARGETING_MODE;
+  mortgageTargetingVariant?: MortgageTargetingVariant;
   locales: number[];
   interestGroups: MetaInterest[][];
 };
@@ -29,25 +35,29 @@ export type MetaAudienceProfile = {
 // an ad-set validate_only request on a FINANCIAL_PRODUCTS_SERVICES campaign.
 // Do not add an interest here from search results alone: many searchable
 // interests are rejected for this special ad category.
-const PRODUCT_INTERESTS: Partial<Record<MetaLeadType, MetaInterest[]>> = {
-  final_expense: [
+const PRODUCT_INTEREST_GROUPS: Partial<Record<MetaLeadType, MetaInterest[][]>> = {
+  final_expense: [[
     { id: "6003353637860", name: "Life insurance" },
-  ],
-  mortgage_protection: [
-    { id: "6003141785766", name: "Mortgage loans" },
-  ],
+  ]],
   iul: [
-    { id: "6003353637860", name: "Life insurance" },
-    { id: "6003331621377", name: "Investment strategy" },
-    { id: "6003293787730", name: "Investment management" },
+    [{ id: "6003353637860", name: "Life insurance" }],
+    [
+      { id: "6003331621377", name: "Investment strategy" },
+      { id: "6003293787730", name: "Investment management" },
+    ],
   ],
 };
 
 const SEGMENT_INTERESTS: Partial<Record<AudienceSegment, MetaInterest[]>> = {
-  // Veteran, military, trucking, CDL, commercial-vehicle, and freight
-  // interests were all rejected by Meta for the financial-services special
-  // category. Logistics is the only validated trucker-adjacent option.
-  trucker: [{ id: "6003531058863", name: "Logistics" }],
+  // Veteran and military interests were rejected for this special category.
+  // Semi-trailer truck was independently accepted and is the primary signal
+  // for new trucker campaigns. Do not OR it with the weaker Logistics signal.
+  trucker: [{ id: "6003523283642", name: "Semi-trailer truck" }],
+};
+
+const MORTGAGE_INTERESTS: Record<MortgageTargetingVariant, MetaInterest> = {
+  mortgage_loans: { id: "6003141785766", name: "Mortgage loans" },
+  mortgage_insurance: { id: "6003644772146", name: "Mortgage insurance" },
 };
 
 const SPANISH_ALL_LOCALE = 1002;
@@ -89,10 +99,10 @@ export function resolveAudienceSegment(input: {
     }
     return "trucker";
   }
-  if (raw === "veteran" && !["mortgage_protection", "iul"].includes(leadType)) {
+  if (raw === "veteran" && !["mortgage_protection", "iul", "final_expense"].includes(leadType)) {
     throw new Error(`The veteran audience is not supported for ${leadType}`);
   }
-  if (raw === "trucker" && !["mortgage_protection", "iul"].includes(leadType)) {
+  if (raw === "trucker" && !["mortgage_protection", "iul", "final_expense"].includes(leadType)) {
     throw new Error(`The trucker audience is not supported for ${leadType}`);
   }
   return raw;
@@ -101,15 +111,22 @@ export function resolveAudienceSegment(input: {
 export function getMetaAudienceProfile(input: {
   leadType: unknown;
   audienceSegment?: unknown;
+  mortgageTargetingVariant?: unknown;
 }): MetaAudienceProfile {
   const leadType = parseLeadType(input.leadType);
   const audienceSegment = resolveAudienceSegment({ leadType, audienceSegment: input.audienceSegment });
   const interestGroups: MetaInterest[][] = [];
   const segmentInterests = SEGMENT_INTERESTS[audienceSegment];
-  const productInterests = PRODUCT_INTERESTS[leadType];
+  const mortgageTargetingVariant: MortgageTargetingVariant =
+    String(input.mortgageTargetingVariant || "mortgage_loans") === "mortgage_insurance"
+      ? "mortgage_insurance"
+      : "mortgage_loans";
+  const productInterestGroups = leadType === "mortgage_protection"
+    ? [[MORTGAGE_INTERESTS[mortgageTargetingVariant]]]
+    : PRODUCT_INTEREST_GROUPS[leadType];
 
   if (segmentInterests?.length) interestGroups.push(segmentInterests);
-  if (productInterests?.length) interestGroups.push(productInterests);
+  if (productInterestGroups?.length) interestGroups.push(...productInterestGroups);
 
   const identityQualified = audienceSegment === "veteran" || audienceSegment === "trucker";
   const qualificationMode = audienceSegment === "spanish"
@@ -121,11 +138,15 @@ export function getMetaAudienceProfile(input: {
         : "product_interest";
 
   return {
-    key: `${leadType}:${audienceSegment}`,
+    key: `${leadType}:${audienceSegment}${leadType === "mortgage_protection" ? `:${mortgageTargetingVariant}` : ""}`,
     leadType,
     audienceSegment,
     policyVersion: META_AUDIENCE_POLICY_VERSION,
     qualificationMode,
+    deliveryMode: audienceSegment === "veteran"
+      ? VETERAN_TARGETING_MODE
+      : "META_DETAILED_TARGETING",
+    ...(leadType === "mortgage_protection" ? { mortgageTargetingVariant } : {}),
     locales: audienceSegment === "spanish" ? [SPANISH_ALL_LOCALE] : [],
     interestGroups,
   };
@@ -195,4 +216,27 @@ export function assertAudienceCreativeMatch(input: {
     throw new Error("Spanish campaigns must use Spanish-language ad copy");
   }
   return profile;
+}
+
+export function assertAllAudienceCreativeMatches(input: {
+  leadType: unknown;
+  audienceSegment?: unknown;
+  creatives: Array<{ primaryText?: unknown; headline?: unknown; description?: unknown }>;
+  landingPageText?: unknown;
+}) {
+  if (!Array.isArray(input.creatives) || !input.creatives.length) {
+    throw new Error("At least one creative is required");
+  }
+  return input.creatives.map((creative, index) => {
+    try {
+      return assertAudienceCreativeMatch({
+        leadType: input.leadType,
+        audienceSegment: input.audienceSegment,
+        creativeText: [creative?.primaryText, creative?.headline, creative?.description].filter(Boolean).join("\n"),
+        landingPageText: input.landingPageText,
+      });
+    } catch (error: any) {
+      throw new Error(`Creative ${index + 1} failed audience/product/language validation: ${error?.message || "mismatch"}`);
+    }
+  });
 }

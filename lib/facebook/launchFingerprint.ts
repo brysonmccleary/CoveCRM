@@ -38,6 +38,7 @@ export function buildLaunchFingerprint(input: {
   performanceGoal?: unknown;
   nativeFormSchemaVersion?: unknown;
   targetingPolicyVersion?: unknown;
+  mortgageTargetingVariant?: unknown;
   creatives: LaunchFingerprintCreative[];
 }): string {
   const canonical = {
@@ -55,6 +56,7 @@ export function buildLaunchFingerprint(input: {
       ? String(input.nativeFormSchemaVersion || "insurance-native-v1").trim()
       : "",
     targetingPolicyVersion: String(input.targetingPolicyVersion || "").trim(),
+    mortgageTargetingVariant: String(input.mortgageTargetingVariant || "").trim(),
     creatives: input.creatives.map((creative) => ({
       primaryText: String(creative.primaryText || ""),
       headline: String(creative.headline || ""),

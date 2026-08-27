@@ -31,11 +31,13 @@ const SUBTYPE_OPTIONS: Record<string, { label: string; leadType: string; audienc
     { label: "General Veteran Leads", leadType: "veteran", audienceSegment: "veteran" },
     { label: "Veteran Mortgage Leads", leadType: "mortgage_protection", audienceSegment: "veteran" },
     { label: "Veteran IUL Leads", leadType: "iul", audienceSegment: "veteran" },
+    { label: "Veteran Final Expense", leadType: "final_expense", audienceSegment: "veteran" },
   ],
   trucker: [
     { label: "General Trucker Leads", leadType: "trucker", audienceSegment: "trucker" },
     { label: "Trucker Mortgage Leads", leadType: "mortgage_protection", audienceSegment: "trucker" },
     { label: "Trucker IUL Leads", leadType: "iul", audienceSegment: "trucker" },
+    { label: "Trucker Final Expense", leadType: "final_expense", audienceSegment: "trucker" },
   ],
   spanish: [
     { label: "Spanish Final Expense", leadType: "final_expense", audienceSegment: "spanish" },

@@ -19,6 +19,12 @@ const FBLeadCampaignSchema = new Schema(
     targetingProfileKey: { type: String, default: "" },
     targetingPolicyVersion: { type: String, default: "" },
     targetingQualificationMode: { type: String, default: "" },
+    targetingDeliveryMode: { type: String, default: "" },
+    mortgageTargetingVariant: {
+      type: String,
+      enum: ["", "mortgage_loans", "mortgage_insurance"],
+      default: "",
+    },
     campaignType: {
       type: String,
       enum: ["native_form", "hosted_funnel", "hosted_funnel_otp"],

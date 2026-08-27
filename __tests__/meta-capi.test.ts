@@ -7,6 +7,7 @@ import {
   sha256Normalized,
   queueMetaLifecycleEventNonBlocking,
   enqueueMetaLifecycleEventSafely,
+  resolveMetaCapiEventId,
 } from "@/lib/meta/capi";
 import { dispositionToMetaLifecycleEvent } from "@/lib/facebook/trackCRMOutcome";
 import { buildCampaignStructure } from "@/lib/facebook/buildCampaignStructure";
@@ -49,6 +50,24 @@ describe("Meta CAPI", () => {
     expect(uniqueIndex?.[1]?.unique).toBe(true);
   });
 
+  it("uses the browser event ID for the matching website Lead CAPI event", () => {
+    expect(resolveMetaCapiEventId({
+      leadEventId: "stable-lead-event",
+      eventName: "Lead",
+      deduplicationEventId: "browser-server-shared-event",
+    })).toBe("browser-server-shared-event");
+    const payload = buildMetaCapiEventPayload({
+      eventName: "Lead",
+      eventId: "browser-server-shared-event",
+      eventSourceUrl: "https://www.covecrm.com/f/campaign",
+      clientIpAddress: "203.0.113.5",
+      clientUserAgent: "test-agent",
+    });
+    expect(payload.action_source).toBe("website");
+    expect(payload.user_data.client_ip_address).toBe("203.0.113.5");
+    expect(payload.user_data.client_user_agent).toBe("test-agent");
+  });
+
   it("keeps the global kill switch off unless explicitly true", () => {
     expect(isCapiEnabled({} as NodeJS.ProcessEnv)).toBe(false);
     expect(isCapiEnabled({ CAPI_ENABLED: "false" } as NodeJS.ProcessEnv)).toBe(false);
@@ -87,7 +106,8 @@ describe("Meta CAPI", () => {
       dailyBudgetCents: 500,
       creatives: [{ primaryText: "Text", headline: "Headline" }],
     };
-    expect(buildCampaignStructure(base).adSet.optimization_goal).toBe("LEAD_GENERATION");
-    expect(buildCampaignStructure({ ...base, performanceGoal: "QUALITY_LEAD" }).adSet.optimization_goal).toBe("QUALITY_LEAD");
+    expect(buildCampaignStructure(base).adSet.optimization_goal).toBe("OFFSITE_CONVERSIONS");
+    expect(buildCampaignStructure({ ...base, campaignType: "native_form" }).adSet.optimization_goal).toBe("LEAD_GENERATION");
+    expect(buildCampaignStructure({ ...base, campaignType: "native_form", performanceGoal: "QUALITY_LEAD" }).adSet.optimization_goal).toBe("QUALITY_LEAD");
   });
 });

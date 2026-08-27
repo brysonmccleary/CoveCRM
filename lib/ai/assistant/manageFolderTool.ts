@@ -1,7 +1,7 @@
 import Folder from "@/models/Folder";
 import { normalizeLeadType } from "@/lib/leads/leadTypes";
 
-const SCRIPTS = ["default", "final_expense", "mortgage_protection", "iul_cash_value", "veteran_leads", "veteran_iul", "veteran_mortgage", "trucker_leads", "trucker_iul", "trucker_mortgage", "generic_life"];
+const SCRIPTS = ["default", "final_expense", "mortgage_protection", "iul_cash_value", "veteran_leads", "veteran_iul", "veteran_mortgage", "trucker_leads", "trucker_iul", "trucker_mortgage", "generic_life", "spanish_final_expense", "spanish_mortgage", "spanish_iul"];
 
 export const MANAGE_FOLDER_TOOL_DEF = { type: "function" as const, function: {
   name: "manage_folder",

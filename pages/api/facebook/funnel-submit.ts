@@ -24,6 +24,11 @@ import { scoreHostedLeadOnArrival } from "@/lib/facebook/hostedLeadScoring";
 import { enqueueMetaLifecycleEventSafely } from "@/lib/meta/capi";
 import { buildStructuredLeadFields } from "@/lib/leads/structuredLeadFields";
 import { sendNewLeadNotificationEmail, sendRepeatOptInNotificationEmail } from "@/lib/email";
+import {
+  buildAccountWideContactFilter,
+  contactMatches,
+  normalizeContactEmail,
+} from "@/lib/leads/accountWideContactMatch";
 
 const LEAD_TYPE_MAP: Record<string, string> = {
   final_expense: "Final Expense",
@@ -32,23 +37,6 @@ const LEAD_TYPE_MAP: Record<string, string> = {
   veteran: "Veteran",
   trucker: "Trucker",
 };
-
-function normalizePhoneForDedupe(value?: string) {
-  const digits = String(value || "").replace(/\D/g, "");
-  return digits.length > 10 ? digits.slice(-10) : digits;
-}
-
-function normalizeEmailForDedupe(value?: string) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function phoneDedupeRegex(normalizedPhone: string) {
-  return new RegExp(normalizedPhone.split("").join("\\D*"));
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -71,6 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     fbc,
     fbp,
     utm,
+    submissionEventId,
   } = req.body as {
     campaignId?: string;
     firstName?: string;
@@ -89,11 +78,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     fbc?: string;
     fbp?: string;
     utm?: Record<string, string>;
+    submissionEventId?: string;
   };
 
   if (!campaignId) return res.status(400).json({ error: "campaignId is required" });
   if (!phone && !email) return res.status(400).json({ error: "phone or email is required" });
 
+  let claimedSubmissionId = "";
   try {
     await mongooseConnect();
 
@@ -152,6 +143,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const ipAddress = requestIp(req.headers as Record<string, any>, req.socket?.remoteAddress || "");
     const userAgent = String(req.headers["user-agent"] || "").slice(0, 1000);
     const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || "https://www.covecrm.com").replace(/\/$/, "");
+    const rawSubmissionEventId = String(submissionEventId || crypto.randomUUID()).trim();
+    if (!/^[A-Za-z0-9._:-]{8,100}$/.test(rawSubmissionEventId)) {
+      return res.status(400).json({ error: "Invalid submission event ID" });
+    }
+    const leadEventId = stableLeadEventId("hosted", rawSubmissionEventId);
+    const preferredLanguage = campaign.audienceSegment === "spanish" ? "Spanish" : "English";
+    const safeUtm = Object.fromEntries(
+      Object.entries(utm && typeof utm === "object" ? utm : {})
+        .slice(0, 10)
+        .map(([key, value]) => [String(key).slice(0, 40), String(value || "").slice(0, 300)])
+    );
+
+    const previousDelivery = await FunnelSubmission.findOne({
+      userEmail,
+      submissionEventId: rawSubmissionEventId,
+    }).select("_id processingStatus createdLeadId wasDuplicate").lean() as any;
+    if (previousDelivery && previousDelivery.processingStatus !== "failed") {
+      return res.status(previousDelivery.processingStatus === "received" ? 202 : 200).json({
+        ok: true,
+        infrastructureDuplicate: true,
+        duplicate: !!previousDelivery.wasDuplicate,
+        leadId: previousDelivery.createdLeadId ? String(previousDelivery.createdLeadId) : undefined,
+        eventId: leadEventId,
+      });
+    }
     const consentEvidence = buildHostedConsentEvidence({
       userId: campaign.userId,
       userEmail,
@@ -187,7 +203,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           email: consentEvidence.email,
           state: String(state || ""),
           rawPayload: req.body,
+          submissionEventId: rawSubmissionEventId,
+          preferredLanguage,
           wasDuplicate: false,
+          processingStatus: "processed",
           ipAddress,
           userAgent,
         }),
@@ -236,55 +255,76 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const normalizedLeadType =
       LEAD_TYPE_MAP[campaign.leadType] || campaign.leadType;
-    const normalizedPhone = normalizePhoneForDedupe(phone);
-    const normalizedEmail = normalizeEmailForDedupe(email);
-    const duplicateMatchers: Record<string, any>[] = [];
-    if (normalizedPhone) {
-      duplicateMatchers.push({ Phone: { $regex: phoneDedupeRegex(normalizedPhone) } });
-    }
-    if (normalizedEmail) {
-      duplicateMatchers.push(
-        { email: normalizedEmail },
-        { Email: { $regex: new RegExp(`^${escapeRegExp(normalizedEmail)}$`, "i") } }
-      );
-    }
-
-    const duplicateCandidates = duplicateMatchers.length
-      ? await Lead.find({
-          userEmail,
-          folderId,
-          $or: duplicateMatchers,
-        })
+    const normalizedEmail = normalizeContactEmail(email);
+    const accountWideFilter = buildAccountWideContactFilter(userEmail, phone, email);
+    const duplicateCandidates = accountWideFilter
+      ? await Lead.find(accountWideFilter)
           .select("_id Phone email Email")
           .lean()
       : [];
-    const duplicateLead = duplicateCandidates.find((existing: any) => {
-      const existingPhone = normalizePhoneForDedupe(existing?.Phone);
-      const existingEmail = normalizeEmailForDedupe(existing?.email || existing?.Email);
-      return (
-        (normalizedPhone && existingPhone === normalizedPhone) ||
-        (normalizedEmail && existingEmail === normalizedEmail)
-      );
-    });
+    const duplicateLead = duplicateCandidates.find((existing: any) => contactMatches(existing, phone, email));
 
-    const rawSubmission = await FunnelSubmission.create({
-      campaignId: campaign._id,
-      userId: campaign.userId,
-      userEmail,
-      leadType: campaign.leadType,
-      firstName: String(firstName || "").trim(),
-      lastName: String(lastName || "").trim(),
-      phone: String(phone || "").trim(),
-      email: normalizedEmail,
-      state: String(state || "").trim(),
-      rawPayload: req.body,
-      wasDuplicate: !!duplicateLead,
-      ipAddress,
-      userAgent,
-    });
+    let rawSubmission: any = null;
+    if (previousDelivery) {
+      rawSubmission = await FunnelSubmission.findOneAndUpdate(
+          { _id: previousDelivery._id, processingStatus: "failed" },
+          { $set: { processingStatus: "received" } },
+          { new: true }
+        );
+    } else {
+      try {
+        rawSubmission = await FunnelSubmission.create({
+          campaignId: campaign._id,
+          userId: campaign.userId,
+          userEmail,
+          leadType: campaign.leadType,
+          submissionEventId: rawSubmissionEventId,
+          preferredLanguage,
+          firstName: String(firstName || "").trim(),
+          lastName: String(lastName || "").trim(),
+          phone: String(phone || "").trim(),
+          email: normalizedEmail,
+          state: String(state || "").trim(),
+          rawPayload: req.body,
+          wasDuplicate: !!duplicateLead,
+          processingStatus: "received",
+          metaCampaignId: String(campaign.metaCampaignId || ""),
+          metaAdsetId: String(campaign.metaAdsetId || ""),
+          metaAdId: attribution.metaAdId,
+          metaCreativeId: attribution.metaCreativeId,
+          variantId: attribution.variantId,
+          creativeFamily: attribution.creativeFamily,
+          fbclid: String(fbclid || "").slice(0, 500),
+          fbc: String(fbc || "").slice(0, 500),
+          fbp: String(fbp || "").slice(0, 500),
+          utm: safeUtm,
+          ipAddress,
+          userAgent,
+        });
+      } catch (createError: any) {
+        if (createError?.code === 11000) {
+          return res.status(202).json({ ok: true, infrastructureDuplicate: true, eventId: leadEventId });
+        }
+        throw createError;
+      }
+    }
+    if (!rawSubmission) {
+      return res.status(202).json({ ok: true, infrastructureDuplicate: true, eventId: leadEventId });
+    }
+    claimedSubmissionId = String((rawSubmission as any)._id);
     await SmsConsentEvidence.create(consentEvidence);
 
     if (duplicateLead) {
+      if (preferredLanguage === "Spanish") {
+        await Lead.updateOne(
+          { _id: (duplicateLead as any)._id, userEmail },
+          { $set: { preferredLanguage: "Spanish" } }
+        ).catch(() => {});
+      }
+      await FunnelSubmission.updateOne(
+        { _id: (rawSubmission as any)._id },
+        { $set: { createdLeadId: (duplicateLead as any)._id, processingStatus: "repeat_opt_in" } }
+      );
       try {
         const leadName = `${String(firstName || "").trim()} ${String(lastName || "").trim()}`.trim() || "Your lead";
         const emailResult = await sendRepeatOptInNotificationEmail({
@@ -303,9 +343,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch (emailErr: any) {
         console.warn("[funnel-submit] repeat opt-in email failed (non-blocking):", emailErr?.message);
       }
+      await enqueueMetaLifecycleEventSafely({
+        userEmail,
+        leadId: String((duplicateLead as any)._id),
+        leadEventId,
+        deduplicationEventId: leadEventId,
+        eventName: "Lead",
+        email: String(email || ""),
+        phone: String(phone || ""),
+        fbc: String(fbc || ""),
+        fbp: String(fbp || ""),
+        eventSourceUrl: consentEvidence.pageUrl,
+        clientIpAddress: ipAddress,
+        clientUserAgent: userAgent,
+        metaCampaignId: String(campaign.metaCampaignId || ""),
+        metaAdId: attribution.metaAdId,
+        metaCreativeId: attribution.metaCreativeId,
+        creativeFamily: attribution.creativeFamily,
+      }, undefined, (error) => console.warn("[funnel-submit] CAPI queue failed (non-blocking):", error?.message));
       return res.status(200).json({
         ok: true,
         duplicate: true,
+        leadId: String((duplicateLead as any)._id),
+        eventId: leadEventId,
       });
     }
 
@@ -317,13 +377,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const rawPhone = String(phone || "").trim();
     const phoneLast10 = rawPhone.replace(/\D+/g, "").slice(-10);
-    const leadEventId = stableLeadEventId("hosted", crypto.randomUUID());
-    const safeUtm = Object.fromEntries(
-      Object.entries(utm && typeof utm === "object" ? utm : {})
-        .slice(0, 10)
-        .map(([key, value]) => [String(key).slice(0, 40), String(value || "").slice(0, 300)])
-    );
-
     const lead = await Lead.create({
       "First Name": String(firstName || "").trim(),
       "Last Name": String(lastName || "").trim(),
@@ -354,6 +407,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       metaFbc: String(fbc || "").slice(0, 500),
       metaFbp: String(fbp || "").slice(0, 500),
       metaUtm: safeUtm,
+      preferredLanguage,
       leadType: normalizedLeadType,
       leadSource: "facebook_funnel",
       sourceType: "facebook_funnel",
@@ -363,7 +417,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     await FunnelSubmission.updateOne(
       { _id: (rawSubmission as any)._id, createdLeadId: null },
-      { $set: { createdLeadId: (lead as any)._id } }
+      { $set: { createdLeadId: (lead as any)._id, processingStatus: "processed" } }
     );
 
     try {
@@ -396,12 +450,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       userEmail,
       leadId: String((lead as any)._id),
       leadEventId,
-      eventName: "LeadAccepted",
+      deduplicationEventId: leadEventId,
+      eventName: "Lead",
       email: String(email || ""),
       phone: rawPhone,
       fbc: String(fbc || ""),
       fbp: String(fbp || ""),
       eventSourceUrl: consentEvidence.pageUrl,
+      clientIpAddress: ipAddress,
+      clientUserAgent: userAgent,
       metaCampaignId: String(campaign.metaCampaignId || ""),
       metaAdId: attribution.metaAdId,
       metaCreativeId: attribution.metaCreativeId,
@@ -423,6 +480,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         phone: rawPhone,
         facebookLeadId: `funnel_${String((lead as any)._id)}`,
         leadEventId,
+        preferredLanguage,
         crmLeadId: (lead as any)._id,
         folderId: folderId || undefined,
         importedToCrm: true,
@@ -487,9 +545,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn("[funnel-submit] enrollOnNewLeadIfWatched failed (non-blocking):", enrollErr?.message);
     }
 
-    return res.status(200).json({ ok: true, leadId: String(lead._id) });
+    return res.status(200).json({ ok: true, leadId: String(lead._id), eventId: leadEventId });
   } catch (err: any) {
     console.error("[funnel-submit] error:", err?.message);
+    if (claimedSubmissionId) {
+      await FunnelSubmission.updateOne(
+        { _id: claimedSubmissionId, processingStatus: "received" },
+        { $set: { processingStatus: "failed" } }
+      ).catch(() => {});
+    }
     return res.status(500).json({ error: "Failed to submit lead" });
   }
 }

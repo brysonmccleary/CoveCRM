@@ -10,6 +10,7 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import BillingMeterHealth from "@/models/BillingMeterHealth";
 import twilioClient from "@/lib/twilioClient";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 jest.mock("next-auth/next", () => ({
   getServerSession: jest.fn(),
@@ -47,6 +48,19 @@ jest.mock("@/lib/twilioClient", () => ({
   default: {
     incomingPhoneNumbers: jest.fn(),
   },
+}));
+
+jest.mock("@/lib/twilio/getClientForUser", () => ({
+  getClientForUser: jest.fn(),
+}));
+
+jest.mock("@/models/PhoneNumber", () => ({
+  __esModule: true,
+  default: { deleteMany: jest.fn().mockResolvedValue({ acknowledged: true }) },
+}));
+
+jest.mock("@/lib/billing/releaseUserPhoneNumbers", () => ({
+  releaseLastNumberA2PResources: jest.fn().mockResolvedValue({ released: false }),
 }));
 
 jest.mock("@/lib/stripe", () => ({
@@ -108,6 +122,7 @@ const mockedBillingMeterHealth = BillingMeterHealth as unknown as {
 const mockedTwilioClient = twilioClient as unknown as {
   incomingPhoneNumbers: jest.Mock;
 };
+const mockedGetClientForUser = getClientForUser as jest.Mock;
 
 describe("P1 security remediations", () => {
   const originalEnv = { ...process.env };
@@ -116,6 +131,7 @@ describe("P1 security remediations", () => {
     jest.clearAllMocks();
     mockedGetServerSession.mockResolvedValue(null);
     mockedDbConnect.mockResolvedValue(undefined);
+    mockedGetClientForUser.mockResolvedValue({ client: mockedTwilioClient });
   });
 
   afterEach(() => {

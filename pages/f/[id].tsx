@@ -1,6 +1,6 @@
 // pages/f/[id].tsx
 // Public hosted campaign funnel. Only safe campaign-owned fields are rendered.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { GetServerSideProps } from "next";
 import Head from "next/head";
 import mongooseConnect from "@/lib/mongooseConnect";
@@ -10,6 +10,7 @@ import { getFunnelTemplate, FunnelStep } from "@/lib/facebook/funnels/funnelTemp
 import { US_STATES, normalizeStateCode } from "@/lib/facebook/geo/usStates";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
 import { buildHostedConsentText } from "@/lib/facebook/hostedConsent";
+import { trackMetaLead, trackMetaPageView } from "@/lib/meta/browserPixel";
 
 // ── Validation helpers ─────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ interface FunnelData {
   complianceProfile?: ComplianceProfile;
   licensedStates: string[];
   borderStateBehavior: "allow_with_warning" | "block";
+  metaPixelId?: string;
 }
 
 interface Props {
@@ -60,6 +62,8 @@ interface Props {
 
 const DISCLAIMER_TEXT =
   "Availability varies by state and carrier. This is a no-obligation review with a licensed independent agent.";
+const SPANISH_DISCLAIMER_TEXT =
+  "La disponibilidad varía según el estado y la compañía. Esta es una revisión sin obligación con un agente autorizado.";
 
 const contactDefaults = {
   firstName: "",
@@ -84,6 +88,11 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   const [submitError, setSubmitError] = useState("");
   const [done, setDone] = useState(false);
   const [smsConsentGiven, setSmsConsentGiven] = useState(false);
+  const pendingSubmissionEventId = useRef("");
+
+  useEffect(() => {
+    if (funnelData?.metaPixelId) trackMetaPageView(funnelData.metaPixelId);
+  }, [funnelData?.metaPixelId]);
 
   const requiresOTP = funnelData?.campaignType === "hosted_funnel_otp";
   const [otpPhase, setOtpPhase] = useState<"phone" | "code" | "verified">(requiresOTP ? "phone" : "verified");
@@ -230,9 +239,9 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
     if (step.id === "consent") return "";
 
     if (step.type === "contact") {
-      if (contact.firstName.trim().length < 2) return "Please enter your first name.";
-      if (contact.lastName.trim().length < 2) return "Please enter your last name.";
-      if (normalizeDigits(contact.phone).length < 10) return "Please enter a valid phone number (10 digits).";
+      if (contact.firstName.trim().length < 2) return isSpanish ? "Ingrese su nombre." : "Please enter your first name.";
+      if (contact.lastName.trim().length < 2) return isSpanish ? "Ingrese su apellido." : "Please enter your last name.";
+      if (normalizeDigits(contact.phone).length < 10) return isSpanish ? "Ingrese un número de teléfono válido (10 dígitos)." : "Please enter a valid phone number (10 digits).";
       return "";
     }
 
@@ -245,16 +254,16 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
     const val = rawVal.trim();
 
     if (!step.required) return "";
-    if (!val) return "Please answer this question to continue.";
+    if (!val) return isSpanish ? "Responda esta pregunta para continuar." : "Please answer this question to continue.";
 
     if (step.id === "email" || step.type === "email") {
-      if (!EMAIL_RE.test(val)) return "Please enter a valid email address (e.g. name@example.com).";
+      if (!EMAIL_RE.test(val)) return isSpanish ? "Ingrese un correo electrónico válido (p. ej., nombre@ejemplo.com)." : "Please enter a valid email address (e.g. name@example.com).";
     }
     if (step.id === "phone" || step.type === "tel") {
-      if (normalizeDigits(val).length < 10) return "Please enter a valid phone number (at least 10 digits).";
+      if (normalizeDigits(val).length < 10) return isSpanish ? "Ingrese un número de teléfono válido (al menos 10 dígitos)." : "Please enter a valid phone number (at least 10 digits).";
     }
     if ((step.id === "firstName" || step.id === "lastName") && val.length < 2) {
-      return "Please enter at least 2 characters.";
+      return isSpanish ? "Ingrese al menos 2 caracteres." : "Please enter at least 2 characters.";
     }
     return "";
   };
@@ -287,6 +296,11 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
     setSubmitError("");
     try {
       const browserUrl = new URL(window.location.href);
+      if (!pendingSubmissionEventId.current) {
+        pendingSubmissionEventId.current = typeof window.crypto?.randomUUID === "function"
+          ? window.crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      }
       const cookieMap = Object.fromEntries(
         document.cookie.split(";").map((part) => {
           const separator = part.indexOf("=");
@@ -322,6 +336,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
           fbc,
           fbp: String(cookieMap._fbp || ""),
           utm,
+          submissionEventId: pendingSubmissionEventId.current,
           answers: finalAnswers,
           stateRestrictionWarning: false,
           stateOutsidePrimaryLicensedArea: false,
@@ -333,6 +348,10 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
         setSubmitError(data.error || (isSpanish ? "No se pudo enviar la solicitud. Inténtelo de nuevo." : "Submission failed. Please try again."));
         return;
       }
+      if (!data.infrastructureDuplicate && !data.complianceOnly && data.eventId) {
+        trackMetaLead(funnelData.metaPixelId, data.eventId);
+      }
+      pendingSubmissionEventId.current = "";
       setDone(true);
     } catch {
       setSubmitError(isSpanish ? "Error de conexión. Inténtelo de nuevo." : "Network error. Please try again.");
@@ -399,7 +418,9 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
           </label>
           {isA2PComplianceStub && (
             <p style={{ margin: "0 0 16px", fontSize: 11, color: theme.muted, lineHeight: 1.5 }}>
-              SMS consent is optional. You may submit your request without checking this box.
+              {isSpanish
+                ? "El consentimiento para SMS es opcional. Puede enviar su solicitud sin marcar esta casilla."
+                : "SMS consent is optional. You may submit your request without checking this box."}
             </p>
           )}
           <button
@@ -432,7 +453,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
         <div style={{ display: "grid", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <input
-              placeholder="First Name"
+              placeholder={isSpanish ? "Nombre" : "First Name"}
               value={contact.firstName}
               onChange={(e) => {
                 setContact({ ...contact, firstName: e.target.value });
@@ -441,7 +462,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               style={inputStyle}
             />
             <input
-              placeholder="Last Name"
+              placeholder={isSpanish ? "Apellido" : "Last Name"}
               value={contact.lastName}
               onChange={(e) => {
                 setContact({ ...contact, lastName: e.target.value });
@@ -451,7 +472,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
             />
           </div>
           <input
-            placeholder="Phone Number"
+            placeholder={isSpanish ? "Número de teléfono" : "Phone Number"}
             type="tel"
             inputMode="tel"
             autoComplete="tel"
@@ -465,7 +486,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
             style={inputStyle}
           />
           <input
-            placeholder="Email Address (optional)"
+            placeholder={isSpanish ? "Correo electrónico (opcional)" : "Email Address (optional)"}
             type="email"
             value={contact.email}
             onChange={(e) => {
@@ -511,7 +532,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
             onChange={(e) => setAnswer(step.id, e.target.value)}
             style={selectStyle}
           >
-            <option value="">Select your state</option>
+            <option value="">{isSpanish ? "Seleccione su estado" : "Select your state"}</option>
             {US_STATES.map((state) => (
               <option key={state.code} value={state.code}>{state.name}</option>
             ))}
@@ -568,6 +589,10 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   const agentPhoneDigits = normalizeDigits(agent.phone || "");
   const agentTel = agentPhoneDigits.length >= 10 ? `tel:+1${agentPhoneDigits.slice(-10)}` : "";
   const compliance = funnelData.complianceProfile || {};
+  const storedDisclaimer = String(compliance.disclaimerText || "").trim();
+  const displayedDisclaimer = isSpanish && /^Availability varies by state/i.test(storedDisclaimer)
+    ? SPANISH_DISCLAIMER_TEXT
+    : storedDisclaimer || (isSpanish ? SPANISH_DISCLAIMER_TEXT : DISCLAIMER_TEXT);
   const isConsentStep = currentStep?.id === "consent";
   const isChoiceStep = currentStep?.type === "choice";
 
@@ -717,14 +742,14 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
               boxShadow: "0 4px 6px -1px rgba(0,0,0,0.06), 0 20px 50px -8px rgba(15,23,42,0.12)",
             }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
-              <h1 style={{ color: theme.text, fontSize: 24, marginBottom: 10, fontWeight: 800 }}>You&apos;re all set.</h1>
+              <h1 style={{ color: theme.text, fontSize: 24, marginBottom: 10, fontWeight: 800 }}>{isSpanish ? "Todo está listo." : "You're all set."}</h1>
               <p style={{ color: theme.muted, lineHeight: 1.6, fontSize: 15 }}>
-                A licensed agent will review your request and reach out shortly.
+                {isSpanish ? "Un agente autorizado revisará su solicitud y se comunicará con usted pronto." : "A licensed agent will review your request and reach out shortly."}
               </p>
               {agentTel && (
                 <div style={{ marginTop: 22 }}>
                   <p style={{ color: theme.text, fontSize: 16, fontWeight: 800, margin: "0 0 10px" }}>
-                    Want to speak to someone now?
+                    {isSpanish ? "¿Desea hablar con alguien ahora?" : "Want to speak to someone now?"}
                   </p>
                   <a
                     href={agentTel}
@@ -739,7 +764,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
                       fontSize: 15,
                     }}
                   >
-                    CALL NOW
+                    {isSpanish ? "LLAMAR AHORA" : "CALL NOW"}
                   </a>
                 </div>
               )}
@@ -748,7 +773,7 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
 
           {/* Footer disclaimer */}
           <p style={{ marginTop: 20, fontSize: 11, color: theme.muted, lineHeight: 1.5, textAlign: "center", opacity: 0.7 }}>
-            {compliance.disclaimerText?.trim() || DISCLAIMER_TEXT}
+            {displayedDisclaimer}
           </p>
           {Array.isArray(funnelData.qualifierTexts) && funnelData.qualifierTexts.map((qualifier) => (
             <p key={qualifier} style={{ marginTop: 4, fontSize: 10, color: theme.muted, lineHeight: 1.45, textAlign: "center", opacity: 0.68 }}>
@@ -883,7 +908,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
     const template = getFunnelTemplate(String(campaign.leadType || "mortgage_protection"), String(campaign.audienceSegment || ""));
     const crmUser = campaign.userId
       ? await (User as any).findById(campaign.userId)
-          .select("email name firstName lastName agentPhone numbers")
+          .select("email name firstName lastName agentPhone numbers metaDatasetId")
           .lean()
       : null;
     const agentContact = injectAgentContact(crmUser, {
@@ -919,6 +944,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
       },
       licensedStates: Array.isArray(campaign.licensedStates) ? campaign.licensedStates.map(String) : [],
       borderStateBehavior: campaign.borderStateBehavior === "allow_with_warning" ? "allow_with_warning" : "block",
+      metaPixelId: String(crmUser?.metaDatasetId || ""),
     };
 
     return { props: { campaignId: id, funnelData, webhookKey } };

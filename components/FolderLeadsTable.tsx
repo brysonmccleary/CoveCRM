@@ -317,6 +317,9 @@ export default function FolderLeadsTable({
               <option value="trucker_leads">Truckers (Life Insurance)</option>
               <option value="trucker_iul">Truckers IUL</option>
               <option value="trucker_mortgage">Truckers Mortgage Protection</option>
+              <option value="spanish_final_expense">Español — Gastos Finales</option>
+              <option value="spanish_mortgage">Español — Protección Hipotecaria</option>
+              <option value="spanish_iul">Español — IUL / Valor en Efectivo</option>
               <option value="default">Default (Generic)</option>
             </select>
             {savingScript && <span style={{ fontSize: 12, color: "var(--cove-muted)" }}>Saving...</span>}

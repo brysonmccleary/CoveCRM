@@ -18,6 +18,8 @@ import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
 import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 import { buildLaunchFingerprint, requireDailyBudgetCents } from "@/lib/facebook/launchFingerprint";
 import { verifyMetaAdset } from "@/lib/facebook/metaAdsetVerification";
+import { resolveCampaignAiScriptKey } from "@/lib/ai/campaignScriptKey";
+import { preflightMetaLaunch } from "@/lib/facebook/metaLaunchPreflight";
 import { claimLaunchCampaign, releaseLaunchCampaignClaim } from "@/lib/facebook/claimLaunchCampaign";
 import { signHostedAttributionToken } from "@/lib/facebook/hostedAttribution";
 import {
@@ -434,6 +436,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       leadType,
       audienceSegment,
       targetingPolicyVersion: lockedStructure.targetingProfile.policyVersion,
+      mortgageTargetingVariant: lockedStructure.targetingProfile.mortgageTargetingVariant,
       campaignType,
       licensedStates: normalizedLicensedStates,
       dailyBudgetCents: budgetCents,
@@ -501,7 +504,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ].map(String).join("\n")).join("\n");
     funnelData.qualifierTexts = requiredQualifierTextsForCreative(creativeClaimText, registeredClaims as any);
     const baseDisclaimerCore = String(complianceProfile?.disclaimerText || "").trim() ||
-      "Availability varies by state and carrier. This is a no-obligation review with a licensed insurance agent. Products, rates, and eligibility are subject to carrier underwriting and policy terms.";
+      (audienceSegment === "spanish"
+        ? "La disponibilidad varía según el estado y la compañía. Esta es una revisión sin obligación con un agente autorizado. Los productos, las tarifas y la elegibilidad están sujetos a la evaluación y los términos de la póliza de la compañía."
+        : "Availability varies by state and carrier. This is a no-obligation review with a licensed insurance agent. Products, rates, and eligibility are subject to carrier underwriting and policy terms.");
     const governmentDisclaimer = audienceSegment === "veteran" || leadType === "veteran"
       ? "This is not affiliated with or endorsed by the U.S. Department of Veterans Affairs, the U.S. military, or any government agency."
       : "";
@@ -526,16 +531,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       folder = await Folder.findOne({ userEmail, name: folderName }).lean();
       if (!folder) {
-        const aiScriptKey =
-          (leadType === "mortgage_protection" && audienceSegment === "veteran") ? "veteran_mortgage" :
-          (leadType === "iul"                 && audienceSegment === "veteran") ? "veteran_iul" :
-          (leadType === "mortgage_protection" && audienceSegment === "trucker") ? "trucker_mortgage" :
-          (leadType === "iul"                 && audienceSegment === "trucker") ? "trucker_iul" :
-          leadType === "mortgage_protection" ? "mortgage_protection" :
-          leadType === "iul" ? "iul_cash_value" :
-          leadType === "veteran" ? "veteran_leads" :
-          leadType === "trucker" ? "trucker_leads" :
-          "final_expense";
+        const aiScriptKey = resolveCampaignAiScriptKey(String(leadType), String(audienceSegment));
         folder = await Folder.create({
           name: folderName,
           userEmail,
@@ -578,7 +574,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           targetingProfileKey: lockedStructure.targetingProfile.key,
           targetingPolicyVersion: lockedStructure.targetingProfile.policyVersion,
           targetingQualificationMode: lockedStructure.targetingProfile.qualificationMode,
-          campaignType,
+          targetingDeliveryMode: lockedStructure.targetingProfile.deliveryMode,
+          mortgageTargetingVariant: lockedStructure.targetingProfile.mortgageTargetingVariant || "",
+          campaignType: campaignType === "native_form" || campaignType === "hosted_funnel_otp"
+            ? campaignType
+            : "hosted_funnel",
           performanceGoal: performanceGoal === "QUALITY_LEAD" ? "QUALITY_LEAD" : "LEAD_GENERATION",
           nativeFormConfiguration: campaignType === "native_form" ? {
             schemaVersion: "insurance-native-v1",
@@ -617,7 +617,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               baseDisclaimer,
             consentText:
               String(complianceProfile?.consentText || "").trim() ||
-              "By submitting, you agree to be contacted by phone, text/SMS, or email by a licensed insurance agent, including through automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase.",
+              (audienceSegment === "spanish"
+                ? "Al enviar este formulario, acepta que un agente autorizado se comunique con usted por teléfono, SMS o correo electrónico, incluso mediante sistemas automatizados, voz artificial o pregrabada y llamadas asistidas por IA o asistentes virtuales. Responda STOP para dejar de recibir mensajes. El consentimiento no es una condición de compra."
+                : "By submitting, you agree to be contacted by phone, text/SMS, or email by a licensed insurance agent, including through automated systems, artificial or prerecorded voice, and AI-assisted or virtual assistant calls. Reply STOP to opt out of texts. Consent is not a condition of purchase."),
             privacyUrl: resolvedPrivacyUrl,
             termsUrl: resolvedTermsUrl,
           },
@@ -713,6 +715,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       if (!isAlreadyPublished) {
+        await preflightMetaLaunch({
+          adAccountId: adAccountIdFinal,
+          accessToken,
+          campaign: lockedStructure.campaign,
+          adSet: lockedStructure.adSet,
+          pageId: pageIdFinal,
+          datasetId: String(launchValidation.datasetId || ""),
+          campaignType: campaignType === "native_form" || campaignType === "hosted_funnel_otp"
+            ? campaignType
+            : "hosted_funnel",
+          validationCampaignId: metaCampaignId,
+        });
+      }
+
+      if (!isAlreadyPublished) {
         const creativeClaim = await claimCreativeSet({
           userEmail,
           campaignId: campaign._id,
@@ -760,9 +777,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         adsetParams.set("optimization_goal", lockedStructure.adSet.optimization_goal);
         adsetParams.set("bid_strategy", lockedStructure.adSet.bid_strategy);
         adsetParams.set("status", lockedStructure.adSet.status);
-        adsetParams.set("promoted_object", JSON.stringify({ page_id: pageIdFinal }));
+        const promotedObject = campaignType === "native_form"
+          ? { page_id: pageIdFinal }
+          : {
+              page_id: pageIdFinal,
+              pixel_id: String(launchValidation.datasetId),
+              custom_event_type: "LEAD",
+            };
+        adsetParams.set("promoted_object", JSON.stringify(promotedObject));
         adsetParams.set("targeting", JSON.stringify(lockedStructure.adSet.targeting));
         adsetParams.set("destination_type", campaignType === "native_form" ? "ON_AD" : "WEBSITE");
+        adsetParams.set("attribution_spec", JSON.stringify([
+          { event_type: "CLICK_THROUGH", window_days: 7 },
+          { event_type: "VIEW_THROUGH", window_days: 1 },
+        ]));
         adsetParams.set("access_token", accessToken);
 
         const metaAdsetResp = await fetch(metaGraphUrl(`act_${adAccountIdFinal}/adsets`), {
@@ -784,9 +812,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await verifyMetaAdset({
         metaAdsetId,
+        metaCampaignId,
         accessToken,
         expectedDailyBudgetCents: lockedStructure.adSet.daily_budget,
         expectedTargeting: lockedStructure.adSet.targeting,
+        expectedSpecialAdCategories: lockedStructure.campaign.special_ad_categories,
+        expected: {
+          optimizationGoal: lockedStructure.adSet.optimization_goal,
+          billingEvent: lockedStructure.adSet.billing_event,
+          destinationType: campaignType === "native_form" ? "ON_AD" : "WEBSITE",
+          promotedObject: campaignType === "native_form"
+            ? { page_id: pageIdFinal }
+            : {
+                page_id: pageIdFinal,
+                pixel_id: String(launchValidation.datasetId),
+                custom_event_type: "LEAD",
+              },
+          attributionSpec: [
+            { event_type: "CLICK_THROUGH", window_days: 7 },
+            { event_type: "VIEW_THROUGH", window_days: 1 },
+          ],
+        },
       });
 
       if (isAlreadyPublished) {
@@ -1075,6 +1121,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           adParams.set("adset_id", metaAdsetId);
           adParams.set("creative", JSON.stringify({ creative_id: creativeId }));
           adParams.set("status", "PAUSED");
+          if (campaignType !== "native_form") {
+            adParams.set("tracking_specs", JSON.stringify([{
+              "action.type": ["offsite_conversion"],
+              fb_pixel: [String(launchValidation.datasetId)],
+            }]));
+          }
           adParams.set("access_token", accessToken);
 
           const metaAdResp = await fetch(metaGraphUrl(`act_${adAccountIdFinal}/ads`), {

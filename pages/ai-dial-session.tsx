@@ -156,6 +156,21 @@ const SCRIPT_OPTIONS = [
     label: "Trucker IUL / Cash Value",
     description: "IUL / cash value script tailored for over-the-road truckers.",
   },
+  {
+    key: "spanish_final_expense",
+    label: "Español — Gastos Finales",
+    description: "Spanish-language final expense script.",
+  },
+  {
+    key: "spanish_mortgage",
+    label: "Español — Protección Hipotecaria",
+    description: "Spanish-language mortgage protection script.",
+  },
+  {
+    key: "spanish_iul",
+    label: "Español — IUL / Valor en Efectivo",
+    description: "Spanish-language IUL script.",
+  },
 ];
 
 /**

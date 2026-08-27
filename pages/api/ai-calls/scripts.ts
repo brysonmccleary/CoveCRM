@@ -78,6 +78,24 @@ const SCRIPTS: ScriptOption[] = [
     description: "IUL / cash value script tailored for over-the-road truckers.",
     leadType: "Trucker",
   },
+  {
+    key: "spanish_final_expense",
+    label: "Español — Gastos Finales",
+    description: "Guion completo en español para prospectos de gastos finales.",
+    leadType: "Final Expense",
+  },
+  {
+    key: "spanish_mortgage",
+    label: "Español — Protección Hipotecaria",
+    description: "Guion completo en español para protección hipotecaria.",
+    leadType: "Mortgage Protection",
+  },
+  {
+    key: "spanish_iul",
+    label: "Español — IUL / Valor en Efectivo",
+    description: "Guion completo en español para IUL y valor en efectivo.",
+    leadType: "IUL",
+  },
 ];
 
 export default async function handler(

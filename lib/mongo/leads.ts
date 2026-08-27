@@ -74,6 +74,7 @@ const LeadSchema = new Schema(
     "Why Interested": { type: String },
     "IUL Goal": { type: String },
     "Best Time To Call": { type: String },
+    preferredLanguage: { type: String, enum: ["", "English", "Spanish"], default: "" },
 
     // Ownership / scoping
     userEmail: { type: String, required: true },

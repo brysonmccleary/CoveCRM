@@ -166,7 +166,7 @@ describe("Meta launch identity, budget, targeting, and verification", () => {
       fetchImpl: fetchImpl as any,
     })).resolves.toBeDefined();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl.mock.calls[0][0]).toContain("fields=daily_budget%2Ctargeting");
+    expect(fetchImpl.mock.calls[0][0]).toContain("daily_budget%2Ctargeting%2Coptimization_goal");
   });
 
   test("readback budget mismatch fails loudly instead of reporting launch success", async () => {
@@ -217,5 +217,27 @@ describe("Meta launch identity, budget, targeting, and verification", () => {
       expectedDailyBudgetCents: 500,
       expectedTargeting,
     })).toThrow("interestGroups");
+  });
+
+  test("readback fails when Meta drops the website Lead dataset or conversion event", () => {
+    const expectedTargeting = buildMetaStateTargeting(["AZ"]);
+    expect(() => assertMetaAdsetMatches({
+      actual: {
+        daily_budget: "500",
+        targeting: expectedTargeting,
+        optimization_goal: "LEAD_GENERATION",
+        billing_event: "IMPRESSIONS",
+        destination_type: "WEBSITE",
+        promoted_object: { page_id: "page-1" },
+      },
+      expectedDailyBudgetCents: 500,
+      expectedTargeting,
+      expected: {
+        optimizationGoal: "LEAD_GENERATION",
+        billingEvent: "IMPRESSIONS",
+        destinationType: "WEBSITE",
+        promotedObject: { page_id: "page-1", pixel_id: "725252660577483", custom_event_type: "LEAD" },
+      },
+    })).toThrow("promoted_object.pixel_id");
   });
 });

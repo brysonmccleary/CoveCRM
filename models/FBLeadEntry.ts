@@ -22,6 +22,7 @@ const FBLeadEntrySchema = new Schema(
     },
     facebookLeadId: { type: String }, // FB's internal lead ID (Phase 2)
     leadEventId: { type: String, index: true, sparse: true },
+    preferredLanguage: { type: String, enum: ["", "English", "Spanish"], default: "" },
     metaAdId: { type: String, default: "", index: true },
     metaCreativeId: { type: String, default: "" },
     variantId: { type: String, default: "", index: true },

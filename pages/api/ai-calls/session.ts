@@ -47,6 +47,9 @@ const CANONICAL_SCRIPTS = [
   "veteran_iul",
   "trucker_mortgage",
   "trucker_iul",
+  "spanish_final_expense",
+  "spanish_mortgage",
+  "spanish_iul",
   // legacy broad keys kept for backward compat with any saved sessions
   "veteran_leads",
   "trucker_leads",
@@ -112,6 +115,10 @@ function normalizeScriptKey(raw: any): CanonicalScriptKey {
   if (v === "trucker" || v === "truckers" || v === "trucker_leads") {
     return "trucker_leads";
   }
+
+  if (v === "spanish_final_expense" || v === "final_expense_spanish") return "spanish_final_expense";
+  if (v === "spanish_mortgage" || v === "mortgage_spanish") return "spanish_mortgage";
+  if (v === "spanish_iul" || v === "iul_spanish") return "spanish_iul";
 
   // Kayla demo calls — internal only, never accessible via normal AI Dial Session UI
   if (v === "kayla_signup" || v === "kayla" || v === "kayla_demo") {

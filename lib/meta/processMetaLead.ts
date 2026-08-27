@@ -17,6 +17,8 @@ import { stableLeadEventId } from "@/lib/facebook/hostedAttribution";
 import { enqueueMetaLifecycleEventSafely } from "@/lib/meta/capi";
 import { buildStructuredLeadFields } from "@/lib/leads/structuredLeadFields";
 import { sendNewLeadNotificationEmail, sendRepeatOptInNotificationEmail } from "@/lib/email";
+import { resolveCampaignAiScriptKey } from "@/lib/ai/campaignScriptKey";
+import { classifySubmissionState } from "@/lib/leads/submissionStatePolicy";
 
 const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   final_expense: "Final Expense",
@@ -24,14 +26,6 @@ const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   mortgage_protection: "Mortgage Protection",
   veteran: "Veteran",
   trucker: "Trucker",
-};
-
-const FB_LEAD_TYPE_TO_AI_SCRIPT_KEY: Record<string, string> = {
-  final_expense: "final_expense",
-  mortgage_protection: "mortgage_protection",
-  iul: "iul_cash_value",
-  veteran: "veteran_leads",
-  trucker: "trucker_leads",
 };
 
 // Retry backoff: 1 min, 5 min, 30 min, 2 hr, 6 hr
@@ -190,12 +184,8 @@ export async function processMetaLead(
 
   const _lt = (campaign as any).leadType as string;
   const _seg = String((campaign as any).audienceSegment || "standard");
-  const aiScriptKey =
-    (_lt === "mortgage_protection" && _seg === "veteran") ? "veteran_mortgage" :
-    (_lt === "iul"                 && _seg === "veteran") ? "veteran_iul" :
-    (_lt === "mortgage_protection" && _seg === "trucker") ? "trucker_mortgage" :
-    (_lt === "iul"                 && _seg === "trucker") ? "trucker_iul" :
-    FB_LEAD_TYPE_TO_AI_SCRIPT_KEY[_lt] || "final_expense";
+  const aiScriptKey = resolveCampaignAiScriptKey(_lt, _seg);
+  const preferredLanguage = _seg === "spanish" ? "Spanish" : "English";
   let folder: any = null;
   const attributedAd = (Array.isArray((campaign as any).ads) ? (campaign as any).ads : []).find(
     (candidate: any) => String(candidate?.metaAdId || "").trim() === String(adId || leadData?.adId || "").trim()
@@ -251,6 +241,7 @@ export async function processMetaLead(
     source: "facebook_meta_native",
     facebookLeadId: leadgenId,
     leadEventId,
+    preferredLanguage,
     metaAdId: String(adId || leadData?.adId || ""),
     metaCreativeId: String(attributedAd?.metaCreativeId || ""),
     variantId: String(attributedAd?.variantId || ""),
@@ -263,6 +254,12 @@ export async function processMetaLead(
   if (dupCheck.isDuplicate) {
     console.info(`[processMetaLead] Duplicate CRM lead for ${leadgenId} — FBLeadEntry created, CRM lead skipped`);
     if (dupCheck.existingLeadId) {
+      if (preferredLanguage === "Spanish") {
+        await Lead.updateOne(
+          { _id: dupCheck.existingLeadId, userEmail },
+          { $set: { preferredLanguage: "Spanish" } }
+        ).catch(() => {});
+      }
       await FBLeadEntry.updateOne(
         { _id: (entry as any)._id },
         { $set: { crmLeadId: dupCheck.existingLeadId } }
@@ -301,6 +298,10 @@ export async function processMetaLead(
 
   const crmLeadType = FB_LEAD_TYPE_TO_CRM[(campaign as any).leadType] ?? "Final Expense";
   const normalizedPhone = String(leadData.phone || "").replace(/\D+/g, "");
+  const stateClassification = classifySubmissionState({
+    state: leadData.state,
+    licensedStates: (campaign as any).licensedStates,
+  });
 
   const rawFields = leadData.rawFieldData || [];
 
@@ -387,6 +388,9 @@ export async function processMetaLead(
     metaRawPayload: JSON.stringify(leadData.rawPayload),
     sourceType: "facebook_lead",
     realTimeEligible: true,
+    preferredLanguage,
+    stateRestrictionWarning: stateClassification.outsideLicensedArea,
+    stateOutsidePrimaryLicensedArea: stateClassification.outsideLicensedArea,
   });
 
   await FBLeadEntry.updateOne(

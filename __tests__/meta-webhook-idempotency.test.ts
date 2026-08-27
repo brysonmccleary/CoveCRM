@@ -96,6 +96,7 @@ describe("Meta webhook lead-creation idempotency", () => {
       leadType: "final_expense",
       audienceSegment: "standard",
       folderId: "folder1",
+      licensedStates: ["AZ"],
     }));
     mockedUser.findOne.mockReturnValue(lean({ _id: "user1", email: "agent@example.com" }));
     mockedRetrieve.mockResolvedValue({
@@ -150,6 +151,16 @@ describe("Meta webhook lead-creation idempotency", () => {
     await processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now());
 
     expect(mockedLead.create).toHaveBeenCalledTimes(1);
+  });
+
+  test("a native Meta lead outside licensed geography is still created and flagged", async () => {
+    statefulEventStore("received");
+    await processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now());
+    expect(mockedLead.create).toHaveBeenCalledWith(expect.objectContaining({
+      State: "HI",
+      stateRestrictionWarning: true,
+      stateOutsidePrimaryLicensedArea: true,
+    }));
   });
 
   test("a new opt-in from an existing contact emails the agent and links the event without creating another CRM lead", async () => {

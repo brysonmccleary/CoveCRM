@@ -53,6 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
     const campaignRows = campaigns.map((campaign: any) => ({
       ...campaign,
+      reconciliationUrl: `/api/facebook/campaigns/${campaign._id}/reconciliation`,
       ...(archiveImageCounts.has(String(campaign._id))
         ? {
             creativePreviewUrl: `/api/facebook/campaigns/${campaign._id}/creative-preview`,

@@ -319,6 +319,11 @@ Conversation strategy:
     const combinedNotes = [String(notesFromLead || "").trim(), memoryPrompt]
       .filter(Boolean)
       .join("\n\n");
+    const preferredLanguage = String(leadAny.preferredLanguage || "English") === "Spanish" ? "Spanish" : "English";
+    const languageInstruction = preferredLanguage === "Spanish"
+      ? "LANGUAGE REQUIREMENT: Conduct the entire call in natural Spanish. Do not fall back to an English sales script."
+      : "";
+    const localizedNotes = [languageInstruction, combinedNotes].filter(Boolean).join("\n\n");
 
     // ✅ Optional: expose AMD AnsweredBy when known (typing-safe access)
     let answeredBy: string | undefined = callDirection === "inbound" ? "human" : undefined;
@@ -356,7 +361,9 @@ Conversation strategy:
       clientState,
       clientPhone: leadAny.phone || leadAny.phoneNumber || leadAny.Phone,
       clientEmail: leadAny.email || leadAny.Email,
-      clientNotes: combinedNotes,
+      clientNotes: localizedNotes,
+      preferredLanguage,
+      languageInstruction,
       leadSummary: leadMemory.leadSummary || "",
       keyFacts: Array.isArray(leadMemory.keyFacts) ? leadMemory.keyFacts : [],
       objections: Array.isArray(leadMemory.objections) ? leadMemory.objections : [],

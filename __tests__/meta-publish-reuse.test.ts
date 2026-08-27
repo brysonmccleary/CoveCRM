@@ -100,6 +100,7 @@ describe("publish-ad exact-match reuse", () => {
       accessToken: "test-token",
       adAccountId: "123",
       pageId: "page-1",
+      datasetId: "725252660577483",
       licensedStates: ["AZ"],
       structure: {
         targetingProfile: {
@@ -120,7 +121,7 @@ describe("publish-ad exact-match reuse", () => {
           name: "Final Expense - Arizona Campaign Ad Set",
           daily_budget: 500,
           billing_event: "IMPRESSIONS",
-          optimization_goal: "LEAD_GENERATION",
+          optimization_goal: "OFFSITE_CONVERSIONS",
           bid_strategy: "LOWEST_COST_WITHOUT_CAP",
           status: "PAUSED",
           targeting,
@@ -138,13 +139,27 @@ describe("publish-ad exact-match reuse", () => {
         ads: [{ metaAdId: "meta-ad-1" }],
       },
     });
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      json: jest.fn().mockResolvedValue({
+    const attributionSpec = [
+      { event_type: "CLICK_THROUGH", window_days: 7 },
+      { event_type: "VIEW_THROUGH", window_days: 1 },
+    ];
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ special_ad_categories: ["FINANCIAL_PRODUCTS_SERVICES"] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({
         daily_budget: "500",
         targeting,
-      }),
-    });
+        optimization_goal: "OFFSITE_CONVERSIONS",
+        billing_event: "IMPRESSIONS",
+        destination_type: "WEBSITE",
+        promoted_object: { page_id: "page-1", pixel_id: "725252660577483", custom_event_type: "LEAD" },
+        attribution_spec: attributionSpec,
+        }),
+      });
     global.fetch = fetchMock as any;
 
     const { req, res } = createMocks({
@@ -173,8 +188,9 @@ describe("publish-ad exact-match reuse", () => {
       alreadyPublished: true,
       verifiedMetaAdset: true,
     }));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toContain("/meta-adset-1?");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toContain("/meta-campaign-1?");
+    expect(fetchMock.mock.calls[1][0]).toContain("/meta-adset-1?");
     expect(releaseLaunchCampaignClaim).toHaveBeenCalledWith(expect.objectContaining({
       campaignId: "campaign-1",
       launchClaimToken: "claim-1",

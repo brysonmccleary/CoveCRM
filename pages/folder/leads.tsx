@@ -43,6 +43,9 @@ const AI_SCRIPT_OPTIONS = [
   { value: "trucker_leads", label: "Truckers (Life Insurance)" },
   { value: "trucker_iul", label: "Truckers IUL" },
   { value: "trucker_mortgage", label: "Truckers Mortgage Protection" },
+  { value: "spanish_final_expense", label: "Español — Gastos Finales" },
+  { value: "spanish_mortgage", label: "Español — Protección Hipotecaria" },
+  { value: "spanish_iul", label: "Español — IUL / Valor en Efectivo" },
   { value: "default", label: "Default (Generic)" },
 ];
 

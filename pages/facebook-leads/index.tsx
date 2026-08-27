@@ -47,6 +47,7 @@ interface FBCampaign {
   metaLastSyncedAt?: string | null;
   creativePreviewUrl?: string;
   creativePreviewUrls?: string[];
+  reconciliationUrl?: string;
   licensedStates?: string[];
   landingPageConfig?: {
     imageUrl?: string;
@@ -2026,6 +2027,17 @@ function CampaignCard({
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            {campaign.reconciliationUrl && (campaign.metaCampaignId || campaign.metaAdsetId) ? (
+              <a
+                href={campaign.reconciliationUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded border border-cyan-700/50 bg-cyan-950/30 px-3 py-1.5 text-xs text-cyan-300 hover:bg-cyan-900/40"
+                title="Read live Meta status, object integrity, and performance without changing history"
+              >
+                Meta live check
+              </a>
+            ) : null}
             <button
               onClick={optimize}
               disabled={optimizing}

@@ -53,6 +53,9 @@ export default async function handler(
       "trucker_iul",
       "trucker_mortgage",
       "generic_life",
+      "spanish_final_expense",
+      "spanish_mortgage",
+      "spanish_iul",
     ];
 
     const aiEnabled = aiFirstCallEnabled === true;
