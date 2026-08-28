@@ -14,6 +14,13 @@ const MetaClaimRegistrySchema = new Schema(
     approvedBy: { type: String, required: true },
     approvalEvidence: { type: String, default: "" },
     approvedAt: { type: Date, default: null },
+    claimId: { type: String, default: "", index: true },
+    canonicalMeaning: { type: String, default: "" },
+    requiredCapabilities: { type: [String], default: [] },
+    requiredDisclosure: { type: String, default: "" },
+    approvalSource: { type: String, default: "" },
+    effectiveVersion: { type: String, default: "" },
+    riskLevel: { type: String, default: "high" },
   },
   { timestamps: true }
 );

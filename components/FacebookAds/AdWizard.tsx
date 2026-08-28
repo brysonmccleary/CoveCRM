@@ -718,6 +718,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         }
         launchDrafts.push({
           leadType: currentDraft.leadType || leadType,
+          audienceSegment: currentDraft.audienceSegment || audienceSegment,
+          language: currentDraft.language || (audienceSegment === "spanish" ? "es" : "en"),
           primaryText: currentDraft.primaryText,
           headline: currentDraft.headline,
           description: currentDraft.description || "",
@@ -737,6 +739,21 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           buttonLabels: currentDraft.buttonLabels,
           bulletPoints: currentDraft.bulletPoints,
           landingPageConfig: currentDraft.landingPageConfig,
+          creativeClass: currentDraft.creativeClass,
+          layoutId: currentDraft.layoutId,
+          hookClass: currentDraft.hookClass,
+          headlineClass: currentDraft.headlineClass,
+          offerClass: currentDraft.offerClass,
+          imageDirection: currentDraft.imageDirection,
+          imageIdentity: currentDraft.imageIdentity,
+          backgroundDirection: currentDraft.backgroundDirection,
+          selectorContract: currentDraft.selectorContract,
+          semanticFingerprint: currentDraft.semanticFingerprint,
+          capabilityId: currentDraft.capabilityId,
+          capabilitySource: currentDraft.capabilitySource,
+          productCapability: currentDraft.productCapability || null,
+          creativeEngineVersion: currentDraft.creativeEngineVersion,
+          variantId: currentDraft.variantId,
         });
       }
 

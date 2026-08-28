@@ -71,8 +71,14 @@ export function scorePatternConfidence(input: {
   const performanceScore = Number(clampScore(rawPerformance * (0.55 + confidenceScore / 220)).toFixed(2));
 
   let status: PatternStatus = "learning";
-  if (leads >= 8 || appointments >= 2 || sales >= 1) status = "promising";
-  if (confidenceScore >= 45 && performanceScore >= 62 && (leads >= 8 || appointments >= 2 || sales >= 1)) {
+  // Global promotion is deliberately conservative. One cheap lead, one sale,
+  // or a small campaign can remain visible for learning but cannot become a
+  // platform-wide winner.
+  if (spend >= 75 && leads >= 10 && (appointments >= 1 || sales >= 1)) status = "promising";
+  if (
+    confidenceScore >= 60 && performanceScore >= 62 && spend >= 150
+    && leads >= 20 && appointments >= 3 && (sales >= 3 || campaigns >= 3)
+  ) {
     status = "winner";
   }
   if (input.hasFatigue || input.avgFrequency >= 4.5 || input.avgOptOutRate >= 18 || input.avgBadNumberRate >= 22) {

@@ -2,6 +2,8 @@ import { createMocks } from "node-mocks-http";
 import handler from "@/pages/api/facebook/generate-ad";
 import { getServerSession } from "next-auth/next";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
+import FBLeadCampaign from "@/models/FBLeadCampaign";
+import MetaAdMetricsDaily from "@/models/MetaAdMetricsDaily";
 import { loadGlobalGenerationHints } from "@/lib/facebook/globalIntelligence/anonymizedLearning";
 import { buildCampaignStructure } from "@/lib/facebook/buildCampaignStructure";
 
@@ -14,8 +16,10 @@ jest.mock("@/lib/facebook/globalIntelligence/anonymizedLearning", () => ({
 }));
 jest.mock("@/models/MetaCreativeUsage", () => ({
   __esModule: true,
-  default: { find: jest.fn() },
+  default: { find: jest.fn(), init: jest.fn(), deleteMany: jest.fn(), insertMany: jest.fn() },
 }));
+jest.mock("@/models/FBLeadCampaign", () => ({ __esModule: true, default: { find: jest.fn() } }));
+jest.mock("@/models/MetaAdMetricsDaily", () => ({ __esModule: true, default: { aggregate: jest.fn() } }));
 
 type Combination = {
   label: string;
@@ -50,8 +54,19 @@ describe("Generate Ad campaign matrix regression", () => {
     (getServerSession as jest.Mock).mockResolvedValue({ user: { email: "agent@example.com" } });
     (loadGlobalGenerationHints as jest.Mock).mockResolvedValue([]);
     (MetaCreativeUsage.find as jest.Mock).mockReturnValue({
-      select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
+      sort: jest.fn().mockReturnValue({
+        limit: jest.fn().mockReturnValue({
+          select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
+        }),
+      }),
     });
+    (MetaCreativeUsage.init as jest.Mock).mockResolvedValue(undefined);
+    (MetaCreativeUsage.deleteMany as jest.Mock).mockResolvedValue({ deletedCount: 0 });
+    (MetaCreativeUsage.insertMany as jest.Mock).mockResolvedValue([]);
+    (FBLeadCampaign.find as jest.Mock).mockReturnValue({
+      select: jest.fn().mockReturnValue({ limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }) }),
+    });
+    (MetaAdMetricsDaily.aggregate as jest.Mock).mockResolvedValue([]);
   });
 
   test.each(SUPPORTED_GENERATE_COMBINATIONS)(
@@ -90,9 +105,10 @@ describe("Generate Ad campaign matrix regression", () => {
         landingPageConfig: expect.objectContaining({ headline: expect.any(String) }),
       }));
 
-      // Generate is read-only apart from its global uniqueness lookup. Meta
-      // object creation remains exclusively behind Review & Launch.
+      // Generate writes only expiring Cove draft reservations. Meta object
+      // creation remains exclusively behind Review & Launch.
       expect(MetaCreativeUsage.find).toHaveBeenCalledTimes(1);
+      expect(MetaCreativeUsage.insertMany).toHaveBeenCalledTimes(1);
     }
   );
 
@@ -118,7 +134,7 @@ describe("Generate Ad campaign matrix regression", () => {
     expect(JSON.parse(res._getData()).draft).toEqual(expect.objectContaining({
       leadType: "veteran",
       audienceSegment: "veteran",
-      winningFamilyId: expect.stringMatching(/^vet_/),
+      winningFamilyId: expect.stringMatching(/^VET_/),
     }));
   });
 

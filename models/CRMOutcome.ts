@@ -13,6 +13,10 @@ const CRMOutcomeSchema = new Schema(
     metaCreativeId: { type: String, default: "" },
     variantId: { type: String, default: "", index: true },
     creativeFamily: { type: String, default: "", index: true },
+    layoutId: { type: String, default: "", index: true },
+    hookClass: { type: String, default: "" },
+    imageIdentity: { type: String, default: "" },
+    backgroundIdentity: { type: String, default: "" },
     date: { type: String, required: true }, // "YYYY-MM-DD"
 
     // Disposition outcome counts
@@ -23,6 +27,18 @@ const CRMOutcomeSchema = new Schema(
     notInterested: { type: Number, default: 0 },
     badNumbers: { type: Number, default: 0 },
     optOuts: { type: Number, default: 0 },
+    contactAttempted: { type: Number, default: 0 },
+    contacted: { type: Number, default: 0 },
+    qualifiedLeads: { type: Number, default: 0 },
+    unqualifiedLeads: { type: Number, default: 0 },
+    wrongAudience: { type: Number, default: 0 },
+    duplicateOptIns: { type: Number, default: 0 },
+    noShows: { type: Number, default: 0 },
+    normalizedOutcome: {
+      type: String,
+      enum: ["NEW", "CONTACT_ATTEMPTED", "CONTACTED", "QUALIFIED", "UNQUALIFIED", "WRONG_AUDIENCE", "BAD_NUMBER", "DUPLICATE_OPT_IN", "APPOINTMENT", "NO_SHOW", "SALE", "OPT_OUT", ""],
+      default: "",
+    },
 
     // Derived cost-per metrics (calculated at scoring time)
     costPerBooked: { type: Number, default: null },

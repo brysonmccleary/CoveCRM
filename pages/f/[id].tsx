@@ -7,6 +7,8 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 import { getFunnelTemplate, FunnelStep } from "@/lib/facebook/funnels/funnelTemplates";
+import type { SelectorContract } from "@/lib/facebook/creativeIntelligence";
+import { selectorToFunnelStep } from "@/lib/facebook/creativeIntelligence/selectors";
 import { US_STATES, normalizeStateCode } from "@/lib/facebook/geo/usStates";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
 import { buildHostedConsentText } from "@/lib/facebook/hostedConsent";
@@ -46,6 +48,7 @@ interface FunnelData {
   ctaStrip: string;
   imageUrl: string;
   qualifierTexts?: string[];
+  selectorContract?: SelectorContract;
   publicAgentProfile?: PublicAgentProfile;
   complianceProfile?: ComplianceProfile;
   licensedStates: string[];
@@ -215,7 +218,15 @@ export default function FunnelPage({ campaignId, funnelData, webhookKey = "", no
   }
 
   const theme = template.theme;
-  const steps = template.steps;
+  // The creative and hosted funnel consume one selector contract. Preserve the
+  // exact option text (including capability-derived eligibility ranges) rather
+  // than reconstructing an approximate age grid in the browser.
+  const contractStep = funnelData.selectorContract
+    ? selectorToFunnelStep(funnelData.selectorContract)
+    : null;
+  const steps: FunnelStep[] = contractStep
+    ? [contractStep, ...template.steps.filter((step) => step.id !== contractStep.id)]
+    : template.steps;
   const currentStep = steps[stepIndex];
   const step1BaseBullets =
     funnelData.benefitBullets && funnelData.benefitBullets.length > 0
@@ -928,6 +939,18 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
       ctaStrip: String(safeConfig?.ctaStrip || "Submit Request"),
       imageUrl: String(safeConfig?.imageUrl || ""),
       qualifierTexts: Array.isArray(safeConfig?.qualifierTexts) ? safeConfig.qualifierTexts.map(String) : [],
+      selectorContract: safeConfig?.selectorContract && Array.isArray(safeConfig.selectorContract.options)
+        ? {
+            selectorId: String(safeConfig.selectorContract.selectorId || "coverage_priority"),
+            type: String(safeConfig.selectorContract.type || "other") as SelectorContract["type"],
+            label: String(safeConfig.selectorContract.label || "What matters most to you?"),
+            options: safeConfig.selectorContract.options.map(String).slice(0, 8),
+            funnelStepId: String(safeConfig.selectorContract.funnelStepId || "creative_selector"),
+            required: safeConfig.selectorContract.required !== false,
+            eligibilityRepresentation: safeConfig.selectorContract.eligibilityRepresentation === true,
+            source: String(safeConfig.selectorContract.source || "safe_default") as SelectorContract["source"],
+          }
+        : undefined,
       publicAgentProfile: {
         displayName: agentContact.name,
         businessName: String(campaign.publicAgentProfile?.businessName || ""),

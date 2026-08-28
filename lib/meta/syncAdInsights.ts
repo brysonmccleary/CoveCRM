@@ -3,6 +3,7 @@
 
 import mongooseConnect from "@/lib/mongooseConnect";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
+import MetaAdMetricsDaily from "@/models/MetaAdMetricsDaily";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import Lead from "@/lib/mongo/leads";
 import { Types } from "mongoose";
@@ -21,6 +22,9 @@ interface InsightRecord {
   cpc?: string;
   cpm?: string;
   ctr?: string;
+  reach?: string;
+  frequency?: string;
+  actions?: Array<{ action_type?: string; value?: string }>;
   date_start?: string;
   date_stop?: string;
 }
@@ -52,7 +56,7 @@ export async function syncAdInsights(
   url.searchParams.set("access_token", accessToken);
   url.searchParams.set(
     "fields",
-    "campaign_id,campaign_name,adset_id,ad_id,ad_name,spend,impressions,clicks,cpc,cpm,ctr,date_start,date_stop"
+    "campaign_id,campaign_name,adset_id,ad_id,ad_name,spend,impressions,reach,frequency,clicks,cpc,cpm,ctr,actions,date_start,date_stop"
   );
   url.searchParams.set("date_preset", days <= 7 ? "last_7d" : days <= 14 ? "last_14d" : days <= 30 ? "last_30d" : "last_90d");
   url.searchParams.set("level", "ad");
@@ -191,6 +195,14 @@ export async function syncAdInsights(
     const cpc = parseFloat(insight.cpc || "0");
     const cpm = parseFloat(insight.cpm || "0");
     const ctr = parseFloat(insight.ctr || "0");
+    const reach = insight.reach == null ? null : parseInt(insight.reach, 10);
+    const frequency = insight.frequency == null ? null : parseFloat(insight.frequency);
+    const actionValue = (name: string): number | null => {
+      const action = (insight.actions || []).find((candidate) => candidate.action_type === name);
+      return action?.value == null ? null : Number(action.value);
+    };
+    const linkClicks = actionValue("link_click");
+    const landingPageViews = actionValue("landing_page_view");
 
     // Use ad-level count when insight.ad_id is present (level=ad always has ad_id).
     // No campaign-level fallback — it would double-count multi-ad campaigns.
@@ -241,6 +253,45 @@ export async function syncAdInsights(
 
     const adId = String(insight.ad_id || "").trim();
     if (adId) {
+      const adMetadata = (Array.isArray((campaign as any).ads) ? (campaign as any).ads : [])
+        .find((ad: any) => String(ad?.metaAdId || "") === adId) || {};
+      const resolvedLeads = leads;
+      await MetaAdMetricsDaily.findOneAndUpdate(
+        { userEmail, metaAdId: adId, date },
+        {
+          $set: {
+            campaignId: (campaign as any)._id,
+            userId: new Types.ObjectId(String(userId)),
+            userEmail,
+            date,
+            metaCampaignId: String(insight.campaign_id || (campaign as any).metaCampaignId || ""),
+            metaAdsetId: String(insight.adset_id || (campaign as any).metaAdsetId || ""),
+            metaAdId: adId,
+            metaCreativeId: String(adMetadata.metaCreativeId || ""),
+            creativeFamily: String(adMetadata.creativeFamily || ""),
+            layoutId: String(adMetadata.layoutId || ""),
+            variantId: String(adMetadata.variantId || ""),
+            hookClass: String(adMetadata.hookClass || ""),
+            imageIdentity: String(adMetadata.imageIdentity || adMetadata.imageUrl || ""),
+            backgroundIdentity: String(adMetadata.backgroundIdentity || ""),
+            spend,
+            impressions,
+            reach: Number.isFinite(reach as number) ? reach : null,
+            frequency: Number.isFinite(frequency as number) ? frequency : null,
+            clicks,
+            linkClicks: Number.isFinite(linkClicks as number) ? linkClicks : null,
+            ctr: Number.isFinite(ctr) ? ctr : null,
+            cpc: Number.isFinite(cpc) ? cpc : null,
+            cpm: Number.isFinite(cpm) ? cpm : null,
+            landingPageViews: Number.isFinite(landingPageViews as number) ? landingPageViews : null,
+            landingPageViewRate: landingPageViews != null && linkClicks != null && linkClicks > 0
+              ? landingPageViews / linkClicks : null,
+            leads: resolvedLeads,
+            cpl: resolvedLeads > 0 && spend > 0 ? spend / resolvedLeads : null,
+          },
+        },
+        { upsert: true, new: true }
+      );
       const existingCampaignAds = campaignAdTotals.get(cid) || new Map<string, {
         spend: number;
         leads: number;

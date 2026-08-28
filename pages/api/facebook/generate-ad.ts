@@ -3,19 +3,17 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import {
   type AudienceSegment,
-  buildWinningFunnelConfig,
-  generateWinningVariantList,
   isWinnerSupportedLeadType,
 } from "@/lib/facebook/winningAdLibrary";
-import {
-  applyGlobalWinnerHints,
-  loadGlobalGenerationHints,
-} from "@/lib/facebook/globalIntelligence/anonymizedLearning";
 import mongooseConnect from "@/lib/mongooseConnect";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
-import { buildCreativeGenerationSignature } from "@/lib/facebook/creativeIdentity";
-import { selectCreativeTreatmentMix } from "@/lib/facebook/creativeCandidateSelection";
+import MetaAdMetricsDaily from "@/models/MetaAdMetricsDaily";
+import FBLeadCampaign from "@/models/FBLeadCampaign";
 import { resolveAudienceSegment } from "@/lib/facebook/audienceTargeting";
+import { generateCreativeIntelligenceDrafts } from "@/lib/facebook/creativeIntelligence";
+import type { CreativeAudienceSegment, CreativeLanguage, CreativeVertical, ProductCapability } from "@/lib/facebook/creativeIntelligence";
+import { reserveGeneratedDrafts } from "@/lib/facebook/creativeUsage";
+import { scoreFamilyEvidence } from "@/lib/facebook/performanceLearning";
 
 const LEAD_FORM_QUESTIONS = {
   mortgage_protection: [
@@ -95,88 +93,9 @@ function campaignLabel(leadType: string) {
     .join(" ");
 }
 
-function hashString(value: string): number {
-  let hash = 0;
-  const str = value || "covecrm";
-  for (let i = 0; i < str.length; i++) {
-    hash = (Math.imul(31, hash) + str.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash);
-}
-
-function visualVariantCount(leadType: string): number {
-  const counts: Record<string, number> = {
-    veteran: 40,
-    trucker: 40,
-    final_expense: 40,
-    mortgage_protection: 40,
-    iul: 40,
-  };
-  return counts[leadType] || 40;
-}
-
-function sanitizeCreativeText(value: string, leadType: string): string {
-  let sanitized = String(value || "");
-
-  const replacements: Array<[RegExp, string]> = [
-    [/benefit unlock/gi, "coverage options"],
-    [/benefits civilians will never access/gi, "private coverage options designed for veterans"],
-    [/civilians will never access/gi, "many people may not know about"],
-    [/not available to civilians/gi, "available through a private coverage review"],
-    [/not available to the general public/gi, "available through a private coverage review"],
-    [/guaranteed approval/gi, "simple review"],
-    [/guaranteed acceptance/gi, "coverage options may be available"],
-    [/fast approval/gi, "fast review"],
-    [/family at home/gi, "structured direct-response layout"],
-    [/young family/gi, "home-focused visual"],
-    [/couple at home/gi, "home-focused visual"],
-    [/warm natural lighting/gi, "high-contrast direct-response lighting"],
-    [/warm cinematic/gi, "high-contrast direct-response"],
-    [/candid family photography/gi, "poster-style ad creative"],
-    [/lifestyle photography/gi, "direct-response poster layout"],
-    [/government program/gi, "private coverage review"],
-    [/government implication/gi, "private coverage framing"],
-    [/official-sounding entitlement language/gi, "private coverage options"],
-    [/plans options designe\w*/gi, "coverage options designed"],
-    [/\bplans options\b/gi, "coverage options"],
-    [/\bcoverage coverage\b/gi, "coverage"],
-    [/\boptions options\b/gi, "options"],
-  ];
-
-  if (leadType === "veteran") {
-    replacements.push(
-      [/private coverage\s*[—-]\s*not va/gi, "coverage options for those who served"],
-      [/private market coverage\s*[—-]\s*not va/gi, "coverage options for those who served"],
-      [/private market\s*[—-]\s*not va/gi, "coverage for those who served"],
-      [/not affiliated with (?:the )?va/gi, "built for veterans and military families"],
-      [/not affiliated with veterans affairs/gi, "built for veterans and military families"],
-      [/\bnot va\b/gi, "built for veterans"],
-      [/\bnot a va program\b/gi, "coverage options for veterans and military families"],
-      [/\bnot va\/government\b/gi, "veteran-focused coverage options"],
-      [/independently offered\/not government/gi, "offered through a licensed coverage review"],
-      [/independently offered and not government/gi, "offered through a licensed coverage review"],
-      [/not (?:a )?government program/gi, "coverage options for veterans and military families"],
-      [/30-year term/gi, "whole life coverage options"],
-      [/term coverage/gi, "whole life coverage options"],
-      [/term life/gi, "whole life coverage options"],
-      [/term policy/gi, "whole life coverage options"]
-    );
-  }
-
-  for (const [pattern, replacement] of replacements) {
-    sanitized = sanitized.replace(pattern, replacement);
-  }
-
-  return sanitized;
-}
-
-function sanitizeCreativeList(values: string[] | undefined, leadType: string): string[] {
-  return (values || []).map((value) => sanitizeCreativeText(value, leadType));
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === "GET") {
-    return res.status(200).json({ ok: true, source: "winner_library" });
+    return res.status(200).json({ ok: true, source: "creative_intelligence_engine" });
   }
 
   if (req.method !== "POST") {
@@ -191,7 +110,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // A tab left open across a deployment keeps running its old JavaScript.
   // Fail closed instead of letting that stale renderer keep generating the
   // retired layouts; the message is intentionally plain and user-facing.
-  if ((req.body as any)?.mode === "wizard" && Number((req.body as any)?.clientCreativeVersion || 0) < 4) {
+  if ((req.body as any)?.mode === "wizard" && Number((req.body as any)?.clientCreativeVersion || 0) < 5) {
     return res.status(409).json({
       ok: false,
       error: "CoveCRM was updated. Refresh this page once to load the improved ad builder.",
@@ -206,7 +125,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     audienceSegment: audienceSegmentParam = "standard",
     regenerationAttempt: regenerationAttemptParam = 0,
     generationNonce: generationNonceParam = "",
-    licensedStates = [],
   } = req.body as {
     leadType?: string;
     location?: string;
@@ -216,7 +134,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     variantCount?: number;
     regenerationAttempt?: number;
     generationNonce?: string;
-    licensedStates?: string[];
+    productCapability?: ProductCapability | null;
   };
 
   if (!isWinnerSupportedLeadType(leadType)) {
@@ -241,174 +159,92 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ? `${campaignLabel(leadType)} - ${location}`
     : `${campaignLabel(leadType)} Campaign`;
 
-  const campaignNameSeeded = [
+  // Creative Intelligence v1 is the single generation path for every supported
+  // vertical and audience combination. Generation is Cove-only: no Meta object
+  // is created until the separate Review & Launch route passes preflight.
+  await mongooseConnect();
+  const recentUsage = await MetaCreativeUsage.find({
+    status: { $in: ["draft_reserved", "reserved", "published"] },
+    $or: [
+      { expiresAt: null },
+      { expiresAt: { $gt: new Date() } },
+    ],
+  })
+    .sort({ createdAt: -1 })
+    .limit(5000)
+    .select("winningFamilyId layoutId headline primaryText description bulletPoints cta imageIdentity imageDirection backgroundDirection palette offerClass selectorSchema semanticFingerprint visualFingerprint -_id")
+    .lean() as Array<Record<string, any>>;
+  const normalizedRecentUsage = recentUsage.map((row) => ({
+    ...row,
+    selectorContract: row.selectorSchema || null,
+  }));
+  const learningCampaignIds = await FBLeadCampaign.find({
+    leadType,
+    attributionVersion: "signed-v1",
+  }).select("_id").limit(5000).lean() as Array<{ _id: any }>;
+  const familyEvidence = learningCampaignIds.length ? await MetaAdMetricsDaily.aggregate([
+    { $match: { campaignId: { $in: learningCampaignIds.map((campaign) => campaign._id) }, creativeFamily: { $ne: "" } } },
+    { $group: {
+      _id: "$creativeFamily",
+      spend: { $sum: { $ifNull: ["$spend", 0] } },
+      impressions: { $sum: { $ifNull: ["$impressions", 0] } },
+      leads: { $sum: { $ifNull: ["$leads", 0] } },
+      qualifiedLeads: { $sum: "$qualifiedLeads" },
+      appointments: { $sum: "$appointmentsBooked" },
+      sales: { $sum: "$sales" },
+      lastSeenAt: { $max: "$date" },
+    } },
+  ]) : [];
+  const performanceWeights = Object.fromEntries(familyEvidence.map((row: any) => [
+    String(row._id || ""),
+    scoreFamilyEvidence({
+      spend: row.spend, impressions: row.impressions, leads: row.leads,
+      qualifiedLeads: row.qualifiedLeads, appointments: row.appointments,
+      sales: row.sales, lastSeenAt: row.lastSeenAt,
+    }).multiplier,
+  ]));
+  const language: CreativeLanguage = audienceSegment === "spanish" ? "es" : "en";
+  const intelligenceDrafts = generateCreativeIntelligenceDrafts({
+    vertical: leadType as CreativeVertical,
+    audienceSegment: audienceSegment as CreativeAudienceSegment,
+    language,
+    userKey: userEmail,
     campaignName,
-    userEmail,
-    leadType,
-    audienceSegment,
     location,
-    `attempt:${regenerationAttempt}`,
-    `nonce:${generationNonce}`,
-  ].join("|");
-
-  const selectedVariantsFromLibrary = generateWinningVariantList({
-    leadType,
-    audienceSegment,
-    userId: userEmail,
-    campaignName: campaignNameSeeded,
-    location,
-    variantCount: requestedVariantCount,
-  });
-  const globalLearningHints = await loadGlobalGenerationHints({
-    leadType,
-    stateCodes: Array.isArray(licensedStates) ? licensedStates : [],
-  });
-  const selectedVariants = applyGlobalWinnerHints(selectedVariantsFromLibrary, globalLearningHints);
-  const budgetDollars = Number(dailyBudget);
-  if (!Number.isFinite(budgetDollars) || budgetDollars < 5) {
+    requestedCount: requestedVariantCount,
+    generationNonce,
+    productCapability: (req.body as any)?.productCapability || null,
+    recentUsage: normalizedRecentUsage,
+    performanceWeights,
+  }).map((draft, index) => ({
+    ...draft,
+    dailyBudgetCents: Math.round(Number(dailyBudget) * 100),
+    regenerationAttempt,
+    candidateBatch: index,
+    leadFormQuestions: audienceSegment === "spanish"
+      ? spanishLeadFormQuestions(leadType as keyof typeof LEAD_FORM_QUESTIONS)
+      : LEAD_FORM_QUESTIONS[leadType as keyof typeof LEAD_FORM_QUESTIONS],
+    thankYouPageText: audienceSegment === "spanish"
+      ? "¡Gracias! Un agente autorizado se comunicará pronto para revisar sus opciones en español."
+      : THANK_YOU_TEXT[leadType as keyof typeof THANK_YOU_TEXT],
+  }));
+  const budgetDollarsForEngine = Number(dailyBudget);
+  if (!Number.isFinite(budgetDollarsForEngine) || budgetDollarsForEngine < 5) {
     return res.status(400).json({ ok: false, error: "dailyBudget must be a finite number >= 5" });
   }
-  const dailyBudgetCents = Math.round(budgetDollars * 100);
-  const buildDraftFromVariant = (
-    variant: (typeof selectedVariants)[number],
-    index = 0,
-    draftNonce = generationNonce,
-    candidateBatch = 0
-  ) => {
-    const landingPageConfig = buildWinningFunnelConfig(variant);
-    const visualVariantBaseSeed = [
-      userEmail,
-      leadType,
-      audienceSegment,
-      draftNonce,
-      String(index),
-      String(regenerationAttempt),
-    ].join("|");
-    const visualVariantIndex = Math.abs(hashString(visualVariantBaseSeed)) % visualVariantCount(leadType);
-    const visualLeadType = audienceSegment === "veteran" || audienceSegment === "trucker"
-      ? audienceSegment
-      : leadType;
-    const photoPercent = visualLeadType === "trucker"
-      ? 75
-      : visualLeadType === "veteran"
-      ? 60
-      : visualLeadType === "mortgage_protection"
-      ? 65
-      : 0;
-    const visualTreatment = Math.abs(hashString(`${visualVariantBaseSeed}|treatment`)) % 100 < photoPercent
-      ? "photo"
-      : "graphic";
-
-    const draft = {
-      leadType,
-      audienceSegment,
-      campaignName,
-      dailyBudgetCents,
-      primaryText: sanitizeCreativeText(variant.primaryText, leadType),
-      headline: sanitizeCreativeText(variant.headline, leadType),
-      description: sanitizeCreativeText(variant.description, leadType),
-      cta: sanitizeCreativeText(variant.cta, leadType),
-      imagePrompt: sanitizeCreativeText(
-        [
-          variant.imagePrompt,
-          `Creative variation seed ${draftNonce}. Use a noticeably different direct-response background treatment, palette, composition, and subject framing from prior attempts. Leave blank reserved headline and CTA areas for app-rendered text. No readable text inside image.`,
-        ].join(" "),
-        leadType
-      ),
-      videoScript: sanitizeCreativeText(variant.videoScript, leadType),
-      buttonLabels: sanitizeCreativeList(variant.buttonLabels, leadType),
-      bulletPoints: sanitizeCreativeList(variant.bulletPoints, leadType),
-      creativeArchetype: variant.archetype,
-      landingPageConfig: {
-        ...landingPageConfig,
-        headline: sanitizeCreativeText(landingPageConfig.headline, leadType),
-        subheadline: sanitizeCreativeText(landingPageConfig.subheadline, leadType),
-        buttonLabels: sanitizeCreativeList(landingPageConfig.buttonLabels, leadType),
-        benefitBullets: sanitizeCreativeList(landingPageConfig.benefitBullets, leadType),
-        ctaStrip: sanitizeCreativeText(landingPageConfig.ctaStrip, leadType),
-      },
-      leadFormQuestions: audienceSegment === "spanish" ? spanishLeadFormQuestions(leadType) : LEAD_FORM_QUESTIONS[leadType],
-      thankYouPageText: audienceSegment === "spanish" ? "¡Gracias! Un agente autorizado se comunicará pronto para revisar sus opciones en español." : THANK_YOU_TEXT[leadType],
-      winningFamilyId: variant.familyId,
-      variationType: variant.variantType,
-      uniquenessFingerprint: variant.uniquenessFingerprint,
-      generationNonce: draftNonce,
-      regenerationAttempt,
-      visualVariantIndex,
-      visualTreatment,
-      candidateBatch,
-      vendorStyleTag: variant.vendorStyleTag,
-      displayAmount: variant.displayAmount,
-      generatedBy: "winner_library",
-      copySource: "winner_library",
-    };
-    return {
-      ...draft,
-      creativeSignature: buildCreativeGenerationSignature(draft),
-    };
-  };
-
-  // Build a deep candidate bench, then remove every semantic design already
-  // reserved or published anywhere on CoveCRM. A final rendered-byte claim at
-  // publish time remains the atomic authority for concurrent requests.
-  const candidateDrafts: Array<Record<string, any>> = [];
-  for (let batch = 0; batch < 32; batch++) {
-    const batchNonce = batch === 0 ? generationNonce : `${generationNonce}|bench:${batch}`;
-    const batchCampaignSeed = [
-      campaignName,
-      userEmail,
-      leadType,
-      audienceSegment,
-      location,
-      `attempt:${regenerationAttempt}`,
-      `nonce:${batchNonce}`,
-    ].join("|");
-    const batchVariants = batch === 0
-      ? selectedVariants
-      : applyGlobalWinnerHints(generateWinningVariantList({
-          leadType,
-          audienceSegment,
-          userId: userEmail,
-          campaignName: batchCampaignSeed,
-          location,
-          variantCount: 4,
-        }), globalLearningHints);
-    batchVariants.forEach((variant, index) => {
-      candidateDrafts.push(buildDraftFromVariant(variant, index, batchNonce, batch));
-    });
-  }
-
-  const uniqueCandidates = Array.from(
-    new Map(candidateDrafts.map((draft) => [draft.creativeSignature, draft])).values()
-  );
-  await mongooseConnect();
-  const usedRows = await MetaCreativeUsage.find({
-    generationSignature: { $in: uniqueCandidates.map((draft) => draft.creativeSignature) },
-  }).select("generationSignature -_id").lean();
-  const usedSignatures = new Set((usedRows as any[]).map((row) => String(row.generationSignature || "")));
-  const freshCandidates = uniqueCandidates
-    .filter((draft) => !usedSignatures.has(String(draft.creativeSignature)));
-  const visualLeadType = audienceSegment === "veteran" || audienceSegment === "trucker"
-    ? audienceSegment
-    : leadType;
-  const selectedDrafts = selectCreativeTreatmentMix(
-    freshCandidates,
-    requestedVariantCount,
-    ["veteran", "trucker", "mortgage_protection"].includes(visualLeadType)
-  );
-
-  if (selectedDrafts.length < requestedVariantCount) {
-    return res.status(409).json({
-      ok: false,
-      error: "The fresh creative pool is temporarily exhausted for this selection. Regenerate once for a new set.",
-    });
-  }
-
+  const reservation = await reserveGeneratedDrafts({
+    userEmail,
+    generationId: generationNonce,
+    drafts: intelligenceDrafts,
+  });
   return res.status(200).json({
     ok: true,
-    draft: selectedDrafts[0],
-    drafts: selectedDrafts,
-    variantCount: selectedDrafts.length,
-    globalLearningHints,
+    draft: intelligenceDrafts[0],
+    drafts: intelligenceDrafts,
+    variantCount: intelligenceDrafts.length,
+    creativeEngineVersion: 1,
+    reservationId: reservation.reservationId,
+    reservationExpiresAt: reservation.expiresAt.toISOString(),
+    globalLearningHints: [],
   });
 }

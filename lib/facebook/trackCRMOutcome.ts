@@ -5,6 +5,7 @@ import FBLeadEntry from "@/models/FBLeadEntry";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import CRMOutcome from "@/models/CRMOutcome";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
+import MetaAdMetricsDaily from "@/models/MetaAdMetricsDaily";
 import Lead from "@/models/Lead";
 import { scoreAdPerformance } from "./scoreAdPerformance";
 import { enqueueMetaLifecycleEventSafely, MetaLifecycleEventName } from "@/lib/meta/capi";
@@ -33,6 +34,36 @@ function dispositionToIncrement(disposition: string): Record<string, number> | n
   }
 
   return null;
+}
+
+export type NormalizedLearningOutcome = "NEW" | "CONTACT_ATTEMPTED" | "CONTACTED" | "QUALIFIED" | "UNQUALIFIED" | "WRONG_AUDIENCE" | "BAD_NUMBER" | "DUPLICATE_OPT_IN" | "APPOINTMENT" | "NO_SHOW" | "SALE" | "OPT_OUT";
+
+export function dispositionToNormalizedOutcome(disposition: string): NormalizedLearningOutcome | null {
+  const d = disposition.toLowerCase().trim().replace(/_/g, " ");
+  if (["new", "new lead"].includes(d)) return "NEW";
+  if (["attempted", "contact attempted", "called", "left voicemail"].includes(d)) return "CONTACT_ATTEMPTED";
+  if (["contacted", "contact made", "reached"].includes(d)) return "CONTACTED";
+  if (["qualified", "interested", "lead qualified"].includes(d)) return "QUALIFIED";
+  if (["unqualified", "not qualified", "not interested", "no interest"].includes(d)) return "UNQUALIFIED";
+  if (["wrong audience", "not veteran", "wrong product", "out of target"].includes(d)) return "WRONG_AUDIENCE";
+  if (["bad number", "wrong number", "disconnected"].includes(d)) return "BAD_NUMBER";
+  if (["duplicate opt in", "duplicate", "repeat opt in"].includes(d)) return "DUPLICATE_OPT_IN";
+  if (["booked appointment", "booked", "appointment booked", "scheduled"].includes(d)) return "APPOINTMENT";
+  if (["no show", "noshow", "missed appointment"].includes(d)) return "NO_SHOW";
+  if (["sold", "sale"].includes(d)) return "SALE";
+  if (["opt out", "optout", "do not contact", "dnc"].includes(d)) return "OPT_OUT";
+  return null;
+}
+
+function normalizedIncrement(outcome: NormalizedLearningOutcome | null): Record<string, number> {
+  if (outcome === "CONTACT_ATTEMPTED") return { contactAttempted: 1 };
+  if (outcome === "CONTACTED") return { contacted: 1 };
+  if (outcome === "QUALIFIED") return { qualifiedLeads: 1 };
+  if (outcome === "UNQUALIFIED") return { unqualifiedLeads: 1 };
+  if (outcome === "WRONG_AUDIENCE") return { wrongAudience: 1 };
+  if (outcome === "DUPLICATE_OPT_IN") return { duplicateOptIns: 1 };
+  if (outcome === "NO_SHOW") return { noShows: 1 };
+  return {};
 }
 
 export function dispositionToMetaLifecycleEvent(disposition: string): MetaLifecycleEventName | null {
@@ -93,15 +124,17 @@ export async function trackOutcomeFromDisposition(
       return;
     }
 
-    const increment = dispositionToIncrement(disposition);
+    const outcome = dispositionToNormalizedOutcome(disposition);
+    const incrementBase = dispositionToIncrement(disposition);
+    const increment = { ...(incrementBase || {}), ...normalizedIncrement(outcome) };
     const lifecycleEvent = dispositionToMetaLifecycleEvent(disposition);
-    if (!increment && !lifecycleEvent) return;
+    if (Object.keys(increment).length === 0 && !lifecycleEvent) return;
 
     // A "Sold" disposition with revenuePending=true (premium not entered yet — see
     // disposition-lead.ts's enforcement) must not count as a sale until a real premium lands.
     // record-sale.ts calls this function directly once the premium is recorded, at which point
     // revenuePending will already be false and this check passes through normally.
-    if (increment?.sales) {
+    if (increment.sales) {
       if ((ownedLead as any)?.revenuePending) {
         console.info("[trackCRMOutcome] Sale deferred — premium pending", { leadId, campaignId: String(campaignId) });
         return;
@@ -129,7 +162,7 @@ export async function trackOutcomeFromDisposition(
     }
 
     // Upsert CRMOutcome — one record per (campaignId, userId, date)
-    if (increment) await CRMOutcome.findOneAndUpdate(
+    if (Object.keys(increment).length) await CRMOutcome.findOneAndUpdate(
       { campaignId, userId, userEmail, date: today, metaAdId, creativeFamily },
       {
         $inc: incFields,
@@ -144,13 +177,14 @@ export async function trackOutcomeFromDisposition(
           metaCreativeId,
           variantId,
           creativeFamily,
+          normalizedOutcome: outcome || "",
         },
       },
       { upsert: true, new: true }
     );
 
     // Also upsert AdMetricsDaily so it becomes the full-funnel daily source of truth
-    if (increment) await AdMetricsDaily.findOneAndUpdate(
+    if (Object.keys(increment).length) await AdMetricsDaily.findOneAndUpdate(
       { campaignId, userEmail, date: today },
       {
         $inc: incFields,
@@ -164,8 +198,28 @@ export async function trackOutcomeFromDisposition(
       { upsert: true, new: true }
     );
 
+    // Exact ad/family outcome attribution. Never divide campaign outcomes among
+    // creatives; an unknown ad stays unknown and is excluded from family learning.
+    if (Object.keys(increment).length && metaAdId) await MetaAdMetricsDaily.findOneAndUpdate(
+      { userEmail, metaAdId, date: today },
+      {
+        $inc: increment,
+        $setOnInsert: {
+          campaignId,
+          userId,
+          userEmail,
+          date: today,
+          metaAdId,
+          metaCreativeId,
+          variantId,
+          creativeFamily,
+        },
+      },
+      { upsert: true, new: true }
+    );
+
     // Re-score campaign (async, non-blocking in case it's slow)
-    if (increment) {
+    if (Object.keys(increment).length) {
       scoreAdPerformance(String(campaignId)).catch((err) => {
         console.warn("[trackCRMOutcome] re-score failed:", err?.message);
       });

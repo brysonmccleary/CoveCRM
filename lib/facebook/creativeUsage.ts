@@ -13,6 +13,92 @@ export type CreativeReservation = {
   generationSignature: string;
 };
 
+export const DRAFT_RESERVATION_MINUTES = 90;
+
+function usageFields(draft: Record<string, any>) {
+  return {
+    leadType: String(draft?.leadType || ""),
+    winningFamilyId: String(draft?.winningFamilyId || draft?.creativeFamily || ""),
+    creativeClass: String(draft?.creativeClass || ""),
+    layoutId: String(draft?.layoutId || ""),
+    hookClass: String(draft?.hookClass || ""),
+    headline: String(draft?.headline || ""),
+    primaryText: String(draft?.primaryText || ""),
+    description: String(draft?.description || ""),
+    bulletPoints: Array.isArray(draft?.bulletPoints) ? draft.bulletPoints.map(String) : [],
+    cta: String(draft?.cta || ""),
+    imageDirection: String(draft?.imageDirection || draft?.imageUrl || ""),
+    imageIdentity: String(draft?.imageIdentity || draft?.imageUrl || ""),
+    backgroundDirection: String(draft?.backgroundDirection || draft?.backgroundImage || ""),
+    palette: String(draft?.paletteId || draft?.colorScheme || ""),
+    offerClass: String(draft?.offerClass || draft?.displayAmount || ""),
+    selectorSchema: draft?.selectorContract || null,
+    semanticFingerprint: String(draft?.semanticFingerprint || ""),
+    visualFingerprint: String(draft?.visualFingerprint || ""),
+    variationType: String(draft?.variationType || ""),
+  };
+}
+
+export async function reserveGeneratedDrafts(input: {
+  userEmail: string;
+  generationId: string;
+  drafts: Array<Record<string, any>>;
+  ttlMinutes?: number;
+  usageModel?: any;
+}): Promise<{ reservationId: string; expiresAt: Date }> {
+  const usageModel = input.usageModel || MetaCreativeUsage;
+  if (typeof usageModel.init === "function") await usageModel.init();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + Math.max(5, input.ttlMinutes || DRAFT_RESERVATION_MINUTES) * 60_000);
+  await usageModel.deleteMany({ status: "draft_reserved", expiresAt: { $lte: now } });
+  const reservationId = randomUUID();
+  const rows = input.drafts.map((draft) => {
+    const generationSignature = String(draft?.creativeSignature || "").trim() || buildCreativeGenerationSignature(draft);
+    const renderedAsset = String(draft?.renderedCreativeDataUrl || draft?.imageUrl || "").trim();
+    return {
+      creativeFingerprint: renderedAsset ? buildPublishedCreativeFingerprint(draft) : `draft_${generationSignature}`,
+      generationSignature,
+      status: "draft_reserved",
+      claimToken: "",
+      claimedAt: now,
+      publishedAt: null,
+      userEmail: input.userEmail,
+      campaignId: null,
+      generationId: input.generationId,
+      reservationId,
+      expiresAt,
+      ...usageFields(draft),
+      metaAdId: "",
+      metaCreativeId: "",
+    };
+  });
+  if (new Set(rows.map((row) => row.generationSignature)).size !== rows.length) {
+    throw new Error("Generated creative set contains an exact duplicate.");
+  }
+  try {
+    await usageModel.insertMany(rows, { ordered: true });
+  } catch (error: any) {
+    await usageModel.deleteMany({ reservationId, status: "draft_reserved" }).catch(() => {});
+    if (error?.code === 11000) throw new Error(CREATIVE_ALREADY_USED_MESSAGE);
+    throw error;
+  }
+  return { reservationId, expiresAt };
+}
+
+export async function releaseGeneratedDrafts(input: {
+  userEmail: string;
+  generationId?: string;
+  reservationId?: string;
+  usageModel?: any;
+}) {
+  const usageModel = input.usageModel || MetaCreativeUsage;
+  const filter: Record<string, any> = { userEmail: input.userEmail, status: "draft_reserved" };
+  if (input.generationId) filter.generationId = input.generationId;
+  if (input.reservationId) filter.reservationId = input.reservationId;
+  if (!input.generationId && !input.reservationId) return { deletedCount: 0 };
+  return usageModel.deleteMany(filter);
+}
+
 export async function claimCreativeSet(input: {
   userEmail: string;
   campaignId: unknown;
@@ -38,7 +124,27 @@ export async function claimCreativeSet(input: {
     for (let index = 0; index < reservations.length; index++) {
       const reservation = reservations[index];
       const draft = input.drafts[index] || {};
-      const claimed = await usageModel.findOneAndUpdate(
+      let claimed = Number(draft?.creativeEngineVersion || 0) >= 1 ? await usageModel.findOneAndUpdate(
+        {
+          generationSignature: reservation.generationSignature,
+          status: "draft_reserved",
+          userEmail: input.userEmail,
+          expiresAt: { $gt: new Date() },
+        },
+        {
+          $set: {
+            status: "reserved",
+            claimToken,
+            claimedAt: new Date(),
+            expiresAt: null,
+            campaignId: input.campaignId,
+            creativeFingerprint: reservation.creativeFingerprint,
+            ...usageFields(draft),
+          },
+        },
+        { new: true }
+      ) : null;
+      if (!claimed) claimed = await usageModel.findOneAndUpdate(
         {
           creativeFingerprint: reservation.creativeFingerprint,
           status: "reserved",
@@ -57,11 +163,10 @@ export async function claimCreativeSet(input: {
             publishedAt: null,
             userEmail: input.userEmail,
             campaignId: input.campaignId,
-            leadType: input.leadType,
-            winningFamilyId: String(draft?.winningFamilyId || ""),
-            variationType: String(draft?.variationType || ""),
             metaAdId: "",
             metaCreativeId: "",
+            expiresAt: null,
+            ...usageFields(draft),
           },
         },
         { upsert: true, new: true }
@@ -100,6 +205,7 @@ export async function finalizeCreativeReservation(input: {
         metaAdId: input.metaAdId,
         metaCreativeId: input.metaCreativeId,
         claimToken: "",
+        expiresAt: null,
       },
     },
     { new: true }

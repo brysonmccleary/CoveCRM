@@ -514,6 +514,22 @@ const EXPLICIT_LAYOUT_BY_FAMILY_ID: Record<string, LayoutFamily> = {
 };
 
 export function resolveCreativeLayoutFamily(draft: any, leadType: string, seed: number, variantIndex: number): LayoutFamily {
+  const intelligenceLayouts: Record<string, LayoutFamily> = {
+    hero_amount_age_grid: "amount_hero",
+    audience_benefit_grid: "benefit_grid",
+    problem_consequence_offer: "split_panel",
+    portrait_hero_offer: "premium_card",
+    full_bleed_text_overlay: "dark_response",
+    notice_letter_paper: "aged_parchment",
+    family_lifestyle_offer: "poster_stack",
+    comparison_two_column: "comparison_table",
+    educational_explainer_card: "clean_white_diagram",
+    calculator_quiz_assessment: "quiz_card",
+    ugc_talking_head: "mobile_native",
+    agent_trust_explainer: "trust_medical",
+  };
+  const intelligenceLayout = intelligenceLayouts[cleanText(draft?.layoutId)];
+  if (intelligenceLayout) return intelligenceLayout;
   const explicitLayout = EXPLICIT_LAYOUT_BY_FAMILY_ID[cleanText(draft?.winningFamilyId)];
   if (explicitLayout) return explicitLayout;
   const audienceSegment = cleanText(draft?.audienceSegment).toLowerCase();
@@ -593,7 +609,7 @@ const VISUAL_SUBHEADLINES: Record<string, string[]> = {
     "Coverage may help your family protect the place they call home.",
   ],
   final_expense: [
-    "Whole life options designed to help with final expenses.",
+    "Life insurance options designed to help with final expenses.",
     "Compare private coverage options for funeral and final costs.",
     "Review final expense coverage options by age and state.",
   ],
@@ -813,7 +829,9 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     headline,
     // Feed-image copy must always be a complete, product-specific thought.
     // Longer funnel copy remains available in the post and landing page.
-    subheadline: getVisualSubheadline(leadType, audienceSegment, seed + variantIndex, spanish),
+    subheadline: Number(draft?.creativeEngineVersion || 0) >= 1
+      ? clampCopy(overlay.subheadline || draft?.primaryText || getVisualSubheadline(leadType, audienceSegment, seed + variantIndex, spanish), 92)
+      : getVisualSubheadline(leadType, audienceSegment, seed + variantIndex, spanish),
     buttons: (overlay.buttonLabels.length ? overlay.buttonLabels : localizedFallbackButtons).slice(0, 4),
     bullets: overlay.benefitBullets.slice(0, 3),
     cta: clampCopy(overlay.ctaStrip || (spanish ? "Conozca sus opciones →" : "Learn more ->"), 42),
@@ -958,7 +976,7 @@ function renderSplitPanel(state: CreativeState) {
         <div style={{ display: "flex", flexDirection: "column", gap: state.gap, justifyContent: "space-between" }}>
           <Panel state={state} style={{ padding: 10 }}>
             <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.8 }}>{state.eyebrow}</div>
-            <div style={{ color: state.palette.accent, fontSize: state.amount ? 34 : 28, fontWeight: 950, lineHeight: 1, marginTop: 8 }}>{state.amount || "FAST CHECK"}</div>
+            <div style={{ color: state.palette.accent, fontSize: state.amount ? 34 : 28, fontWeight: 950, lineHeight: 1, marginTop: 8 }}>{state.amount || "QUICK REVIEW"}</div>
           </Panel>
           <MiniBenefits state={state} />
         </div>
@@ -979,6 +997,8 @@ function renderSplitPanel(state: CreativeState) {
 }
 
 function getSelectorPrompt(state: CreativeState): string {
+  const contractLabel = cleanText(state.draft?.selectorContract?.label);
+  if (Number(state.draft?.creativeEngineVersion || 0) >= 1 && contractLabel) return contractLabel.toUpperCase();
   const hasAmountChoices = state.buttons.some((label) => /\$/.test(label));
   if (state.leadType === "mortgage_protection") {
     return state.spanish ? "ELIJA EL SALDO DE SU HIPOTECA" : "SELECT YOUR MORTGAGE BALANCE";
@@ -1174,21 +1194,19 @@ function renderMessengerPrompt(state: CreativeState) {
 }
 
 function renderBenefitGrid(state: CreativeState) {
-  const benefitLabels = state.bullets.length >= 4 ? state.bullets : state.leadType === "veteran"
-    ? ["Protect Home", "Support Loved Ones", "Prepare Ahead", "Protect Legacy"]
-    : state.bullets.length
+  const benefitLabels = state.bullets.length
     ? state.bullets
     : ["Compare Options", "Coverage Fit", "Family Goals", "Next Step"];
   return (
     <CreativeShell state={state}>
       <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 14, paddingBottom: 50, display: "grid", gridTemplateRows: "auto auto 1fr auto", gap: 9, background: state.leadType === "veteran" ? "linear-gradient(135deg, rgba(245,240,232,0.9), rgba(255,255,255,0.72))" : undefined, border: state.leadType === "veteran" ? "6px solid rgba(139,26,26,0.82)" : undefined }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.7 }}>
-          <span>{state.leadType === "veteran" ? "VETERANS 50+ NOTICE" : state.eyebrow}</span>
+          <span>{state.leadType === "veteran" ? "VETERANS • COVERAGE REVIEW" : state.eyebrow}</span>
           <span style={{ color: state.palette.accent }}>{state.leadType === "iul" ? "EDUCATION" : "OPTIONS"}</span>
         </div>
         <div style={{ textAlign: "center" }}>
           <div style={{ color: state.palette.headline, fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
-          {(state.amount || state.leadType === "veteran") && <div style={{ color: state.palette.accent, fontSize: 45, fontWeight: 950, lineHeight: 0.95, marginTop: 7 }}>{state.amount || "$40,000"}</div>}
+          {state.amount && <div style={{ color: state.palette.accent, fontSize: 45, fontWeight: 950, lineHeight: 0.95, marginTop: 7 }}>{state.amount}</div>}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, alignContent: "center" }}>
           {benefitLabels.slice(0, 4).map((benefit, index) => (
@@ -1618,6 +1636,25 @@ function renderPopArtBurst(state: CreativeState) {
 }
 
 function renderTemplateFamily(state: CreativeState) {
+  // Creative Intelligence drafts carry an explicit, validated layout contract.
+  // They use the real layout renderers below even when a photo is present; this
+  // is what makes hierarchy/composition diversity visible in the final upload.
+  const intelligenceLayout = Number(state.draft?.creativeEngineVersion || 0) >= 1
+    && Boolean(state.draft?.layoutId);
+  if (intelligenceLayout) {
+    if (state.layoutFamily === "split_panel") return renderSplitPanel(state);
+    if (state.layoutFamily === "selector_grid") return renderSelectorGrid(state);
+    if (state.layoutFamily === "checklist_first" || state.layoutFamily === "trust_medical") return renderChecklistFirst(state);
+    if (state.layoutFamily === "amount_hero") return renderAmountHero(state);
+    if (state.layoutFamily === "comparison_table") return renderComparisonTable(state);
+    if (state.layoutFamily === "quiz_card") return renderDirectResponseOffer(state);
+    if (state.layoutFamily === "report_card" || state.layoutFamily === "mobile_native") return renderReportCard(state);
+    if (state.layoutFamily === "benefit_grid") return renderBenefitGrid(state);
+    if (state.layoutFamily === "clean_white_diagram") return renderCleanWhiteDiagram(state);
+    if (state.layoutFamily === "aged_parchment") return renderAgedParchment(state);
+    if (state.layoutFamily === "premium_card" || state.layoutFamily === "dark_response") return renderPosterStack(state);
+    return renderPosterStack(state);
+  }
   // Wide paid/generated backgrounds are shown in a dedicated image zone.
   // This preserves the subject and keeps all copy outside the crop instead of
   // stretching a landscape photo behind a portrait ad.

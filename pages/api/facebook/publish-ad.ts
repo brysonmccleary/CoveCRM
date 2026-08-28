@@ -24,10 +24,14 @@ import { claimLaunchCampaign, releaseLaunchCampaignClaim } from "@/lib/facebook/
 import { signHostedAttributionToken } from "@/lib/facebook/hostedAttribution";
 import {
   buildLandingPageSnapshot,
-  DEFAULT_META_CLAIMS,
+  ALL_META_CLAIMS,
+  applyTenantClaimApprovals,
+  ensureDefaultMetaClaims,
   evaluateCreativeClaims,
   requiredQualifierTextsForCreative,
 } from "@/lib/facebook/claimsRegistry";
+import MetaClaimRegistry from "@/models/MetaClaimRegistry";
+import MetaClaimApproval, { COVECRM_PLATFORM_CLAIM_SCOPE } from "@/models/MetaClaimApproval";
 import { writeImmutableMetaLaunchArchive } from "@/lib/facebook/archiveMetaLaunch";
 import { metaGraphUrl } from "@/lib/meta/graphApi";
 import {
@@ -49,6 +53,7 @@ import {
 } from "@/lib/facebook/creativeUsage";
 import { hasRequiredCreativeTreatmentMix } from "@/lib/facebook/creativeCandidateSelection";
 import { resolveAudienceSegment } from "@/lib/facebook/audienceTargeting";
+import { assertSelectorFunnelConsistency } from "@/lib/facebook/creativeIntelligence/selectors";
 
 export const config = {
   api: {
@@ -249,6 +254,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       buttonLabels?: string[];
       bulletPoints?: string[];
       landingPageConfig?: Record<string, any>;
+      productCapability?: Record<string, any> | null;
+      creativeClass?: string;
+      layoutId?: string;
+      hookClass?: string;
+      headlineClass?: string;
+      offerClass?: string;
+      imageDirection?: string;
+      imageIdentity?: string;
+      backgroundDirection?: string;
+      selectorContract?: Record<string, any>;
+      semanticFingerprint?: string;
+      capabilityId?: string;
+      capabilitySource?: string;
+      creativeEngineVersion?: number;
+      variantId?: string;
+      audienceSegment?: string;
+      language?: string;
     }>;
     creativeArchetype?: string;
     winningFamilyId?: string;
@@ -396,6 +418,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             creativeArchetype,
           },
         ];
+    for (const draft of normalizedDrafts) {
+      if (Number(draft?.creativeEngineVersion || 0) < 1) continue;
+      if (String(draft?.leadType || "") !== String(leadType)) {
+        return res.status(422).json({ ok: false, error: "Launch blocked: creative product does not match the selected campaign product." });
+      }
+      if (String(draft?.audienceSegment || audienceSegment) !== audienceSegment) {
+        return res.status(422).json({ ok: false, error: "Launch blocked: creative audience does not match the selected targeting profile." });
+      }
+      const expectedLanguage = audienceSegment === "spanish" ? "es" : "en";
+      if (String(draft?.language || expectedLanguage) !== expectedLanguage) {
+        return res.status(422).json({ ok: false, error: "Launch blocked: creative language does not match the campaign language." });
+      }
+      try {
+        assertSelectorFunnelConsistency(draft.selectorContract as any, draft.landingPageConfig?.selectorStep || {});
+      } catch (error: any) {
+        return res.status(422).json({ ok: false, error: `Launch blocked: ${error?.message || "selector/funnel mismatch"}` });
+      }
+    }
     const generatedCoveCrmCreative = Boolean(
       winnerLandingPageConfig ||
       winningFamilyId ||
@@ -491,12 +531,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       qualifierTexts: [] as string[],
     };
 
-    // Copy review is advisory only. Qualifiers are still derived from recognized
-    // claims and rendered on the hosted funnel, but CoveCRM never blocks publish.
-    // Keep automatic disclosures and the immutable audit archive, but do not
-    // make publishing depend on CoveCRM-maintained approval records. Meta is the
-    // final authority for ad review.
-    const registeredClaims = DEFAULT_META_CLAIMS as any[];
+    // Claims are a hard launch boundary. Market observation is not product
+    // approval; unsupported copy must fail before Cove or Meta objects exist.
+    let registeredClaims = ALL_META_CLAIMS as any[];
     const creativeClaimText = normalizedDrafts.map((draft) => [
       draft?.primaryText,
       draft?.headline,
@@ -515,13 +552,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...funnelData,
       disclaimerText: baseDisclaimer,
     });
-    const claimEvaluation = evaluateCreativeClaims({
+    let claimEvaluation = evaluateCreativeClaims({
       creativeText: creativeClaimText,
       leadType: String(leadType),
       states: normalizedLicensedStates,
       landingPageSnapshot,
       claims: registeredClaims as any,
+      productCapability: normalizedDrafts[0]?.productCapability || null,
     });
+    // Safe/general copy never needs a registry write or lookup. If a risky
+    // claim is present, load current Cove/platform approvals and reevaluate.
+    if (!claimEvaluation.launchAllowed) {
+      await ensureDefaultMetaClaims();
+      const nowForClaims = new Date();
+      const [registryRows, approvalRows] = await Promise.all([
+        MetaClaimRegistry.find({ expiresAt: { $gt: nowForClaims } }).lean(),
+        MetaClaimApproval.find({
+          userEmail: { $in: [userEmail, COVECRM_PLATFORM_CLAIM_SCOPE] },
+          revokedAt: null,
+          expiresAt: { $gt: nowForClaims },
+        }).lean(),
+      ]);
+      registeredClaims = applyTenantClaimApprovals(registryRows as any[], approvalRows as any[], nowForClaims);
+      claimEvaluation = evaluateCreativeClaims({
+        creativeText: creativeClaimText,
+        leadType: String(leadType),
+        states: normalizedLicensedStates,
+        landingPageSnapshot,
+        claims: registeredClaims as any,
+        productCapability: normalizedDrafts[0]?.productCapability || null,
+      });
+    }
+    if (!claimEvaluation.launchAllowed) {
+      return res.status(422).json({
+        ok: false,
+        error: `Launch blocked by product/claim validation: ${claimEvaluation.blockers.join(" ")}`,
+        claimBlockers: claimEvaluation.blockers,
+      });
+    }
 
     // 1. Ensure CRM folder exists — convention: "FB: {campaignName}"
     //    This matches what the webhook uses for lead routing.
@@ -657,6 +725,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       metaAdId: string;
       metaCreativeId: string;
       creativeFamily: string;
+      layoutId: string;
+      hookClass: string;
+      creativeClass: string;
+      offerClass: string;
+      imageIdentity: string;
+      backgroundIdentity: string;
       destinationUrl: string;
       status: string;
     }> = [];
@@ -1011,7 +1085,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         for (let index = 0; index < normalizedDrafts.length; index++) {
           const currentDraft = normalizedDrafts[index] || {};
-          const variantId = String(currentDraft.uniquenessFingerprint || `variant_${index + 1}`);
+          const variantId = String(currentDraft.variantId || currentDraft.uniquenessFingerprint || `variant_${index + 1}`);
           const creativeFamily = String(currentDraft.winningFamilyId || currentDraft.creativeArchetype || "");
           let currentImageUrl = String(
             currentDraft.renderedCreativeDataUrl ||
@@ -1156,6 +1230,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             metaAdId: createdMetaAdId,
             metaCreativeId: creativeId,
             creativeFamily,
+            layoutId: String(currentDraft.layoutId || ""),
+            hookClass: String(currentDraft.hookClass || ""),
+            creativeClass: String(currentDraft.creativeClass || ""),
+            offerClass: String(currentDraft.offerClass || ""),
+            imageIdentity: String(currentDraft.imageIdentity || currentDraft.imageDirection || currentDraft.imageUrl || ""),
+            backgroundIdentity: String(currentDraft.backgroundDirection || ""),
             destinationUrl: resolvedAdLink,
             status: "PAUSED",
           });

@@ -2,9 +2,9 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
 import CRMOutcome from "@/models/CRMOutcome";
+import MetaAdMetricsDaily from "@/models/MetaAdMetricsDaily";
 import FBGlobalAdPattern from "@/models/FBGlobalAdPattern";
 import { extractPatternFromCampaign, ExtractedGlobalPattern } from "./extractPatternFromCampaign";
-import { buildGenerationHints } from "./buildGenerationHints";
 import { scorePatternConfidence } from "./scorePatternConfidence";
 
 type RecomputeOptions = {
@@ -177,6 +177,27 @@ export async function recomputeGlobalPatterns(
 
   summary.campaignsScanned = campaigns.length;
   const perfMap = await loadPerfByCampaign(campaigns.map((c: any) => c._id));
+  const familyPerfRows = await MetaAdMetricsDaily.aggregate([
+    { $match: { campaignId: { $in: campaigns.map((c: any) => c._id) }, creativeFamily: { $ne: "" } } },
+    { $group: {
+      _id: { campaignId: "$campaignId", creativeFamily: "$creativeFamily" },
+      spend: { $sum: { $ifNull: ["$spend", 0] } },
+      leads: { $sum: { $ifNull: ["$leads", 0] } },
+      appointments: { $sum: "$appointmentsBooked" },
+      sales: { $sum: "$sales" },
+      optOuts: { $sum: "$optOuts" },
+      badNumbers: { $sum: "$badNumbers" },
+      frequency: { $avg: "$frequency" },
+    } },
+  ]);
+  const familyPerfMap = new Map<string, CampaignPerf>(familyPerfRows.map((row: any) => [
+    `${String(row._id.campaignId)}:${String(row._id.creativeFamily)}`,
+    {
+      spend: num(row.spend), leads: num(row.leads), appointments: num(row.appointments),
+      sales: num(row.sales), revenue: 0, optOuts: num(row.optOuts), badNumbers: num(row.badNumbers),
+      frequency: num(row.frequency),
+    },
+  ]));
   const buckets = new Map<string, Bucket>();
 
   for (const campaign of campaigns as any[]) {
@@ -200,15 +221,15 @@ export async function recomputeGlobalPatterns(
       continue;
     }
     for (const stateCode of stateCodes) for (const winningFamilyId of familyIds) {
-    const familyAd = (campaign.ads || []).find((ad: any) => String(ad.creativeFamily || "") === winningFamilyId);
-    const familyCount = Math.max(1, familyIds.length);
-    const perf: CampaignPerf = familyAd ? {
-      ...campaignPerformance,
-      spend: num(familyAd.spend) || campaignPerformance.spend / familyCount,
-      leads: num(familyAd.leads) || campaignPerformance.leads / familyCount,
-      appointments: num(familyAd.appointmentsBooked) || campaignPerformance.appointments / familyCount,
-      sales: num(familyAd.sales) || campaignPerformance.sales / familyCount,
-    } : campaignPerformance;
+    const exactFamilyPerf = familyPerfMap.get(`${String(campaign._id)}:${winningFamilyId}`);
+    // A single-family legacy campaign can safely use its campaign total. A
+    // multi-family campaign without exact ad attribution is excluded rather
+    // than evenly splitting outcomes and fabricating performance.
+    if (!exactFamilyPerf && familyIds.length > 1) {
+      summary.skipped += 1;
+      continue;
+    }
+    const perf: CampaignPerf = exactFamilyPerf || campaignPerformance;
     const extracted = {
       ...extractedBase,
       stateCode,
