@@ -15,6 +15,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
 import { buildCreativeGenerationSignature } from "@/lib/facebook/creativeIdentity";
 import { selectCreativeTreatmentMix } from "@/lib/facebook/creativeCandidateSelection";
+import { resolveAudienceSegment } from "@/lib/facebook/audienceTargeting";
 
 const LEAD_FORM_QUESTIONS = {
   mortgage_protection: [
@@ -85,10 +86,6 @@ function spanishLeadFormQuestions(leadType: keyof typeof LEAD_FORM_QUESTIONS): r
     return [...shared, "Edad", "Interés principal (Protección / Valor en efectivo / Jubilación / Legado)", "Cobertura actual"];
   }
   return LEAD_FORM_QUESTIONS[leadType];
-}
-
-function normalizeAudienceSegment(segment?: string): AudienceSegment {
-  return segment === "veteran" || segment === "trucker" || segment === "spanish" ? segment : "standard";
 }
 
 function campaignLabel(leadType: string) {
@@ -231,7 +228,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const userEmail = String(session.user.email).toLowerCase();
   const location = String(locationParam || agentState || "").trim();
-  const audienceSegment = normalizeAudienceSegment(audienceSegmentParam);
+  let audienceSegment: AudienceSegment;
+  try {
+    audienceSegment = resolveAudienceSegment({ leadType, audienceSegment: audienceSegmentParam });
+  } catch (error: any) {
+    return res.status(400).json({ ok: false, error: error?.message || "Unsupported audience selection" });
+  }
   const requestedVariantCount = Math.min(4, Math.max(1, Number((req.body as any)?.variantCount) || 3));
   const regenerationAttempt = Math.max(0, Number(regenerationAttemptParam) || 0);
   const generationNonce = String(generationNonceParam || "").trim() || `server_${Date.now().toString(36)}_${regenerationAttempt}`;

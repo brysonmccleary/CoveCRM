@@ -690,6 +690,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   {
     id: "vet_patriotic_amount_card",
     leadType: "veteran",
+    audienceSegment: "veteran",
     archetype: "patriotic_amount_card",
     familyName: "Patriotic Amount Card",
     vendorStyleTag: "market_veteran",
@@ -764,6 +765,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   {
     id: "vet_age_qualifier_card",
     leadType: "veteran",
+    audienceSegment: "veteran",
     archetype: "age_qualifier_card",
     familyName: "Age Qualifier Card",
     vendorStyleTag: "market_veteran",
@@ -850,6 +852,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   {
     id: "vet_benefit_unlock_long_copy",
     leadType: "veteran",
+    audienceSegment: "veteran",
     archetype: "veteran_benefit_unlock_long_copy",
     familyName: "Benefit Unlock Long Copy",
     vendorStyleTag: "market_veteran",
@@ -932,6 +935,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   {
     id: "vet_branch_selector",
     leadType: "veteran",
+    audienceSegment: "veteran",
     archetype: "branch_selector",
     familyName: "Branch Selector",
     vendorStyleTag: "market_veteran_branch",
@@ -1003,6 +1007,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   {
     id: "vet_spouse_security",
     leadType: "veteran",
+    audienceSegment: "veteran",
     archetype: "spouse_security",
     familyName: "Spouse Security",
     vendorStyleTag: "market_veteran_family",
@@ -1078,6 +1083,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   {
     id: "trk_neon_card",
     leadType: "trucker",
+    audienceSegment: "trucker",
     archetype: "neon_trucker_card",
     familyName: "Neon Trucker Card",
     vendorStyleTag: "market_trucker",
@@ -1148,6 +1154,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   {
     id: "trk_patriotic_card",
     leadType: "trucker",
+    audienceSegment: "trucker",
     archetype: "patriotic_trucker_card",
     familyName: "Patriotic Trucker Card",
     vendorStyleTag: "market_trucker",
@@ -1216,6 +1223,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   {
     id: "trk_scenic_benefit",
     leadType: "trucker",
+    audienceSegment: "trucker",
     archetype: "scenic_benefit_trucker",
     familyName: "Scenic Benefit Trucker",
     vendorStyleTag: "market_trucker",
@@ -1276,6 +1284,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
   {
     id: "trk_problem_solution",
     leadType: "trucker",
+    audienceSegment: "trucker",
     archetype: "driver_specific_problem_solution",
     familyName: "Driver Problem/Solution",
     vendorStyleTag: "market_trucker",
@@ -1798,9 +1807,10 @@ function buildAdditionalWinningAdFamilies(): WinningAdFamily[] {
     return ["Learn About IUL →", "Review Policy Terms →", "Start IUL Education →"];
   };
 
-  const fe = (id: string, familyName: string, archetype: string, styleTag: string, visualDirection: string, headlines: string[], hooks: string[], bullets: string[], buttons: string[][], theme: { background: string; accent: string; styleTag: string }, priority = 2): WinningAdFamily => ({
+  const fe = (id: string, familyName: string, archetype: string, styleTag: string, visualDirection: string, headlines: string[], hooks: string[], bullets: string[], buttons: string[][], theme: { background: string; accent: string; styleTag: string }, priority = 2, audienceSegment: AudienceSegment = "standard"): WinningAdFamily => ({
     id,
     leadType: "final_expense",
+    audienceSegment,
     archetype,
     familyName,
     vendorStyleTag: styleTag,
@@ -1995,6 +2005,8 @@ function buildAdditionalWinningAdFamilies(): WinningAdFamily[] {
     fe("fe_family_burden_respectful", "Respectful Family Burden", "family_burden_respectful", "final_expense_family", "Respectful family burden layout, warm home palette, clear CTA and dignified language", ["Help Protect Loved Ones From Final Costs", "Plan Ahead For The People You Love"], ["Final expense coverage can help reduce financial stress for loved ones.", "Planning ahead may help your family focus on each other instead of bills."], ["Help cover final costs", "Simple review", "Respectful planning"], ageSenior, { background: "#fff7ed", accent: "#c2410c", styleTag: "fe_family_warmth" }),
     fe("fe_lock_rate_direct_response", "Lock Rate Direct Response", "lock_rate_direct_response", "final_expense_lock_rate", "Dark gold direct-response card with lock-rate language and age selector", ["Review Rates Before They Change", "Check Final Expense Options Today"], ["It may be worth reviewing final expense options while coverage may be affordable.", "Compare options before age or health changes."], ["Current age band check", "Rate class conversation", "Coverage before changes"], ageSenior, { background: "#111827", accent: "#d4a017", styleTag: "fe_lock_rate" }),
     fe("fe_simple_phone_review", "Simple Phone Review", "simple_phone_review", "final_expense_phone_review", "Mobile-native message card style for final expense phone review", ["A Simple Final Expense Review", "See Options In A Short Call"], ["A licensed professional can walk through options in a simple phone review.", "No pressure, just a clear look at what may be available."], ["Short phone review", "No obligation", "State-specific options"], ageSenior, { background: "#f8fafc", accent: "#0f172a", styleTag: "fe_phone_review" }),
+    fe("fe_veteran_final_cost_review", "Veteran Final Cost Review", "veteran_final_cost_review", "final_expense_veteran", "Respectful veteran final expense card with private coverage framing, navy and muted patriotic accents, no seals or government marks", ["Veterans: Final Expense Coverage Review", "Final Expense Options For Those Who Served"], ["Veterans and military families can review private final expense coverage options.", "A licensed professional can explain age-based final expense options for veterans in your state."], ["Veteran-focused private coverage", "Help prepare for final costs", "Licensed no-obligation review"], ageSenior, { background: "#f5f0e8", accent: "#8b1a1a", styleTag: "fe_veteran_review" }, 1, "veteran"),
+    fe("fe_trucker_final_cost_review", "Trucker Final Cost Review", "trucker_final_cost_review", "final_expense_trucker", "Rugged but respectful final expense card for CDL drivers with navy and amber highway accents", ["Truckers: Final Expense Coverage Review", "Final Expense Options For CDL Drivers"], ["CDL drivers can review private final expense coverage options on their schedule.", "Truckers can compare age-based final expense options with a licensed professional."], ["Driver-focused review", "Help prepare for final costs", "No-obligation coverage check"], ageSenior, { background: "#07131f", accent: "#f59e0b", styleTag: "fe_trucker_review" }, 1, "trucker"),
 
     mp("mp_clean_navy_price_table", "Clean Navy Price Table", "clean_navy_price_table", "standard", "mortgage_price_table", "Clean navy and blue mortgage amount table with homeowner CTA", ["Mortgage Protection Options", "Compare Home Protection Amounts"], ["If the unexpected happened, mortgage protection may help your family stay in the home.", "Compare private coverage options by mortgage amount."], ["Mortgage balance review", "Family protection", "Living benefits may be available"], mortgageAmounts, { background: "#eaf4ff", accent: "#1d4ed8", styleTag: "mp_navy_table" }, 1),
     mp("mp_homeowner_notice_layout", "Homeowner Notice Layout", "homeowner_notice_layout", "standard", "mortgage_notice", "Homeowner notice card with blue header, white table, and amount buttons", ["Homeowner Coverage Notice", "Protect Your Mortgage Balance"], ["Homeowners can check mortgage-balance protection options in a notice-style table.", "Select a balance range to see how coverage may be structured."], ["Mortgage balance ranges", "Homeowner notice format", "Amount-based comparison"], mortgageAmounts, { background: "#ffffff", accent: "#0f3b70", styleTag: "mp_homeowner_notice" }),
@@ -2046,11 +2058,23 @@ function normalizeAudienceSegment(segment?: string): AudienceSegment {
   return segment === "veteran" || segment === "trucker" || segment === "spanish" ? segment : "standard";
 }
 
+// Veteran and trucker were originally modeled as lead types before the
+// audience dimension existed. Keep legacy callers that still pass "standard"
+// on the same canonical identity segment as the launch targeting layer.
+function resolveWinningAudienceSegment(
+  leadType: WinnerLeadType,
+  audienceSegment?: AudienceSegment
+): AudienceSegment {
+  if (leadType === "veteran") return "veteran";
+  if (leadType === "trucker") return "trucker";
+  return normalizeAudienceSegment(audienceSegment);
+}
+
 export function getWinningFamiliesByLeadType(
   leadType: WinnerLeadType,
   audienceSegment: AudienceSegment = "standard"
 ): WinningAdFamily[] {
-  const normalizedSegment = normalizeAudienceSegment(audienceSegment);
+  const normalizedSegment = resolveWinningAudienceSegment(leadType, audienceSegment);
   return WINNING_AD_LIBRARY
     .filter((f) => !f.disabled && f.leadType === leadType && normalizeAudienceSegment(f.audienceSegment) === normalizedSegment)
     .sort((a, b) => a.priority - b.priority);
@@ -2364,7 +2388,7 @@ export function generateWinningVariants(input: {
   familyIdOverride?: string;
 }): { emotional: GeneratedWinningAd; logical: GeneratedWinningAd; curiosity: GeneratedWinningAd } {
   const { leadType, userId, campaignName, location = "", familyIdOverride } = input;
-  const audienceSegment = normalizeAudienceSegment(input.audienceSegment);
+  const audienceSegment = resolveWinningAudienceSegment(leadType, input.audienceSegment);
   const families = getWinningFamiliesByLeadType(leadType, audienceSegment);
 
   if (families.length === 0) {
@@ -2397,7 +2421,7 @@ export function generateWinningVariantList(input: {
   variantCount?: number;
 }): GeneratedWinningAd[] {
   const { leadType, userId, campaignName, location = "", familyIdOverride } = input;
-  const audienceSegment = normalizeAudienceSegment(input.audienceSegment);
+  const audienceSegment = resolveWinningAudienceSegment(leadType, input.audienceSegment);
   const families = getWinningFamiliesByLeadType(leadType, audienceSegment);
 
   if (families.length === 0) {

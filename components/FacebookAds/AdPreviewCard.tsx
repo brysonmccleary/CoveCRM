@@ -509,6 +509,8 @@ const EXPLICIT_LAYOUT_BY_FAMILY_ID: Record<string, LayoutFamily> = {
   iul_trucker_sunset_gold: "trucker_highway",
   iul_trucker_premium_black_gold: "premium_dark_gold",
   iul_trucker_dark_purple_sky: "trucker_highway",
+  fe_veteran_final_cost_review: "age_selector",
+  fe_trucker_final_cost_review: "trucker_highway",
 };
 
 export function resolveCreativeLayoutFamily(draft: any, leadType: string, seed: number, variantIndex: number): LayoutFamily {

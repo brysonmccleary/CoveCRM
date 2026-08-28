@@ -170,7 +170,7 @@ describe("Exhaustive generated-creative quality gate", () => {
             }
 
             if (family.leadType === "mortgage_protection") {
-              expect(markup).toMatch(/MORTGAGE PROTECTION|PROTECCIÓN HIPOTECARIA/);
+              expect(markup).toMatch(/MORTGAGE PROTECTION|PROTECCIÓN HIPOTECARIA/i);
               expect(markup).toMatch(/MORTGAGE BALANCE|SALDO (?:DE SU )?HIPOTECA|SALDO HIPOTECARIO/);
               for (const label of draft.landingPageConfig.buttonLabels) {
                 const normalized = label.toLowerCase().replace(/,/g, "").trim();

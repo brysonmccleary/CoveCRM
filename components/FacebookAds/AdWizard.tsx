@@ -654,7 +654,15 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           generationNonce,
         }),
       });
-      const json = await response.json();
+      const responseBody = await response.text();
+      let json: any;
+      try {
+        json = responseBody ? JSON.parse(responseBody) : {};
+      } catch {
+        throw new Error(
+          `Generation failed (HTTP ${response.status}): ${responseBody || "the server returned an invalid response"}`
+        );
+      }
       if (!response.ok || !json?.draft) throw new Error(json?.error || "Generation failed");
       const nextDrafts = Array.isArray(json?.drafts) && json.drafts.length > 0 ? json.drafts : [json.draft];
       setDraft(json.draft);
