@@ -46,13 +46,30 @@ describe("global creative intelligence engine", () => {
 
   it("ships the CSS-first execution capacity without a paid image dependency", () => {
     expect(cssExecutionCounts()).toEqual({
-      veteran: 40,
-      finalExpense: 30,
-      mortgage: 30,
-      iul: 30,
-      trucker: 30,
-      spanish: 110,
+      veteran: 100,
+      finalExpense: 100,
+      mortgage: 100,
+      iul: 100,
+      trucker: 100,
+      spanish: 300,
     });
+  });
+
+  it("counts feed-visible composition depth rather than palette aliases", () => {
+    const lanes = [
+      ["veteran", "veteran", "en", 100], ["final_expense", "standard", "en", 100],
+      ["mortgage_protection", "standard", "en", 100], ["iul", "standard", "en", 100],
+      ["trucker", "trucker", "en", 100], ["final_expense", "spanish", "es", 60],
+      ["mortgage_protection", "spanish", "es", 60], ["iul", "spanish", "es", 60],
+      ["veteran", "veteran", "es", 60], ["trucker", "trucker", "es", 60],
+    ] as const;
+    const { getEligibleCssExecutions } = require("@/lib/facebook/creativeIntelligence/executions");
+    for (const [vertical, audienceSegment, language, expected] of lanes) {
+      const rows = getEligibleCssExecutions({ vertical, audienceSegment, language });
+      expect(rows).toHaveLength(expected);
+      expect(new Set(rows.map((row: any) => row.compositionVariant)).size).toBe(10);
+      expect(new Set(rows.map((row: any) => [row.macroFamily, row.compositionVariant, row.hierarchyTreatment, row.panelStructure, row.selectorPresentation, row.benefitTreatment].join("|"))).size).toBe(expected);
+    }
   });
 
   it("uses strong safe direct-response copy without inventing gated claims", () => {
@@ -76,6 +93,7 @@ describe("global creative intelligence engine", () => {
     expect(scoreBatchDiversity(drafts).score).toBeGreaterThanOrEqual(0.65);
     expect(new Set(drafts.map((draft) => draft.layoutId)).size).toBeGreaterThanOrEqual(2);
     expect(drafts.every((draft) => draft.capabilitySource === "safe_general")).toBe(true);
+    expect(drafts.every((draft) => draft.creativeEngineVersion === 3 && draft.cssCompositionVariant && draft.cssBenefitTreatment)).toBe(true);
   });
 
   it("derives eligibility ranges from configured capability data and shares exact funnel options", () => {

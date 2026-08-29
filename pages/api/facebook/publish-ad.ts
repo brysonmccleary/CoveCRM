@@ -257,6 +257,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       productCapability?: Record<string, any> | null;
       creativeClass?: string;
       layoutId?: string;
+      cssExecutionId?: string;
+      cssCompositionVariant?: string;
+      cssMacroFamily?: string;
+      cssHierarchyTreatment?: string;
+      cssPanelStructure?: string;
+      cssTypographyTreatment?: string;
+      cssSelectorPresentation?: string;
+      cssBenefitTreatment?: string;
+      cssBackgroundTreatment?: string;
+      cssCtaTreatment?: string;
       hookClass?: string;
       headlineClass?: string;
       offerClass?: string;
@@ -726,6 +736,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       metaCreativeId: string;
       creativeFamily: string;
       layoutId: string;
+      executionId: string;
+      compositionVariant: string;
+      macroFamily: string;
+      hierarchyTreatment: string;
+      panelStructure: string;
+      typographyTreatment: string;
+      selectorPresentation: string;
+      benefitTreatment: string;
+      backgroundTreatment: string;
+      ctaTreatment: string;
       hookClass: string;
       creativeClass: string;
       offerClass: string;
@@ -1231,6 +1251,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             metaCreativeId: creativeId,
             creativeFamily,
             layoutId: String(currentDraft.layoutId || ""),
+            executionId: String(currentDraft.cssExecutionId || ""),
+            compositionVariant: String(currentDraft.cssCompositionVariant || ""),
+            macroFamily: String(currentDraft.cssMacroFamily || ""),
+            hierarchyTreatment: String(currentDraft.cssHierarchyTreatment || ""),
+            panelStructure: String(currentDraft.cssPanelStructure || ""),
+            typographyTreatment: String(currentDraft.cssTypographyTreatment || ""),
+            selectorPresentation: String(currentDraft.cssSelectorPresentation || ""),
+            benefitTreatment: String(currentDraft.cssBenefitTreatment || ""),
+            backgroundTreatment: String(currentDraft.cssBackgroundTreatment || ""),
+            ctaTreatment: String(currentDraft.cssCtaTreatment || ""),
             hookClass: String(currentDraft.hookClass || ""),
             creativeClass: String(currentDraft.creativeClass || ""),
             offerClass: String(currentDraft.offerClass || ""),

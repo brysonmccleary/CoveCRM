@@ -53,6 +53,8 @@ describe("Creative Intelligence rendered visual quality gates", () => {
         layoutId: layout.layoutId,
         cssExecutionId: "",
         cssRendererFamily: "",
+        cssCompositionVariant: "",
+        creativeEngineVersion: 2,
         winningFamilyId: `layout-qa-${layout.layoutId}`,
         visualVariantIndex: index,
         visualTreatment: "graphic",

@@ -1,6 +1,6 @@
 import type { GetServerSideProps } from "next";
 import { ProductionFeedCreative } from "@/components/FacebookAds/AdPreviewCard";
-import { buildCreativeVisualQaCorpus } from "@/lib/facebook/creativeIntelligence/qaCorpus";
+import { buildCreativeDepthCollisionCorpus, buildCreativeVisualQaCorpus } from "@/lib/facebook/creativeIntelligence/qaCorpus";
 
 export default function CreativeIntelligenceQa({ drafts, title, single }: { drafts: Array<Record<string, any>>; title: string; single: boolean }) {
   if (single) {
@@ -36,7 +36,8 @@ export default function CreativeIntelligenceQa({ drafts, title, single }: { draf
 
 export const getServerSideProps: GetServerSideProps = async ({ query }) => {
   if (process.env.NODE_ENV !== "development") return { notFound: true };
-  const corpus = buildCreativeVisualQaCorpus();
+  const collision = String(query.suite || "") === "collision";
+  const corpus = collision ? buildCreativeDepthCollisionCorpus() : buildCreativeVisualQaCorpus();
   const group = String(query.group || "veteran");
   const preview = String(query.preview || "");
   const sheet = Math.max(1, Number(query.sheet || 1));
@@ -48,11 +49,12 @@ export const getServerSideProps: GetServerSideProps = async ({ query }) => {
     ? corpus.previews.filter((draft) => draft.qaBatchId === batch)
     : layout ? corpus.previews.filter((draft) => draft.layoutId === layout)
       : corpus.previews.filter((draft) => draft.qaGroup === group);
-  const drafts = JSON.parse(JSON.stringify(preview ? matches : matches.slice((sheet - 1) * 6, sheet * 6)));
+  const sheetSize = Math.max(1, Math.min(25, Number(query.sheetSize || 6)));
+  const drafts = JSON.parse(JSON.stringify(preview ? matches : matches.slice((sheet - 1) * sheetSize, sheet * sheetSize)));
   return {
     props: {
       drafts,
-      title: preview || (batch ? `${batch}` : layout ? `${layout} · sheet ${sheet}` : `${group} · sheet ${sheet}`),
+      title: preview || `${collision ? "collision · " : ""}${batch ? `${batch}` : layout ? `${layout} · sheet ${sheet}` : `${group} · sheet ${sheet}`}`,
       single: Boolean(preview),
     },
   };

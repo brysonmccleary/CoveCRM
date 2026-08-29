@@ -9,6 +9,7 @@ const CONFIGS = [
   ["mortgage_protection", "veteran", "en"], ["iul", "veteran", "en"], ["final_expense", "veteran", "en"],
   ["mortgage_protection", "trucker", "en"], ["iul", "trucker", "en"], ["final_expense", "trucker", "en"],
   ["final_expense", "spanish", "es"], ["mortgage_protection", "spanish", "es"], ["iul", "spanish", "es"],
+  ["veteran", "veteran", "es"], ["trucker", "trucker", "es"],
 ] as const;
 
 function increment(map: Map<string, number>, key: unknown) {
@@ -32,6 +33,9 @@ function simulate(customers: number, adsPerCustomer: number) {
   const visualTypes = new Map<string, number>();
   const veteranVisualTypes = new Map<string, number>();
   const macros = new Map<string, number>();
+  const backgrounds = new Map<string, number>();
+  const hooks = new Map<string, number>();
+  const offers = new Map<string, number>();
   const batchScores: number[] = [];
   let exactDuplicates = 0;
   let nearDuplicates = 0;
@@ -60,7 +64,7 @@ function simulate(customers: number, adsPerCustomer: number) {
       const comparisons = all.slice(-5000);
       if (comparisons.some((existing) => creativeSimilarity(draft, existing).classification === "NEAR_DUPLICATE")) nearDuplicates += 1;
       fingerprints.add(fingerprint);
-      visualKeys.add(`${draft.layoutId}|${draft.imageDirection}|${draft.backgroundDirection}|${draft.hookClass}`);
+      visualKeys.add(`${draft.cssMacroFamily}|${draft.cssCompositionVariant}|${draft.cssHierarchyTreatment}|${draft.cssPanelStructure}|${draft.cssTypographyTreatment}|${draft.cssSelectorPresentation}|${draft.cssBenefitTreatment}|${draft.cssBackgroundTreatment}|${draft.cssCtaTreatment}|${draft.visualTreatment}`);
       increment(families, draft.winningFamilyId);
       increment(layouts, draft.layoutId);
       increment(images, `${draft.imageDirection}|${draft.backgroundDirection}`);
@@ -70,6 +74,9 @@ function simulate(customers: number, adsPerCustomer: number) {
         increment(veteranVisualTypes, draft.visualTreatment);
       }
       increment(macros, draft.cssMacroFamily);
+      increment(backgrounds, draft.cssBackgroundTreatment || draft.backgroundDirection);
+      increment(hooks, draft.hookClass);
+      increment(offers, draft.offerClass);
       all.push(draft);
     }
   }
@@ -87,6 +94,15 @@ function simulate(customers: number, adsPerCustomer: number) {
       average: Number((batchScores.reduce((sum, score) => sum + score, 0) / Math.max(1, batchScores.length)).toFixed(4)),
       minimum: Number(Math.min(...batchScores).toFixed(4)),
     },
+    concentration: {
+      largestExecutionShare: Number(((top(treatments, total)[0]?.share || 0)).toFixed(4)),
+      largestMacroShare: Number(((top(macros, total)[0]?.share || 0)).toFixed(4)),
+      largestFamilyShare: Number(((top(families, total)[0]?.share || 0)).toFixed(4)),
+      largestLayoutShare: Number(((top(layouts, total)[0]?.share || 0)).toFixed(4)),
+      largestBackgroundShare: Number(((top(backgrounds, total)[0]?.share || 0)).toFixed(4)),
+      largestHookShare: Number(((top(hooks, total)[0]?.share || 0)).toFixed(4)),
+      largestOfferShare: Number(((top(offers, total)[0]?.share || 0)).toFixed(4)),
+    },
     cssGraphicShare: Number(((visualTypes.get("graphic") || 0) / total).toFixed(4)),
     imageShare: Number(((visualTypes.get("image") || 0) / total).toFixed(4)),
     hybridShare: Number(((visualTypes.get("hybrid") || 0) / total).toFixed(4)),
@@ -98,14 +114,17 @@ function simulate(customers: number, adsPerCustomer: number) {
     pass: generationFailures.length === 0 && total === customers * adsPerCustomer && exactDuplicates === 0 && nearDuplicates === 0 && diversityFailures === 0,
     familyDistribution: top(families, total), layoutDistribution: top(layouts, total),
     cssTreatmentDistribution: top(treatments, total), macroDistribution: top(macros, total),
-    visualTreatmentDistribution: top(visualTypes, total), imageReuse: top(images, total),
+    backgroundDistribution: top(backgrounds, total), hookDistribution: top(hooks, total),
+    offerDistribution: top(offers, total), visualTreatmentDistribution: top(visualTypes, total),
+    imageReuse: top(images, total),
   };
 }
 
-const capacityPlans = process.env.COVE_CAPACITY_ONLY === "1000"
-  ? [[200, 5] as const]
-  : [[100, 3] as const, [100, 5] as const, [200, 5] as const];
+const capacityPlans = process.env.COVE_CAPACITY_ONLY === "2000"
+  ? [[400, 5] as const]
+  : [[100, 3] as const, [100, 5] as const, [200, 5] as const, [400, 5] as const];
 const capacity = capacityPlans.map(([customers, adsPerCustomer]) => simulate(customers, adsPerCustomer));
+const customerBatchQa = [[25, 3] as const, [25, 5] as const].map(([customers, ads]) => simulate(customers, ads));
 const verticalQaConfigs = [CONFIGS[0], CONFIGS[1], CONFIGS[2], CONFIGS[3], CONFIGS[4], CONFIGS[11]];
 const verticalQa = verticalQaConfigs.map(([vertical, audienceSegment, language], configIndex) => {
   const drafts: Array<Record<string, any>> = [];
@@ -130,7 +149,7 @@ const verticalQa = verticalQaConfigs.map(([vertical, audienceSegment, language],
   };
 });
 
-const report = { generatedAt: new Date().toISOString(), capacity, verticalQa };
+const report = { generatedAt: new Date().toISOString(), capacity, customerBatchQa, verticalQa };
 const reportPath = path.resolve("artifacts/creative-intelligence/css-first-direct-response/capacity-report.json");
 fs.mkdirSync(path.dirname(reportPath), { recursive: true });
 fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
@@ -148,5 +167,6 @@ process.stdout.write(`${JSON.stringify({
     veteranCreativeMix: entry.veteranCreativeMix,
     pass: entry.pass,
   })),
+  customerBatchQa: customerBatchQa.map((entry) => ({ customers: entry.customers, adsPerCustomer: entry.adsPerCustomer, expectedAds: entry.expectedAds, batchDiversity: entry.batchDiversity, concentration: entry.concentration, pass: entry.pass })),
   verticalQa,
 }, null, 2)}\n`);

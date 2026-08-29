@@ -101,6 +101,12 @@ describe("global Meta creative uniqueness", () => {
     expect(buildPublishedCreativeFingerprint({ ...baseDraft, creativeSignature: first })).toMatch(/^cpf_[a-f0-9]{64}$/);
   });
 
+  test("a structural composition change produces a fresh generation identity", () => {
+    const centered = buildCreativeGenerationSignature({ ...baseDraft, layoutId: "hero_amount_age_grid", cssExecutionId: "VET_CSS_01_centered", cssCompositionVariant: "centered_offer_stack", cssPanelStructure: "hero_amount_panel" });
+    const split = buildCreativeGenerationSignature({ ...baseDraft, layoutId: "hero_amount_age_grid", cssExecutionId: "VET_CSS_01_split", cssCompositionVariant: "split_response_columns", cssPanelStructure: "consequence_columns" });
+    expect(centered).not.toBe(split);
+  });
+
   test("a published creative cannot be claimed by a different agent", async () => {
     const usageModel = createUsageModel();
     const creativeSignature = buildCreativeGenerationSignature(baseDraft);

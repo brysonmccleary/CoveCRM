@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await mongooseConnect();
   const [recent, distributions, metricCoverage, capabilityCount, claimCount, assetInventory, videoFrameworkCount] = await Promise.all([
     MetaCreativeUsage.find({}).sort({ createdAt: -1 }).limit(100)
-      .select("status generationId reservationId expiresAt leadType winningFamilyId creativeClass layoutId hookClass headline cta imageIdentity imageDirection backgroundDirection offerClass selectorSchema semanticFingerprint visualFingerprint userEmail campaignId createdAt publishedAt")
+      .select("status generationId reservationId expiresAt leadType winningFamilyId creativeClass layoutId executionId compositionVariant macroFamily hierarchyTreatment panelStructure typographyTreatment selectorPresentation benefitTreatment backgroundTreatment ctaTreatment hookClass headline cta imageIdentity imageDirection backgroundDirection offerClass selectorSchema semanticFingerprint visualFingerprint userEmail campaignId createdAt publishedAt")
       .lean(),
     MetaCreativeUsage.aggregate([
       { $match: { status: { $in: ["draft_reserved", "reserved", "published"] } } },
@@ -24,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { $sort: { count: -1 } }, { $limit: 200 },
     ]),
     MetaAdMetricsDaily.aggregate([
-      { $group: { _id: null, rows: { $sum: 1 }, ads: { $addToSet: "$metaAdId" }, families: { $addToSet: "$creativeFamily" }, layouts: { $addToSet: "$layoutId" }, qualifiedOutcomes: { $sum: "$qualifiedLeads" }, appointments: { $sum: "$appointmentsBooked" }, sales: { $sum: "$sales" } } },
+      { $group: { _id: null, rows: { $sum: 1 }, ads: { $addToSet: "$metaAdId" }, families: { $addToSet: "$creativeFamily" }, layouts: { $addToSet: "$layoutId" }, executions: { $addToSet: "$executionId" }, compositions: { $addToSet: "$compositionVariant" }, qualifiedOutcomes: { $sum: "$qualifiedLeads" }, appointments: { $sum: "$appointmentsBooked" }, sales: { $sum: "$sales" } } },
     ]),
     MetaProductCapability.countDocuments({ active: true }),
     MetaClaimRegistry.countDocuments({ expiresAt: { $gt: new Date() } }),

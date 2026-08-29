@@ -11,17 +11,17 @@ const PREVIEW_ROOT = path.join(ROOT, "previews");
 const SHEET_ROOT = path.join(ROOT, "contact-sheets");
 
 const GROUPS = [
-  { id: "veteran", start: 1, end: 24 },
-  { id: "final-expense", start: 25, end: 42 },
-  { id: "mortgage", start: 43, end: 60 },
-  { id: "iul", start: 61, end: 78 },
-  { id: "trucker", start: 79, end: 96 },
-  { id: "spanish", start: 97, end: 120 },
-  { id: "combinations", start: 121, end: 144 },
+  { id: "veteran", start: 1, end: 30 },
+  { id: "final-expense", start: 31, end: 60 },
+  { id: "mortgage", start: 61, end: 90 },
+  { id: "iul", start: 91, end: 120 },
+  { id: "trucker", start: 121, end: 150 },
+  { id: "spanish", start: 151, end: 200 },
+  { id: "combinations", start: 201, end: 230 },
 ] as const;
 
 function previewId(index: number) {
-  return `P${String(index).padStart(3, "0")}`;
+  return `P${String(index).padStart(4, "0")}`;
 }
 
 async function imageHash(file: string) {
@@ -117,9 +117,9 @@ async function main() {
       const leftDraft = draftById.get(screenshots[left].id);
       const rightDraft = draftById.get(screenshots[right].id);
       const sameVisibleTreatment = leftDraft?.qaGroup === rightDraft?.qaGroup
-        && leftDraft?.cssRendererFamily === rightDraft?.cssRendererFamily
-        && leftDraft?.cssBackgroundTreatment === rightDraft?.cssBackgroundTreatment
-        && leftDraft?.cssTypographyTreatment === rightDraft?.cssTypographyTreatment;
+        && leftDraft?.cssCompositionVariant === rightDraft?.cssCompositionVariant
+        && leftDraft?.cssMacroFamily === rightDraft?.cssMacroFamily
+        && leftDraft?.cssBackgroundTreatment === rightDraft?.cssBackgroundTreatment;
       if (sameVisibleTreatment && distance <= 3) humanVisibleNearDuplicates.push({ left: screenshots[left].id, right: screenshots[right].id, distance });
     }
   }
@@ -183,6 +183,8 @@ async function main() {
     layoutDistribution: distribution("layoutId"),
     familyDistribution: distribution("winningFamilyId"),
     cssTreatmentDistribution: distribution("cssExecutionId"),
+    compositionDistribution: distribution("cssCompositionVariant"),
+    benefitTreatmentDistribution: distribution("cssBenefitTreatment"),
     macroDistribution: distribution("cssMacroFamily"),
     visualTreatmentDistribution: distribution("visualTreatment"),
     sheets,

@@ -19,6 +19,16 @@ const MetaCreativeUsageSchema = new Schema(
     winningFamilyId: { type: String, default: "" },
     creativeClass: { type: String, default: "" },
     layoutId: { type: String, default: "" },
+    executionId: { type: String, default: "", index: true },
+    compositionVariant: { type: String, default: "", index: true },
+    macroFamily: { type: String, default: "" },
+    hierarchyTreatment: { type: String, default: "" },
+    panelStructure: { type: String, default: "" },
+    typographyTreatment: { type: String, default: "" },
+    selectorPresentation: { type: String, default: "" },
+    benefitTreatment: { type: String, default: "" },
+    backgroundTreatment: { type: String, default: "" },
+    ctaTreatment: { type: String, default: "" },
     hookClass: { type: String, default: "" },
     headline: { type: String, default: "" },
     primaryText: { type: String, default: "" },
@@ -46,6 +56,7 @@ MetaCreativeUsageSchema.index({ creativeFingerprint: 1 }, { unique: true });
 MetaCreativeUsageSchema.index({ generationSignature: 1 }, { unique: true });
 MetaCreativeUsageSchema.index({ userEmail: 1, createdAt: -1 });
 MetaCreativeUsageSchema.index({ winningFamilyId: 1, layoutId: 1, createdAt: -1 });
+MetaCreativeUsageSchema.index({ executionId: 1, compositionVariant: 1, createdAt: -1 });
 MetaCreativeUsageSchema.index({ assetId: 1, userEmail: 1, createdAt: -1 });
 
 export default models.MetaCreativeUsage || mongoose.model("MetaCreativeUsage", MetaCreativeUsageSchema);

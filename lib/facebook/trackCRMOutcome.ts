@@ -148,6 +148,12 @@ export async function trackOutcomeFromDisposition(
     const metaCreativeId = String((fbEntry as any).metaCreativeId || (ownedLead as any).metaCreativeId || "");
     const variantId = String((fbEntry as any).variantId || (ownedLead as any).metaVariantId || "");
     const creativeFamily = String((fbEntry as any).creativeFamily || (ownedLead as any).metaCreativeFamily || "");
+    const campaignAd = Array.isArray((campaign as any).ads)
+      ? (campaign as any).ads.find((ad: any) => String(ad?.metaAdId || "") === metaAdId)
+      : null;
+    const executionId = String(campaignAd?.executionId || "");
+    const compositionVariant = String(campaignAd?.compositionVariant || "");
+    const macroFamily = String(campaignAd?.macroFamily || "");
 
     // NOTE: no revenue estimate is added here. The flat per-lead-type guess that used to live here
     // was never real money — real revenue is agent-entered via the Sale modal
@@ -177,6 +183,9 @@ export async function trackOutcomeFromDisposition(
           metaCreativeId,
           variantId,
           creativeFamily,
+          executionId,
+          compositionVariant,
+          macroFamily,
           normalizedOutcome: outcome || "",
         },
       },
@@ -213,6 +222,9 @@ export async function trackOutcomeFromDisposition(
           metaCreativeId,
           variantId,
           creativeFamily,
+          executionId,
+          compositionVariant,
+          macroFamily,
         },
       },
       { upsert: true, new: true }

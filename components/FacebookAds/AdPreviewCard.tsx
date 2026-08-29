@@ -1067,6 +1067,127 @@ function MiniBenefits({ state, columns = 1 }: { state: CreativeState; columns?: 
   );
 }
 
+function DepthAmount({ state, size = 38 }: { state: CreativeState; size?: number }) {
+  if (!state.amount) return null;
+  return (
+    <div style={{ textAlign: "center" }}>
+      <div style={{ color: state.palette.eyebrow, fontSize: 8.5, fontWeight: 950, letterSpacing: 1.2, textTransform: "uppercase" }}>{state.copy.coverageOptionsUpTo}</div>
+      <div style={{ color: state.palette.accent, fontSize: size, fontWeight: 950, lineHeight: 1 }}>{state.amount}</div>
+      <div style={{ color: state.palette.subheadline, fontSize: 7.8, fontWeight: 700 }}>{state.copy.amountDisclosure}</div>
+    </div>
+  );
+}
+
+function DepthSelector({ state, columns = 2, compact = false }: { state: CreativeState; columns?: number; compact?: boolean }) {
+  return (
+    <div data-creative-zone="selector" style={{ display: "grid", gap: compact ? 5 : 7 }}>
+      <div style={{ color: state.palette.eyebrow, fontSize: compact ? 8 : 9.5, fontWeight: 950, letterSpacing: 0.8, textAlign: "center", textTransform: "uppercase" }}>{getSelectorPrompt(state)}</div>
+      <div data-creative-selector-grid="true" style={{ display: "grid", gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gap: compact ? 5 : 7 }}>
+        {state.buttons.map((label) => <div data-creative-selector-option="true" key={label} style={{ background: state.palette.buttonBg, color: state.palette.buttonText, border: state.palette.buttonBorder, borderRadius: compact ? 3 : state.radius, minHeight: 36, padding: "4px 5px", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", fontSize: compact ? 9 : 10.5, fontWeight: 950, lineHeight: 1.05 }}>{label}</div>)}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Ten reusable feed-visible compositions. These are structural templates—not
+ * palette aliases. Each moves the headline, selector, benefits, offer and CTA
+ * into a different hierarchy while retaining the validated copy/selector
+ * contract supplied by Creative Intelligence.
+ */
+function renderDepthComposition(state: CreativeState) {
+  const composition = cleanText(state.draft?.cssCompositionVariant);
+  const shell = (children: any) => <CreativeShell state={state}><div data-creative-composition={composition} style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden" }}>{children}</div></CreativeShell>;
+  const cta = <CtaUnit state={state} />;
+
+  if (composition === "selector_first_board") return shell(<>
+    <div style={{ height: "100%", padding: "14px 16px 54px", boxSizing: "border-box", display: "grid", gridTemplateRows: "auto auto 1fr", gap: 9 }}>
+      <Panel state={state} style={{ padding: 10 }}><DepthSelector state={state} columns={2} /></Panel>
+      <HeadlineBlock state={state} compact />
+      <div style={{ alignSelf: "center" }}><MiniBenefits state={state} columns={2} /></div>
+    </div>{cta}
+  </>);
+
+  if (composition === "split_response_columns") return shell(<>
+    <div style={{ height: "100%", padding: "15px 15px 54px", boxSizing: "border-box", display: "grid", gridTemplateRows: "auto 1fr auto", gap: 9 }}>
+      <HeadlineBlock state={state} compact />
+      <div style={{ display: "grid", gridTemplateColumns: "0.92fr 1.08fr", gap: 8, minHeight: 0 }}>
+        <Panel state={state} style={{ padding: 10, display: "grid", alignContent: "center", gap: 8 }}><div style={{ color: state.palette.eyebrow, fontSize: 9, fontWeight: 950, letterSpacing: 1 }}>{state.copy.whatToReview}</div><div style={{ color: state.palette.subheadline, fontSize: 10.5, fontWeight: 800, lineHeight: 1.25 }}>{state.subheadline}</div><DepthAmount state={state} size={29} /></Panel>
+        <div style={{ display: "grid", alignContent: "center", gap: 7 }}><MiniBenefits state={state} /><DepthSelector state={state} columns={1} compact /></div>
+      </div>
+    </div>{cta}
+  </>);
+
+  if (composition === "framed_hero_notice") return shell(<>
+    <div style={{ position: "absolute", inset: 15, bottom: 58, border: `3px double ${state.palette.accent}`, padding: 12, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 9, boxSizing: "border-box" }}>
+      <div style={{ color: state.palette.eyebrow, textAlign: "center", fontSize: 9, fontWeight: 950, letterSpacing: 2, textTransform: "uppercase" }}>{state.eyebrow}</div>
+      <div style={{ alignSelf: "center", display: "grid", gap: 10 }}><HeadlineBlock state={state} compact /><DepthAmount state={state} size={44} /><MiniBenefits state={state} columns={2} /></div>
+      <DepthSelector state={state} columns={2} compact />
+    </div>{cta}
+  </>);
+
+  if (composition === "oversized_type_bleed") return shell(<>
+    <div style={{ position: "absolute", left: 0, right: 18, top: 8, color: state.palette.eyebrow, fontSize: 8.5, fontWeight: 950, letterSpacing: 1.5, textTransform: "uppercase" }}>{state.eyebrow}</div>
+    <div style={{ position: "absolute", left: -5, right: 18, top: 26, color: state.palette.headline, fontFamily: "Impact, 'Arial Narrow Bold', sans-serif", fontSize: 36, fontWeight: 950, lineHeight: 0.9, textTransform: "uppercase", textShadow: "0 3px 18px rgba(0,0,0,.45)", ...lineClampStyle(3) }}>{state.headline}</div>
+    <div style={{ position: "absolute", left: 16, right: 16, bottom: 54, display: "grid", gap: 7 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}><div style={{ flex: 1, color: state.palette.subheadline, background: state.palette.panel, padding: 8, border: `1px solid ${state.palette.panelBorder}`, fontSize: 9.5, fontWeight: 800 }}>{state.subheadline}</div><DepthAmount state={state} size={28} /></div>
+      <MiniBenefits state={state} columns={2} /><DepthSelector state={state} columns={4} compact />
+    </div>{cta}
+  </>);
+
+  if (composition === "side_benefit_rail") return shell(<>
+    <div style={{ height: "100%", padding: "14px 14px 54px", boxSizing: "border-box", display: "grid", gridTemplateColumns: "1.28fr .72fr", gap: 9 }}>
+      <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto", gap: 9 }}><HeadlineBlock state={state} compact /><div style={{ alignSelf: "center" }}><DepthAmount state={state} size={42} /></div><DepthSelector state={state} columns={2} /></div>
+      <div style={{ borderLeft: `4px solid ${state.palette.accent}`, paddingLeft: 8, display: "grid", alignContent: "center", gap: 7 }}><div style={{ color: state.palette.eyebrow, fontSize: 9, fontWeight: 950, letterSpacing: 1, textTransform: "uppercase" }}>{state.copy.whatToReview}</div><MiniBenefits state={state} /></div>
+    </div>{cta}
+  </>);
+
+  if (composition === "editorial_notice_card") return shell(<>
+    <div style={{ position: "absolute", inset: "12px 14px 55px", background: "rgba(255,250,235,.94)", color: "#2d2410", borderTop: "9px solid #7f1d1d", padding: "11px 14px", boxSizing: "border-box", display: "grid", gridTemplateRows: "auto auto 1fr auto", gap: 7 }}>
+      <div style={{ font: "950 9px Georgia,serif", letterSpacing: 1.6, textAlign: "center", color: "#7f1d1d" }}>{state.eyebrow.toUpperCase()} · {state.copy.coverageNotice}</div>
+      <div style={{ font: "950 24px/1 Georgia,serif", textAlign: "center", textTransform: "uppercase" }}>{state.headline}</div>
+      <div style={{ alignSelf: "center", display: "grid", gap: 8 }}><div style={{ borderTop: "1px solid #8b7355", borderBottom: "1px solid #8b7355", padding: "8px 0", font: "700 10px/1.35 Georgia,serif", textAlign: "center" }}>{state.subheadline}</div><DepthAmount state={{ ...state, palette: { ...state.palette, eyebrow: "#7f1d1d", accent: "#7f1d1d", subheadline: "#4a3822" } }} size={31} /><MiniBenefits state={{ ...state, palette: { ...state.palette, panel: "#f4ead2", panelBorder: "#b9a27d", subheadline: "#3f2d1f" } }} columns={2} /></div>
+      <DepthSelector state={{ ...state, palette: { ...state.palette, eyebrow: "#7f1d1d", buttonBg: "#1a2744", buttonText: "#fff", buttonBorder: "1px solid #1a2744" } }} columns={2} compact />
+    </div>{cta}
+  </>);
+
+  if (composition === "compact_action_grid") return shell(<>
+    <div style={{ height: "100%", padding: "12px 14px 54px", boxSizing: "border-box", display: "grid", gridTemplateRows: "auto auto 1fr", gap: 7 }}>
+      <HeadlineBlock state={state} compact />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 7, alignItems: "center" }}><MiniBenefits state={state} columns={2} /><DepthAmount state={state} size={28} /></div>
+      <Panel state={state} style={{ padding: 9, alignSelf: "center" }}><DepthSelector state={state} columns={2} compact /></Panel>
+    </div>{cta}
+  </>);
+
+  if (composition === "stepped_qualification") return shell(<>
+    <div style={{ height: "100%", padding: "13px 16px 54px", boxSizing: "border-box", display: "grid", gridTemplateRows: "auto 1fr", gap: 8 }}>
+      <HeadlineBlock state={state} compact />
+      <Panel state={state} style={{ padding: 10, display: "grid", alignContent: "center", gap: 7 }}>
+        {[state.subheadline, state.bullets[0] || state.copy.compareOptions].map((value, index) => <div key={index} style={{ display: "grid", gridTemplateColumns: "25px 1fr", gap: 7, alignItems: "center" }}><div style={{ width: 24, height: 24, borderRadius: 99, background: state.palette.accent, color: "#111827", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 950 }}>{index + 1}</div><div style={{ color: state.palette.subheadline, fontSize: 10, fontWeight: 800, lineHeight: 1.2 }}>{value}</div></div>)}
+        <div style={{ display: "grid", gridTemplateColumns: "25px 1fr", gap: 7, alignItems: "start" }}><div style={{ width: 24, height: 24, borderRadius: 99, background: state.palette.accent, color: "#111827", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 950 }}>3</div><DepthSelector state={state} columns={2} compact /></div>
+        <DepthAmount state={state} size={28} />
+      </Panel>
+    </div>{cta}
+  </>);
+
+  if (composition === "horizontal_action_strip") return shell(<>
+    <div style={{ height: "100%", padding: "15px 15px 54px", boxSizing: "border-box", display: "grid", gridTemplateRows: "auto auto 1fr auto", gap: 8 }}>
+      <div style={{ color: state.palette.eyebrow, fontSize: 9, fontWeight: 950, letterSpacing: 2, textTransform: "uppercase" }}>{state.eyebrow}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 9, alignItems: "center" }}><div style={{ color: state.palette.headline, fontSize: 25, fontWeight: 950, lineHeight: 1, textTransform: "uppercase", ...lineClampStyle(3) }}>{state.headline}</div><DepthAmount state={state} size={32} /></div>
+      <div style={{ alignSelf: "center" }}><MiniBenefits state={state} columns={2} /></div>
+      <div style={{ marginLeft: -15, marginRight: -15, padding: "8px 15px", background: state.palette.panel, borderTop: `3px solid ${state.palette.accent}`, borderBottom: `3px solid ${state.palette.accent}` }}><DepthSelector state={state} columns={4} compact /></div>
+    </div>{cta}
+  </>);
+
+  return shell(<>
+    <div style={{ height: "100%", padding: "16px 18px 54px", boxSizing: "border-box", display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10, textAlign: "center" }}>
+      <HeadlineBlock state={state} />
+      <div style={{ alignSelf: "center", display: "grid", gap: 10 }}><DepthAmount state={state} size={46} /><MiniBenefits state={state} /></div>
+      <DepthSelector state={state} columns={2} />
+    </div>{cta}
+  </>);
+}
+
 function renderPosterStack(state: CreativeState) {
   return (
     <CreativeShell state={state}>
@@ -1788,6 +1909,9 @@ function renderTemplateFamily(state: CreativeState) {
   const intelligenceLayout = Number(state.draft?.creativeEngineVersion || 0) >= 1
     && Boolean(state.draft?.layoutId);
   if (intelligenceLayout) {
+    if (Number(state.draft?.creativeEngineVersion || 0) >= 3 && state.draft?.cssCompositionVariant) {
+      return renderDepthComposition(state);
+    }
     if (state.draft?.visualTreatment === "image" && state.backgroundUrl) return renderPhotoDirectResponse(state);
     if (state.layoutFamily === "split_panel") return renderSplitPanel(state);
     if (state.layoutFamily === "selector_grid") return renderSelectorGrid(state);

@@ -192,6 +192,10 @@ export type CreativeEngineDraft = Record<string, unknown> & {
   cssSelectorPresentation: string;
   cssCtaTreatment: string;
   cssFrameTreatment: string;
+  cssCompositionVariant: import("./executions").CssCompositionVariant;
+  cssBenefitTreatment: string;
+  cssHeroTreatment: string;
+  cssWhitespaceTreatment: string;
   cssPaletteIndex: number;
   variantId: string;
 };

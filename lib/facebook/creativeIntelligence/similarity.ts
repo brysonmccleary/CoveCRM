@@ -32,7 +32,8 @@ export function creativeSimilarity(left: Record<string, any>, right: Record<stri
     ctaPlacement: draft.ctaPlacement || "", benefitStructure: draft.benefitStructure || "",
     execution: draft.cssExecutionId || "", macro: draft.cssMacroFamily || "",
     cssTreatment: [draft.cssRendererFamily, draft.cssBackgroundTreatment, draft.cssTypographyTreatment,
-      draft.cssPanelStructure, draft.cssSelectorPresentation, draft.cssCtaTreatment, draft.cssFrameTreatment],
+      draft.cssPanelStructure, draft.cssSelectorPresentation, draft.cssCtaTreatment, draft.cssFrameTreatment,
+      draft.cssCompositionVariant, draft.cssBenefitTreatment, draft.cssHeroTreatment, draft.cssWhitespaceTreatment],
   });
   if (exactShape(left) === exactShape(right)) {
     return { score: 1, classification: "EXACT_DUPLICATE" as const, factors: { exact: 1 } };
@@ -59,9 +60,10 @@ export function creativeSimilarity(left: Record<string, any>, right: Record<stri
     benefitStructure: exact(left.benefitStructure || (left.bulletPoints || []).length, right.benefitStructure || (right.bulletPoints || []).length),
     execution: exact(left.cssExecutionId, right.cssExecutionId),
     macro: exact(left.cssMacroFamily, right.cssMacroFamily),
+    composition: exact(left.cssCompositionVariant, right.cssCompositionVariant),
     cssTreatment: exact(
-      [left.cssRendererFamily, left.cssBackgroundTreatment, left.cssTypographyTreatment, left.cssPanelStructure, left.cssSelectorPresentation, left.cssCtaTreatment, left.cssFrameTreatment].join("|"),
-      [right.cssRendererFamily, right.cssBackgroundTreatment, right.cssTypographyTreatment, right.cssPanelStructure, right.cssSelectorPresentation, right.cssCtaTreatment, right.cssFrameTreatment].join("|")
+      [left.cssRendererFamily, left.cssBackgroundTreatment, left.cssTypographyTreatment, left.cssPanelStructure, left.cssSelectorPresentation, left.cssCtaTreatment, left.cssFrameTreatment, left.cssBenefitTreatment, left.cssHeroTreatment, left.cssWhitespaceTreatment].join("|"),
+      [right.cssRendererFamily, right.cssBackgroundTreatment, right.cssTypographyTreatment, right.cssPanelStructure, right.cssSelectorPresentation, right.cssCtaTreatment, right.cssFrameTreatment, right.cssBenefitTreatment, right.cssHeroTreatment, right.cssWhitespaceTreatment].join("|")
     ),
   };
   const score = factors.family * 0.03 + factors.layout * 0.1 + factors.headline * 0.11
@@ -69,7 +71,7 @@ export function creativeSimilarity(left: Record<string, any>, right: Record<stri
     + factors.palette * 0.03 + factors.offer * 0.08 + factors.selector * 0.07 + factors.cta * 0.03
     + factors.hierarchy * 0.06 + factors.backgroundClass * 0.04
     + factors.ctaPlacement * 0.03 + factors.benefitStructure * 0.04
-    + factors.execution * 0.08 + factors.macro * 0.06 + factors.cssTreatment * 0.06;
+    + factors.execution * 0.06 + factors.macro * 0.05 + factors.composition * 0.05 + factors.cssTreatment * 0.04;
   const classification: SimilarityClass = score >= 0.98 ? "EXACT_DUPLICATE"
     : score >= 0.7 ? "NEAR_DUPLICATE"
       : score >= 0.46 ? "SIMILAR_BUT_ACCEPTABLE" : "DISTINCT";
@@ -85,6 +87,7 @@ export function semanticFingerprint(draft: Record<string, any>): string {
     draft.cssExecutionId, draft.cssMacroFamily, draft.cssRendererFamily, draft.cssBackgroundTreatment,
     draft.cssTypographyTreatment, draft.cssPanelStructure, draft.cssSelectorPresentation,
     draft.cssCtaTreatment, draft.cssFrameTreatment,
+    draft.cssCompositionVariant, draft.cssBenefitTreatment, draft.cssHeroTreatment, draft.cssWhitespaceTreatment,
   ]
     .map((value) => String(value || "").toLowerCase().replace(/\s+/g, " ").trim()).join("|");
   return createHash("sha256").update(normalized).digest("hex");

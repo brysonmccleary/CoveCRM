@@ -300,6 +300,10 @@ function buildDraft(
     cssSelectorPresentation: execution.selectorPresentation,
     cssCtaTreatment: execution.ctaTreatment,
     cssFrameTreatment: execution.frameTreatment,
+    cssCompositionVariant: execution.compositionVariant,
+    cssBenefitTreatment: execution.benefitTreatment,
+    cssHeroTreatment: execution.heroTreatment,
+    cssWhitespaceTreatment: execution.whitespaceTreatment,
     cssPaletteIndex: execution.paletteIndex,
     heroHierarchy: execution.hierarchyTreatment || layout.hierarchyClass,
     backgroundClass: hasStaticPhoto ? `${requestedVisualTreatment}:${visualLeadType}` : `css:${execution.backgroundTreatment}`,
@@ -311,7 +315,7 @@ function buildDraft(
     capabilityFallbackReasons: capabilityResolution.errors,
     variantId,
     generationNonce: input.generationNonce,
-    creativeEngineVersion: 2,
+    creativeEngineVersion: 3,
     generatedBy: "creative_intelligence_engine",
     copySource: "creative_intelligence_engine",
     renderLegacyCreative: false,
@@ -323,6 +327,10 @@ function buildDraft(
   const visual = createHash("sha256").update(JSON.stringify({
     layoutId, format, imageIdentity, imageDirection, backgroundDirection, hookClass: draft.hookClass,
     selector: fittedSelector, offerClass, cssExecutionId: execution.executionId,
+    compositionVariant: execution.compositionVariant,
+    benefitTreatment: execution.benefitTreatment,
+    heroTreatment: execution.heroTreatment,
+    whitespaceTreatment: execution.whitespaceTreatment,
   })).digest("hex");
   return {
     ...draft,
@@ -415,7 +423,7 @@ export function generateCreativeIntelligenceDrafts(input: CreativeEngineInput): 
     usedLayouts.add(accepted.layoutId);
   }
   const diversity = scoreBatchDiversity(drafts);
-  const diversityThreshold = 0.8;
+  const diversityThreshold = 0.9;
   if (drafts.length >= 3 && diversity.score < diversityThreshold) {
     return retryBatch(`Generated batch did not meet Cove's family/layout/visual diversity threshold (${diversity.score}).`);
   }
@@ -429,6 +437,7 @@ export function scoreBatchDiversity(drafts: Array<Record<string, any>>) {
     family: uniqueness("winningFamilyId"),
     layout: uniqueness("layoutId"),
     execution: uniqueness("cssExecutionId"),
+    composition: uniqueness("cssCompositionVariant"),
     hook: uniqueness("hookClass"),
     headline: uniqueness("headline"),
     visual: new Set(drafts.map((draft) => [
@@ -437,14 +446,19 @@ export function scoreBatchDiversity(drafts: Array<Record<string, any>>) {
       draft.cssBackgroundTreatment || draft.backgroundDirection || "",
       draft.cssTypographyTreatment || "",
       draft.cssFrameTreatment || "",
+      draft.cssCompositionVariant || "",
+      draft.cssBenefitTreatment || "",
     ].join("|"))).size / drafts.length,
     offer: uniqueness("offerClass"),
     selector: new Set(drafts.map((draft) => JSON.stringify(draft.selectorContract || {}))).size / drafts.length,
     hierarchy: new Set(drafts.map((draft) => `${draft.heroHierarchy || ""}|${draft.ctaPlacement || ""}|${draft.benefitStructure || ""}`)).size / drafts.length,
   };
-  const score = dimensions.family * 0.13 + dimensions.layout * 0.17
-    + dimensions.execution * 0.16 + dimensions.visual * 0.13 + dimensions.hook * 0.09
-    + dimensions.headline * 0.1 + dimensions.offer * 0.12
-    + dimensions.selector * 0.04 + dimensions.hierarchy * 0.06;
+  // Feed-visible structure carries most of this score. Repeated selector type
+  // within one product is expected and must not outweigh genuinely different
+  // compositions, executions, hierarchy and panel arrangements.
+  const score = dimensions.execution * 0.25 + dimensions.composition * 0.2
+    + dimensions.visual * 0.2 + dimensions.hierarchy * 0.15 + dimensions.layout * 0.1
+    + dimensions.family * 0.03 + dimensions.hook * 0.02 + dimensions.headline * 0.02
+    + dimensions.offer * 0.02 + dimensions.selector * 0.01;
   return { score: Number(score.toFixed(4)), dimensions };
 }

@@ -15,6 +15,9 @@ const MetaAdMetricsDailySchema = new Schema(
     metaCreativeId: { type: String, default: "", index: true },
     creativeFamily: { type: String, default: "", index: true },
     layoutId: { type: String, default: "", index: true },
+    executionId: { type: String, default: "", index: true },
+    compositionVariant: { type: String, default: "", index: true },
+    macroFamily: { type: String, default: "", index: true },
     variantId: { type: String, default: "", index: true },
     hookClass: { type: String, default: "", index: true },
     imageIdentity: { type: String, default: "" },
@@ -56,6 +59,7 @@ const MetaAdMetricsDailySchema = new Schema(
 
 MetaAdMetricsDailySchema.index({ userEmail: 1, metaAdId: 1, date: 1 }, { unique: true });
 MetaAdMetricsDailySchema.index({ creativeFamily: 1, layoutId: 1, date: -1 });
+MetaAdMetricsDailySchema.index({ executionId: 1, compositionVariant: 1, date: -1 });
 MetaAdMetricsDailySchema.index({ campaignId: 1, date: 1 });
 
 export type MetaAdMetricsDaily = InferSchemaType<typeof MetaAdMetricsDailySchema>;
