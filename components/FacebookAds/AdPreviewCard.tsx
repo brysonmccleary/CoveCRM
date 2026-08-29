@@ -530,6 +530,14 @@ const EXPLICIT_LAYOUT_BY_FAMILY_ID: Record<string, LayoutFamily> = {
 };
 
 export function resolveCreativeLayoutFamily(draft: any, leadType: string, seed: number, variantIndex: number): LayoutFamily {
+  const cssRenderer = cleanText(draft?.cssRendererFamily) as LayoutFamily;
+  const cssRenderers = new Set<LayoutFamily>([
+    "amount_hero", "age_selector", "benefit_grid", "split_panel", "aged_parchment",
+    "premium_dark_gold", "patriotic_notice", "comparison_table", "clean_white_diagram",
+    "price_table", "homeowner_table", "trucker_highway", "ornate_gold_frame",
+    "quiz_card", "poster_stack",
+  ]);
+  if (cssRenderers.has(cssRenderer)) return cssRenderer;
   const intelligenceLayouts: Record<string, LayoutFamily> = {
     hero_amount_age_grid: "amount_hero",
     audience_benefit_grid: "benefit_grid",
@@ -800,9 +808,16 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
   const audienceSegment = cleanText(draft?.audienceSegment || "standard").toLowerCase();
   const seed = hashString(getVariationSeed(draft, leadType));
   const variantIndex = pickVisualVariant(draft, leadType, VISUAL_VARIANT_COUNT);
-  const basePalette = getPalettes(leadType)[variantIndex % getPalettes(leadType).length];
+  const palettes = getPalettes(leadType);
+  const suppliedPaletteIndex = Number(draft?.cssPaletteIndex);
+  const paletteIndex = Number.isFinite(suppliedPaletteIndex) && suppliedPaletteIndex >= 0
+    ? Math.floor(suppliedPaletteIndex)
+    : variantIndex;
+  const basePalette = palettes[paletteIndex % palettes.length];
   const layoutFamily = resolveCreativeLayoutFamily(draft, leadType, seed, variantIndex);
   const backgroundUrl = getCreativeBackground(draft, leadType, variantIndex, layoutFamily);
+  const cssBackgroundTreatment = cleanText(draft?.cssBackgroundTreatment);
+  const usesLightCssSurface = !backgroundUrl && (cssBackgroundTreatment === "paper_notice" || cssBackgroundTreatment === "clean_modern");
   const palette = backgroundUrl
     ? {
         ...basePalette,
@@ -819,15 +834,40 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
         buttonBorder: "1.5px solid rgba(255,255,255,0.55)",
         benefit: "dark" as const,
       }
-    : basePalette;
+    : usesLightCssSurface
+      ? {
+          ...basePalette,
+          eyebrow: "#7f1d1d",
+          headline: "#17233d",
+          headlineBg: "rgba(255,255,255,0.9)",
+          headlineBorder: "rgba(23,35,61,0.22)",
+          subheadline: "#334155",
+          panel: "rgba(255,255,255,0.92)",
+          panelBorder: "rgba(23,35,61,0.2)",
+          buttonText: "#ffffff",
+        }
+      : basePalette;
   const iaFamily = pickSeeded(IA_BY_LEAD_TYPE[leadType] || IA_BY_LEAD_TYPE.final_expense, seed + variantIndex * 17, "ia");
   // Creative quality must not depend on decorative randomness. The old frame
   // roulette could place diagonal bands and corner badges directly through
   // copy. Keep the variation in the actual offer, photo, palette and layout.
-  const densityStyle: DensityStyle = "balanced";
-  const typographyStyle: TypographyStyle = "premium_clean";
-  const frameStyle: FrameStyle = "full_bleed";
-  const overlayStyle: OverlayStyle = "deep_gradient";
+  const densityStyle: DensityStyle = String(draft?.cssPanelStructure).includes("hero") ? "roomy"
+    : String(draft?.cssPanelStructure).includes("table") ? "compact" : "balanced";
+  const typographyMap: Record<string, TypographyStyle> = {
+    condensed_military: "condensed_poster", bold_sans: "aggressive_response",
+    notice_editorial: "trust_editorial", amount_first: "premium_clean", problem_first: "utility_ui",
+  };
+  const frameMap: Record<string, FrameStyle> = {
+    double_border: "inset_card", clean_card: "full_bleed", paper_notice: "top_banner",
+    gold_outline: "corner_badge", red_blue_frame: "split_overlay",
+  };
+  const overlayMap: Record<string, OverlayStyle> = {
+    navy_gradient: "deep_gradient", clean_modern: "soft_gradient", paper_notice: "paper_wash",
+    dark_texture: "hard_vignette", vertical_abstract: "neon_glow",
+  };
+  const typographyStyle = typographyMap[cleanText(draft?.cssTypographyTreatment)] || "premium_clean";
+  const frameStyle = frameMap[cleanText(draft?.cssFrameTreatment)] || "full_bleed";
+  const overlayStyle = overlayMap[cleanText(draft?.cssBackgroundTreatment)] || "deep_gradient";
   const fp = String(draft?.uniquenessFingerprint || "");
   const hash2 = Math.abs(hashString(`${fp}pad`));
   const hash3 = Math.abs(hashString(`${fp}gap`));
@@ -839,8 +879,7 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     ? getVisibleIdentityLabel({ vertical: leadType, audienceSegment, language })
     : getProductLabel(leadType, audienceSegment, spanish));
   const headlineRaw = overlay.headline || cleanText(draft?.headline) || getLeadFallbackHeadline(leadType, spanish);
-  const productClear = isProductClear(headlineRaw, leadType, spanish);
-  const headline = clampCopy(productClear ? headlineRaw : productLabel, 58);
+  const headline = clampCopy(headlineRaw, 58);
   const headlineSize = Math.max(20, 27 - (headline.length > 42 ? 3 : 0));
   const fallbackButtons = leadType === "mortgage_protection"
     ? ["$250,000", "$400,000", "$600,000"]
@@ -901,7 +940,9 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
 
 function getOverlayBackground(state: CreativeState): string {
   if (state.backgroundUrl) {
-    return "linear-gradient(180deg, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.20) 46%, rgba(0,0,0,0.72) 100%)";
+    // Photo-backed executions must preserve feed-legibility over bright homes,
+    // skies, and interiors; the CSS overlay is part of the finished ad.
+    return "linear-gradient(180deg, rgba(0,0,0,0.52) 0%, rgba(0,0,0,0.48) 46%, rgba(0,0,0,0.82) 100%)";
   }
   if (state.overlayStyle === "soft_gradient") return "linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(0,0,0,0.62) 100%)";
   if (state.overlayStyle === "hard_vignette") return "radial-gradient(circle at 50% 24%, rgba(255,255,255,0.1) 0%, rgba(0,0,0,0.8) 72%)";
@@ -914,23 +955,47 @@ function CreativeShell({ state, children }: { state: CreativeState; children: an
   const baseBackground = state.backgroundUrl
     ? { backgroundImage: `url("${state.backgroundUrl}")`, backgroundSize: "cover", backgroundPosition: "center" }
     : { background: state.palette.fallback };
+  const backgroundTreatment = cleanText(state.draft?.cssBackgroundTreatment);
+  const pattern = backgroundTreatment === "navy_gradient"
+    ? "radial-gradient(circle at 12% 12%, rgba(255,255,255,0.16) 0 2px, transparent 3px), radial-gradient(circle at 82% 20%, rgba(255,255,255,0.12) 0 2px, transparent 3px)"
+    : backgroundTreatment === "paper_notice"
+      ? "repeating-linear-gradient(0deg, rgba(90,65,30,0.045) 0 1px, transparent 1px 7px)"
+      : backgroundTreatment === "dark_texture"
+        ? "repeating-linear-gradient(135deg, rgba(255,255,255,0.035) 0 2px, transparent 2px 9px)"
+        : backgroundTreatment === "vertical_abstract"
+          ? "linear-gradient(115deg, transparent 0 32%, rgba(255,255,255,0.08) 33% 37%, transparent 38% 62%, rgba(255,255,255,0.05) 63% 69%, transparent 70%)"
+          : "linear-gradient(135deg, rgba(255,255,255,0.08), transparent 42%)";
+  const frame = state.frameStyle === "inset_card"
+    ? { inset: 9, border: `3px double ${state.palette.accent}`, borderRadius: 2 }
+    : state.frameStyle === "top_banner"
+      ? { inset: "8px 10px", border: `1px solid ${state.palette.panelBorder}`, borderTop: `8px solid ${state.palette.accent}` }
+      : state.frameStyle === "corner_badge"
+        ? { inset: 8, border: `2px solid ${state.palette.accent}`, outline: `1px solid ${state.palette.accent}`, outlineOffset: -6 }
+        : state.frameStyle === "split_overlay"
+          ? { inset: 7, borderTop: `5px solid ${state.palette.accent}`, borderBottom: `5px solid ${state.palette.cta}` }
+          : { inset: 0, border: "1px solid transparent" };
 
   return (
-    <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
+    <div data-css-execution={cleanText(state.draft?.cssExecutionId)} data-css-background={backgroundTreatment} style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
       <div style={{ position: "absolute", inset: 0, background: getOverlayBackground(state) }} />
+      <div style={{ position: "absolute", inset: 0, backgroundImage: pattern, backgroundSize: backgroundTreatment === "navy_gradient" ? "42px 42px" : undefined, pointerEvents: "none" }} />
       <div style={{ position: "absolute", inset: 0, boxShadow: state.palette.glow }} />
+      <div data-css-frame={cleanText(state.draft?.cssFrameTreatment)} style={{ position: "absolute", pointerEvents: "none", ...frame }} />
       {children}
     </div>
   );
 }
 
 function Panel({ state, children, style = {} }: { state: CreativeState; children: any; style?: any }) {
+  const structure = cleanText(state.draft?.cssPanelStructure);
+  const doubleBorder = structure.includes("notice") || structure.includes("ornate");
+  const square = structure.includes("table") || structure.includes("columns");
   return (
     <div
       style={{
         background: state.frameStyle === "soft_glass" ? "rgba(255,255,255,0.18)" : state.palette.panel,
-        border: `1px solid ${state.palette.panelBorder}`,
-        borderRadius: state.radius,
+        border: doubleBorder ? `3px double ${state.palette.accent}` : `1px solid ${state.palette.panelBorder}`,
+        borderRadius: square ? 2 : state.radius,
         boxShadow: "0 14px 30px rgba(0,0,0,0.25)",
         overflow: "hidden",
         ...style,
@@ -943,14 +1008,20 @@ function Panel({ state, children, style = {} }: { state: CreativeState; children
 
 function HeadlineBlock({ state, compact = false }: { state: CreativeState; compact?: boolean }) {
   const showEyebrow = state.eyebrow.toLowerCase() !== state.headline.toLowerCase();
+  const condensed = state.typographyStyle === "condensed_poster";
+  const editorial = state.typographyStyle === "trust_editorial";
+  const aggressive = state.typographyStyle === "aggressive_response";
+  const headlineFont = condensed
+    ? "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif"
+    : editorial ? "Georgia, 'Times New Roman', serif" : "Arial, Helvetica, sans-serif";
   return (
-    <div style={{ color: state.palette.headline, background: state.palette.headlineBg, border: `1px solid ${state.palette.headlineBorder}`, borderRadius: state.radius, padding: compact ? "8px 10px" : "10px 12px" }}>
+    <div data-css-typography={cleanText(state.draft?.cssTypographyTreatment)} style={{ color: state.palette.headline, background: state.palette.headlineBg, border: aggressive ? `3px solid ${state.palette.accent}` : `1px solid ${state.palette.headlineBorder}`, borderRadius: editorial ? 1 : state.radius, padding: compact ? "8px 10px" : "10px 12px", textAlign: aggressive ? "left" : "center" }}>
       {showEyebrow && (
         <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2, marginBottom: 5, textTransform: "uppercase" }}>
           {state.eyebrow}
         </div>
       )}
-      <div style={{ fontSize: compact ? state.headlineSize - 3 : state.headlineSize, fontWeight: 950, lineHeight: state.lineHeight, textTransform: "uppercase", ...lineClampStyle(2) }}>
+      <div style={{ fontFamily: headlineFont, fontSize: compact ? state.headlineSize - 3 : state.headlineSize, fontWeight: 950, lineHeight: state.lineHeight, letterSpacing: condensed ? 0.9 : editorial ? -0.3 : 0, textTransform: "uppercase", ...lineClampStyle(2) }}>
         {state.headline}
       </div>
       {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: state.subSize, fontWeight: 800, lineHeight: 1.28, marginTop: 6, ...lineClampStyle(2) }}>{state.subheadline}</div>}
@@ -960,6 +1031,7 @@ function HeadlineBlock({ state, compact = false }: { state: CreativeState; compa
 
 function CtaUnit({ state, flow }: { state: CreativeState; flow?: CtaFlow }) {
   const ctaFlow = flow || state.ctaFlow;
+  const treatment = cleanText(state.draft?.cssCtaTreatment);
   const base = {
     background: state.palette.cta,
     color: "#ffffff",
@@ -971,7 +1043,11 @@ function CtaUnit({ state, flow }: { state: CreativeState; flow?: CtaFlow }) {
     textAlign: "center" as const,
     boxShadow: "0 10px 22px rgba(0,0,0,0.22)",
   };
-  if (ctaFlow === "bottom_bar") return <BottomBar color={state.palette.cta} label={state.cta} />;
+  if (ctaFlow === "bottom_bar") return (
+    <div data-css-cta={treatment} style={{ position: "absolute", left: treatment === "stamp_bar" ? 14 : 0, right: treatment === "stamp_bar" ? 14 : 0, bottom: treatment === "stamp_bar" ? 8 : 0, minHeight: treatment === "stamp_bar" ? 38 : 44, background: treatment === "gold_bar" ? state.palette.accent : state.palette.cta, color: treatment === "gold_bar" ? "#0f172a" : "#ffffff", border: treatment === "contrast_bar" ? "3px solid #ffffff" : treatment === "stamp_bar" ? `2px dashed ${state.palette.accent}` : "none", borderRadius: treatment === "stamp_bar" ? 4 : 0, padding: "7px 12px", boxSizing: "border-box", fontSize: 14, fontWeight: 950, letterSpacing: treatment === "stamp_bar" ? 1.1 : 0.3, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", textTransform: "uppercase", boxShadow: "0 10px 22px rgba(0,0,0,0.24)" }}>
+      {state.cta}{treatment === "arrow_bar" ? "  →" : ""}
+    </div>
+  );
   if (ctaFlow === "floating_cta") return <div style={{ ...base, position: "absolute", right: 16, bottom: 14, borderRadius: 999, padding: "10px 15px", maxWidth: 184 }}>{state.cta}</div>;
   if (ctaFlow === "stacked_cta") return <div style={{ ...base, borderRadius: state.radius, minHeight: 38, marginTop: state.gap }}>{state.cta}</div>;
   if (ctaFlow === "inline_cta") return <span style={{ ...base, display: "inline-flex", borderRadius: 999, padding: "8px 12px" }}>{state.cta}</span>;
@@ -1590,7 +1666,11 @@ function renderOrnateGoldFrame(state: CreativeState) {
         <div style={{ color: "#e03c3c", fontSize: 12, fontWeight: 950, letterSpacing: 2.4, textTransform: "uppercase" }}>{state.eyebrow}</div>
         <div style={{ display: "grid", gap: 10, alignContent: "center" }}>
           <div style={{ color: "#f5eddc", fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1.05, textTransform: "uppercase", ...lineClampStyle(2) }}>{state.headline}</div>
-          {state.amount && <div style={{ color: "#c9a84c", fontSize: 48, fontWeight: 950, lineHeight: 1, textShadow: "0 3px 12px rgba(201,168,76,0.35)" }}>{state.amount}</div>}
+          {state.amount && <div>
+            <div style={{ color: "#d7c58a", fontSize: 9, fontWeight: 950, letterSpacing: 1.1 }}>{state.copy.coverageOptionsUpTo}</div>
+            <div style={{ color: "#c9a84c", fontSize: 48, fontWeight: 950, lineHeight: 1, textShadow: "0 3px 12px rgba(201,168,76,0.35)" }}>{state.amount}</div>
+            <div style={{ color: "#d7c58a", fontSize: 8.5, fontWeight: 700, marginTop: 3 }}>{state.copy.amountDisclosure}</div>
+          </div>}
           {state.subheadline && <div style={{ color: "#d7c58a", fontSize: 12, fontWeight: 700, lineHeight: 1.3, ...lineClampStyle(2) }}>{state.subheadline}</div>}
         </div>
         <div style={{ display: "grid", gap: 10 }}>
@@ -1708,6 +1788,7 @@ function renderTemplateFamily(state: CreativeState) {
   const intelligenceLayout = Number(state.draft?.creativeEngineVersion || 0) >= 1
     && Boolean(state.draft?.layoutId);
   if (intelligenceLayout) {
+    if (state.draft?.visualTreatment === "image" && state.backgroundUrl) return renderPhotoDirectResponse(state);
     if (state.layoutFamily === "split_panel") return renderSplitPanel(state);
     if (state.layoutFamily === "selector_grid") return renderSelectorGrid(state);
     if (state.layoutFamily === "checklist_first" || state.layoutFamily === "trust_medical") return renderChecklistFirst(state);
@@ -1718,6 +1799,13 @@ function renderTemplateFamily(state: CreativeState) {
     if (state.layoutFamily === "benefit_grid") return renderBenefitGrid(state);
     if (state.layoutFamily === "clean_white_diagram") return renderCleanWhiteDiagram(state);
     if (state.layoutFamily === "aged_parchment") return renderAgedParchment(state);
+    if (state.layoutFamily === "age_selector") return renderAgeSelector(state);
+    if (state.layoutFamily === "price_table") return renderPriceTable(state);
+    if (state.layoutFamily === "homeowner_table") return renderHomeownerTable(state);
+    if (state.layoutFamily === "trucker_highway") return renderTruckerHighway(state);
+    if (state.layoutFamily === "patriotic_notice") return renderPatrioticNotice(state);
+    if (state.layoutFamily === "premium_dark_gold") return renderPremiumDarkGold(state);
+    if (state.layoutFamily === "ornate_gold_frame") return renderOrnateGoldFrame(state);
     if (state.layoutFamily === "premium_card" || state.layoutFamily === "dark_response") return renderPosterStack(state);
     return renderPosterStack(state);
   }
@@ -1796,6 +1884,8 @@ export function ProductionFeedCreative({
       data-creative-root="true"
       data-creative-language={draft?.language === "es" ? "es" : "en"}
       data-creative-layout={cleanText(draft?.layoutId || draft?.layoutFamily || "")}
+      data-creative-execution={cleanText(draft?.cssExecutionId || "legacy")}
+      data-creative-treatment={cleanText(draft?.visualTreatment || "graphic")}
       style={{
         width: 540,
         height: 675,

@@ -41,21 +41,21 @@ describe("production creative asset library", () => {
   });
 
   it("uses an actual compatible production asset ID and URL in generated drafts", () => {
-    const productionAssets = [asset({ compatibleFamilies: ["VET_IDENTITY_AGE_AMOUNT_CORE"] })];
+    const productionAssets = [asset({ compatibleFamilies: ["*"] })];
     const draft = generateCreativeIntelligenceDrafts({
       vertical: "veteran", audienceSegment: "veteran", language: "en", userKey: context.userKey,
-      campaignName: "Asset QA", requestedCount: 1, generationNonce: "asset-backed-draft",
+      campaignName: "Asset QA", requestedCount: 5, generationNonce: "asset-backed-draft",
       preferredFamilyId: "VET_IDENTITY_AGE_AMOUNT_CORE", productionAssets,
-    })[0];
+    }).find((candidate) => candidate.assetId === "asset-1");
     expect(draft).toEqual(expect.objectContaining({ assetId: "asset-1", imageUrl: "/assets/veteran-1.jpg", imageIdentity: "/assets/veteran-1.jpg" }));
   });
 
-  it("creates an unfunded 740-image queue and 100 safe video frameworks without vendor calls", () => {
+  it("keeps the paid image queue cancelled while preserving safe video specifications", () => {
     const queue = buildUnfundedStaticAssetQueue();
-    expect(MASS_ASSET_COST_PLAN.totalApprovedAssetsRequested).toBe(860);
+    expect(MASS_ASSET_COST_PLAN.totalApprovedAssetsRequested).toBe(120);
     expect(MASS_ASSET_COST_PLAN.existingAssetCandidates).toBe(120);
-    expect(queue).toHaveLength(740);
-    expect(new Set(queue.map((job) => job.jobId)).size).toBe(740);
+    expect(MASS_ASSET_COST_PLAN.newStaticAssetsRequired).toBe(0);
+    expect(queue).toHaveLength(0);
     const video = buildPendingVideoFrameworks();
     expect(video).toHaveLength(100);
     expect(video.every((framework) => framework.approvalStatus === "pending" && framework.claimRequirements.length === 0)).toBe(true);

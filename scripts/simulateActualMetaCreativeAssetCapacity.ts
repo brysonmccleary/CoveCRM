@@ -38,6 +38,7 @@ function simulate(productionAssets: any[], customers: number, adsPerCustomer: nu
   let nearDuplicates = 0;
   let diversityFailures = 0;
   let actualAssetBacked = 0;
+  const visualTreatments = new Map<string, number>();
   for (let customer = 0; customer < customers; customer++) {
     const [vertical, audienceSegment, language] = CONFIGS[customer % CONFIGS.length];
     let drafts: any[];
@@ -52,12 +53,13 @@ function simulate(productionAssets: any[], customers: number, adsPerCustomer: nu
       failures.push({ customer, combination: `${vertical}/${audienceSegment}/${language}`, error: String(error?.message || error) });
       continue;
     }
-    if (scoreBatchDiversity(drafts).score < (adsPerCustomer > 4 ? 0.72 : 0.8)) diversityFailures += 1;
+    if (scoreBatchDiversity(drafts).score < 0.8) diversityFailures += 1;
     for (const draft of drafts) {
       const comparisons = all.slice(-5000);
       if (comparisons.some((row) => row.semanticFingerprint === draft.semanticFingerprint)) exactDuplicates += 1;
       if (comparisons.some((row) => creativeSimilarity(draft, row).classification === "NEAR_DUPLICATE")) nearDuplicates += 1;
       if (draft.assetId) actualAssetBacked += 1;
+      increment(visualTreatments, draft.visualTreatment || "graphic");
       increment(assets, draft.assetId);
       increment(families, draft.winningFamilyId);
       increment(layouts, draft.layoutId);
@@ -76,8 +78,9 @@ function simulate(productionAssets: any[], customers: number, adsPerCustomer: nu
     generationFailures: failures.length, firstFailures: failures.slice(0, 10), diversityFailures,
     actualAssetBacked, actualAssetCoverage: Number(assetCoverage.toFixed(4)),
     exactDuplicates, nearDuplicates,
+    visualTreatmentDistribution: distribution(visualTreatments, all.length),
     maxSingleAssetShare: Number(maxSingleAssetShare.toFixed(4)),
-    pass: failures.length === 0 && all.length === expected && assetCoverage === 1
+    pass: failures.length === 0 && all.length === expected && diversityFailures === 0
       && exactDuplicates === 0 && nearDuplicates === 0 && maxSingleAssetShare <= 0.05,
     assetReuse: assetDistribution.slice(0, 20),
     familyDistribution: distribution(families, all.length).slice(0, 20),

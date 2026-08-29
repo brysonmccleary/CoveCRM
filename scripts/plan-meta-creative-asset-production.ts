@@ -10,7 +10,7 @@ const estimatedStorageGb = MASS_ASSET_COST_PLAN.estimatedNewAssetBytes / 1_000_0
 const storageCost = estimatedStorageGb * MASS_ASSET_COST_PLAN.blobStorageCostPerGbMonthUsd;
 
 console.log(JSON.stringify({
-  authorizationState: "PLANNED_UNFUNDED_DO_NOT_GENERATE",
+  authorizationState: "CANCELLED_CSS_FIRST_NO_PAID_IMAGE_GENERATION",
   ...MASS_ASSET_COST_PLAN,
   imageOutputCostUsd: Number(imageOutputCost.toFixed(2)),
   maximumTextInputCostUsd: Number(maximumTextCost.toFixed(2)),

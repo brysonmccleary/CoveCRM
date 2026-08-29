@@ -7,6 +7,7 @@ import { creativeSimilarity } from "@/lib/facebook/creativeIntelligence/similari
 import { evaluateCreativeClaims, type RegisteredClaim } from "@/lib/facebook/claimsRegistry";
 import { reserveGeneratedDrafts } from "@/lib/facebook/creativeUsage";
 import { scoreFamilyEvidence } from "@/lib/facebook/performanceLearning";
+import { cssExecutionCounts } from "@/lib/facebook/creativeIntelligence/executions";
 
 const COMBINATIONS = [
   ["veteran", "veteran", "en"],
@@ -41,6 +42,28 @@ describe("global creative intelligence engine", () => {
       "MP_HOME_BALANCE_FAMILY", "IUL_TAX_CASH_EDUCATION", "TRK_OCCUPATION_AMOUNT_BENEFITS",
       "ES_FE_FAMILY_BURDEN", "ES_MP_LIVING_BENEFIT", "ES_IUL_EDUCATION",
     ]) expect(ids.has(id)).toBe(true);
+  });
+
+  it("ships the CSS-first execution capacity without a paid image dependency", () => {
+    expect(cssExecutionCounts()).toEqual({
+      veteran: 40,
+      finalExpense: 30,
+      mortgage: 30,
+      iul: 30,
+      trucker: 30,
+      spanish: 110,
+    });
+  });
+
+  it("uses strong safe direct-response copy without inventing gated claims", () => {
+    const drafts = Array.from({ length: 12 }, (_, index) => generateCreativeIntelligenceDrafts({
+      vertical: "veteran", audienceSegment: "veteran", language: "en", userKey: `safe-dr-${index}`,
+      campaignName: "Safe DR QA", requestedCount: 1, generationNonce: `safe-dr-${index}`,
+    })[0]);
+    const text = drafts.map((draft) => `${draft.headline} ${draft.primaryText}`).join(" ");
+    expect(drafts.every((draft) => draft.copyMode === "safe_direct_response" && draft.cssExecutionId.startsWith("VET_CSS_"))).toBe(true);
+    expect(text).not.toMatch(/licensed agent can explain|private insurance options can be reviewed|family, budget, and long-term priorities/i);
+    expect(text).not.toMatch(/\$\d|no medical exam|no waiting period|guaranteed acceptance|guaranteed rate/i);
   });
 
   it.each(COMBINATIONS)("generates a diverse review batch for %s/%s/%s without Meta writes", (vertical, audienceSegment, language) => {

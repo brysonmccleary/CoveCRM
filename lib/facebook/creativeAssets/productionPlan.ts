@@ -13,7 +13,7 @@ export type AssetProductionLane = {
 export const ASSET_PRODUCTION_LANES: AssetProductionLane[] = [
   {
     laneId: "veteran", vertical: "veteran", audienceSegment: "veteran", language: "en",
-    targetApproved: 160, existingCandidateCount: 40,
+    targetApproved: 40, existingCandidateCount: 40,
     directions: [
       "older male veteran", "older female veteran", "middle-aged veteran", "veteran couple",
       "veteran and spouse", "veteran at home", "veteran outdoors", "veteran portrait",
@@ -26,7 +26,7 @@ export const ASSET_PRODUCTION_LANES: AssetProductionLane[] = [
   },
   {
     laneId: "mortgage", vertical: "mortgage_protection", audienceSegment: "standard", language: "en",
-    targetApproved: 130, existingCandidateCount: 40,
+    targetApproved: 40, existingCandidateCount: 40,
     directions: [
       "home exterior", "family at home", "new homeowner", "couple in home", "mortgage paperwork",
       "keys and homeownership", "protect-the-home concept", "family and home consequence", "suburban home",
@@ -37,7 +37,7 @@ export const ASSET_PRODUCTION_LANES: AssetProductionLane[] = [
   },
   {
     laneId: "trucker", vertical: "trucker", audienceSegment: "trucker", language: "en",
-    targetApproved: 130, existingCandidateCount: 40,
+    targetApproved: 40, existingCandidateCount: 40,
     directions: [
       "semi-trailer truck", "driver portrait", "driver in cab", "driver beside truck", "owner-operator",
       "highway", "truck stop", "sunrise or sunset highway", "family and trucker", "homecoming",
@@ -48,7 +48,7 @@ export const ASSET_PRODUCTION_LANES: AssetProductionLane[] = [
   },
   {
     laneId: "final_expense", vertical: "final_expense", audienceSegment: "standard", language: "en",
-    targetApproved: 160, existingCandidateCount: 0,
+    targetApproved: 0, existingCandidateCount: 0,
     directions: [
       "older adult portrait", "older couple", "adult child and parent", "family preparation",
       "kitchen-table planning", "funeral-cost concern", "subtle memorial family imagery", "calm home environment",
@@ -59,7 +59,7 @@ export const ASSET_PRODUCTION_LANES: AssetProductionLane[] = [
   },
   {
     laneId: "iul", vertical: "iul", audienceSegment: "standard", language: "en",
-    targetApproved: 130, existingCandidateCount: 0,
+    targetApproved: 0, existingCandidateCount: 0,
     directions: [
       "financial education", "family legacy", "retirement planning", "cash-value education",
       "tax-planning concept", "timeline", "comparison chart", "calculator assessment", "professional couple",
@@ -70,27 +70,27 @@ export const ASSET_PRODUCTION_LANES: AssetProductionLane[] = [
   },
   {
     laneId: "spanish_final_expense", vertical: "final_expense", audienceSegment: "spanish", language: "es",
-    targetApproved: 30, existingCandidateCount: 0,
+    targetApproved: 0, existingCandidateCount: 0,
     directions: ["responsabilidad familiar", "padre o madre e hijos", "pareja", "familia multigeneracional", "confianza con agente", "planificación"],
   },
   {
     laneId: "spanish_mortgage", vertical: "mortgage_protection", audienceSegment: "spanish", language: "es",
-    targetApproved: 30, existingCandidateCount: 0,
+    targetApproved: 0, existingCandidateCount: 0,
     directions: ["familia en casa", "pareja propietaria", "conversación", "protección del hogar", "tarjeta informativa", "consulta con agente"],
   },
   {
     laneId: "spanish_iul", vertical: "iul", audienceSegment: "spanish", language: "es",
-    targetApproved: 30, existingCandidateCount: 0,
+    targetApproved: 0, existingCandidateCount: 0,
     directions: ["educación financiera", "pareja profesional", "familia y legado", "planificación", "explicación con agente", "tarjeta de beneficios"],
   },
   {
     laneId: "spanish_veteran", vertical: "veteran", audienceSegment: "spanish", language: "es",
-    targetApproved: 30, existingCandidateCount: 0,
+    targetApproved: 0, existingCandidateCount: 0,
     directions: ["familia y responsabilidad", "pareja", "hogar", "conversación", "planificación", "confianza con agente"],
   },
   {
     laneId: "spanish_trucker", vertical: "trucker", audienceSegment: "spanish", language: "es",
-    targetApproved: 30, existingCandidateCount: 0,
+    targetApproved: 0, existingCandidateCount: 0,
     directions: ["familia", "pareja", "hogar", "conversación", "planificación", "educación financiera"],
   },
 ];
@@ -113,6 +113,9 @@ export type PlannedAssetJob = {
 };
 
 export function buildUnfundedStaticAssetQueue(): PlannedAssetJob[] {
+  // Paid mass-image production was explicitly cancelled. Existing approved
+  // Cove-owned photos remain optional inputs; CSS/HTML executions are the
+  // complete static creative and do not depend on a generated JPEG.
   return ASSET_PRODUCTION_LANES.flatMap((lane) => {
     const required = Math.max(0, lane.targetApproved - lane.existingCandidateCount);
     return Array.from({ length: required }, (_, index) => {

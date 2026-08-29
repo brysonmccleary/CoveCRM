@@ -1,13 +1,14 @@
 import { createHash } from "crypto";
 import { buildCreativeGenerationSignature } from "@/lib/facebook/creativeIdentity";
 import { getEligibleCreativeFamilies } from "./families";
-import { CREATIVE_LAYOUTS, assertLayoutCompatibility, getLayoutDefinition } from "./layouts";
+import { assertLayoutCompatibility, getLayoutDefinition } from "./layouts";
 import { assertApprovedHeroAmount, formatApprovedHeroAmount, getApprovedBenefitCopy, productCapabilitySupports, resolveProductCapability } from "./capabilities";
 import { buildSelectorContract, selectorToFunnelStep } from "./selectors";
 import { creativeSimilarity, semanticFingerprint } from "./similarity";
 import { assertRenderedLanguageSafe, assertVisibleIdentity, getVisibleIdentityLabel, localizeSelectorContract } from "./localization";
 import { assertCreativeQualityGates, fitCopyForLayout } from "./qualityGates";
 import { selectProductionAsset } from "@/lib/facebook/creativeAssets/selection";
+import { getEligibleCssExecutions, type CssExecutionDefinition } from "./executions";
 import type {
   CreativeClass,
   CreativeEngineDraft,
@@ -97,28 +98,62 @@ function chooseFamily(
   return scored[scored.length - 1].family;
 }
 
-function chooseLayout(family: CreativeFamilyDefinition, seed: string, usedLayouts: Set<LayoutId>, recentUsage: Array<Record<string, unknown>> = []): { layoutId: LayoutId; format: CreativeFormat } {
-  const layoutPool = family.layoutIds.filter((layoutId) => !usedLayouts.has(layoutId));
-  const available = layoutPool.length ? layoutPool : family.layoutIds;
-  const counts = new Map(available.map((layoutId) => [layoutId, recentUsage.filter((row: any) => row?.layoutId === layoutId).length]));
-  const minimumCount = Math.min(...available.map((layoutId) => counts.get(layoutId) || 0));
-  const leastIssued = available.filter((layoutId) => (counts.get(layoutId) || 0) <= minimumCount + 1);
-  const layoutId = pick(leastIssued, `${seed}|layout`);
-  const layout = CREATIVE_LAYOUTS.find((candidate) => candidate.layoutId === layoutId);
-  if (!layout) throw new Error(`Unknown creative layout: ${layoutId}`);
-  const allowedFormats = family.formats.filter((format) => layout.compatibleFormats.includes(format));
-  const format = pick(allowedFormats.length ? allowedFormats : layout.compatibleFormats, `${seed}|format`);
-  assertLayoutCompatibility({ layoutId, vertical: family.vertical, format });
-  return { layoutId, format };
+function chooseExecution(
+  input: CreativeEngineInput,
+  seed: string,
+  usedExecutionIds: Set<string>,
+  usedMacroFamilies: Set<string>,
+  usedLayouts: Set<LayoutId>,
+  recentUsage: Array<Record<string, unknown>> = [],
+  compatibleLayouts?: LayoutId[],
+  photoCompatibility?: boolean
+): CssExecutionDefinition {
+  const eligibleExecutions = getEligibleCssExecutions({
+    vertical: input.vertical,
+    audienceSegment: input.audienceSegment,
+    language: input.language,
+    compatibleLayouts,
+  });
+  const photoFiltered = typeof photoCompatibility === "boolean"
+    ? eligibleExecutions.filter((execution) => execution.photoCompatible === photoCompatibility)
+    : eligibleExecutions;
+  const executions = photoFiltered.length ? photoFiltered : eligibleExecutions;
+  if (!executions.length) {
+    throw new Error(`No CSS direct-response execution supports ${input.vertical}/${input.audienceSegment}/${input.language}.`);
+  }
+  const freshMacroAndLayout = executions.filter((execution) => !usedMacroFamilies.has(execution.macroFamily)
+    && !usedLayouts.has(execution.layoutId));
+  const freshMacro = executions.filter((execution) => !usedMacroFamilies.has(execution.macroFamily));
+  const freshLayout = executions.filter((execution) => !usedLayouts.has(execution.layoutId));
+  const unused = executions.filter((execution) => !usedExecutionIds.has(execution.executionId));
+  const available = freshMacroAndLayout.length ? freshMacroAndLayout
+    : freshMacro.length ? freshMacro : freshLayout.length ? freshLayout : unused.length ? unused : executions;
+  const counts = available.map((execution) => ({
+    execution,
+    count: recentUsage.filter((row: any) => row?.cssExecutionId === execution.executionId).length,
+  }));
+  const minimumCount = Math.min(...counts.map((entry) => entry.count));
+  return pick(counts.filter((entry) => entry.count <= minimumCount + 1).map((entry) => entry.execution), `${seed}|css-execution`);
 }
 
-function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition, index: number, layoutId: LayoutId, format: CreativeFormat): CreativeEngineDraft {
-  const seed = `${input.userKey}|${input.generationNonce}|${input.vertical}|${input.audienceSegment}|${index}|${family.familyId}|${layoutId}`;
+function buildDraft(
+  input: CreativeEngineInput,
+  family: CreativeFamilyDefinition,
+  index: number,
+  execution: CssExecutionDefinition,
+  forcedVeteranPhotoSlot?: boolean
+): CreativeEngineDraft {
+  const layoutId = execution.layoutId;
+  const generationSeed = String((input as CreativeEngineInput & { generationSeed?: string }).generationSeed || input.generationNonce);
+  const seed = `${input.userKey}|${generationSeed}|${input.vertical}|${input.audienceSegment}|${index}|${family.familyId}|${layoutId}`;
   const capabilityResolution = resolveProductCapability({ vertical: input.vertical, state: input.capabilityState || input.location, applicantAge: input.applicantAge, capability: input.productCapability });
   if (input.productCapability && capabilityResolution.errors.length > 0) {
     throw new Error(`Configured product capability failed validation: ${capabilityResolution.errors.join(" ")}`);
   }
   const copy = input.language === "es" && family.spanish ? family.spanish : family;
+  const copyMode = capabilityResolution.source === "configured_product"
+    ? "capability_enhanced_direct_response" as const
+    : "safe_direct_response" as const;
   const headlineRaw = pickLeastUsed(copy.headlines, `${seed}|headline`, input.recentUsage || [], "headline");
   const hook = pick(copy.hooks, `${seed}|hook`);
   const safeBenefits = pick(copy.benefitLists, `${seed}|benefits`);
@@ -141,9 +176,20 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
   const visualLeadType = input.audienceSegment === "veteran" || input.audienceSegment === "trucker"
     ? input.audienceSegment : input.vertical;
   const staticAssetCounts: Record<string, number> = { veteran: 40, trucker: 40, mortgage_protection: 40 };
-  const photoBlocked = layoutId === "educational_explainer_card" || layoutId === "notice_letter_paper"
-    || (layoutId === "audience_benefit_grid" && visualLeadType === "veteran");
-  const photoRequested = format === "photo" || format === "video" || format === "ugc_video" || format === "agent_video";
+  const visualRoll = hashInt(`${seed}|css-first-share`) % 100;
+  const imageThreshold = input.vertical === "veteran" && input.language === "en" ? 56 : 78;
+  const hybridThreshold = Math.round((imageThreshold + 100) / 2);
+  const requestedVisualTreatment = typeof forcedVeteranPhotoSlot === "boolean"
+    ? (forcedVeteranPhotoSlot && execution.photoCompatible
+      ? (visualRoll % 2 === 0 ? "hybrid" as const : "image" as const)
+      : "graphic" as const)
+    : execution.photoCompatible && visualRoll >= imageThreshold
+      ? (visualRoll < hybridThreshold ? "hybrid" as const : "image" as const)
+      : "graphic" as const;
+  const photoRequested = requestedVisualTreatment !== "graphic";
+  const photoBlocked = !execution.photoCompatible;
+  const format: CreativeFormat = photoRequested ? "photo" : "graphic";
+  assertLayoutCompatibility({ layoutId, vertical: family.vertical, format });
   const selectedAsset = !photoBlocked ? selectProductionAsset(input.productionAssets || [], {
     vertical: input.vertical,
     audienceSegment: input.audienceSegment,
@@ -206,7 +252,7 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
     imageDirection,
     backgroundDirection,
     imagePrompt: `${imageDirection}; ${backgroundDirection}; original Cove composition; no logos; no readable generated text`,
-    visualTreatment: hasStaticPhoto ? "photo" : "graphic",
+    visualTreatment: hasStaticPhoto ? requestedVisualTreatment : "graphic",
     visualVariantIndex,
     imageIdentity,
     imageUrl: imageUrl.startsWith("graphic:") ? "" : imageUrl,
@@ -239,12 +285,24 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
     requiredDisclosures: family.requiredDisclosures,
     capabilityId: capabilityResolution.capability.capabilityId,
     capabilitySource: capabilityResolution.source,
+    copyMode,
     displayAmount,
     capabilityBenefits,
     capabilityDisclosures,
     visibleIdentityLabel,
-    heroHierarchy: layout.hierarchyClass,
-    backgroundClass: hasStaticPhoto ? `photo:${visualLeadType}` : `graphic:${backgroundDirection}`,
+    cssExecutionId: execution.executionId,
+    cssMacroFamily: execution.macroFamily,
+    cssRendererFamily: execution.rendererFamily,
+    cssHierarchyTreatment: execution.hierarchyTreatment,
+    cssPanelStructure: execution.panelStructure,
+    cssBackgroundTreatment: execution.backgroundTreatment,
+    cssTypographyTreatment: execution.typographyTreatment,
+    cssSelectorPresentation: execution.selectorPresentation,
+    cssCtaTreatment: execution.ctaTreatment,
+    cssFrameTreatment: execution.frameTreatment,
+    cssPaletteIndex: execution.paletteIndex,
+    heroHierarchy: execution.hierarchyTreatment || layout.hierarchyClass,
+    backgroundClass: hasStaticPhoto ? `${requestedVisualTreatment}:${visualLeadType}` : `css:${execution.backgroundTreatment}`,
     ctaPlacement: "bottom_bar",
     benefitStructure: benefits.length ? `${layoutId}:${benefits.length}` : `${layoutId}:0`,
     productCapability: capabilityResolution.source === "configured_product"
@@ -253,7 +311,7 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
     capabilityFallbackReasons: capabilityResolution.errors,
     variantId,
     generationNonce: input.generationNonce,
-    creativeEngineVersion: 1,
+    creativeEngineVersion: 2,
     generatedBy: "creative_intelligence_engine",
     copySource: "creative_intelligence_engine",
     renderLegacyCreative: false,
@@ -264,7 +322,7 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
   const semantic = semanticFingerprint(draft);
   const visual = createHash("sha256").update(JSON.stringify({
     layoutId, format, imageIdentity, imageDirection, backgroundDirection, hookClass: draft.hookClass,
-    selector: fittedSelector, offerClass,
+    selector: fittedSelector, offerClass, cssExecutionId: execution.executionId,
   })).digest("hex");
   return {
     ...draft,
@@ -275,39 +333,70 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
 }
 
 export function generateCreativeIntelligenceDrafts(input: CreativeEngineInput): CreativeEngineDraft[] {
+  const internalInput = input as CreativeEngineInput & { generationRetry?: number; generationSeed?: string };
+  const generationRetry = Number(internalInput.generationRetry || 0);
+  const generationSeed = String(internalInput.generationSeed || input.generationNonce);
+  const retryBatch = (reason: string): CreativeEngineDraft[] => {
+    if (generationRetry >= 16) throw new Error(reason);
+    return generateCreativeIntelligenceDrafts({
+      ...input,
+      generationRetry: generationRetry + 1,
+      generationSeed: `${input.generationNonce}|batch-retry:${generationRetry + 1}`,
+    } as CreativeEngineInput);
+  };
   const resolvedCapability = resolveProductCapability({ vertical: input.vertical, state: input.capabilityState || input.location, applicantAge: input.applicantAge, capability: input.productCapability });
   if (input.productCapability && resolvedCapability.errors.length > 0) {
     throw new Error(`Configured product capability failed validation: ${resolvedCapability.errors.join(" ")}`);
   }
   const families = getEligibleCreativeFamilies(input).filter((family) =>
     family.requiredCapabilities.every((requirement) => productCapabilitySupports(resolvedCapability.capability, requirement))
+    && getEligibleCssExecutions({
+      vertical: input.vertical,
+      audienceSegment: input.audienceSegment,
+      language: input.language,
+      compatibleLayouts: family.layoutIds,
+    }).length > 0
   );
   if (families.length === 0) {
     throw new Error(`No approved creative families support ${input.vertical}/${input.audienceSegment}/${input.language}.`);
   }
   const requestedCount = Math.min(12, Math.max(1, Math.floor(input.requestedCount)));
+  const supportedLayouts = [...new Set(families.flatMap((family) => family.layoutIds))];
   const drafts: CreativeEngineDraft[] = [];
   const usedFamilies = new Set<string>();
+  const usedExecutionIds = new Set<string>();
+  const usedMacroFamilies = new Set<string>();
   const usedLayouts = new Set<LayoutId>();
   const recent = (input.recentUsage || []).filter(Boolean) as Record<string, any>[];
 
   for (let slot = 0; slot < requestedCount; slot++) {
     let accepted: CreativeEngineDraft | null = null;
     for (let attempt = 0; attempt < 80; attempt++) {
-      const seed = `${input.generationNonce}|slot:${slot}|attempt:${attempt}`;
+      const seed = `${generationSeed}|slot:${slot}|attempt:${attempt}`;
       const selectionInput = { ...input, recentUsage: [...recent, ...drafts] };
-      const family = input.preferredFamilyId && slot === 0
-        ? families.find((candidate) => candidate.familyId === input.preferredFamilyId) || chooseFamily(families, selectionInput, seed, usedFamilies)
-        : chooseFamily(families, selectionInput, seed, usedFamilies);
-      const { layoutId, format } = chooseLayout(family, seed, usedLayouts, recent);
-      const candidate = buildDraft(selectionInput, family, slot * 100 + attempt, layoutId, format);
-      const visualLeadForCandidate = input.audienceSegment === "veteran" || input.audienceSegment === "trucker"
-        ? input.audienceSegment : input.vertical;
-      if (requestedCount === 1
-        && ["veteran", "trucker", "mortgage_protection"].includes(visualLeadForCandidate)
-        && candidate.visualTreatment !== "photo") {
-        continue;
-      }
+      const preferredFamily = input.preferredFamilyId && slot === 0
+        ? families.find((candidate) => candidate.familyId === input.preferredFamilyId)
+        : undefined;
+      const veteranEnglish = input.vertical === "veteran"
+        && input.audienceSegment === "veteran"
+        && input.language === "en";
+      const priorVeteranIssuance = selectionInput.recentUsage.filter((row: any) => row?.leadType === "veteran"
+        && row?.audienceSegment === "veteran" && row?.language === "en").length;
+      // Two photo-capable placements in each nine-creative cycle produces a
+      // stable 77.8% CSS / 22.2% image+hybrid mix, even for small customer batches.
+      const forcedVeteranPhotoSlot = veteranEnglish
+        ? priorVeteranIssuance % 9 === 3 || priorVeteranIssuance % 9 === 8
+        : undefined;
+      const execution = chooseExecution(
+        selectionInput, seed, usedExecutionIds, usedMacroFamilies, usedLayouts, recent,
+        preferredFamily?.layoutIds || supportedLayouts,
+        forcedVeteranPhotoSlot
+      );
+      const compatibleFamilies = families.filter((candidate) => candidate.layoutIds.includes(execution.layoutId));
+      const family = preferredFamily && compatibleFamilies.includes(preferredFamily)
+        ? preferredFamily
+        : chooseFamily(compatibleFamilies, selectionInput, seed, usedFamilies);
+      const candidate = buildDraft(selectionInput, family, slot * 100 + attempt, execution, forcedVeteranPhotoSlot);
       const comparisons = [...drafts, ...recent];
       const duplicate = comparisons.some((existing) => {
         const similarity = creativeSimilarity(candidate, existing);
@@ -318,55 +407,17 @@ export function generateCreativeIntelligenceDrafts(input: CreativeEngineInput): 
         break;
       }
     }
-    if (!accepted) throw new Error("Unable to produce a distinct creative set. Regenerate with a new nonce.");
+    if (!accepted) return retryBatch("Unable to produce a distinct creative set. Regenerate with a new nonce.");
     drafts.push(accepted);
     usedFamilies.add(accepted.winningFamilyId);
+    usedExecutionIds.add(accepted.cssExecutionId);
+    usedMacroFamilies.add(accepted.cssMacroFamily);
     usedLayouts.add(accepted.layoutId);
   }
-  if (drafts.length >= 2 && !(input.productionAssets || []).length) {
-    const treatments = new Set(drafts.map((draft) => draft.visualTreatment));
-    if (treatments.size === 1) {
-      const desired: CreativeFormat = drafts[0].visualTreatment === "photo" ? "graphic" : "photo";
-      const replaceIndex = drafts.findIndex((draft) => {
-        const layout = CREATIVE_LAYOUTS.find((candidate) => candidate.layoutId === draft.layoutId);
-        if (!layout?.compatibleFormats.includes(desired)) return false;
-        if (desired === "graphic") return true;
-        const visualLead = input.audienceSegment === "veteran" || input.audienceSegment === "trucker"
-          ? input.audienceSegment : input.vertical;
-        const blocked = draft.layoutId === "educational_explainer_card" || draft.layoutId === "notice_letter_paper"
-          || (draft.layoutId === "audience_benefit_grid" && visualLead === "veteran");
-        return !blocked && ["veteran", "trucker", "mortgage_protection"].includes(visualLead);
-      });
-      if (replaceIndex >= 0) {
-        const current = drafts[replaceIndex];
-        const visualLead = input.audienceSegment === "veteran" || input.audienceSegment === "trucker"
-          ? input.audienceSegment : input.vertical;
-        const imageIdentity = desired === "photo"
-          ? `/ad-backgrounds/${visualLead}/${Number(current.visualVariantIndex || 0) + 1}.jpg`
-          : `graphic:${current.backgroundDirection}`;
-        const updated = {
-          ...current,
-          format: desired,
-          visualTreatment: desired,
-          imageIdentity,
-        };
-        drafts[replaceIndex] = {
-          ...updated,
-          semanticFingerprint: semanticFingerprint(updated),
-          visualFingerprint: createHash("sha256").update(JSON.stringify({
-            layoutId: updated.layoutId, format: desired, imageIdentity,
-            imageDirection: updated.imageDirection, backgroundDirection: updated.backgroundDirection,
-            hookClass: updated.hookClass, selector: updated.selectorContract, offerClass: updated.offerClass,
-          })).digest("hex"),
-          creativeSignature: buildCreativeGenerationSignature(updated),
-        };
-      }
-    }
-  }
   const diversity = scoreBatchDiversity(drafts);
-  const diversityThreshold = drafts.length > 4 ? 0.72 : 0.8;
+  const diversityThreshold = 0.8;
   if (drafts.length >= 3 && diversity.score < diversityThreshold) {
-    throw new Error(`Generated batch did not meet Cove's family/layout/visual diversity threshold (${diversity.score}).`);
+    return retryBatch(`Generated batch did not meet Cove's family/layout/visual diversity threshold (${diversity.score}).`);
   }
   return drafts;
 }
@@ -377,16 +428,23 @@ export function scoreBatchDiversity(drafts: Array<Record<string, any>>) {
   const dimensions = {
     family: uniqueness("winningFamilyId"),
     layout: uniqueness("layoutId"),
+    execution: uniqueness("cssExecutionId"),
     hook: uniqueness("hookClass"),
     headline: uniqueness("headline"),
-    visual: new Set(drafts.map((draft) => `${draft.imageDirection || ""}|${draft.backgroundDirection || ""}`)).size / drafts.length,
+    visual: new Set(drafts.map((draft) => [
+      draft.visualTreatment || "graphic",
+      draft.cssRendererFamily || "",
+      draft.cssBackgroundTreatment || draft.backgroundDirection || "",
+      draft.cssTypographyTreatment || "",
+      draft.cssFrameTreatment || "",
+    ].join("|"))).size / drafts.length,
     offer: uniqueness("offerClass"),
     selector: new Set(drafts.map((draft) => JSON.stringify(draft.selectorContract || {}))).size / drafts.length,
     hierarchy: new Set(drafts.map((draft) => `${draft.heroHierarchy || ""}|${draft.ctaPlacement || ""}|${draft.benefitStructure || ""}`)).size / drafts.length,
   };
-  const score = dimensions.family * 0.16 + dimensions.layout * 0.22
-    + dimensions.visual * 0.15 + dimensions.hook * 0.1
+  const score = dimensions.family * 0.13 + dimensions.layout * 0.17
+    + dimensions.execution * 0.16 + dimensions.visual * 0.13 + dimensions.hook * 0.09
     + dimensions.headline * 0.1 + dimensions.offer * 0.12
-    + dimensions.selector * 0.05 + dimensions.hierarchy * 0.1;
+    + dimensions.selector * 0.04 + dimensions.hierarchy * 0.06;
   return { score: Number(score.toFixed(4)), dimensions };
 }

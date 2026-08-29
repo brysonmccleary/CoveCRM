@@ -181,5 +181,17 @@ export type CreativeEngineDraft = Record<string, unknown> & {
   displayAmount?: string;
   visibleIdentityLabel: string;
   capabilityBenefits: string[];
+  copyMode: "safe_direct_response" | "capability_enhanced_direct_response";
+  cssExecutionId: string;
+  cssMacroFamily: string;
+  cssRendererFamily: import("./executions").CssRendererFamily;
+  cssHierarchyTreatment: string;
+  cssPanelStructure: string;
+  cssBackgroundTreatment: string;
+  cssTypographyTreatment: string;
+  cssSelectorPresentation: string;
+  cssCtaTreatment: string;
+  cssFrameTreatment: string;
+  cssPaletteIndex: number;
   variantId: string;
 };
