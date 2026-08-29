@@ -1,3 +1,5 @@
+import { getRendererCopy, getVisibleIdentityLabel, localizeSelectorContract, type RendererCopy } from "@/lib/facebook/creativeIntelligence/localization";
+
 const PAGE_NAMES: Record<string, string> = {
   veteran: "Veteran Benefits Center",
   trucker: "Trucker Life Coverage",
@@ -249,6 +251,11 @@ function ButtonGrid({
 }) {
   if (!labels.length) return null;
   const compactLabels = labels.some((label) => label.length > 10);
+  // Two-column choices remain readable up to 30 characters at the production
+  // width. Reserve the taller single-column treatment for genuinely long
+  // phrases so the selector does not push the CTA below the crop.
+  const stackedLabels = labels.some((label) => label.length > 30);
+  const columns = stackedLabels ? "1fr" : compactLabels ? "1fr 1fr" : undefined;
 
   const styles: Record<string, { background: string; color: string; border: string; radius: number }> = {
     navy: { background: "#1a2744", color: "#ffffff", border: "1px solid rgba(255,255,255,0.22)", radius: 999 },
@@ -260,22 +267,30 @@ function ButtonGrid({
   const selected = customStyle ? { ...customStyle, radius: customStyle.radius ?? styles[styleType].radius } : styles[styleType];
 
   return (
-    <div style={{ display: compactLabels ? "grid" : "flex", gridTemplateColumns: compactLabels ? "1fr 1fr" : undefined, gap: 7, justifyContent: "center", flexWrap: compactLabels ? undefined : "wrap", width: "100%" }}>
+    <div data-creative-selector-grid="true" style={{ display: compactLabels ? "grid" : "flex", gridTemplateColumns: columns, gap: 7, justifyContent: "center", flexWrap: compactLabels ? undefined : "wrap", width: "100%" }}>
       {labels.slice(0, 4).map((label) => (
         <div
           key={label}
+          data-creative-selector-option="true"
           style={{
             background: selected.background,
             color: selected.color,
             border: selected.border,
             borderRadius: selected.radius,
-            padding: compactLabels ? "7px 6px" : "9px 13px",
+            padding: compactLabels ? "7px 8px" : "9px 13px",
+            minHeight: 36,
             minWidth: compactLabels ? 0 : styleType === "red" ? 92 : undefined,
             textAlign: "center",
             fontSize: compactLabels ? 11 : 12,
             fontWeight: 900,
-            lineHeight: 1,
+            lineHeight: 1.15,
             whiteSpace: compactLabels ? "normal" : "nowrap",
+            overflowWrap: "normal",
+            wordBreak: "keep-all",
+            hyphens: "none",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             boxShadow: "0 8px 18px rgba(0,0,0,0.18)",
           }}
         >
@@ -434,6 +449,7 @@ type CreativeState = {
   radius: number;
   lineHeight: number;
   spanish: boolean;
+  copy: RendererCopy;
 };
 
 // Curated from the supplied top-vendor references. These are the existing
@@ -551,8 +567,16 @@ export function resolveCreativeLayoutFamily(draft: any, leadType: string, seed: 
 
 function getProductLabel(leadType: string, audienceSegment: string, spanish = false): string {
   if (spanish) {
-    if (leadType === "mortgage_protection") return "SEGURO DE PROTECCIÓN HIPOTECARIA";
-    if (leadType === "iul") return "SEGURO DE VIDA UNIVERSAL INDEXADO (IUL)";
+    if (leadType === "mortgage_protection") return audienceSegment === "veteran"
+      ? "VETERANOS + PROTECCIÓN HIPOTECARIA"
+      : audienceSegment === "trucker" ? "CONDUCTORES CDL + PROTECCIÓN HIPOTECARIA" : "SEGURO DE PROTECCIÓN HIPOTECARIA";
+    if (leadType === "iul") return audienceSegment === "veteran"
+      ? "VETERANOS + EDUCACIÓN IUL"
+      : audienceSegment === "trucker" ? "CONDUCTORES CDL + EDUCACIÓN IUL" : "SEGURO DE VIDA UNIVERSAL INDEXADO (IUL)";
+    if (leadType === "veteran") return "VETERANOS + SEGURO DE VIDA";
+    if (leadType === "trucker") return "CONDUCTORES CDL + SEGURO DE VIDA";
+    if (audienceSegment === "veteran") return "VETERANOS + GASTOS FINALES";
+    if (audienceSegment === "trucker") return "CONDUCTORES CDL + GASTOS FINALES";
     return "SEGURO DE GASTOS FINALES";
   }
   if (leadType === "veteran") return "LIFE INSURANCE FOR VETERANS";
@@ -567,6 +591,8 @@ function getProductLabel(leadType: string, audienceSegment: string, spanish = fa
     if (audienceSegment === "trucker") return "TRUCKERS IUL LIFE INSURANCE";
     return "INDEXED UNIVERSAL LIFE INSURANCE";
   }
+  if (leadType === "final_expense" && audienceSegment === "veteran") return "FINAL EXPENSE INSURANCE FOR VETERANS";
+  if (leadType === "final_expense" && audienceSegment === "trucker") return "FINAL EXPENSE INSURANCE FOR CDL DRIVERS";
   return "FINAL EXPENSE INSURANCE";
 }
 
@@ -768,7 +794,9 @@ function getPalettes(leadType: string): Palette[] {
 }
 
 function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<typeof getOverlay>): CreativeState {
-  const spanish = draft?.audienceSegment === "spanish";
+  const spanish = draft?.language === "es" || draft?.audienceSegment === "spanish";
+  const language = spanish ? "es" : "en";
+  const copy = getRendererCopy(language);
   const audienceSegment = cleanText(draft?.audienceSegment || "standard").toLowerCase();
   const seed = hashString(getVariationSeed(draft, leadType));
   const variantIndex = pickVisualVariant(draft, leadType, VISUAL_VARIANT_COUNT);
@@ -807,7 +835,9 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
   const gapOptions = [8, 10, 12, 14];
   const ctaFlow: CtaFlow = "bottom_bar";
   const density = { pad: padOptions[hash2 % 4], gap: gapOptions[hash3 % 4], lineHeight: 1.08 };
-  const productLabel = getProductLabel(leadType, audienceSegment, spanish);
+  const productLabel = cleanText(draft?.visibleIdentityLabel) || (Number(draft?.creativeEngineVersion || 0) >= 1
+    ? getVisibleIdentityLabel({ vertical: leadType, audienceSegment, language })
+    : getProductLabel(leadType, audienceSegment, spanish));
   const headlineRaw = overlay.headline || cleanText(draft?.headline) || getLeadFallbackHeadline(leadType, spanish);
   const productClear = isProductClear(headlineRaw, leadType, spanish);
   const headline = clampCopy(productClear ? headlineRaw : productLabel, 58);
@@ -823,6 +853,14 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
       : ["Menos de 50", "50-60", "61-70", "71+"])
     : fallbackButtons;
 
+  const rawButtons = (overlay.buttonLabels.length ? overlay.buttonLabels : localizedFallbackButtons).slice(0, 4);
+  const localizedContract = draft?.selectorContract
+    ? localizeSelectorContract(draft.selectorContract, language)
+    : null;
+  const buttons = spanish && localizedContract?.options?.length
+    ? localizedContract.options.slice(0, 4)
+    : rawButtons;
+
   return {
     draft,
     leadType,
@@ -832,7 +870,7 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     subheadline: Number(draft?.creativeEngineVersion || 0) >= 1
       ? clampCopy(overlay.subheadline || draft?.primaryText || getVisualSubheadline(leadType, audienceSegment, seed + variantIndex, spanish), 92)
       : getVisualSubheadline(leadType, audienceSegment, seed + variantIndex, spanish),
-    buttons: (overlay.buttonLabels.length ? overlay.buttonLabels : localizedFallbackButtons).slice(0, 4),
+    buttons,
     bullets: overlay.benefitBullets.slice(0, 3),
     cta: clampCopy(overlay.ctaStrip || (spanish ? "Conozca sus opciones →" : "Learn more ->"), 42),
     eyebrow: productLabel,
@@ -857,6 +895,7 @@ function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<ty
     radius: 8,
     lineHeight: density.lineHeight,
     spanish,
+    copy,
   };
 }
 
@@ -940,7 +979,7 @@ function CtaUnit({ state, flow }: { state: CreativeState; flow?: CtaFlow }) {
 }
 
 function MiniBenefits({ state, columns = 1 }: { state: CreativeState; columns?: number }) {
-  const bullets = state.bullets.length ? state.bullets : ["Licensed review", "No obligation", "Fast options check"];
+  const bullets = state.bullets.length ? state.bullets : [state.copy.compareOptions, state.copy.coverageFit, state.copy.nextStep];
   return (
     <div style={{ display: "grid", gridTemplateColumns: columns === 2 ? "1fr 1fr" : "1fr", gap: 7 }}>
       {bullets.slice(0, columns === 2 ? 2 : 3).map((bullet, index) => (
@@ -958,7 +997,7 @@ function renderPosterStack(state: CreativeState) {
       <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap, textAlign: "center" }}>
         <HeadlineBlock state={state} />
         <div style={{ marginTop: "auto", display: "grid", gap: state.gap }}>
-          {state.amount && <div style={{ color: state.palette.accent, fontSize: 42, fontWeight: 950, lineHeight: 1, textShadow: "0 3px 14px rgba(0,0,0,0.55)" }}>{state.amount}</div>}
+          {state.amount && <div><div style={{ color: state.palette.eyebrow, fontSize: 9, fontWeight: 950, letterSpacing: 1.1 }}>{state.copy.coverageOptionsUpTo}</div><div style={{ color: state.palette.accent, fontSize: 42, fontWeight: 950, lineHeight: 1, textShadow: "0 3px 14px rgba(0,0,0,0.55)" }}>{state.amount}</div><div style={{ color: state.palette.subheadline, fontSize: 8.5, fontWeight: 700, marginTop: 3 }}>{state.copy.amountDisclosure}</div></div>}
           <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
           <MiniBenefits state={state} />
           {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow={state.ctaFlow} />}
@@ -972,24 +1011,20 @@ function renderPosterStack(state: CreativeState) {
 function renderSplitPanel(state: CreativeState) {
   return (
     <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", display: "grid", gridTemplateColumns: "44% 56%", padding: state.pad, gap: state.gap, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: state.gap, justifyContent: "space-between" }}>
-          <Panel state={state} style={{ padding: 10 }}>
-            <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.8 }}>{state.eyebrow}</div>
-            <div style={{ color: state.palette.accent, fontSize: state.amount ? 34 : 28, fontWeight: 950, lineHeight: 1, marginTop: 8 }}>{state.amount || "QUICK REVIEW"}</div>
+      <div data-creative-composition="problem-consequence-offer" style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateRows: "auto 1fr auto", padding: state.pad, gap: state.gap, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad }}>
+        <HeadlineBlock state={state} compact />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, alignContent: "center" }}>
+          <Panel state={state} style={{ padding: 12, minWidth: 0 }}>
+            <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.4 }}>{state.copy.whatToReview}</div>
+            <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 850, lineHeight: 1.3, marginTop: 8 }}>{state.subheadline}</div>
           </Panel>
-          <MiniBenefits state={state} />
+          <Panel state={state} style={{ padding: 12, minWidth: 0 }}>
+            <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.4 }}>{state.copy.nextStep.toUpperCase()}</div>
+            {state.amount && <div style={{ color: state.palette.accent, fontSize: 30, fontWeight: 950, lineHeight: 1, marginTop: 8 }}>{state.amount}</div>}
+            <div style={{ marginTop: 8 }}><MiniBenefits state={state} /></div>
+          </Panel>
         </div>
-        <Panel state={state} style={{ padding: 12, display: "flex", flexDirection: "column", justifyContent: "space-between", textAlign: "left" }}>
-          <div>
-            <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
-            {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.3, marginTop: 8 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
-          </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
-            {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
-          </div>
-        </Panel>
+        <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
       </div>
       {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
     </CreativeShell>
@@ -998,7 +1033,10 @@ function renderSplitPanel(state: CreativeState) {
 
 function getSelectorPrompt(state: CreativeState): string {
   const contractLabel = cleanText(state.draft?.selectorContract?.label);
-  if (Number(state.draft?.creativeEngineVersion || 0) >= 1 && contractLabel) return contractLabel.toUpperCase();
+  if (Number(state.draft?.creativeEngineVersion || 0) >= 1 && contractLabel) {
+    const localized = localizeSelectorContract(state.draft.selectorContract, state.spanish ? "es" : "en");
+    return cleanText(localized.label).toUpperCase();
+  }
   const hasAmountChoices = state.buttons.some((label) => /\$/.test(label));
   if (state.leadType === "mortgage_protection") {
     return state.spanish ? "ELIJA EL SALDO DE SU HIPOTECA" : "SELECT YOUR MORTGAGE BALANCE";
@@ -1037,7 +1075,8 @@ function renderSelectorGrid(state: CreativeState) {
 function renderChecklistFirst(state: CreativeState) {
   return (
     <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap }}>
+      <div data-creative-composition="licensed-agent-explainer" style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap }}>
+        <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.5, textAlign: "center" }}>{state.copy.licensedAgentExplainer}</div>
         <MiniBenefits state={state} />
         <Panel state={state} style={{ padding: 12, marginTop: "auto", textAlign: "center" }}>
           <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2 }}>{state.eyebrow}</div>
@@ -1057,10 +1096,10 @@ function renderAmountHero(state: CreativeState) {
 
   return (
     <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, textAlign: "center", display: "flex", flexDirection: "column", gap: state.gap }}>
+      <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, textAlign: "center", display: "flex", flexDirection: "column", gap: state.gap }}>
         <div style={{ color: state.palette.eyebrow, fontSize: 11, fontWeight: 950, letterSpacing: 2.2 }}>{state.eyebrow}</div>
         {state.amount && (
-          <div style={{ color: state.palette.accent, fontSize: 54, fontWeight: 950, lineHeight: 0.95, marginTop: 7, textShadow: "0 4px 18px rgba(0,0,0,0.65)" }}>{state.amount}</div>
+          <div><div style={{ color: state.palette.eyebrow, fontSize: 9, fontWeight: 950, letterSpacing: 1.1 }}>{state.copy.coverageOptionsUpTo}</div><div style={{ color: state.palette.accent, fontSize: 54, fontWeight: 950, lineHeight: 0.95, marginTop: 4, textShadow: "0 4px 18px rgba(0,0,0,0.65)" }}>{state.amount}</div><div style={{ color: state.palette.subheadline, fontSize: 8.5, fontWeight: 700, marginTop: 3 }}>{state.copy.amountDisclosure}</div></div>
         )}
         <div style={{ color: state.palette.headline, fontSize: state.amount ? state.headlineSize : Math.max(30, state.headlineSize + 5), fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase", marginTop: state.amount ? 0 : 12, ...lineClampStyle(2) }}>{state.headline}</div>
         {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: state.subSize, fontWeight: 800, lineHeight: 1.3, maxWidth: "88%", margin: "0 auto" , ...lineClampStyle(2) }}>{state.subheadline}</div>}
@@ -1077,21 +1116,24 @@ function renderAmountHero(state: CreativeState) {
 }
 
 function renderComparisonTable(state: CreativeState) {
-  const rows = state.buttons.length ? state.buttons : ["Option A", "Option B", "Option C"];
+  const bullets = state.bullets.length ? state.bullets : [state.copy.compareOptions, state.copy.coverageFit, state.copy.nextStep];
+  const leftTitle = state.leadType === "iul" ? state.copy.howItWorks : state.copy.whatToReview;
+  const rightTitle = state.leadType === "iul" ? state.copy.keyTradeoffs : state.copy.options;
   return (
     <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "grid", gridTemplateRows: "auto 1fr auto", gap: state.gap }}>
+      <div data-creative-composition="balanced-comparison" style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "grid", gridTemplateRows: "auto 1fr auto", gap: state.gap }}>
         <HeadlineBlock state={state} compact />
-        <Panel state={state} style={{ padding: 10 }}>
-          <div style={{ color: state.palette.accent, fontSize: 10, fontWeight: 950, letterSpacing: 1.2, textTransform: "uppercase", padding: "2px 6px 7px" }}>{getSelectorPrompt(state)}</div>
-          {rows.slice(0, 4).map((row, index) => (
-            <div key={row} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 6px", borderBottom: index === rows.length - 1 ? "none" : `1px solid ${state.palette.panelBorder}`, color: state.palette.subheadline, fontSize: 12, fontWeight: 900 }}>
-              <span>{row}</span>
-              <span style={{ color: state.palette.accent }}>{state.spanish ? "Ver opciones" : "View options"}</span>
-            </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, minHeight: 0, alignContent: "center" }}>
+          {[leftTitle, rightTitle].map((title, column) => (
+            <Panel key={title} state={state} style={{ padding: 11, minWidth: 0 }}>
+              <div style={{ color: state.palette.accent, fontSize: 10, fontWeight: 950, letterSpacing: 1.1, textTransform: "uppercase", minHeight: 24 }}>{title}</div>
+              {bullets.slice(column, column + 2).map((bullet) => (
+                <div key={bullet} style={{ color: state.palette.subheadline, fontSize: 11, fontWeight: 850, lineHeight: 1.25, marginTop: 9, display: "flex", gap: 5 }}><span style={{ color: state.palette.accent }}>✓</span><span>{bullet}</span></div>
+              ))}
+            </Panel>
           ))}
-        </Panel>
-        {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow={state.ctaFlow} />}
+        </div>
+        <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
       </div>
       {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
     </CreativeShell>
@@ -1117,9 +1159,9 @@ function renderDirectResponseOffer(state: CreativeState) {
 
   return (
     <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap, textAlign: "center" }}>
+      <div data-creative-composition="educational-assessment" style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap, textAlign: "center" }}>
         <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.7, textTransform: "uppercase" }}>
-          {state.spanish ? state.eyebrow : (offerLabel[state.leadType] || state.eyebrow)}
+          {state.spanish ? state.eyebrow : (offerLabel[state.leadType] || state.eyebrow)} • {state.copy.education}
         </div>
         <Panel state={state} style={{ padding: "12px 12px 11px" }}>
           {state.amount && <div style={{ color: state.palette.accent, fontSize: 39, fontWeight: 950, lineHeight: 0.98, letterSpacing: -1, textShadow: "0 3px 14px rgba(0,0,0,0.28)" }}>{state.amount}</div>}
@@ -1127,7 +1169,9 @@ function renderDirectResponseOffer(state: CreativeState) {
           {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 11, fontWeight: 800, lineHeight: 1.28, marginTop: 7 , ...lineClampStyle(2) }}>{state.subheadline}</div>}
         </Panel>
         <div style={{ marginTop: "auto", display: "grid", gap: 8 }}>
-          <MiniBenefits state={state} columns={2} />
+          <Panel state={state} style={{ padding: 9, color: state.palette.subheadline, fontSize: 11, fontWeight: 850 }}>
+            {state.copy.whatToReview}: {state.bullets.slice(0, 2).join(" • ")}
+          </Panel>
           <div style={{ color: state.palette.headline, fontSize: 10, fontWeight: 950, letterSpacing: 1.1, textTransform: "uppercase" }}>{selectorLabel}</div>
           <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
           {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
@@ -1141,19 +1185,19 @@ function renderDirectResponseOffer(state: CreativeState) {
 function renderReportCard(state: CreativeState) {
   return (
     <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "grid", gap: state.gap }}>
-        <Panel state={state} style={{ padding: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.4 }}>
-            <span>REVIEW</span><span>READY</span>
-          </div>
-          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.04, textTransform: "uppercase", marginTop: 8 , ...lineClampStyle(2) }}>{state.headline}</div>
+      <div data-creative-composition="video-framework" style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "grid", gridTemplateRows: "auto 1fr auto", gap: state.gap }}>
+        <Panel state={state} style={{ padding: 11 }}>
+          <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.4 }}>{state.copy.videoFramework}</div>
+          <div style={{ color: state.palette.subheadline, fontSize: 9.5, fontWeight: 900, letterSpacing: 1.1, marginTop: 4 }}>{state.eyebrow}</div>
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.04, textTransform: "uppercase", marginTop: 7 }}>{state.headline}</div>
         </Panel>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <Panel state={state} style={{ padding: 10, color: state.palette.subheadline, fontSize: 11, fontWeight: 900 }}>Options<br /><span style={{ color: state.palette.accent, fontSize: 24 }}>✓</span></Panel>
-          <Panel state={state} style={{ padding: 10, color: state.palette.subheadline, fontSize: 11, fontWeight: 900 }}>Time<br /><span style={{ color: state.palette.accent, fontSize: 20 }}>Fast</span></Panel>
+        <div style={{ position: "relative", minHeight: 0, borderRadius: state.radius, border: `1px solid ${state.palette.panelBorder}`, background: state.backgroundUrl ? "rgba(0,0,0,0.18)" : state.palette.panel, display: "grid", placeItems: "center" }}>
+          <div style={{ width: 62, height: 62, borderRadius: 999, display: "grid", placeItems: "center", background: state.palette.cta, color: "#fff", fontSize: 26, boxShadow: "0 10px 25px rgba(0,0,0,0.35)" }}>▶</div>
+          <div style={{ position: "absolute", left: 10, right: 10, bottom: 10, background: "rgba(0,0,0,0.72)", color: "#fff", padding: "8px 10px", borderRadius: 6, fontSize: 11, fontWeight: 850 }}>
+            {state.copy.licensedAgentExplainer}
+          </div>
         </div>
-        <MiniBenefits state={state} />
-        {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
+        <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
       </div>
       {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
     </CreativeShell>
@@ -1196,26 +1240,42 @@ function renderMessengerPrompt(state: CreativeState) {
 function renderBenefitGrid(state: CreativeState) {
   const benefitLabels = state.bullets.length
     ? state.bullets
-    : ["Compare Options", "Coverage Fit", "Family Goals", "Next Step"];
+    : [state.copy.compareOptions, state.copy.coverageFit, state.copy.familyGoals, state.copy.nextStep];
+  const veteranTheme = state.leadType === "veteran" || state.draft?.audienceSegment === "veteran";
+  const visualState = veteranTheme ? {
+    ...state,
+    palette: {
+      ...state.palette,
+      headline: "#13213d",
+      subheadline: "#24324a",
+      eyebrow: "#7f1d1d",
+      accent: "#7f1d1d",
+      panel: "rgba(255,255,255,0.96)",
+      panelBorder: "rgba(19,33,61,0.24)",
+      buttonBg: "#13213d",
+      buttonText: "#ffffff",
+      buttonBorder: "1.5px solid #7f1d1d",
+    },
+  } : state;
   return (
-    <CreativeShell state={state}>
-      <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 14, paddingBottom: 50, display: "grid", gridTemplateRows: "auto auto 1fr auto", gap: 9, background: state.leadType === "veteran" ? "linear-gradient(135deg, rgba(245,240,232,0.9), rgba(255,255,255,0.72))" : undefined, border: state.leadType === "veteran" ? "6px solid rgba(139,26,26,0.82)" : undefined }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.7 }}>
-          <span>{state.leadType === "veteran" ? "VETERANS • COVERAGE REVIEW" : state.eyebrow}</span>
-          <span style={{ color: state.palette.accent }}>{state.leadType === "iul" ? "EDUCATION" : "OPTIONS"}</span>
+    <CreativeShell state={visualState}>
+      <div data-creative-composition="audience-benefit-grid" style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 14, paddingBottom: 50, display: "grid", gridTemplateRows: "auto auto 1fr auto", gap: 9, background: veteranTheme ? "linear-gradient(135deg, rgba(245,240,232,0.98), rgba(255,255,255,0.94))" : undefined, border: veteranTheme ? "6px solid rgba(127,29,29,0.9)" : undefined }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: visualState.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.7 }}>
+          <span>{state.eyebrow}</span>
+          <span style={{ color: visualState.palette.accent }}>{state.leadType === "iul" ? state.copy.education : state.copy.options}</span>
         </div>
         <div style={{ textAlign: "center" }}>
-          <div style={{ color: state.palette.headline, fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
-          {state.amount && <div style={{ color: state.palette.accent, fontSize: 45, fontWeight: 950, lineHeight: 0.95, marginTop: 7 }}>{state.amount}</div>}
+          <div style={{ color: visualState.palette.headline, fontSize: state.headlineSize + 1, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" , ...lineClampStyle(2) }}>{state.headline}</div>
+          {state.amount && <div><div style={{ color: visualState.palette.eyebrow, fontSize: 9, fontWeight: 950, letterSpacing: 1.1, marginTop: 6 }}>{state.copy.coverageOptionsUpTo}</div><div style={{ color: visualState.palette.accent, fontSize: 45, fontWeight: 950, lineHeight: 0.95, marginTop: 3 }}>{state.amount}</div><div style={{ color: visualState.palette.subheadline, fontSize: 8.5, fontWeight: 700, marginTop: 3 }}>{state.copy.amountDisclosure}</div></div>}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, alignContent: "center" }}>
           {benefitLabels.slice(0, 4).map((benefit, index) => (
-            <Panel key={`${benefit}-${index}`} state={state} style={{ padding: "10px 8px", minHeight: 58, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", color: state.palette.subheadline, fontSize: 11, fontWeight: 950, lineHeight: 1.1 }}>
+            <Panel key={`${benefit}-${index}`} state={visualState} style={{ padding: "10px 8px", minHeight: 58, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", color: visualState.palette.subheadline, fontSize: 11, fontWeight: 950, lineHeight: 1.15 }}>
               {benefit}
             </Panel>
           ))}
         </div>
-        <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(state)} />
+        <ButtonGrid labels={state.buttons} styleType={visualState.palette.button} customStyle={getButtonStyle(visualState)} />
       </div>
       <CtaUnit state={state} />
     </CreativeShell>
@@ -1404,23 +1464,26 @@ function renderPremiumDarkGold(state: CreativeState) {
 }
 
 function renderCleanWhiteDiagram(state: CreativeState) {
-  const items = state.bullets.length ? state.bullets.slice(0, 3) : ["Protection", "Growth potential", "Flexible access"];
+  const items = state.bullets.length ? state.bullets.slice(0, 3) : [state.copy.howItWorks, state.copy.keyTradeoffs, state.copy.nextStep];
+  const educationState = { ...state, palette: { ...state.palette, fallback: "#ffffff", eyebrow: "#1d4ed8", headline: "#0f172a", subheadline: "#334155", accent: "#1d4ed8", cta: "#1d4ed8", panel: "rgba(255,255,255,0.98)", panelBorder: "rgba(37,99,235,0.2)", headlineBg: "rgba(255,255,255,0.98)", headlineBorder: "rgba(37,99,235,0.2)", buttonBg: "#1d4ed8", buttonText: "#ffffff", buttonBorder: "1.5px solid #1d4ed8" } };
   return (
-    <CreativeShell state={{ ...state, palette: { ...state.palette, fallback: "#ffffff", headline: "#0f172a", subheadline: "#334155", panel: "rgba(255,255,255,0.94)" } }}>
-      <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 16, paddingBottom: 52, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10, background: "linear-gradient(180deg, rgba(255,255,255,0.94), rgba(239,246,255,0.9))" }}>
-        <HeadlineBlock state={{ ...state, palette: { ...state.palette, headline: "#0f172a", subheadline: "#334155", headlineBg: "rgba(255,255,255,0.86)", headlineBorder: "rgba(37,99,235,0.16)" } }} compact />
-        <div style={{ position: "relative", alignSelf: "center", justifySelf: "center", width: 178, height: 146 }}>
-          <div style={{ position: "absolute", left: 49, top: 0, width: 80, height: 80, transform: "rotate(45deg)", background: "rgba(37,99,235,0.14)", border: "2px solid rgba(37,99,235,0.42)" }} />
-          <div style={{ position: "absolute", left: 8, bottom: 0, width: 78, height: 78, transform: "rotate(45deg)", background: "rgba(22,163,74,0.13)", border: "2px solid rgba(22,163,74,0.38)" }} />
-          <div style={{ position: "absolute", right: 8, bottom: 0, width: 78, height: 78, transform: "rotate(45deg)", background: "rgba(212,160,23,0.13)", border: "2px solid rgba(212,160,23,0.44)" }} />
+    <CreativeShell state={educationState}>
+      <div data-creative-composition="educational-explainer" style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", padding: 16, paddingBottom: 52, display: "grid", gridTemplateRows: "auto 1fr auto", gap: 10, background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.96))" }}>
+        <HeadlineBlock state={educationState} compact />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, alignContent: "center" }}>
           {items.map((item, index) => (
-            <div key={item} style={{ position: "absolute", left: index === 0 ? 46 : index === 1 ? 0 : 92, top: index === 0 ? 27 : 105, width: 86, textAlign: "center", color: "#0f172a", fontSize: 10, fontWeight: 950, lineHeight: 1.05 }}>
-              {item}
+            <div key={item} style={{ minHeight: 118, borderRadius: 9, padding: "10px 7px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, textAlign: "center", color: "#0f172a", background: index === 0 ? "#eaf2ff" : index === 1 ? "#eaf8ef" : "#fff7df", border: `1.5px solid ${index === 0 ? "#2563eb" : index === 1 ? "#16a34a" : "#a16207"}` }}>
+              <span style={{ width: 28, height: 28, borderRadius: 999, display: "grid", placeItems: "center", background: "#0f172a", color: "#fff", fontSize: 12, fontWeight: 950 }}>{index + 1}</span>
+              <span style={{ fontSize: 10.5, fontWeight: 900, lineHeight: 1.2 }}>{item}</span>
             </div>
           ))}
         </div>
-        <CtaUnit state={state} flow="panel_cta" />
+        <div style={{ display: "grid", gap: 7 }}>
+          <div style={{ color: "#334155", fontSize: 10.5, fontWeight: 800, textAlign: "center" }}>{state.copy.requestEducation}</div>
+          <ButtonGrid labels={state.buttons} styleType={state.palette.button} customStyle={getButtonStyle(educationState)} />
+        </div>
       </div>
+      <CtaUnit state={educationState} />
     </CreativeShell>
   );
 }
@@ -1559,22 +1622,25 @@ function renderAgedParchment(state: CreativeState) {
   return (
     <CreativeShell state={{ ...state, overlayStyle: "deep_gradient", palette: { ...state.palette, fallback: "linear-gradient(160deg, #f2e6c8 0%, #e8d8ac 55%, #ddc98e 100%)", overlay: "transparent", glow: "none" } }}>
       <div style={{ position: "absolute", top: 0, right: 0, width: 0, height: 0, borderTop: "42px solid rgba(0,0,0,0.14)", borderLeft: "42px solid transparent" }} />
-      <div style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateRows: "auto 1fr auto", gap: 12 }}>
+      <div data-creative-composition="eligibility-notice" style={{ position: "relative", height: "100%", boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateRows: "auto auto 1fr auto", gap: 8, paddingBottom: 52 }}>
         <div style={{ background: "#1a2744", color: "#f2e6c8", padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 950, letterSpacing: 1.8, textTransform: "uppercase" }}>
-          {state.eyebrow}
+          {state.leadType === "mortgage_protection" ? state.copy.homeownerNotice : state.copy.coverageNotice}
         </div>
-        <div style={{ padding: "0 20px", textAlign: "center", alignSelf: "center", display: "grid", gap: 10 }}>
-          <div style={{ fontSize: 30 }}>{motif}</div>
+        <div style={{ padding: "8px 16px 0", textAlign: "center" }}>
+          <div style={{ color: "#7f1d1d", fontSize: 10, fontWeight: 950, letterSpacing: 1.4 }}>{motif} {state.eyebrow}</div>
           <div style={{ color: "#2d2410", fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.05, textTransform: "uppercase", ...lineClampStyle(2) }}>{state.headline}</div>
-          {state.amount && <div style={{ color: "#8b4513", fontSize: 40, fontWeight: 950, lineHeight: 1 }}>{state.amount}</div>}
-          {state.subheadline && <div style={{ color: "#4a3728", fontSize: 12, fontWeight: 700, lineHeight: 1.3, ...lineClampStyle(2) }}>{state.subheadline}</div>}
+          {state.amount && <div style={{ color: "#7c2d12", fontSize: 36, fontWeight: 950, lineHeight: 1, marginTop: 5 }}>{state.amount}</div>}
         </div>
-        <div style={{ padding: "0 16px 16px", display: "grid", gap: 10 }}>
+        <div style={{ padding: "0 18px", display: "grid", alignContent: "center", gap: 7 }}>
+          {state.subheadline && <div style={{ color: "#3f2d1f", fontSize: 11.5, fontWeight: 750, lineHeight: 1.3, textAlign: "center" }}>{state.subheadline}</div>}
+          <div style={{ color: "#2d2410", fontSize: 9, fontWeight: 850, lineHeight: 1.25, textAlign: "center" }}>{state.copy.availabilityDisclosure}</div>
+        </div>
+        <div data-creative-zone="selector" style={{ padding: "0 16px 10px", display: "grid", gap: 7 }}>
+          <div style={{ color: "#2d2410", fontSize: 9.5, fontWeight: 950, letterSpacing: 0.7, textAlign: "center", textTransform: "uppercase" }}>{getSelectorPrompt(state)}</div>
           <ButtonGrid labels={state.buttons} styleType="cream" />
-          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
         </div>
       </div>
-      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+      <CtaUnit state={state} />
     </CreativeShell>
   );
 }
@@ -1705,8 +1771,9 @@ function FinishedCreativeRenderer({
 function lineClampStyle(lines: number): React.CSSProperties {
   void lines;
   return {
-    overflowWrap: "break-word",
-    wordBreak: "normal",
+    overflowWrap: "normal",
+    wordBreak: "keep-all",
+    hyphens: "none",
   } as React.CSSProperties;
 }
 
@@ -1727,6 +1794,8 @@ export function ProductionFeedCreative({
     <div
       ref={creativeRef}
       data-creative-root="true"
+      data-creative-language={draft?.language === "es" ? "es" : "en"}
+      data-creative-layout={cleanText(draft?.layoutId || draft?.layoutFamily || "")}
       style={{
         width: 540,
         height: 675,

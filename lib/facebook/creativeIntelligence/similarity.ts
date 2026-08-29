@@ -28,6 +28,8 @@ export function creativeSimilarity(left: Record<string, any>, right: Record<stri
     bullets: draft.bulletPoints || [], image: draft.imageIdentity || draft.imageUrl || draft.backgroundImage || draft.imageDirection || "",
     background: draft.backgroundDirection || "", palette: draft.paletteId || draft.colorScheme || "",
     offer: draft.offerClass || draft.heroAmount || "", selector: draft.selectorContract || draft.buttonLabels || [], cta: draft.cta || "",
+    hierarchy: draft.heroHierarchy || "", backgroundClass: draft.backgroundClass || "",
+    ctaPlacement: draft.ctaPlacement || "", benefitStructure: draft.benefitStructure || "",
   });
   if (exactShape(left) === exactShape(right)) {
     return { score: 1, classification: "EXACT_DUPLICATE" as const, factors: { exact: 1 } };
@@ -48,13 +50,19 @@ export function creativeSimilarity(left: Record<string, any>, right: Record<stri
     offer: exact(left.offerClass || left.heroAmount, right.offerClass || right.heroAmount),
     selector: exact(JSON.stringify(left.selectorContract || left.buttonLabels), JSON.stringify(right.selectorContract || right.buttonLabels)),
     cta: exact(left.cta, right.cta),
+    hierarchy: exact(left.heroHierarchy || left.layoutId, right.heroHierarchy || right.layoutId),
+    backgroundClass: exact(left.backgroundClass || left.visualTreatment, right.backgroundClass || right.visualTreatment),
+    ctaPlacement: exact(left.ctaPlacement || "bottom_bar", right.ctaPlacement || "bottom_bar"),
+    benefitStructure: exact(left.benefitStructure || (left.bulletPoints || []).length, right.benefitStructure || (right.bulletPoints || []).length),
   };
-  const score = factors.family * 0.08 + factors.layout * 0.12 + factors.headline * 0.13
-    + factors.hook * 0.13 + factors.body * 0.16 + factors.image * 0.13
-    + factors.palette * 0.05 + factors.offer * 0.08 + factors.selector * 0.07 + factors.cta * 0.05;
+  const score = factors.family * 0.04 + factors.layout * 0.14 + factors.headline * 0.13
+    + factors.hook * 0.07 + factors.body * 0.08 + factors.image * 0.06
+    + factors.palette * 0.04 + factors.offer * 0.1 + factors.selector * 0.09 + factors.cta * 0.04
+    + factors.hierarchy * 0.08 + factors.backgroundClass * 0.04
+    + factors.ctaPlacement * 0.04 + factors.benefitStructure * 0.05;
   const classification: SimilarityClass = score >= 0.98 ? "EXACT_DUPLICATE"
-    : score >= 0.78 ? "NEAR_DUPLICATE"
-      : score >= 0.5 ? "SIMILAR_BUT_ACCEPTABLE" : "DISTINCT";
+    : score >= 0.7 ? "NEAR_DUPLICATE"
+      : score >= 0.46 ? "SIMILAR_BUT_ACCEPTABLE" : "DISTINCT";
   return { score: Number(score.toFixed(4)), classification, factors };
 }
 
@@ -63,6 +71,7 @@ export function semanticFingerprint(draft: Record<string, any>): string {
     draft.winningFamilyId, draft.layoutId, draft.hookClass, draft.headline, draft.primaryText,
     draft.description, JSON.stringify(draft.bulletPoints || []), draft.offerClass,
     draft.imageIdentity, draft.imageDirection, draft.backgroundDirection, JSON.stringify(draft.selectorContract), draft.cta,
+    draft.heroHierarchy, draft.backgroundClass, draft.ctaPlacement, draft.benefitStructure,
   ]
     .map((value) => String(value || "").toLowerCase().replace(/\s+/g, " ").trim()).join("|");
   return createHash("sha256").update(normalized).digest("hex");

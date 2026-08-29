@@ -130,7 +130,7 @@ export const ADDITIONAL_META_CLAIMS: RegisteredClaim[] = [
   canonicalClaim({ id: "market_downside_floor", text: "Market Downside/Floor", pattern: "market.{0,30}(?:downside|floor|zero\\s+floor|can't\\s+lose|no\\s+loss)", products: ["iul"], capabilities: ["index:floor_language"], qualifier: "Index crediting is subject to policy terms, caps, participation rates, costs, and a floor; it is not a direct market investment." }),
   canonicalClaim({ id: "premium_example", text: "Premium/Price Example", pattern: "(?:as\\s+low\\s+as|starting\\s+at|only)\\s+\\$\\s?\\d[\\d,]*(?:\\.\\d{1,2})?", products: ["final_expense", "iul", "mortgage_protection", "veteran", "trucker"], capabilities: ["premium:approved_example"], qualifier: "Example premiums are not quotes; actual rates depend on age, state, health, carrier, product, and underwriting." }),
   canonicalClaim({ id: "approval_speed", text: "Approval Speed", pattern: "(?:approved|approval).{0,20}(?:minutes?|hours?|same\\s+day|instant|fast)", products: ["final_expense", "iul", "mortgage_protection", "veteran", "trucker"], capabilities: ["approval_speed:approved"] }),
-  canonicalClaim({ id: "government_comparison", text: "VA/Government Benefit Comparison", pattern: "(?:va|government).{0,30}(?:benefit|program|coverage|approved|endorsed)", products: ["veteran"], capabilities: ["government_comparison:approved"], qualifier: "This is not affiliated with or endorsed by the U.S. Department of Veterans Affairs, the U.S. military, or any government agency." }),
+  canonicalClaim({ id: "government_comparison", text: "VA/Government Benefit Comparison", pattern: "\\b(?:va|government)\\b.{0,30}\\b(?:benefit|program|coverage|approved|endorsed)\\b", products: ["veteran"], capabilities: ["government_comparison:approved"], qualifier: "This is not affiliated with or endorsed by the U.S. Department of Veterans Affairs, the U.S. military, or any government agency." }),
   canonicalClaim({ id: "statistical_risk", text: "Statistical Risk Claim", pattern: "\\b\\d+(?:\\.\\d+)?%\\s+(?:of|more|less|risk|chance|families|people)", products: ["final_expense", "iul", "mortgage_protection", "veteran", "trucker"], capabilities: ["statistics:approved_source"] }),
 ];
 
@@ -156,7 +156,7 @@ const RISKY_PATTERNS = [
   /tax[ -]?free\s+(?:income|retirement|withdrawals?)/i,
   /market.{0,30}(?:downside|floor|zero\s+floor|can't\s+lose|no\s+loss)/i,
   /(?:approved|approval).{0,20}(?:minutes?|hours?|same\s+day|instant|fast)/i,
-  /(?:va|government).{0,30}(?:benefit|program|coverage|approved|endorsed)/i,
+  /\b(?:va|government)\b.{0,30}\b(?:benefit|program|coverage|approved|endorsed)\b/i,
   /\b\d+(?:\.\d+)?%\s+(?:of|more|less|risk|chance|families|people)/i,
 ];
 

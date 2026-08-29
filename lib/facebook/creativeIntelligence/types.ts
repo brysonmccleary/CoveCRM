@@ -140,6 +140,7 @@ export type CreativeEngineInput = {
   userKey: string;
   campaignName: string;
   location?: string;
+  applicantAge?: number;
   requestedCount: number;
   generationNonce: string;
   productCapability?: ProductCapability | null;
@@ -175,5 +176,8 @@ export type CreativeEngineDraft = Record<string, unknown> & {
   requiredDisclosures: string[];
   capabilityId: string;
   capabilitySource: "configured_product" | "safe_general";
+  displayAmount?: string;
+  visibleIdentityLabel: string;
+  capabilityBenefits: string[];
   variantId: string;
 };

@@ -2,7 +2,7 @@ import { CREATIVE_FAMILIES } from "@/lib/facebook/creativeIntelligence/families"
 import { CREATIVE_LAYOUTS } from "@/lib/facebook/creativeIntelligence/layouts";
 import { generateCreativeIntelligenceDrafts, scoreBatchDiversity } from "@/lib/facebook/creativeIntelligence/engine";
 import { buildSelectorContract, assertSelectorFunnelConsistency, selectorToFunnelStep } from "@/lib/facebook/creativeIntelligence/selectors";
-import { buildSafeGeneralCapability } from "@/lib/facebook/creativeIntelligence/capabilities";
+import { assertApprovedHeroAmount, buildSafeGeneralCapability } from "@/lib/facebook/creativeIntelligence/capabilities";
 import { creativeSimilarity } from "@/lib/facebook/creativeIntelligence/similarity";
 import { evaluateCreativeClaims, type RegisteredClaim } from "@/lib/facebook/claimsRegistry";
 import { reserveGeneratedDrafts } from "@/lib/facebook/creativeUsage";
@@ -110,5 +110,88 @@ describe("global creative intelligence engine", () => {
     expect(qualified.eligibleForBoost).toBe(true);
     expect(qualified.multiplier).toBeGreaterThan(1);
     expect(qualified.multiplier).toBeLessThanOrEqual(1.35);
+  });
+
+  it("binds approved hero amounts and benefits, but never invents them without capability data", () => {
+    const capability = {
+      ...buildSafeGeneralCapability("veteran"),
+      capabilityId: "qa-veteran-capability",
+      carrier: "QA Carrier",
+      product: "QA Product",
+      productIdentifier: "QA-VET-1",
+      states: ["AZ"],
+      issueAgeMin: 45,
+      issueAgeMax: 80,
+      faceAmountMin: 25_000,
+      faceAmountMax: 100_000,
+      medicalExamRequirement: "not_required" as const,
+      immediateBenefitRules: ["immediate"],
+      premiumGuarantees: ["level guaranteed"],
+      approvalSource: "QA carrier guide",
+    };
+    const approved = generateCreativeIntelligenceDrafts({
+      vertical: "veteran", audienceSegment: "veteran", language: "en", userKey: "capability-qa",
+      campaignName: "Capability QA", requestedCount: 1, generationNonce: "approved-capability", location: "AZ",
+      applicantAge: 60, productCapability: capability, preferredFamilyId: "VET_IDENTITY_AGE_AMOUNT_CORE",
+    })[0];
+    expect(approved.displayAmount).toBe("$100,000");
+    expect(approved.capabilityBenefits).toEqual(expect.arrayContaining(["No medical exam", "Immediate benefit", "Premium guarantee"]));
+    expect(approved.capabilityDisclosures).toEqual(expect.arrayContaining([expect.stringMatching(/carrier, state, age, health/i)]));
+    const safe = generateCreativeIntelligenceDrafts({
+      vertical: "veteran", audienceSegment: "veteran", language: "en", userKey: "safe-qa",
+      campaignName: "Safe QA", requestedCount: 1, generationNonce: "missing-capability",
+    })[0];
+    expect(safe.displayAmount).toBeUndefined();
+    expect(safe.capabilityBenefits).toEqual([]);
+    expect(() => assertApprovedHeroAmount(capability, "$250,000")).toThrow(/not supported/i);
+  });
+
+  it("blocks expired, wrong-state, and wrong-age configured capabilities", () => {
+    const base = {
+      ...buildSafeGeneralCapability("final_expense"), capabilityId: "blocked-capability", carrier: "QA Carrier",
+      product: "QA Product", productIdentifier: "QA-FE-1", states: ["AZ"], issueAgeMin: 50, issueAgeMax: 75,
+      approvalSource: "QA carrier guide",
+    };
+    const generate = (productCapability: typeof base, location = "AZ", applicantAge = 60) => generateCreativeIntelligenceDrafts({
+      vertical: "final_expense", audienceSegment: "standard", language: "en", userKey: "blocked-qa",
+      campaignName: "Blocked QA", requestedCount: 1, generationNonce: `${location}-${applicantAge}-${productCapability.expiresAt || "active"}`,
+      location, applicantAge, productCapability,
+    });
+    expect(() => generate({ ...base, expiresAt: "2020-01-01" })).toThrow(/expired/i);
+    expect(() => generate(base, "CA")).toThrow(/not approved for CA/i);
+    expect(() => generate(base, "AZ", 80)).toThrow(/issue age 80/i);
+  });
+
+  it("does not mistake private coverage for a government comparison", () => {
+    const evaluate = (creativeText: string) => evaluateCreativeClaims({
+      creativeText, leadType: "veteran", states: ["AZ"], landingPageSnapshot: "", claims: [], now: new Date("2026-08-28"),
+    });
+    expect(evaluate("Review private coverage options").blockers).toHaveLength(0);
+    expect(evaluate("Compare VA coverage with other options").blockers).toEqual(expect.arrayContaining([expect.stringMatching(/unregistered claim/i)]));
+    expect(evaluate("This government program provides coverage").blockers).toEqual(expect.arrayContaining([expect.stringMatching(/unregistered claim/i)]));
+    expect(evaluate("Official VA endorsed coverage").blockers).toEqual(expect.arrayContaining([expect.stringMatching(/unregistered claim/i)]));
+  });
+
+  it("recognizes all thirteen human-visible QA clusters as near duplicates", () => {
+    const clusters = [
+      ["P004", "P014", "audience_benefit_grid"], ["P029", "P032", "agent_trust_explainer"],
+      ["P034", "P040", "ugc_talking_head"], ["P036", "P039", "educational_explainer_card"],
+      ["P045", "P049", "educational_explainer_card"], ["P062", "P066", "problem_consequence_offer"],
+      ["P064", "P067", "ugc_talking_head"], ["P089", "P092", "problem_consequence_offer"],
+      ["P105", "P107", "educational_explainer_card"], ["P109", "P112", "comparison_two_column"],
+      ["P127", "P140", "calculator_quiz_assessment"], ["P130", "P142", "notice_letter_paper"],
+      ["P134", "P137", "audience_benefit_grid"],
+    ];
+    for (const [leftId, rightId, layoutId] of clusters) {
+      const base = {
+        winningFamilyId: `qa-${layoutId}`, layoutId, headline: "Review coverage options for your family",
+        primaryText: "A clear review of available coverage choices.", bulletPoints: ["Options explained", "Family priorities"],
+        imageIdentity: "graphic:shared-direction", backgroundClass: "graphic:editorial", colorScheme: "navy-gold",
+        offerClass: "coverage_review", selectorContract: { type: "age_range", options: ["50-59", "60-69", "70+"] },
+        cta: "Review options", heroHierarchy: `hierarchy:${layoutId}`, ctaPlacement: "bottom_bar", benefitStructure: `${layoutId}:2`,
+      };
+      const changed = { ...base, headline: "Review your family's coverage options", primaryText: "See clear available coverage choices." };
+      expect(creativeSimilarity({ ...base, previewId: leftId }, { ...changed, previewId: rightId }).classification).toBe("NEAR_DUPLICATE");
+    }
   });
 });

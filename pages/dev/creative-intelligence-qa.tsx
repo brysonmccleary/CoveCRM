@@ -1,21 +1,24 @@
 import type { GetServerSideProps } from "next";
 import { ProductionFeedCreative } from "@/components/FacebookAds/AdPreviewCard";
-import { generateCreativeIntelligenceDrafts } from "@/lib/facebook/creativeIntelligence/engine";
-import { CREATIVE_LAYOUTS } from "@/lib/facebook/creativeIntelligence/layouts";
+import { buildCreativeVisualQaCorpus } from "@/lib/facebook/creativeIntelligence/qaCorpus";
 
-export default function CreativeIntelligenceQa({ drafts }: { drafts: Array<Record<string, any>> }) {
+export default function CreativeIntelligenceQa({ drafts, title }: { drafts: Array<Record<string, any>>; title: string }) {
   return (
-    <main style={{ background: "#111827", minHeight: "100vh", padding: 24, color: "white", fontFamily: "system-ui" }}>
-      <h1 style={{ margin: "0 0 6px" }}>Creative Intelligence — 12 Layout QA</h1>
+    <main style={{ background: "#111827", minHeight: "100vh", padding: 22, color: "white", fontFamily: "system-ui" }}>
+      <h1 style={{ margin: "0 0 6px" }}>Creative Intelligence — {title}</h1>
       <p style={{ margin: "0 0 24px", color: "#cbd5e1" }}>Development-only render surface. No Cove or Meta objects are created.</p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(560px, 1fr))", gap: 28 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 216px)", gap: 24 }}>
         {drafts.map((draft) => (
-          <section key={String(draft.layoutId)} style={{ display: "grid", gap: 10 }}>
+          <section key={String(draft.previewId)} data-preview-id={String(draft.previewId)} style={{ display: "grid", gap: 8, width: 216 }}>
             <div>
-              <strong>{String(draft.layoutId)}</strong>
-              <div style={{ color: "#94a3b8", fontSize: 13 }}>{String(draft.leadType)} · {String(draft.winningFamilyId)} · {String(draft.visualTreatment)}</div>
+              <strong style={{ fontSize: 11 }}>{String(draft.previewId)} · {String(draft.qaConfigLabel)}</strong>
+              <div style={{ color: "#94a3b8", fontSize: 8, minHeight: 20 }}>{String(draft.layoutId)} · {String(draft.winningFamilyId)} · {String(draft.visualTreatment)}</div>
             </div>
-            <ProductionFeedCreative draft={draft} />
+            <div style={{ width: 216, height: 270, overflow: "hidden" }}>
+              <div style={{ width: 540, height: 675, transform: "scale(0.4)", transformOrigin: "top left" }}>
+                <ProductionFeedCreative draft={draft} />
+              </div>
+            </div>
           </section>
         ))}
       </div>
@@ -23,25 +26,22 @@ export default function CreativeIntelligenceQa({ drafts }: { drafts: Array<Recor
   );
 }
 
-export const getServerSideProps: GetServerSideProps = async () => {
+export const getServerSideProps: GetServerSideProps = async ({ query }) => {
   if (process.env.NODE_ENV !== "development") return { notFound: true };
-  const configs = [
-    ["veteran", "veteran", "en"], ["final_expense", "standard", "en"],
-    ["mortgage_protection", "standard", "en"], ["iul", "standard", "en"],
-    ["trucker", "trucker", "en"], ["final_expense", "spanish", "es"],
-  ] as const;
-  const byLayout = new Map<string, Record<string, any>>();
-  for (let round = 0; round < 80 && byLayout.size < CREATIVE_LAYOUTS.length; round++) {
-    const [vertical, audienceSegment, language] = configs[round % configs.length];
-    const drafts = generateCreativeIntelligenceDrafts({
-      vertical, audienceSegment, language, userKey: `visual-qa-${round}`,
-      campaignName: "Visual QA", requestedCount: 5, generationNonce: `visual-qa-${round}`,
-    });
-    for (const draft of drafts) if (!byLayout.has(draft.layoutId)) byLayout.set(draft.layoutId, draft);
-  }
+  const corpus = buildCreativeVisualQaCorpus();
+  const group = String(query.group || "veteran");
+  const sheet = Math.max(1, Number(query.sheet || 1));
+  const layout = String(query.layout || "");
+  const batch = String(query.batch || "");
+  const matches = batch
+    ? corpus.previews.filter((draft) => draft.qaBatchId === batch)
+    : layout ? corpus.previews.filter((draft) => draft.layoutId === layout)
+      : corpus.previews.filter((draft) => draft.qaGroup === group);
+  const drafts = JSON.parse(JSON.stringify(matches.slice((sheet - 1) * 6, sheet * 6)));
   return {
     props: {
-      drafts: CREATIVE_LAYOUTS.map((layout) => byLayout.get(layout.layoutId)).filter(Boolean),
+      drafts,
+      title: batch ? `${batch}` : layout ? `${layout} · sheet ${sheet}` : `${group} · sheet ${sheet}`,
     },
   };
 };
