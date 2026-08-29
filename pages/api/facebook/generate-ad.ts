@@ -8,6 +8,8 @@ import {
 import mongooseConnect from "@/lib/mongooseConnect";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
 import MetaAdMetricsDaily from "@/models/MetaAdMetricsDaily";
+import MetaCreativeAsset from "@/models/MetaCreativeAsset";
+import MetaProductCapability from "@/models/MetaProductCapability";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import { resolveAudienceSegment } from "@/lib/facebook/audienceTargeting";
 import { generateCreativeIntelligenceDrafts } from "@/lib/facebook/creativeIntelligence";
@@ -135,6 +137,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     regenerationAttempt?: number;
     generationNonce?: string;
     productCapability?: ProductCapability | null;
+    productCapabilityId?: string;
+    licensedStates?: string[];
+    applicantAge?: number;
   };
 
   if (!isWinnerSupportedLeadType(leadType)) {
@@ -152,6 +157,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (error: any) {
     return res.status(400).json({ ok: false, error: error?.message || "Unsupported audience selection" });
   }
+  const language: CreativeLanguage = audienceSegment === "spanish" ? "es" : "en";
   const requestedVariantCount = Math.min(4, Math.max(1, Number((req.body as any)?.variantCount) || 3));
   const regenerationAttempt = Math.max(0, Number(regenerationAttemptParam) || 0);
   const generationNonce = String(generationNonceParam || "").trim() || `server_${Date.now().toString(36)}_${regenerationAttempt}`;
@@ -163,7 +169,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // vertical and audience combination. Generation is Cove-only: no Meta object
   // is created until the separate Review & Launch route passes preflight.
   await mongooseConnect();
-  const recentUsage = await MetaCreativeUsage.find({
+  const [recentUsage, productionAssetRows] = await Promise.all([MetaCreativeUsage.find({
     status: { $in: ["draft_reserved", "reserved", "published"] },
     $or: [
       { expiresAt: null },
@@ -172,8 +178,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   })
     .sort({ createdAt: -1 })
     .limit(5000)
-    .select("winningFamilyId layoutId headline primaryText description bulletPoints cta imageIdentity imageDirection backgroundDirection palette offerClass selectorSchema semanticFingerprint visualFingerprint -_id")
-    .lean() as Array<Record<string, any>>;
+    .select("winningFamilyId layoutId headline primaryText description bulletPoints cta imageIdentity imageDirection backgroundDirection palette offerClass selectorSchema semanticFingerprint visualFingerprint assetId assetVisualFingerprint userEmail generationNonce -_id")
+    .lean(),
+  MetaCreativeAsset.find({
+    active: true,
+    approvalStatus: "approved",
+    licenseStatus: { $in: ["owned", "licensed", "approved_stock"] },
+    verticals: leadType,
+    languages: language,
+    $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+  })
+    .limit(5000)
+    .select("assetId assetType verticals audienceSegments products languages format direction imageDirection visualClass compatibleFamilies layoutCompatibility storageUrl contentHash semanticFingerprint visualFingerprint ownershipStatus licenseStatus approvalStatus approvedAt expiresAt useCount recentUsage lastUsedAt active -_id")
+    .lean()]) as [Array<Record<string, any>>, Array<Record<string, any>>];
   const normalizedRecentUsage = recentUsage.map((row) => ({
     ...row,
     selectorContract: row.selectorSchema || null,
@@ -203,7 +220,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sales: row.sales, lastSeenAt: row.lastSeenAt,
     }).multiplier,
   ]));
-  const language: CreativeLanguage = audienceSegment === "spanish" ? "es" : "en";
+  const requestedCapabilityId = String((req.body as any)?.productCapabilityId
+    || (req.body as any)?.productCapability?.capabilityId || "").trim();
+  const licensedStates = Array.isArray((req.body as any)?.licensedStates)
+    ? (req.body as any).licensedStates.map((value: unknown) => String(value || "").trim().toUpperCase()).filter(Boolean)
+    : [];
+  const configuredCapability = requestedCapabilityId ? await MetaProductCapability.findOne({
+    capabilityId: requestedCapabilityId,
+    active: true,
+    effectiveDate: { $lte: new Date() },
+    approvalSource: { $ne: "" },
+    $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+  }).lean() as Record<string, any> | null : null;
+  const supportsLicensedStates = !configuredCapability || licensedStates.length === 0
+    || configuredCapability.states?.includes("*")
+    || licensedStates.every((state: string) => configuredCapability.states?.includes(state));
+  const serverCapability = configuredCapability && supportsLicensedStates ? {
+    ...configuredCapability,
+    effectiveDate: new Date(configuredCapability.effectiveDate).toISOString(),
+    expiresAt: configuredCapability.expiresAt ? new Date(configuredCapability.expiresAt).toISOString() : undefined,
+  } as ProductCapability : null;
   const intelligenceDrafts = generateCreativeIntelligenceDrafts({
     vertical: leadType as CreativeVertical,
     audienceSegment: audienceSegment as CreativeAudienceSegment,
@@ -211,9 +247,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     userKey: userEmail,
     campaignName,
     location,
+    capabilityState: licensedStates.length === 1 ? licensedStates[0] : undefined,
+    applicantAge: Number.isFinite(Number((req.body as any)?.applicantAge)) ? Number((req.body as any).applicantAge) : undefined,
     requestedCount: requestedVariantCount,
     generationNonce,
-    productCapability: (req.body as any)?.productCapability || null,
+    // Capability claims are server-authoritative. A client body may name a
+    // capability ID, but it cannot inject carrier facts or claim support.
+    productCapability: serverCapability,
+    productionAssets: productionAssetRows as any,
     recentUsage: normalizedRecentUsage,
     performanceWeights,
   }).map((draft, index) => ({
@@ -246,5 +287,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     reservationId: reservation.reservationId,
     reservationExpiresAt: reservation.expiresAt.toISOString(),
     globalLearningHints: [],
+    productionAssetPoolSize: productionAssetRows.length,
+    capabilitySource: serverCapability ? "approved_server_record" : "safe_general",
+    capabilityNotice: requestedCapabilityId && !serverCapability
+      ? supportsLicensedStates
+        ? "The requested capability was not found as a current approved server record; safe general language was used."
+        : "The requested capability does not cover every selected state; safe general language was used."
+      : undefined,
   });
 }

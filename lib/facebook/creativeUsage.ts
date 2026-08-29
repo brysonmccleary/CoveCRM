@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
+import MetaCreativeAsset from "@/models/MetaCreativeAsset";
 import {
   buildCreativeGenerationSignature,
   buildPublishedCreativeFingerprint,
@@ -29,6 +30,8 @@ function usageFields(draft: Record<string, any>) {
     cta: String(draft?.cta || ""),
     imageDirection: String(draft?.imageDirection || draft?.imageUrl || ""),
     imageIdentity: String(draft?.imageIdentity || draft?.imageUrl || ""),
+    assetId: String(draft?.assetId || ""),
+    assetVisualFingerprint: String(draft?.assetVisualFingerprint || ""),
     backgroundDirection: String(draft?.backgroundDirection || draft?.backgroundImage || ""),
     palette: String(draft?.paletteId || draft?.colorScheme || ""),
     offerClass: String(draft?.offerClass || draft?.displayAmount || ""),
@@ -190,6 +193,7 @@ export async function finalizeCreativeReservation(input: {
   metaAdId: string;
   metaCreativeId: string;
   usageModel?: any;
+  assetModel?: any;
 }) {
   const usageModel = input.usageModel || MetaCreativeUsage;
   const result = await usageModel.findOneAndUpdate(
@@ -211,6 +215,14 @@ export async function finalizeCreativeReservation(input: {
     { new: true }
   );
   if (!result) throw new Error("Creative uniqueness reservation was lost before publish finalized");
+  const assetId = String(result?.assetId || "").trim();
+  if (assetId) {
+    const assetModel = input.assetModel || MetaCreativeAsset;
+    await assetModel.findOneAndUpdate(
+      { assetId, active: true, approvalStatus: "approved" },
+      { $inc: { useCount: 1 }, $set: { lastUsedAt: new Date() } }
+    );
+  }
   return result;
 }
 

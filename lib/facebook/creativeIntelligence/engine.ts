@@ -7,6 +7,7 @@ import { buildSelectorContract, selectorToFunnelStep } from "./selectors";
 import { creativeSimilarity, semanticFingerprint } from "./similarity";
 import { assertRenderedLanguageSafe, assertVisibleIdentity, getVisibleIdentityLabel, localizeSelectorContract } from "./localization";
 import { assertCreativeQualityGates, fitCopyForLayout } from "./qualityGates";
+import { selectProductionAsset } from "@/lib/facebook/creativeAssets/selection";
 import type {
   CreativeClass,
   CreativeEngineDraft,
@@ -113,7 +114,7 @@ function chooseLayout(family: CreativeFamilyDefinition, seed: string, usedLayout
 
 function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition, index: number, layoutId: LayoutId, format: CreativeFormat): CreativeEngineDraft {
   const seed = `${input.userKey}|${input.generationNonce}|${input.vertical}|${input.audienceSegment}|${index}|${family.familyId}|${layoutId}`;
-  const capabilityResolution = resolveProductCapability({ vertical: input.vertical, state: input.location, applicantAge: input.applicantAge, capability: input.productCapability });
+  const capabilityResolution = resolveProductCapability({ vertical: input.vertical, state: input.capabilityState || input.location, applicantAge: input.applicantAge, capability: input.productCapability });
   if (input.productCapability && capabilityResolution.errors.length > 0) {
     throw new Error(`Configured product capability failed validation: ${capabilityResolution.errors.join(" ")}`);
   }
@@ -135,7 +136,7 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
   const headline = fitted.headline;
   const fittedHook = fitted.body;
   const fittedSelector = { ...selector, options: fitted.buttons };
-  const imageDirection = pick(family.imageDirections, `${seed}|image`);
+  let imageDirection = pick(family.imageDirections, `${seed}|image`);
   const backgroundDirection = pick(family.backgroundDirections, `${seed}|background`);
   const visualLeadType = input.audienceSegment === "veteran" || input.audienceSegment === "trucker"
     ? input.audienceSegment : input.vertical;
@@ -143,11 +144,34 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
   const photoBlocked = layoutId === "educational_explainer_card" || layoutId === "notice_letter_paper"
     || (layoutId === "audience_benefit_grid" && visualLeadType === "veteran");
   const photoRequested = format === "photo" || format === "video" || format === "ugc_video" || format === "agent_video";
-  const hasStaticPhoto = photoRequested && !photoBlocked && Boolean(staticAssetCounts[visualLeadType]);
+  const selectedAsset = !photoBlocked ? selectProductionAsset(input.productionAssets || [], {
+    vertical: input.vertical,
+    audienceSegment: input.audienceSegment,
+    language: input.language,
+    product: input.vertical,
+    familyId: family.familyId,
+    layoutId,
+    format,
+    userKey: input.userKey,
+    seed,
+    recentUsage: (input.recentUsage || []) as Array<Record<string, unknown>>,
+    excludedAssetIds: new Set((input.recentUsage || [])
+      .filter((row: any) => row?.generationNonce === input.generationNonce)
+      .map((row: any) => String(row?.assetId || ""))
+      .filter(Boolean)),
+  }) : null;
+  if (selectedAsset?.imageDirection || selectedAsset?.direction) {
+    imageDirection = selectedAsset.imageDirection || selectedAsset.direction;
+  }
+  const hasStaticPhoto = Boolean(selectedAsset)
+    || (photoRequested && !photoBlocked && Boolean(staticAssetCounts[visualLeadType]));
   const visualVariantIndex = hashInt(`${seed}|asset`) % 40;
-  const imageIdentity = hasStaticPhoto
+  const imageIdentity = selectedAsset?.storageUrl || (hasStaticPhoto
     ? `/ad-backgrounds/${visualLeadType}/${visualVariantIndex + 1}.jpg`
-    : `graphic:${backgroundDirection}`;
+    : `graphic:${backgroundDirection}`);
+  const imageUrl = selectedAsset?.storageUrl || (hasStaticPhoto
+    ? `/ad-backgrounds/${visualLeadType}/${visualVariantIndex + 1}.jpg`
+    : `graphic:${backgroundDirection}`);
   const variantId = `cie_${createHash("sha256").update(seed).digest("hex").slice(0, 18)}`;
   const amountLayouts: LayoutId[] = ["hero_amount_age_grid", "audience_benefit_grid", "portrait_hero_offer", "full_bleed_text_overlay"];
   const displayAmount = capabilityResolution.source === "configured_product" && amountLayouts.includes(layoutId)
@@ -185,6 +209,10 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
     visualTreatment: hasStaticPhoto ? "photo" : "graphic",
     visualVariantIndex,
     imageIdentity,
+    imageUrl: imageUrl.startsWith("graphic:") ? "" : imageUrl,
+    assetId: selectedAsset?.assetId || "",
+    assetVisualFingerprint: selectedAsset?.visualFingerprint || "",
+    assetType: selectedAsset?.assetType || "",
     primaryText: fittedHook,
     headline,
     description: benefits.join(" • "),
@@ -247,7 +275,7 @@ function buildDraft(input: CreativeEngineInput, family: CreativeFamilyDefinition
 }
 
 export function generateCreativeIntelligenceDrafts(input: CreativeEngineInput): CreativeEngineDraft[] {
-  const resolvedCapability = resolveProductCapability({ vertical: input.vertical, state: input.location, applicantAge: input.applicantAge, capability: input.productCapability });
+  const resolvedCapability = resolveProductCapability({ vertical: input.vertical, state: input.capabilityState || input.location, applicantAge: input.applicantAge, capability: input.productCapability });
   if (input.productCapability && resolvedCapability.errors.length > 0) {
     throw new Error(`Configured product capability failed validation: ${resolvedCapability.errors.join(" ")}`);
   }
@@ -295,7 +323,7 @@ export function generateCreativeIntelligenceDrafts(input: CreativeEngineInput): 
     usedFamilies.add(accepted.winningFamilyId);
     usedLayouts.add(accepted.layoutId);
   }
-  if (drafts.length >= 2) {
+  if (drafts.length >= 2 && !(input.productionAssets || []).length) {
     const treatments = new Set(drafts.map((draft) => draft.visualTreatment));
     if (treatments.size === 1) {
       const desired: CreativeFormat = drafts[0].visualTreatment === "photo" ? "graphic" : "photo";

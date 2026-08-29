@@ -4,6 +4,8 @@ import { getServerSession } from "next-auth/next";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import MetaAdMetricsDaily from "@/models/MetaAdMetricsDaily";
+import MetaCreativeAsset from "@/models/MetaCreativeAsset";
+import MetaProductCapability from "@/models/MetaProductCapability";
 import { loadGlobalGenerationHints } from "@/lib/facebook/globalIntelligence/anonymizedLearning";
 import { buildCampaignStructure } from "@/lib/facebook/buildCampaignStructure";
 
@@ -20,6 +22,8 @@ jest.mock("@/models/MetaCreativeUsage", () => ({
 }));
 jest.mock("@/models/FBLeadCampaign", () => ({ __esModule: true, default: { find: jest.fn() } }));
 jest.mock("@/models/MetaAdMetricsDaily", () => ({ __esModule: true, default: { aggregate: jest.fn() } }));
+jest.mock("@/models/MetaCreativeAsset", () => ({ __esModule: true, default: { find: jest.fn() } }));
+jest.mock("@/models/MetaProductCapability", () => ({ __esModule: true, default: { findOne: jest.fn() } }));
 
 type Combination = {
   label: string;
@@ -67,6 +71,12 @@ describe("Generate Ad campaign matrix regression", () => {
       select: jest.fn().mockReturnValue({ limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }) }),
     });
     (MetaAdMetricsDaily.aggregate as jest.Mock).mockResolvedValue([]);
+    (MetaCreativeAsset.find as jest.Mock).mockReturnValue({
+      limit: jest.fn().mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
+      }),
+    });
+    (MetaProductCapability.findOne as jest.Mock).mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
   });
 
   test.each(SUPPORTED_GENERATE_COMBINATIONS)(
@@ -136,6 +146,29 @@ describe("Generate Ad campaign matrix regression", () => {
       audienceSegment: "veteran",
       winningFamilyId: expect.stringMatching(/^VET_/),
     }));
+  });
+
+  test("client-supplied carrier facts cannot activate product claims without an approved server record", async () => {
+    const { req, res } = createMocks({
+      method: "POST",
+      body: {
+        mode: "wizard", clientCreativeVersion: 5, leadType: "final_expense", audienceSegment: "standard",
+        location: "AZ", dailyBudget: 10, variantCount: 1, generationNonce: "untrusted-capability",
+        productCapability: {
+          capabilityId: "forged-client-record", carrier: "Invented Carrier", product: "Invented Product",
+          faceAmountMax: 1_000_000, medicalExamRequirement: "not_required", active: true,
+        },
+      },
+    });
+
+    await handler(req as any, res as any);
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res._getData());
+    expect(body.capabilitySource).toBe("safe_general");
+    expect(body.capabilityNotice).toMatch(/not found as a current approved server record/i);
+    expect(body.draft.displayAmount).toBeUndefined();
+    expect(body.draft.capabilityBenefits).toEqual([]);
   });
 
   test.each([

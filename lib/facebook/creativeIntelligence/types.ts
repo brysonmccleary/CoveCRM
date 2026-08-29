@@ -140,6 +140,7 @@ export type CreativeEngineInput = {
   userKey: string;
   campaignName: string;
   location?: string;
+  capabilityState?: string;
   applicantAge?: number;
   requestedCount: number;
   generationNonce: string;
@@ -147,6 +148,7 @@ export type CreativeEngineInput = {
   preferredFamilyId?: string;
   recentUsage?: Array<Record<string, unknown>>;
   performanceWeights?: Record<string, number>;
+  productionAssets?: import("@/lib/facebook/creativeAssets/types").ProductionCreativeAsset[];
 };
 
 export type CreativeEngineDraft = Record<string, unknown> & {

@@ -9,9 +9,15 @@ import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let openai: OpenAI | null = null;
 
-const PROMPTS: Record<string, string[]> = {
+function imageClient(): OpenAI {
+  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is required for paid image generation.");
+  openai ||= new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return openai;
+}
+
+export const PROMPTS: Record<string, string[]> = {
   trucker: [
     "three large commercial semi trucks on a dark American highway at night, dramatic neon amber and cyan lighting, wide cinematic shot, no logos or readable text on trucks, no people",
     "a professional semi truck on an open American highway at dusk, dark dramatic sky, warm amber glow lighting, powerful low-angle composition, no logos, no people",
@@ -151,7 +157,7 @@ async function generateOne(leadType: string, index: number, prompt: string) {
     console.log(`skip (exists): ${leadType}/${index + 1}`);
     return;
   }
-  const img = await openai.images.generate({
+  const img = await imageClient().images.generate({
     model: "gpt-image-1",
     prompt: prompt + SUFFIX,
     size: "1536x1024",
@@ -179,7 +185,9 @@ async function main() {
   console.log("done");
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
