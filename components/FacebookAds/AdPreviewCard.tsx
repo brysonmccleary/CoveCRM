@@ -1,3 +1,5 @@
+import ApprovedTruckerCreative from "@/components/FacebookAds/ApprovedTruckerCreative";
+
 const PAGE_NAMES: Record<string, string> = {
   veteran: "Veteran Benefits Center",
   trucker: "Trucker Life Coverage",
@@ -1660,6 +1662,7 @@ function FinishedCreativeRenderer({
   leadType: string;
   overlay: ReturnType<typeof getOverlay>;
 }) {
+  if (draft?.approvedTruckerConcept) return <ApprovedTruckerCreative draft={draft} />;
   return renderTemplateFamily(buildCreativeState(draft, leadType, overlay));
 }
 

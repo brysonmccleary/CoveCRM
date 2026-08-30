@@ -16,6 +16,11 @@ import MetaCreativeUsage from "@/models/MetaCreativeUsage";
 import { buildCreativeGenerationSignature } from "@/lib/facebook/creativeIdentity";
 import { selectCreativeTreatmentMix } from "@/lib/facebook/creativeCandidateSelection";
 import { resolveAudienceSegment } from "@/lib/facebook/audienceTargeting";
+import {
+  buildApprovedTruckerLibrary,
+  getApprovedTruckerLane,
+  selectApprovedTruckerConcepts,
+} from "@/lib/facebook/approvedTruckerCreative";
 
 const LEAD_FORM_QUESTIONS = {
   mortgage_protection: [
@@ -234,7 +239,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (error: any) {
     return res.status(400).json({ ok: false, error: error?.message || "Unsupported audience selection" });
   }
-  const requestedVariantCount = Math.min(4, Math.max(1, Number((req.body as any)?.variantCount) || 3));
+  const approvedTruckerLane = getApprovedTruckerLane(leadType, audienceSegment);
+  const requestedVariantCount = Math.min(
+    approvedTruckerLane ? 5 : 4,
+    Math.max(1, Number((req.body as any)?.variantCount) || 3)
+  );
   const regenerationAttempt = Math.max(0, Number(regenerationAttemptParam) || 0);
   const generationNonce = String(generationNonceParam || "").trim() || `server_${Date.now().toString(36)}_${regenerationAttempt}`;
   const campaignName = location
@@ -269,6 +278,82 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ ok: false, error: "dailyBudget must be a finite number >= 5" });
   }
   const dailyBudgetCents = Math.round(budgetDollars * 100);
+
+  if (approvedTruckerLane) {
+    const approvedLibrary = buildApprovedTruckerLibrary(approvedTruckerLane);
+    await mongooseConnect();
+    const usedRows = await MetaCreativeUsage.find({
+      variationType: { $in: approvedLibrary.map((concept) => concept.visualConceptId) },
+      status: { $in: ["draft_reserved", "reserved", "published"] },
+    }).select("variationType -_id").lean();
+    const usedVisualConceptIds = new Set(
+      (usedRows as any[]).map((row) => String(row.variationType || "")).filter(Boolean)
+    );
+    const approvedConcepts = selectApprovedTruckerConcepts({
+      lane: approvedTruckerLane,
+      seed: campaignNameSeeded,
+      count: requestedVariantCount,
+      usedVisualConceptIds,
+    });
+    const funnelVariant = selectedVariantsFromLibrary[0];
+    if (!funnelVariant) {
+      return res.status(409).json({ ok: false, error: "The selected Trucker funnel is unavailable." });
+    }
+    const funnelConfig = buildWinningFunnelConfig(funnelVariant);
+    const selectedDrafts = approvedConcepts.map((concept) => {
+      const draft = {
+        leadType,
+        audienceSegment,
+        campaignName,
+        dailyBudgetCents,
+        primaryText: concept.master.subhead,
+        headline: concept.master.headline,
+        description: concept.master.subhead,
+        cta: concept.master.cta,
+        imagePrompt: "",
+        videoScript: "",
+        buttonLabels: concept.master.qualifier,
+        bulletPoints: concept.master.bullets,
+        creativeArchetype: concept.master.kind,
+        landingPageConfig: {
+          ...funnelConfig,
+          headline: sanitizeCreativeText(funnelConfig.headline, leadType),
+          subheadline: sanitizeCreativeText(funnelConfig.subheadline, leadType),
+          buttonLabels: sanitizeCreativeList(funnelConfig.buttonLabels, leadType),
+          benefitBullets: sanitizeCreativeList(funnelConfig.benefitBullets, leadType),
+          ctaStrip: sanitizeCreativeText(funnelConfig.ctaStrip, leadType),
+        },
+        leadFormQuestions: LEAD_FORM_QUESTIONS[leadType],
+        thankYouPageText: THANK_YOU_TEXT[leadType],
+        winningFamilyId: concept.master.id,
+        variationType: concept.visualConceptId,
+        uniquenessFingerprint: concept.visualConceptId,
+        generationNonce,
+        regenerationAttempt,
+        visualVariantIndex: concept.imageNumber - 1,
+        visualTreatment: concept.visualTreatment,
+        candidateBatch: 0,
+        vendorStyleTag: `approved_trucker_${concept.treatment.toLowerCase()}`,
+        displayAmount: "",
+        generatedBy: "approved_trucker_library",
+        copySource: "approved_trucker_library",
+        approvedTruckerConcept: concept,
+      };
+      return {
+        ...draft,
+        creativeSignature: buildCreativeGenerationSignature(draft),
+      };
+    });
+
+    return res.status(200).json({
+      ok: true,
+      draft: selectedDrafts[0],
+      drafts: selectedDrafts,
+      variantCount: selectedDrafts.length,
+      globalLearningHints: {},
+    });
+  }
+
   const buildDraftFromVariant = (
     variant: (typeof selectedVariants)[number],
     index = 0,
