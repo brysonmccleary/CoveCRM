@@ -19,6 +19,7 @@ export interface MetaLeadData {
   city: string;
   state: string;
   productInterest: string;
+  customDisclaimerResponses: any[];
   rawFieldData: any[];
   rawPayload: any;
 }
@@ -53,7 +54,7 @@ export async function retrieveMetaLead(
   url.searchParams.set("access_token", token);
   url.searchParams.set(
     "fields",
-    "id,created_time,field_data,form_id,ad_id,adset_id,campaign_id,page_id"
+    "id,created_time,field_data,custom_disclaimer_responses,form_id,ad_id,adset_id,campaign_id,page_id"
   );
 
   const resp = await fetch(url.toString(), { method: "GET" });
@@ -110,6 +111,9 @@ export async function retrieveMetaLead(
     city: fields["city"] || "",
     state: fields["state"] || fields["state_province"] || fields["province"] || "",
     productInterest,
+    customDisclaimerResponses: Array.isArray(payload.custom_disclaimer_responses)
+      ? payload.custom_disclaimer_responses
+      : [],
     rawFieldData: fieldData,
     rawPayload: payload,
   };

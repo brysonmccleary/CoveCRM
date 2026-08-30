@@ -31,6 +31,7 @@ const FBLeadEntrySchema = new Schema(
     fbc: { type: String, default: "" },
     fbp: { type: String, default: "" },
     utm: { type: Schema.Types.Mixed, default: {} },
+    consent: { type: Schema.Types.Mixed, default: {} },
     crmLeadId: { type: Schema.Types.ObjectId, ref: "Lead" }, // set when imported to CRM
     folderId: { type: Schema.Types.ObjectId, ref: "Folder" },
     importedToCrm: { type: Boolean, default: false, index: true },

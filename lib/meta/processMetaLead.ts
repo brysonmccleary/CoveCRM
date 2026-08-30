@@ -246,6 +246,14 @@ export async function processMetaLead(
     metaCreativeId: String(attributedAd?.metaCreativeId || ""),
     variantId: String(attributedAd?.variantId || ""),
     creativeFamily: String(attributedAd?.creativeFamily || ""),
+    consent: {
+      source: "meta_instant_form",
+      formId: String(formId || leadData.formId || ""),
+      submittedAt: createdTime || leadData.createdTime || "",
+      responses: Array.isArray(leadData.customDisclaimerResponses)
+        ? leadData.customDisclaimerResponses
+        : [],
+    },
     folderId: (folder as any)._id,
     importedToCrm: !dupCheck.isDuplicate,
     importedAt: dupCheck.isDuplicate ? undefined : new Date(),
@@ -386,6 +394,14 @@ export async function processMetaLead(
       ? new Date(typeof createdTime === "number" ? createdTime * 1000 : createdTime)
       : new Date(),
     metaRawPayload: JSON.stringify(leadData.rawPayload),
+    metaConsent: {
+      source: "meta_instant_form",
+      formId: String(formId || leadData.formId || ""),
+      submittedAt: createdTime || leadData.createdTime || "",
+      responses: Array.isArray(leadData.customDisclaimerResponses)
+        ? leadData.customDisclaimerResponses
+        : [],
+    },
     sourceType: "facebook_lead",
     realTimeEligible: true,
     preferredLanguage,

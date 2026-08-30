@@ -163,6 +163,44 @@ describe("Meta webhook lead-creation idempotency", () => {
     }));
   });
 
+  test("maps the veteran Instant Form fields without requiring removed qualification fields", async () => {
+    statefulEventStore("received");
+    mockedCampaign.findOne.mockReturnValue(lean({
+      _id: "camp1", userEmail: "agent@example.com", leadType: "veteran",
+      audienceSegment: "veteran", folderId: "folder1", licensedStates: ["AZ"],
+    }));
+    mockedRetrieve.mockResolvedValue({
+      firstName: "Jane", lastName: "Doe", phone: "+18085551212", email: "jane@example.com",
+      state: "AZ", formId: "form1", createdTime: "2026-08-30T12:00:00Z",
+      rawFieldData: [
+        { name: "age", values: ["60-69"] },
+        { name: "who_needs_coverage", values: ["Veteran"] },
+        { name: "coverage_amount", values: ["$25,000-$49,999"] },
+      ],
+      customDisclaimerResponses: [{ checkbox_key: "covecrm_contact_consent", is_checked: true }],
+      rawPayload: {},
+    });
+
+    await processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now());
+
+    expect(mockedLead.create).toHaveBeenCalledWith(expect.objectContaining({
+      Age: "60-69",
+      "Who Needs Coverage": "Veteran",
+      "Requested Coverage": "$25,000-$49,999",
+      "Coverage Amount": "$25,000-$49,999",
+      metaConsent: expect.objectContaining({
+        source: "meta_instant_form",
+        responses: [{ checkbox_key: "covecrm_contact_consent", is_checked: true }],
+      }),
+    }));
+    const created = mockedLead.create.mock.calls[0][0];
+    expect(created).not.toHaveProperty("DOB");
+    expect(created).not.toHaveProperty("Military Branch");
+    expect(created).not.toHaveProperty("Marital Status");
+    expect(created).not.toHaveProperty("Best Time To Call");
+    expect(created).not.toHaveProperty("Health Issues");
+  });
+
   test("a new opt-in from an existing contact emails the agent and links the event without creating another CRM lead", async () => {
     statefulEventStore("received");
     mockedCheckDuplicate.mockResolvedValue({

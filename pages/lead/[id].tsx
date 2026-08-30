@@ -825,6 +825,7 @@ export default function LeadProfileDial() {
     pushField("Marital Status", ["Marital Status", "maritalStatus", "Marriage Status"]);
     pushField("Military Status", ["Military Status", "militaryStatus", "Veteran Status"]);
     pushField("Military Branch", ["Military Branch", "militaryBranch", "Branch Of Service", "Branch"]);
+    pushField("Who Needs Coverage", ["Who Needs Coverage", "whoNeedsCoverage", "Coverage Subject"]);
     pushField("CDL Status", ["CDL Status", "cdlStatus", "CDL Driver Status", "Driver Type"]);
     pushField("Best Time To Call", ["Best Time To Call", "bestTime", "Best Time To Contact", "Best Call Time"]);
     pushField("Health Issues", ["Health Issues", "healthIssues", "Health Notes"]);

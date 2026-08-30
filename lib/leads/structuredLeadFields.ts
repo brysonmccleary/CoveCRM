@@ -19,6 +19,7 @@ export const STRUCTURED_LEAD_FIELD_ORDER = [
   "Marital Status",
   "Military Status",
   "Military Branch",
+  "Who Needs Coverage",
   "CDL Status",
   "Beneficiary",
   "Health Issues",
@@ -61,6 +62,10 @@ const FIELD_DEFINITIONS: FieldDefinition[] = [
   {
     label: "Military Branch",
     aliases: ["militaryBranch", "branch", "whatMilitaryBranchDidYouServeIn"],
+  },
+  {
+    label: "Who Needs Coverage",
+    aliases: ["whoNeedsCoverage", "coverageSubject", "whoNeedsLifeInsurance"],
   },
   {
     label: "CDL Status",

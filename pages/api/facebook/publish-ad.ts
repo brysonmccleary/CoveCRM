@@ -49,6 +49,7 @@ import {
 } from "@/lib/facebook/creativeUsage";
 import { hasRequiredCreativeTreatmentMix } from "@/lib/facebook/creativeCandidateSelection";
 import { resolveAudienceSegment } from "@/lib/facebook/audienceTargeting";
+import { buildNativeLeadFormQuestions } from "@/lib/facebook/nativeLeadFormQuestions";
 
 export const config = {
   api: {
@@ -74,31 +75,6 @@ function getBase64FromDataImageUrl(imageAsset: string) {
     .match(/^data:image\/(?:png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=\s]+)$/);
 
   return match?.[1]?.replace(/\s/g, "") || "";
-}
-
-function getLeadSpecificQuestion(leadType: string, audienceSegment: string): { label: string; key: string } {
-  if (audienceSegment === "spanish") {
-    const spanishMap: Record<string, { label: string; key: string }> = {
-      mortgage_protection: { label: "¿Cuál es el saldo aproximado de su hipoteca?", key: "mortgage_balance" },
-      final_expense: { label: "¿Qué cantidad de cobertura le interesa?", key: "coverage_amount" },
-      iul: { label: "¿Busca protección, potencial de valor en efectivo o ambos?", key: "iul_goal" },
-    };
-    return spanishMap[leadType] || { label: "¿Qué le interesa más?", key: "lead_question" };
-  }
-  if (audienceSegment === "veteran") {
-    return { label: "What military branch did you serve in?", key: "military_branch" };
-  }
-  if (audienceSegment === "trucker") {
-    return { label: "Are you currently an active CDL driver?", key: "cdl_driver_status" };
-  }
-  const map: Record<string, { label: string; key: string }> = {
-    mortgage_protection: { label: "What is your mortgage balance?", key: "mortgage_balance" },
-    final_expense: { label: "What coverage amount are you interested in?", key: "coverage_amount" },
-    iul: { label: "Are you looking for protection, cash value growth, or both?", key: "iul_goal" },
-    veteran: { label: "What military branch did you serve in?", key: "military_branch" },
-    trucker: { label: "Are you currently an active CDL driver?", key: "cdl_driver_status" },
-  };
-  return map[leadType] || { label: "What are you most interested in?", key: "lead_question" };
 }
 
 function isGeneratedCoveCrmDraft(draft: any) {
@@ -863,15 +839,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (campaignType !== "hosted_funnel" && campaignType !== "hosted_funnel_otp") {
       if (!metaFormId) {
-        const leadSpecificQ = getLeadSpecificQuestion(leadType, audienceSegment);
-        const questions: Array<Record<string, any>> = [
-          { type: "FULL_NAME" },
-          { type: "CUSTOM", label: leadSpecificQ.label, key: leadSpecificQ.key },
-          { type: "PHONE" },
-          { type: "EMAIL" },
-          { type: "CUSTOM", label: audienceSegment === "spanish" ? "Edad" : "Age", key: "age" },
-          { type: "CUSTOM", label: audienceSegment === "spanish" ? "Estado" : "State", key: "state" },
-        ];
+        const questions: Array<Record<string, any>> = buildNativeLeadFormQuestions({
+          leadType,
+          audienceSegment,
+          spanish: audienceSegment === "spanish",
+        });
 
         const storedComplianceProfile = (campaign as any).complianceProfile || {};
         const storedDisclaimerText = String(

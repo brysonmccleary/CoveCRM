@@ -153,6 +153,7 @@ const LeadSchema = new Schema(
     metaPageId: { type: String, default: "" },
     metaCreatedTime: { type: Date },
     metaRawPayload: { type: String, default: "" },
+    metaConsent: { type: Schema.Types.Mixed, default: {} },
     leadSource: { type: String, default: "" },
 
     // Sale revenue fields (agent-entered; Option B source of truth for Facebook ROAS)
