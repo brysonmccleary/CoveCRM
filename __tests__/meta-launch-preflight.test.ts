@@ -37,6 +37,7 @@ describe("Meta non-creating launch preflight", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     const campaignBody = new URLSearchParams(fetchImpl.mock.calls[0][1].body);
     expect(JSON.parse(String(campaignBody.get("execution_options")))).toEqual(["validate_only"]);
+    expect(campaignBody.get("is_adset_budget_sharing_enabled")).toBe("false");
     const adSetBody = new URLSearchParams(fetchImpl.mock.calls[2][1].body);
     expect(JSON.parse(String(adSetBody.get("execution_options")))).toEqual(["validate_only"]);
     expect(JSON.parse(String(adSetBody.get("promoted_object")))).toEqual({

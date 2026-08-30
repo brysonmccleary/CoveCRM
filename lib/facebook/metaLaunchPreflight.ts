@@ -31,6 +31,10 @@ export async function preflightMetaLaunch(input: {
   campaignParams.set("status", "PAUSED");
   campaignParams.set("special_ad_categories", JSON.stringify(input.campaign.special_ad_categories));
   campaignParams.set("special_ad_category_countries", JSON.stringify(["US"]));
+  // Graph API v24 requires an explicit choice for ad-set budget sharing when
+  // the campaign is not using a campaign-level budget. Keep it disabled so
+  // the live ad set retains its exact configured budget.
+  campaignParams.set("is_adset_budget_sharing_enabled", "false");
   campaignParams.set("execution_options", JSON.stringify(["validate_only"]));
   campaignParams.set("access_token", input.accessToken);
   const campaignResult = await metaJson(await fetchImpl(metaGraphUrl(`act_${adAccountId}/campaigns`), {
