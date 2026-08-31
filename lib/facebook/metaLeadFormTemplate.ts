@@ -29,10 +29,11 @@ export function buildNativeLeadFormFingerprint(specification: NativeLeadFormSpec
 
 export function assertNativeFormComplianceMode(env: NodeJS.ProcessEnv = process.env) {
   if (env.NODE_ENV === "production" && String(env.META_NATIVE_FORM_FLEXIBLE_DELIVERY_LOCKED || "").toLowerCase() !== "true") {
-    throw new Error(
-      "Native Meta forms are disabled until flexible form delivery is confirmed locked off for the configured Graph API version"
-    );
+    return [
+      "Cove preference warning: flexible form delivery is not confirmed locked off for the configured Graph API version.",
+    ];
   }
+  return [];
 }
 
 export async function verifyNativeLeadFormQualitySettings(input: {
@@ -47,10 +48,14 @@ export async function verifyNativeLeadFormQualitySettings(input: {
   const response = await (input.fetchImpl || fetch)(url.toString());
   const json = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`Meta lead-form verification failed: ${JSON.stringify(json)}`);
-  if (json?.is_optimized_for_quality !== true || json?.is_phone_sms_verify_enabled !== true) {
-    throw new Error("Meta did not apply required higher-intent and SMS-verification settings to the lead form");
+  const policyWarnings: string[] = [];
+  if (json?.is_optimized_for_quality !== true) {
+    policyWarnings.push("Cove preference warning: Meta did not report higher-intent optimization on the accepted lead form.");
   }
-  return json;
+  if (json?.is_phone_sms_verify_enabled !== true) {
+    policyWarnings.push("Cove preference warning: Meta did not report phone/SMS verification on the accepted lead form.");
+  }
+  return { ...json, policyWarnings };
 }
 
 export async function claimNativeLeadFormTemplate(input: {

@@ -17,6 +17,23 @@ export type CampaignStructureCreative = {
   templateId?: string;
 };
 
+/**
+ * Preserve the copy the owner reviewed. This helper intentionally performs no
+ * rewriting, sanitizing, claim substitution, or SAFE_MODE downgrade. Meta may
+ * still reject the resulting creative through its API.
+ */
+export function preserveOwnerApprovedMetaCopy(input: {
+  primaryText?: unknown;
+  headline?: unknown;
+  description?: unknown;
+}) {
+  return {
+    primaryText: String(input.primaryText ?? ""),
+    headline: String(input.headline ?? ""),
+    description: String(input.description ?? ""),
+  };
+}
+
 export function buildCampaignStructure(input: {
   campaignName: string;
   leadType: MetaLeadType;
@@ -73,9 +90,7 @@ export function buildCampaignStructure(input: {
     ads: creatives.map((creative, index) => ({
       name: `${String(input.campaignName || "").trim()} Ad ${index + 1}`,
       templateId: creative.templateId || `locked_template_${index + 1}`,
-      primaryText: String(creative.primaryText),
-      headline: String(creative.headline),
-      description: String(creative.description || ""),
+      ...preserveOwnerApprovedMetaCopy(creative),
       cta: String(creative.cta || "LEARN_MORE"),
       imageUrl: String(creative.imageUrl || ""),
       imagePrompt: String(creative.imagePrompt || ""),

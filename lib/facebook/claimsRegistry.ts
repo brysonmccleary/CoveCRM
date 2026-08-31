@@ -205,3 +205,13 @@ export function evaluateCreativeClaims(input: {
     warnings,
   };
 }
+
+export function ownerApprovedMetaClaimWarnings(evaluation: {
+  launchAllowed?: boolean;
+  blockers?: string[];
+  warnings?: string[];
+}): string[] {
+  const findings = (evaluation.blockers?.length ? evaluation.blockers : evaluation.warnings) || [];
+  if (evaluation.launchAllowed === true && findings.length === 0) return [];
+  return Array.from(new Set(findings.map((finding) => `Claim/capability review: ${finding}`)));
+}

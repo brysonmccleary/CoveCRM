@@ -14,6 +14,7 @@ import { isWinnerSupportedLeadType } from "@/lib/facebook/winningAdLibrary";
 import { getCanonicalHeaders, getLeadSheetType } from "@/lib/facebook/sheets/sheetHeaders";
 import { validateStates } from "@/lib/facebook/guardrails";
 import { validateLaunchInput } from "@/pages/api/facebook/validate-launch";
+import { preserveOwnerApprovedMetaCopy } from "@/lib/facebook/buildCampaignStructure";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
 import { checkMetaWriteReadiness, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 import { buildLaunchFingerprint, requireDailyBudgetCents } from "@/lib/facebook/launchFingerprint";
@@ -26,6 +27,7 @@ import {
   buildLandingPageSnapshot,
   DEFAULT_META_CLAIMS,
   evaluateCreativeClaims,
+  ownerApprovedMetaClaimWarnings,
   requiredQualifierTextsForCreative,
 } from "@/lib/facebook/claimsRegistry";
 import { writeImmutableMetaLaunchArchive } from "@/lib/facebook/archiveMetaLaunch";
@@ -44,10 +46,11 @@ import {
 import {
   claimCreativeSet,
   finalizeCreativeReservation,
+  isCreativeExclusivityPolicyError,
   releaseCreativeSet,
   type CreativeReservation,
 } from "@/lib/facebook/creativeUsage";
-import { hasRequiredCreativeTreatmentMix } from "@/lib/facebook/creativeCandidateSelection";
+import { ownerApprovedCreativeMixWarnings } from "@/lib/facebook/creativeCandidateSelection";
 import { resolveAudienceSegment } from "@/lib/facebook/audienceTargeting";
 import { buildNativeLeadFormQuestions } from "@/lib/facebook/nativeLeadFormQuestions";
 
@@ -68,6 +71,11 @@ const VALID_LEAD_TYPES = [
 ];
 const EXPECTED_CREATIVE_WIDTH = 1080;
 const EXPECTED_CREATIVE_HEIGHT = 1350;
+
+function recordMetaPolicyWarning(warnings: string[], message: string) {
+  if (!warnings.includes(message)) warnings.push(message);
+  console.warn("[publish-ad] Cove policy warning (non-blocking):", message);
+}
 
 function getBase64FromDataImageUrl(imageAsset: string) {
   const match = String(imageAsset || "")
@@ -250,6 +258,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     performanceGoal?: "LEAD_GENERATION" | "QUALITY_LEAD";
   };
 
+  const policyWarnings: string[] = [];
   let audienceSegment = "standard";
   try {
     audienceSegment = resolveAudienceSegment({
@@ -287,18 +296,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: err?.message || "Licensed states required" });
   }
   if (!stateRestrictionNoticeAccepted) {
-    return res.status(400).json({ error: "State restriction notice must be acknowledged before publishing." });
+    recordMetaPolicyWarning(
+      policyWarnings,
+      "State restriction acknowledgement was not recorded; owner-approved Meta launch continued."
+    );
   }
   if (Array.isArray(drafts) && drafts.length > 0) {
     const launchVisualLeadType = audienceSegment === "veteran" || audienceSegment === "trucker"
       ? audienceSegment
       : leadType;
     const photoPoolAvailable = ["veteran", "trucker", "mortgage_protection"].includes(launchVisualLeadType);
-    if (!hasRequiredCreativeTreatmentMix(drafts, photoPoolAvailable)) {
-      return res.status(409).json({
-        ok: false,
-        error: "This generated set is missing its required photo/graphic mix. Refresh once and regenerate before launching.",
-      });
+    for (const warning of ownerApprovedCreativeMixWarnings(drafts, photoPoolAvailable)) {
+      recordMetaPolicyWarning(policyWarnings, warning);
     }
   }
 
@@ -310,6 +319,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     normalizedLicensedStates = launchValidation.licensedStates;
     const lockedStructure = launchValidation.structure;
+    for (const warning of launchValidation.policyWarnings || []) {
+      recordMetaPolicyWarning(policyWarnings, warning);
+    }
 
     const userEmail = String(session.user.email).toLowerCase();
     const user = await User.findOne({ email: userEmail })
@@ -498,6 +510,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       landingPageSnapshot,
       claims: registeredClaims as any,
     });
+    for (const warning of ownerApprovedMetaClaimWarnings(claimEvaluation)) {
+      recordMetaPolicyWarning(policyWarnings, warning);
+    }
 
     // 1. Ensure CRM folder exists — convention: "FB: {campaignName}"
     //    This matches what the webhook uses for lead routing.
@@ -579,7 +594,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           landingPageConfig: funnelData,
           licensedStates: normalizedLicensedStates,
           borderStateBehavior: "allow_with_warning",
-          stateRestrictionNoticeAccepted: true,
+          stateRestrictionNoticeAccepted: stateRestrictionNoticeAccepted === true,
           publicAgentProfile: {
             displayName: advertiserDisplayName,
             businessName: advertiserBusinessName,
@@ -706,14 +721,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       if (!isAlreadyPublished) {
-        const creativeClaim = await claimCreativeSet({
-          userEmail,
-          campaignId: campaign._id,
-          leadType: String(leadType),
-          drafts: normalizedDrafts,
-        });
-        creativeClaimToken = creativeClaim.claimToken;
-        creativeReservations = creativeClaim.reservations;
+        try {
+          const creativeClaim = await claimCreativeSet({
+            userEmail,
+            campaignId: campaign._id,
+            leadType: String(leadType),
+            drafts: normalizedDrafts,
+          });
+          creativeClaimToken = creativeClaim.claimToken;
+          creativeReservations = creativeClaim.reservations;
+        } catch (error) {
+          if (!isCreativeExclusivityPolicyError(error)) throw error;
+          recordMetaPolicyWarning(
+            policyWarnings,
+            "The selected creative conflicts with Cove's global creative-exclusivity preference; owner-approved Meta launch continued."
+          );
+        }
       }
 
       if (!metaCampaignId) {
@@ -834,6 +857,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           metaAdId,
           ads: Array.isArray((campaign as any).ads) ? (campaign as any).ads : [],
           adCount: Array.isArray((campaign as any).ads) ? (campaign as any).ads.length : 1,
+          policyWarnings,
         });
       }
 
@@ -905,11 +929,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (formClaim.reused) {
           metaFormId = formClaim.formId;
           const pageAccessToken = String((user as any)?.metaPageAccessToken || "").trim();
-          await verifyNativeLeadFormQualitySettings({
+          const formReview = await verifyNativeLeadFormQualitySettings({
             formId: metaFormId,
             accessToken: pageAccessToken || accessToken,
             formUrl: (formId) => metaGraphUrl(formId),
           });
+          for (const warning of formReview.policyWarnings) {
+            recordMetaPolicyWarning(policyWarnings, warning);
+          }
           await FBLeadCampaign.findOneAndUpdate(
             { _id: campaign._id, userEmail },
             { $set: { metaFormId, metaFormFingerprint: formClaim.fingerprint, metaLastPublishAttemptAt: new Date() } }
@@ -948,11 +975,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         metaFormId = String(metaFormJson.id);
         try {
-          await verifyNativeLeadFormQualitySettings({
+          const formReview = await verifyNativeLeadFormQualitySettings({
             formId: metaFormId,
             accessToken: pageAccessToken || accessToken,
             formUrl: (formId) => metaGraphUrl(formId),
           });
+          for (const warning of formReview.policyWarnings) {
+            recordMetaPolicyWarning(policyWarnings, warning);
+          }
         } catch (verificationError) {
           await failNativeLeadFormTemplate({
             userEmail,
@@ -1018,13 +1048,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           trackedFunnelUrl.searchParams.set("utm_campaign", String((campaign as any)._id));
           trackedFunnelUrl.searchParams.set("utm_content", variantId);
           const resolvedAdLink = campaignType === "native_form" ? instantFormDisplayUrl : trackedFunnelUrl.toString();
+          const ownerApprovedCopy = preserveOwnerApprovedMetaCopy({
+            primaryText: currentDraft.primaryText ?? primaryText,
+            headline: currentDraft.headline ?? headline,
+            description: currentDraft.description ?? description,
+          });
           const objectStorySpec: Record<string, any> = {
             page_id: pageIdFinal,
             link_data: {
               link: resolvedAdLink,
-              message: String(currentDraft.primaryText || primaryText || ""),
-              name: String(currentDraft.headline || headline || ""),
-              description: String(currentDraft.description || description || ""),
+              message: ownerApprovedCopy.primaryText,
+              name: ownerApprovedCopy.headline,
+              description: ownerApprovedCopy.description,
               call_to_action: {
                 type: (() => {
                   const raw = String(currentDraft.cta || cta || "LEARN_MORE").toUpperCase();
@@ -1078,15 +1113,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           const creativeId = String(metaCreativeJson.id);
 
-          // Once Meta has accepted the creative object, permanently consume
-          // this design even if a later ad-object request fails. Reusing it
-          // after a partial Meta publish would violate the global guarantee.
-          await finalizeCreativeReservation({
-            claimToken: creativeClaimToken,
-            creativeFingerprint: creativeReservations[index]?.creativeFingerprint || "",
-            metaAdId: "",
-            metaCreativeId: creativeId,
-          });
+          // Preserve usage accounting when a reservation exists. A Cove-only
+          // exclusivity conflict is warning-only and therefore has no claim.
+          if (creativeClaimToken && creativeReservations[index]?.creativeFingerprint) {
+            await finalizeCreativeReservation({
+              claimToken: creativeClaimToken,
+              creativeFingerprint: creativeReservations[index].creativeFingerprint,
+              metaAdId: "",
+              metaCreativeId: creativeId,
+            });
+          }
 
           const adParams = new URLSearchParams();
           adParams.set("name", `${safeName} Ad ${index + 1}`);
@@ -1249,6 +1285,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         metaAdId,
         ads: publishedAds,
         adCount: publishedAds.length,
+        policyWarnings,
       });
   } catch (err: any) {
     console.error("[publish-ad] error:", err?.message);

@@ -48,3 +48,12 @@ export function hasRequiredCreativeTreatmentMix(
   if (drafts.length === 1) return hasPhoto;
   return hasPhoto && drafts.some((draft) => !isPhoto(draft));
 }
+
+export function ownerApprovedCreativeMixWarnings(
+  drafts: CreativeCandidate[],
+  photoPoolAvailable: boolean
+): string[] {
+  return hasRequiredCreativeTreatmentMix(drafts, photoPoolAvailable)
+    ? []
+    : ["The selected ad set does not match Cove's preferred photo/graphic treatment mix; owner-approved Meta launch continued."];
+}

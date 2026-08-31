@@ -55,7 +55,8 @@ describe("publish-ad exact-match reuse", () => {
     (releaseLaunchCampaignClaim as jest.Mock).mockResolvedValue(undefined);
   });
 
-  test("blocks a one-ad veteran set when a stale client selected only a graphic treatment", async () => {
+  test("does not let a stale client's one-ad graphic preference veto technical launch validation", async () => {
+    (validateLaunchInput as jest.Mock).mockRejectedValue(new Error("Ad account connection required"));
     const { req, res } = createMocks({
       method: "POST",
       body: {
@@ -83,9 +84,9 @@ describe("publish-ad exact-match reuse", () => {
 
     await handler(req as any, res as any);
 
-    expect(res.statusCode).toBe(409);
-    expect(JSON.parse(res._getData()).error).toContain("required photo/graphic mix");
-    expect(validateLaunchInput).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res._getData()).error).toContain("Nothing was activated");
+    expect(validateLaunchInput).toHaveBeenCalledTimes(1);
   });
 
   test("an exact published fingerprint verifies the live Meta ad set before returning reuse success", async () => {
@@ -102,6 +103,7 @@ describe("publish-ad exact-match reuse", () => {
       pageId: "page-1",
       datasetId: "725252660577483",
       licensedStates: ["AZ"],
+      policyWarnings: [],
       structure: {
         targetingProfile: {
           key: "final_expense:standard",

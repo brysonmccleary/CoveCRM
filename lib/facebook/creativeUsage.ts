@@ -8,6 +8,12 @@ import {
 export const CREATIVE_ALREADY_USED_MESSAGE =
   "That exact ad was just reserved or launched by another agent. Regenerate once to receive a fresh set.";
 
+export function isCreativeExclusivityPolicyError(error: unknown): boolean {
+  const message = String(error instanceof Error ? error.message : error || "");
+  return message.includes(CREATIVE_ALREADY_USED_MESSAGE)
+    || message.includes("A launch set cannot contain the same creative twice");
+}
+
 export type CreativeReservation = {
   creativeFingerprint: string;
   generationSignature: string;

@@ -1150,6 +1150,16 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           {result?.campaignId && (
             <p className="text-xs text-gray-500 mt-2">Campaign ID: {result.campaignId}</p>
           )}
+          {Array.isArray(result?.policyWarnings) && result.policyWarnings.length > 0 && (
+            <div className="mt-4 rounded-lg border border-yellow-700/40 bg-yellow-950/20 p-4">
+              <p className="text-sm font-semibold text-yellow-100">Cove review warnings</p>
+              <ul className="mt-2 space-y-1 text-xs text-yellow-100/80">
+                {result.policyWarnings.map((warning: string, index: number) => (
+                  <li key={`${warning}-${index}`}>• {warning}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {result ? (
             <div className="mt-4 flex flex-wrap gap-2">
               <button

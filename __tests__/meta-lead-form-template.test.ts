@@ -48,12 +48,14 @@ describe("Meta native insurance form templates", () => {
     );
   });
 
-  it("fails closed in production until flexible delivery is explicitly confirmed locked", () => {
-    expect(() => assertNativeFormComplianceMode({ NODE_ENV: "production" } as NodeJS.ProcessEnv)).toThrow(/flexible form delivery/i);
-    expect(() => assertNativeFormComplianceMode({
+  it("reports the production flexible-delivery lock as a Cove warning, not a veto", () => {
+    expect(assertNativeFormComplianceMode({ NODE_ENV: "production" } as NodeJS.ProcessEnv)).toEqual([
+      expect.stringMatching(/flexible form delivery/i),
+    ]);
+    expect(assertNativeFormComplianceMode({
       NODE_ENV: "production",
       META_NATIVE_FORM_FLEXIBLE_DELIVERY_LOCKED: "true",
-    } as NodeJS.ProcessEnv)).not.toThrow();
+    } as NodeJS.ProcessEnv)).toEqual([]);
   });
 
   it("readbacks higher intent and SMS verification before accepting a form", async () => {
@@ -71,6 +73,42 @@ describe("Meta native insurance form templates", () => {
       fetchImpl: fetchImpl as any,
       formUrl: (formId) => `https://graph.facebook.com/v24.0/${formId}`,
     })).resolves.toEqual(expect.objectContaining({ id: "form-1" }));
+  });
+
+  it("keeps accepted forms launchable when Cove quality preferences are absent", async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        id: "form-1",
+        is_optimized_for_quality: false,
+        is_phone_sms_verify_enabled: false,
+      }),
+    });
+    await expect(verifyNativeLeadFormQualitySettings({
+      formId: "form-1",
+      accessToken: "token",
+      fetchImpl: fetchImpl as any,
+      formUrl: (formId) => `https://graph.facebook.com/v24.0/${formId}`,
+    })).resolves.toEqual(expect.objectContaining({
+      id: "form-1",
+      policyWarnings: expect.arrayContaining([
+        expect.stringMatching(/higher-intent/i),
+        expect.stringMatching(/phone\/SMS verification/i),
+      ]),
+    }));
+  });
+
+  it("still blocks when Meta rejects the form readback request", async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({
+      ok: false,
+      json: jest.fn().mockResolvedValue({ error: { message: "Invalid access token" } }),
+    });
+    await expect(verifyNativeLeadFormQualitySettings({
+      formId: "form-1",
+      accessToken: "bad-token",
+      fetchImpl: fetchImpl as any,
+      formUrl: (formId) => `https://graph.facebook.com/v24.0/${formId}`,
+    })).rejects.toThrow(/Meta lead-form verification failed/i);
   });
 
   it("reuses a ready matching form instead of creating a duplicate", async () => {

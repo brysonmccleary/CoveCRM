@@ -56,7 +56,10 @@ export async function validateLaunchInput(params: {
   if (!accessToken || !adAccountId) throw new Error("Ad account connection required");
   if (!pageId) throw new Error("Facebook page connection required");
   const campaignType = String(body.campaignType || "hosted_funnel");
-  if (campaignType === "native_form") assertNativeFormComplianceMode();
+  const policyWarnings: string[] = [];
+  if (campaignType === "native_form") {
+    policyWarnings.push(...assertNativeFormComplianceMode());
+  }
   const datasetId = String(user.metaDatasetId || "").trim();
   if (campaignType !== "native_form" && !datasetId) {
     throw new Error("Website lead campaigns require a connected Meta Pixel/dataset and standard Lead conversion event");
@@ -77,13 +80,18 @@ export async function validateLaunchInput(params: {
   }
 
   const licensedStates = validateStates(body.licensedStates);
-  const winningFamily = validateWinningVariantMetadata({
-    leadType,
-    winningFamilyId: body.winningFamilyId,
-    variationType: body.variationType,
-    uniquenessFingerprint: body.uniquenessFingerprint,
-    vendorStyleTag: body.vendorStyleTag,
-  });
+  let winningFamilyId = String(body.winningFamilyId || "").trim();
+  try {
+    winningFamilyId = validateWinningVariantMetadata({
+      leadType,
+      winningFamilyId: body.winningFamilyId,
+      variationType: body.variationType,
+      uniquenessFingerprint: body.uniquenessFingerprint,
+      vendorStyleTag: body.vendorStyleTag,
+    }).id;
+  } catch (error: any) {
+    policyWarnings.push(`Cove creative-library warning: ${error?.message || "creative metadata was not recognized"}`);
+  }
 
   if (!body.funnelType && !body.landingPageConfig && !body.winnerLandingPageConfig) {
     throw new Error("Funnel required");
@@ -101,12 +109,16 @@ export async function validateLaunchInput(params: {
         imagePrompt: body.imagePrompt,
         templateId: body.winningFamilyId,
       }];
-  assertAllAudienceCreativeMatches({
-    leadType,
-    audienceSegment,
-    creatives: creativesToValidate,
-    landingPageText,
-  });
+  try {
+    assertAllAudienceCreativeMatches({
+      leadType,
+      audienceSegment,
+      creatives: creativesToValidate,
+      landingPageText,
+    });
+  } catch (error: any) {
+    policyWarnings.push(`Cove audience/copy warning: ${error?.message || "creative metadata did not match Cove's regex"}`);
+  }
 
   const structure = buildCampaignStructure({
     campaignName: body.campaignName,
@@ -126,7 +138,7 @@ export async function validateLaunchInput(params: {
       cta: creative?.cta,
       imageUrl: creative?.imageUrl,
       imagePrompt: creative?.imagePrompt,
-      templateId: creative?.templateId || creative?.winningFamilyId || winningFamily.id,
+      templateId: creative?.templateId || creative?.winningFamilyId || winningFamilyId || "owner_approved_meta_creative",
     })),
   });
 
@@ -144,6 +156,7 @@ export async function validateLaunchInput(params: {
     licensedStates,
     audienceSegment,
     structure,
+    policyWarnings: Array.from(new Set(policyWarnings)),
   };
 }
 
@@ -166,6 +179,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ok: true,
       licensedStates: result.licensedStates,
       structure: result.structure,
+      policyWarnings: result.policyWarnings,
     });
   } catch (err: any) {
     return res.status(400).json({ ok: false, error: err?.message || "Launch validation failed" });
