@@ -1,0 +1,128 @@
+.creative { --ink:#071a30; --accent:#e7b544; --red:#a9181b; --paper:#f7f2e9; width:540px; height:675px; position:relative; overflow:hidden; box-sizing:border-box; color:#fff; background:#06192c; font-family:Arial,Helvetica,sans-serif; isolation:isolate; }
+.photo,.overlay,.texture,.frame { position:absolute; inset:0; pointer-events:none; }
+.photo { z-index:-4; background-size:cover; background-position:center; }
+.overlay { z-index:-3; background:linear-gradient(145deg,#041423 0%,#0b2944 100%); }
+.texture { z-index:-2; opacity:.12; background-image:radial-gradient(circle at 10% 12%,#fff 0 1.5px,transparent 2px),radial-gradient(circle at 20% 20%,#fff 0 1px,transparent 1.5px),linear-gradient(155deg,transparent 70%,rgba(0,0,0,.5)); background-size:62px 62px,76px 76px,100% 100%; }
+.frame { z-index:4; inset:8px; border:2px solid var(--accent); }
+.top,.hero,.benefits,.age { position:absolute; box-sizing:border-box; }
+.top { left:28px; right:28px; top:22px; text-align:center; }
+.eyebrow { font-family:Impact,"Arial Narrow Bold",sans-serif; font-size:48px; line-height:.92; letter-spacing:1px; font-weight:900; }
+.headline { margin-top:6px; font-family:Impact,"Arial Narrow Bold",sans-serif; font-size:29px; line-height:.98; letter-spacing:.4px; font-weight:900; }
+.headline div:first-child { color:var(--accent); }
+.subhead { margin-top:8px; font-weight:900; font-size:15px; line-height:1.1; }
+.hero { left:34px; right:34px; top:190px; height:165px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; border-top:1px solid rgba(255,255,255,.65); border-bottom:1px solid rgba(255,255,255,.65); }
+.heroLabel { font-size:16px; line-height:1.08; font-weight:900; max-width:440px; }
+.heroValue { margin-top:5px; font-family:Impact,"Arial Narrow Bold",sans-serif; font-size:82px; line-height:.92; letter-spacing:1px; font-weight:900; white-space:nowrap; }
+.heroValue div { white-space:nowrap; }
+.creative[data-hero-kind="safe"] .heroValue { font-size:48px; line-height:.9; white-space:normal; }
+.benefits { left:28px; right:28px; top:370px; min-height:135px; display:grid; grid-template-columns:repeat(3,1fr); align-items:center; }
+.benefit { height:106px; padding:8px 10px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; gap:7px; font-size:13px; line-height:1.05; font-weight:900; }
+.benefit+.benefit { border-left:1px solid rgba(255,255,255,.55); }
+.benefitIcon { color:var(--accent); font-size:31px; line-height:1; }
+.age { left:24px; right:24px; bottom:21px; height:126px; border-top:1px solid rgba(255,255,255,.65); padding-top:13px; }
+.cta { text-align:center; font-size:16px; font-weight:900; }
+.ageGrid { margin-top:10px; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; }
+.ageOption { min-width:0; height:43px; border:2px solid var(--accent); border-radius:3px; display:flex; align-items:center; justify-content:center; background:rgba(3,17,30,.9); font-size:13px; font-weight:900; white-space:nowrap; }
+.badge { position:absolute; z-index:5; right:14px; bottom:7px; color:rgba(255,255,255,.54); font-size:8px; font-weight:900; letter-spacing:.7px; }
+
+.paper { color:var(--ink); background:var(--paper); }
+.paper .overlay { background:linear-gradient(145deg,#fff 0%,#f3ede2 100%); }
+.paper .texture { opacity:.06; background-image:radial-gradient(circle at 10% 15%,#173450 0 1px,transparent 1.5px); }
+.paper .frame { border-color:#173450; box-shadow:inset 6px 0 0 var(--red); }
+.paper .headline div:first-child,.paper .benefitIcon { color:var(--red); }
+.paper .hero,.paper .age { border-color:#173450; }
+.paper .benefit+.benefit { border-color:#173450; }
+.paper .ageOption { color:var(--ink); background:#f9f5ed; border-color:#173450; }
+.paper .badge { color:rgba(7,26,48,.55); }
+.black { background:#070b0e; }
+.black .overlay { background:linear-gradient(145deg,#05080a,#111a1d); }
+.poster { --accent:#f0be46; }
+.poster .overlay { background:linear-gradient(135deg,#f7f2e9 0 46%,#09223a 46% 100%); }
+.poster { color:#081d34; }
+.poster .top,.poster .hero { color:#081d34; }
+.poster .benefits,.poster .age { color:#fff; }
+.poster .ageOption { color:#fff; }
+.split .overlay { background:linear-gradient(90deg,rgba(4,18,32,.98) 0 56%,rgba(8,39,65,.74) 56% 100%); }
+.imageMode .overlay { background:linear-gradient(180deg,rgba(3,15,27,.8),rgba(3,18,31,.9)); }
+.imageMode.paper .overlay { background:linear-gradient(90deg,rgba(248,244,236,.97) 0 58%,rgba(248,244,236,.68)); }
+.imageMode.split .overlay { background:linear-gradient(90deg,rgba(3,16,28,.98) 0 55%,rgba(3,16,28,.26) 76%,rgba(3,16,28,.48)); }
+.imageMode.poster .overlay { background:linear-gradient(180deg,rgba(246,241,231,.9) 0 46%,rgba(7,29,51,.84) 46% 100%); }
+
+/* 01: accepted board tile 1 geometry */
+.layout-01 .top{top:18px;height:130px}.layout-01 .eyebrow{font-size:54px}.layout-01 .headline{font-size:32px}.layout-01 .subhead{display:none}.layout-01 .hero{top:153px;height:200px}.layout-01 .benefits{top:361px;height:160px}.layout-01 .age{bottom:18px}
+/* 02: light checklist, hero center, red footer */
+.layout-02 .top{top:20px}.layout-02 .eyebrow{font-size:51px}.layout-02 .headline{font-size:43px;color:var(--red)}.layout-02 .subhead{font-size:21px}.layout-02 .hero{top:177px;height:190px;border:0;background:linear-gradient(90deg,#0b2744,#183b5a);color:#fff;border-radius:5px}.layout-02 .benefits{top:380px;display:flex;flex-direction:column;align-items:flex-start;gap:3px}.layout-02 .benefit{height:31px;flex-direction:row;padding:0 52px;font-size:16px}.layout-02 .benefit+.benefit{border:0}.layout-02 .age{left:8px;right:8px;bottom:8px;padding:11px 20px;background:var(--red);color:#fff;border:0}.layout-02 .ageOption{border-color:#fff;background:rgba(120,0,0,.42);color:#fff}
+/* 03: problem box first */
+.layout-03 .eyebrow{font-size:52px}.layout-03 .headline{font-size:25px}.layout-03 .subhead{display:none}.layout-03 .hero{top:138px;height:244px;border:3px solid var(--accent);border-radius:8px;background:rgba(3,16,28,.64)}.layout-03 .heroLabel{max-width:390px;font-size:22px}.layout-03 .heroValue{color:var(--accent);font-size:84px}.layout-03 .benefits{top:395px;height:130px}.layout-03 .age{height:106px;background:linear-gradient(90deg,#e3ad31,#f1ca5a);color:#071a30;padding:17px 24px;border:0}.layout-03 .ageGrid{display:none}.layout-03 .cta{font-size:24px}
+/* 04: editorial white */
+.layout-04 .top{top:22px}.layout-04 .eyebrow{font-size:55px}.layout-04 .headline{font-family:Georgia,serif;font-size:31px;color:var(--red);border-top:2px solid var(--red);border-bottom:2px solid var(--red);padding:7px}.layout-04 .subhead{display:none}.layout-04 .hero{top:180px;height:190px}.layout-04 .heroValue{font-family:Georgia,serif;color:#092744}.layout-04 .benefits{top:386px}.layout-04 .benefitIcon{font-size:40px}.layout-04 .age{background:#092744;color:#fff;left:8px;right:8px;bottom:8px;padding:15px 18px;border:0}.layout-04 .ageOption{color:#fff;background:#0c2d4f;border-color:#fff}
+.layout-04[data-hero-kind="safe"] .heroValue{font-size:42px}
+/* 05: benefits precede the amount */
+.layout-05 .top{top:24px}.layout-05 .eyebrow{color:var(--accent)}.layout-05 .headline{font-size:34px}.layout-05 .subhead{padding:9px;background:var(--accent);color:#071a30;font-size:20px}.layout-05 .benefits{top:210px;height:145px}.layout-05 .hero{top:366px;height:145px}.layout-05 .heroValue{color:var(--accent);font-size:69px}.layout-05 .age{bottom:17px;height:133px}
+/* 06: gratitude headline dominates */
+.layout-06 .top{top:18px}.layout-06 .eyebrow{font-size:54px}.layout-06 .headline{font-family:Arial,sans-serif;font-size:31px;color:var(--red);line-height:1.04}.layout-06 .subhead{font-size:18px}.layout-06 .hero{top:215px;height:155px;background:#092744;color:#fff;border:0;border-radius:4px}.layout-06 .benefits{top:381px}.layout-06 .age{bottom:17px}.layout-06 .heroValue{color:#fff}
+/* 07: copy rides on the right of a fixed image panel */
+.layout-07 .photo{right:57%;background-position:38% center}.layout-07 .overlay{background:linear-gradient(90deg,rgba(3,16,29,.32) 0 40%,rgba(3,16,29,.98) 59%)}.layout-07 .top{left:218px;right:22px;text-align:left;top:32px}.layout-07 .eyebrow{font-size:39px}.layout-07 .headline{font-size:40px}.layout-07 .subhead{margin-top:16px}.layout-07 .hero{left:210px;right:22px;top:240px;height:145px;align-items:flex-start;text-align:left}.layout-07 .heroValue{font-size:58px}.layout-07 .benefits{left:211px;right:24px;top:396px;height:150px;display:flex;flex-direction:column;align-items:flex-start}.layout-07 .benefit{height:33px;flex-direction:row;padding:0;font-size:12px}.layout-07 .benefit+.benefit{border:0}.layout-07 .age{left:22px;right:22px;bottom:18px;height:102px}.layout-07 .ageGrid{margin-top:7px}
+/* 08: benefit grid is central */
+.layout-08 .top{top:25px}.layout-08 .eyebrow{font-size:41px}.layout-08 .headline{font-size:37px}.layout-08 .subhead{color:var(--red);font-size:18px}.layout-08 .benefits{top:205px;height:170px;border-top:1px solid #173450;border-bottom:1px solid #173450}.layout-08 .benefit{height:140px}.layout-08 .hero{top:385px;height:140px;border:0}.layout-08 .heroValue{color:var(--red);font-size:72px}.layout-08 .age{bottom:16px;height:116px}
+/* 09: large amount card on navy */
+.layout-09 .top{top:25px}.layout-09 .eyebrow{font-size:55px}.layout-09 .headline{color:var(--accent);font-size:30px}.layout-09 .subhead{font-size:17px}.layout-09 .hero{top:176px;height:200px;background:rgba(3,14,25,.74);border:2px solid var(--accent);border-radius:7px}.layout-09 .heroValue{font-size:90px}.layout-09 .benefits{top:390px}.layout-09 .age{bottom:16px}
+/* 10: restrained bordered card */
+.layout-10 .frame{inset:12px;border:4px solid #153652;border-left:9px solid #153652;border-right:9px solid var(--red)}.layout-10 .top{top:24px}.layout-10 .eyebrow{font-size:54px}.layout-10 .headline{color:var(--red);font-size:30px}.layout-10 .subhead{font-size:24px;margin-top:20px}.layout-10 .hero{top:205px;height:165px;background:#092744;color:#fff;border:0}.layout-10 .benefits{top:382px}.layout-10 .age{bottom:20px}
+/* 11: checklist with amount last */
+.layout-11 .top{top:27px}.layout-11 .eyebrow{font-size:36px;color:var(--accent)}.layout-11 .headline{font-size:38px}.layout-11 .subhead{font-size:18px}.layout-11 .benefits{top:196px;display:flex;flex-direction:column;align-items:flex-start;padding-left:78px}.layout-11 .benefit{height:36px;flex-direction:row;padding:0;font-size:16px}.layout-11 .benefit+.benefit{border:0}.layout-11 .hero{top:355px;height:164px}.layout-11 .heroValue{color:var(--accent);font-size:77px}.layout-11 .age{bottom:15px}
+/* 12: triad and future security */
+.layout-12 .top{top:25px}.layout-12 .eyebrow{font-size:42px}.layout-12 .headline{font-size:39px;color:var(--red)}.layout-12 .subhead{font-size:18px}.layout-12 .benefits{top:190px;height:170px;border-top:1px solid #173450;border-bottom:1px solid #173450}.layout-12 .hero{top:370px;height:155px}.layout-12 .heroValue{color:var(--red);font-size:77px}.layout-12 .age{bottom:16px}
+/* 13: amount owns the top half */
+.layout-13 .top{top:190px}.layout-13 .eyebrow{font-size:40px}.layout-13 .headline{font-size:24px}.layout-13 .subhead{font-size:14px}.layout-13 .hero{top:28px;height:150px;background:var(--accent);color:#06192c;border:0}.layout-13 .heroLabel{font-size:18px}.layout-13 .heroValue{font-size:93px}.layout-13 .benefits{top:335px;height:170px}.layout-13 .age{bottom:18px}
+/* 14: split hero and stacked amount */
+.layout-14 .top{left:24px;right:260px;top:35px;text-align:left}.layout-14 .eyebrow{font-size:33px}.layout-14 .headline{font-size:35px}.layout-14 .subhead{font-size:16px;margin-top:18px}.layout-14 .hero{left:24px;right:260px;top:250px;height:165px;align-items:flex-start;text-align:left}.layout-14 .heroValue{font-size:54px}.layout-14 .benefits{left:280px;right:22px;top:306px;height:230px;display:flex;flex-direction:column}.layout-14 .benefit{height:60px}.layout-14 .benefit+.benefit{border-left:0;border-top:1px solid rgba(255,255,255,.5)}.layout-14 .age{bottom:20px}
+/* 15: response buttons are the hero */
+.layout-15 .top{top:26px}.layout-15 .eyebrow{font-size:31px}.layout-15 .headline{font-size:44px}.layout-15 .subhead{font-size:16px}.layout-15 .age{left:28px;right:28px;top:205px;bottom:auto;height:178px;background:#092744;padding:20px;color:#fff;border:0}.layout-15 .cta{font-size:27px}.layout-15 .ageGrid{grid-template-columns:repeat(5,1fr);margin-top:20px}.layout-15 .ageOption{height:66px;font-size:14px}.layout-15 .hero{top:398px;height:125px;border:0}.layout-15 .heroValue{font-size:60px;color:var(--red)}.layout-15 .benefits{top:535px;height:100px}.layout-15 .benefit{height:74px;color:#fff}.layout-15 .badge{color:#fff}
+/* 16: family problem at left, answer card at right */
+.layout-16 .top{left:24px;right:250px;top:35px;text-align:left}.layout-16 .eyebrow{font-size:30px}.layout-16 .headline{font-size:35px;color:var(--accent)}.layout-16 .subhead{margin-top:17px}.layout-16 .hero{left:270px;right:22px;top:50px;height:300px;background:rgba(3,16,28,.75);border:2px solid var(--accent);border-radius:7px}.layout-16 .heroValue{font-size:55px}.layout-16 .benefits{top:370px;height:150px}.layout-16 .age{bottom:20px}
+.layout-16[data-hero-kind="safe"] .heroValue{font-size:34px}
+/* 17: notice format */
+.layout-17 .frame{inset:17px;border:5px double #153652}.layout-17 .top{top:42px}.layout-17 .eyebrow{font-family:Arial,sans-serif;font-size:25px;letter-spacing:5px;color:var(--red);border-bottom:5px solid var(--red);padding-bottom:11px}.layout-17 .headline{font-family:Georgia,serif;font-size:38px;margin-top:18px}.layout-17 .subhead{font-size:19px}.layout-17 .hero{top:245px;height:145px;background:#f1e4ca;border:2px solid #173450}.layout-17 .heroValue{font-size:62px}.layout-17 .benefits{top:406px;height:105px}.layout-17 .benefit{height:78px;font-size:12px}.layout-17 .age{bottom:27px;height:112px}
+/* 18: giant vertical product typography */
+.layout-18 .top{left:25px;right:284px;top:34px;text-align:left}.layout-18 .eyebrow{font-size:35px}.layout-18 .headline{font-size:82px;line-height:.75;color:#092744}.layout-18 .subhead{font-size:37px;color:var(--red)}.layout-18 .hero{left:274px;right:24px;top:83px;height:230px;background:#092744;color:#fff;border:0}.layout-18 .heroValue{font-size:52px;color:var(--accent)}.layout-18 .benefits{left:270px;right:24px;top:327px;height:180px;display:flex;flex-direction:column;color:#fff}.layout-18 .benefit{height:48px;flex-direction:row}.layout-18 .benefit+.benefit{border:0}.layout-18 .age{left:16px;right:16px;bottom:16px;color:#fff;background:#092744;padding:17px}.layout-18 .badge{color:#fff}
+/* 19: vertical benefit rail */
+.layout-19 .top{left:24px;right:190px;top:28px;text-align:left}.layout-19 .eyebrow{font-size:33px}.layout-19 .headline{font-size:40px}.layout-19 .subhead{font-size:17px}.layout-19 .hero{left:25px;right:180px;top:225px;height:220px;align-items:flex-start;text-align:left}.layout-19 .heroValue{font-size:68px;color:var(--accent)}.layout-19 .benefits{left:370px;right:20px;top:25px;height:480px;display:flex;flex-direction:column;background:rgba(3,14,25,.72);border-left:2px solid var(--accent);padding:20px 5px}.layout-19 .benefit{height:130px}.layout-19 .benefit+.benefit{border:0;border-top:1px solid rgba(255,255,255,.5)}.layout-19 .age{bottom:18px}
+/* 20: right image with boxed copy */
+.layout-20 .photo{left:53%;background-position:center}.layout-20 .top{left:27px;right:250px;top:35px;text-align:left}.layout-20 .eyebrow{font-size:29px}.layout-20 .headline{font-size:48px;color:var(--accent)}.layout-20 .subhead{font-size:18px}.layout-20 .hero{left:27px;right:250px;top:260px;height:185px;align-items:flex-start;text-align:left;background:rgba(2,14,25,.74);padding:12px;border:2px solid var(--accent)}.layout-20 .heroValue{font-size:55px}.layout-20 .benefits{left:285px;right:22px;top:342px;height:175px}.layout-20 .age{bottom:18px}
+/* 21: cinematic bottom title */
+.layout-21 .top{top:330px;text-align:left}.layout-21 .eyebrow{font-size:34px}.layout-21 .headline{font-size:53px;color:var(--accent)}.layout-21 .subhead{font-size:18px}.layout-21 .hero{top:52px;left:250px;right:27px;height:215px;background:rgba(3,15,27,.74);border:2px solid #fff}.layout-21 .heroValue{font-size:54px}.layout-21 .benefits{top:475px;height:75px}.layout-21 .benefit{height:65px;flex-direction:row}.layout-21 .benefitIcon{font-size:21px}.layout-21 .age{bottom:15px;height:102px}
+/* 22: diagonal patriotic poster */
+.layout-22 .top{top:27px;text-align:left}.layout-22 .eyebrow{font-size:28px;letter-spacing:2px}.layout-22 .headline{font-size:63px;line-height:.83;color:#a9181b}.layout-22 .subhead{font-size:18px}.layout-22 .hero{left:260px;right:26px;top:72px;height:250px;background:#092744;color:#fff;border:0;transform:rotate(-2deg)}.layout-22 .heroValue{font-size:55px;color:var(--accent)}.layout-22 .benefits{top:355px;height:150px;color:#fff}.layout-22 .age{left:15px;right:15px;bottom:15px;color:#fff;background:#a9181b;padding:14px;border:0}.layout-22 .ageOption{border-color:#fff}.layout-22 .badge{color:#fff}
+/* 23: family card inset */
+.layout-23 .top{left:42px;right:42px;top:35px}.layout-23 .eyebrow{font-size:35px;color:var(--red)}.layout-23 .headline{font-family:Georgia,serif;font-size:40px}.layout-23 .subhead{font-size:17px}.layout-23 .hero{left:60px;right:60px;top:225px;height:180px;background:#fff;border:6px double #173450;box-shadow:0 8px 24px rgba(0,0,0,.2)}.layout-23 .heroValue{color:var(--red);font-family:Georgia,serif;font-size:70px}.layout-23 .benefits{top:420px}.layout-23 .age{left:18px;right:18px;bottom:17px;background:#092744;color:#fff;padding:14px;border:0}.layout-23 .ageOption{color:#fff;border-color:#fff;background:#0b2948}.layout-23 .badge{color:#fff}
+/* 24: minimal type with tiny utility rail */
+.layout-24 .frame{border:0}.layout-24 .top{left:42px;right:42px;top:52px;text-align:left}.layout-24 .eyebrow{font-size:28px;color:var(--accent);letter-spacing:5px}.layout-24 .headline{font-size:72px;line-height:.82;margin-top:22px}.layout-24 .subhead{margin-top:18px;font-size:20px}.layout-24 .hero{left:42px;right:42px;top:310px;height:170px;align-items:flex-start;text-align:left;border-top:5px solid var(--accent);border-bottom:0}.layout-24 .heroLabel{font-size:18px}.layout-24 .heroValue{font-size:77px}.layout-24 .benefits{left:42px;right:42px;top:500px;height:60px}.layout-24 .benefit{height:55px;flex-direction:row;padding:3px;font-size:11px}.layout-24 .benefitIcon{font-size:17px}.layout-24 .age{left:42px;right:42px;bottom:20px;height:87px;border:0;padding:0}.layout-24 .ageGrid{display:none}.layout-24 .cta{text-align:left;background:var(--accent);color:#071a30;padding:15px 20px;font-size:21px}
+
+/* Off-production background-treatment layer. Copy-region geometry above remains unchanged. */
+.creative[data-background-treatment="full_bleed_dark_overlay"] .photo{inset:0;opacity:1;background-size:cover}
+.creative[data-background-treatment="full_bleed_dark_overlay"] .overlay{background:linear-gradient(180deg,rgba(2,13,24,.68),rgba(2,14,25,.9))}
+.creative[data-background-treatment="faint_full_background"] .photo{inset:0;opacity:.24;background-size:cover;filter:saturate(.72) contrast(.9)}
+.creative[data-background-treatment="faint_full_background"] .overlay{background:rgba(4,22,38,.72)}
+.creative.paper[data-background-treatment="faint_full_background"] .photo{opacity:.17;filter:grayscale(.25) saturate(.65)}
+.creative.paper[data-background-treatment="faint_full_background"] .overlay{background:rgba(248,244,236,.84)}
+.creative[data-background-treatment="left_image_gradient"] .photo{inset:0 42% 0 0;opacity:1;background-size:cover}
+.creative[data-background-treatment="left_image_gradient"] .overlay{background:linear-gradient(90deg,rgba(3,16,29,.08) 0 31%,rgba(3,16,29,.82) 49%,rgba(3,16,29,.98) 64%)}
+.creative[data-background-treatment="right_image_gradient"] .photo{inset:0 0 0 42%;opacity:1;background-size:cover}
+.creative[data-background-treatment="right_image_gradient"] .overlay{background:linear-gradient(90deg,rgba(3,16,29,.98) 0 36%,rgba(3,16,29,.82) 53%,rgba(3,16,29,.08) 72%)}
+.creative[data-background-treatment="split_background"] .photo{inset:0 0 0 56%;opacity:1;background-size:cover}
+.creative[data-background-treatment="split_background"] .overlay{background:linear-gradient(90deg,#06192c 0 52%,rgba(6,25,44,.78) 59%,rgba(6,25,44,.13) 76%)}
+.creative[data-background-treatment="hero_protected_background"] .photo{inset:0;opacity:.82;background-size:cover}
+.creative[data-background-treatment="hero_protected_background"] .overlay{background:linear-gradient(180deg,rgba(3,16,28,.55),rgba(3,16,28,.78))}
+.creative[data-background-treatment="hero_protected_background"] .hero{background:rgba(2,14,25,.91);border:2px solid var(--accent);box-shadow:0 10px 30px rgba(0,0,0,.35);padding:10px}
+.creative[data-background-treatment="patriotic_texture"] .photo{inset:0;opacity:.19;background-size:cover;filter:grayscale(.35) saturate(.8) contrast(1.05)}
+.creative[data-background-treatment="patriotic_texture"] .overlay{background:linear-gradient(135deg,rgba(4,21,37,.8),rgba(8,42,70,.86))}
+.creative[data-background-treatment="patriotic_texture"] .texture{opacity:.25;background-image:radial-gradient(circle at 10% 12%,#fff 0 1.5px,transparent 2px),linear-gradient(120deg,transparent 0 58%,rgba(174,27,32,.24) 58% 68%,transparent 68%)}
+.creative[data-background-treatment="top_environment_fade"] .photo{inset:0 0 46% 0;opacity:.84;background-size:cover}
+.creative[data-background-treatment="top_environment_fade"] .overlay{background:linear-gradient(180deg,rgba(3,16,28,.1) 0 24%,rgba(3,16,28,.9) 49%,#06192c 66%)}
+.creative.paper[data-background-treatment="left_image_gradient"] .overlay,.creative.paper[data-background-treatment="right_image_gradient"] .overlay,.creative.paper[data-background-treatment="split_background"] .overlay,.creative.paper[data-background-treatment="top_environment_fade"] .overlay{background:linear-gradient(90deg,rgba(248,244,236,.18),rgba(248,244,236,.88) 52%,rgba(248,244,236,.98) 72%)}
+.creative.paper[data-background-treatment="patriotic_texture"] .overlay{background:rgba(248,244,236,.86)}
+.creative.imageMode:not(.paper) .top,.creative.imageMode:not(.paper) .hero,.creative.imageMode:not(.paper) .benefits,.creative.imageMode:not(.paper) .age{color:#fff}
+.creative.imageMode:not(.paper) .headline,.creative.imageMode:not(.paper) .heroValue{text-shadow:0 2px 8px rgba(0,0,0,.85)}
+.creative.imageMode:not(.paper) .heroValue{color:var(--accent)}
+.creative.imageMode:not(.paper).layout-13 .heroValue{color:#06192c;text-shadow:none}

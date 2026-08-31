@@ -21,6 +21,10 @@ import {
   getApprovedTruckerLane,
   selectApprovedTruckerConcepts,
 } from "@/lib/facebook/approvedTruckerCreative";
+import {
+  buildApprovedVeteranLibrary,
+  selectApprovedVeteranConcepts,
+} from "@/lib/facebook/approvedVeteranCreative";
 
 const LEAD_FORM_QUESTIONS = {
   mortgage_protection: [
@@ -240,8 +244,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ ok: false, error: error?.message || "Unsupported audience selection" });
   }
   const approvedTruckerLane = getApprovedTruckerLane(leadType, audienceSegment);
+  const approvedVeteranLane = leadType === "veteran" && audienceSegment === "veteran";
   const requestedVariantCount = Math.min(
-    approvedTruckerLane ? 5 : 4,
+    approvedTruckerLane || approvedVeteranLane ? 5 : 4,
     Math.max(1, Number((req.body as any)?.variantCount) || 3)
   );
   const regenerationAttempt = Math.max(0, Number(regenerationAttemptParam) || 0);
@@ -278,6 +283,80 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ ok: false, error: "dailyBudget must be a finite number >= 5" });
   }
   const dailyBudgetCents = Math.round(budgetDollars * 100);
+
+  if (approvedVeteranLane) {
+    const approvedLibrary = buildApprovedVeteranLibrary();
+    await mongooseConnect();
+    const usedRows = await MetaCreativeUsage.find({
+      variationType: { $in: [...new Set(approvedLibrary.map((concept) => concept.visualConceptId))] },
+      status: { $in: ["draft_reserved", "reserved", "published"] },
+    }).select("variationType -_id").lean();
+    const usedVisualConceptIds = new Set(
+      (usedRows as any[]).map((row) => String(row.variationType || "")).filter(Boolean)
+    );
+    const approvedConcepts = selectApprovedVeteranConcepts({
+      seed: campaignNameSeeded,
+      count: requestedVariantCount,
+      usedVisualConceptIds,
+    });
+    const funnelVariant = selectedVariantsFromLibrary[0];
+    if (!funnelVariant) {
+      return res.status(409).json({ ok: false, error: "The selected Veteran funnel is unavailable." });
+    }
+    const funnelConfig = buildWinningFunnelConfig(funnelVariant);
+    const selectedDrafts = approvedConcepts.map((concept) => {
+      const draft = {
+        leadType,
+        audienceSegment,
+        campaignName,
+        dailyBudgetCents,
+        primaryText: "Private whole life coverage options for veterans and military families. A licensed professional can review available choices.",
+        headline: concept.headline.join(" "),
+        description: "Private coverage review by age.",
+        cta: concept.cta,
+        imagePrompt: "",
+        videoScript: "",
+        buttonLabels: concept.ageOptions,
+        bulletPoints: concept.benefits,
+        creativeArchetype: concept.masterKind,
+        landingPageConfig: {
+          ...funnelConfig,
+          headline: sanitizeCreativeText(funnelConfig.headline, leadType),
+          subheadline: sanitizeCreativeText(funnelConfig.subheadline, leadType),
+          buttonLabels: sanitizeCreativeList(funnelConfig.buttonLabels, leadType),
+          benefitBullets: sanitizeCreativeList(funnelConfig.benefitBullets, leadType),
+          ctaStrip: sanitizeCreativeText(funnelConfig.ctaStrip, leadType),
+        },
+        leadFormQuestions: LEAD_FORM_QUESTIONS[leadType],
+        thankYouPageText: THANK_YOU_TEXT[leadType],
+        winningFamilyId: `vet_approved_${concept.masterId.toLowerCase()}`,
+        variationType: concept.visualConceptId,
+        uniquenessFingerprint: concept.renderFingerprint,
+        generationNonce,
+        regenerationAttempt,
+        visualVariantIndex: Math.max(0, Number(concept.backgroundAssetId?.match(/(\d+)$/)?.[1] || 1) - 1),
+        visualTreatment: concept.backgroundAssetId ? "photo" : "graphic",
+        candidateBatch: 0,
+        vendorStyleTag: `approved_veteran_${concept.imageTreatment}`,
+        displayAmount: "",
+        generatedBy: "approved_veteran_library",
+        copySource: "approved_veteran_library",
+        approvedVeteranConcept: concept,
+      };
+      return {
+        ...draft,
+        creativeSignature: buildCreativeGenerationSignature(draft),
+      };
+    });
+
+    return res.status(200).json({
+      ok: true,
+      draft: selectedDrafts[0],
+      drafts: selectedDrafts,
+      variantCount: selectedDrafts.length,
+      globalLearningHints: {},
+    });
+  }
 
   if (approvedTruckerLane) {
     const approvedLibrary = buildApprovedTruckerLibrary(approvedTruckerLane);
