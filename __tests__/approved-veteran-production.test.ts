@@ -129,6 +129,27 @@ describe("approved Veteran production recovery", () => {
     expect(wizard).not.toContain("Variant: {currentDraft.uniquenessFingerprint}");
   });
 
+  test("keeps all twelve reference-locked tile labels out of customer-facing pixels", () => {
+    const library = buildApprovedVeteranLibrary();
+
+    for (let tile = 1; tile <= 12; tile += 1) {
+      const concept = library.find((candidate) => (
+        candidate.masterKind === "reference_locked"
+        && candidate.referenceTile === tile
+        && candidate.customerEligible
+      ));
+      expect(concept).toBeDefined();
+
+      const markup = renderToStaticMarkup(createElement(ApprovedVeteranCreative, {
+        draft: { approvedVeteranConcept: concept },
+      }));
+      const visibleText = markup.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+
+      expect(visibleText).not.toContain(`REFERENCE-LOCKED · TILE ${String(tile).padStart(2, "0")}`);
+      expect(visibleText).not.toMatch(/REFERENCE-LOCKED|MASTER\s+M\d+|SAFE_MODE|TEST|DEBUG/i);
+    }
+  });
+
   test("locks twelve golden visual identities to the August 29 pixel authority", () => {
     const library = buildApprovedVeteranLibrary();
     expect(VETERAN_AUG29_GOLDEN_VISUALS).toHaveLength(12);

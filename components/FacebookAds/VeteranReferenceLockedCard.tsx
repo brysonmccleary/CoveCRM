@@ -44,6 +44,5 @@ export function VeteranReferenceLockedCard({ preview }: { preview: VeteranRefere
       <div className={styles.cta}>{preview.cta}</div>
       <div className={styles.ageGrid}>{preview.ageOptions.map((option)=><div className={styles.ageOption} data-reference-age-option="true" key={option}>{option}</div>)}</div>
     </section>
-    <div className={styles.lockBadge}>REFERENCE-LOCKED · TILE {String(preview.referenceTile).padStart(2,"0")}</div>
   </div>;
 }
