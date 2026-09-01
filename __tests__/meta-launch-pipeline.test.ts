@@ -240,4 +240,53 @@ describe("Meta launch identity, budget, targeting, and verification", () => {
       },
     })).toThrow("promoted_object.pixel_id");
   });
+
+  describe("attribution read-back normalization", () => {
+    const expectedTargeting = buildMetaStateTargeting(["AZ"]);
+    const nativeAttribution = [
+      { event_type: "CLICK_THROUGH", window_days: 1 },
+      { event_type: "VIEW_THROUGH", window_days: 0 },
+    ];
+    const hostedAttribution = [
+      { event_type: "CLICK_THROUGH", window_days: 7 },
+      { event_type: "VIEW_THROUGH", window_days: 1 },
+    ];
+    const verifyAttribution = (actualAttribution: Array<Record<string, unknown>>, expectedAttribution = nativeAttribution) => assertMetaAdsetMatches({
+      actual: { daily_budget: "500", targeting: expectedTargeting, attribution_spec: actualAttribution },
+      expectedDailyBudgetCents: 500,
+      expectedTargeting,
+      expected: { attributionSpec: expectedAttribution },
+    });
+
+    test("accepts Meta omitting only the native zero-day view entry", () => {
+      expect(() => verifyAttribution([
+        { event_type: "CLICK_THROUGH", window_days: 1 },
+      ])).not.toThrow();
+    });
+
+    test("accepts Meta explicitly returning native one-day click and zero-day view", () => {
+      expect(() => verifyAttribution(nativeAttribution)).not.toThrow();
+    });
+
+    test("rejects a non-zero native view window", () => {
+      expect(() => verifyAttribution([
+        { event_type: "CLICK_THROUGH", window_days: 1 },
+        { event_type: "VIEW_THROUGH", window_days: 1 },
+      ])).toThrow("attribution_spec");
+    });
+
+    test("rejects a wrong or missing native click window", () => {
+      expect(() => verifyAttribution([
+        { event_type: "CLICK_THROUGH", window_days: 7 },
+      ])).toThrow("attribution_spec");
+      expect(() => verifyAttribution([])).toThrow("attribution_spec");
+    });
+
+    test("keeps hosted seven-day click and one-day view verification unchanged", () => {
+      expect(() => verifyAttribution(hostedAttribution, hostedAttribution)).not.toThrow();
+      expect(() => verifyAttribution([
+        { event_type: "CLICK_THROUGH", window_days: 7 },
+      ], hostedAttribution)).toThrow("attribution_spec");
+    });
+  });
 });

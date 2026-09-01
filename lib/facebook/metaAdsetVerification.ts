@@ -96,6 +96,19 @@ function normalizedAttribution(value: unknown) {
   })).sort((a, b) => `${a.event_type}:${a.window_days}`.localeCompare(`${b.event_type}:${b.window_days}`));
 }
 
+function normalizedAttributionReadback(actualValue: unknown, expectedValue: unknown) {
+  const actual = normalizedAttribution(actualValue);
+  const expected = normalizedAttribution(expectedValue);
+  const nativeZeroDayView = JSON.stringify(expected) === JSON.stringify(normalizedAttribution([
+    { event_type: "CLICK_THROUGH", window_days: 1 },
+    { event_type: "VIEW_THROUGH", window_days: 0 },
+  ]));
+  if (nativeZeroDayView && !actual.some((item) => item.event_type === "VIEW_THROUGH")) {
+    return normalizedAttribution([...actual, { event_type: "VIEW_THROUGH", window_days: 0 }]);
+  }
+  return actual;
+}
+
 export function assertMetaAdsetMatches(input: {
   actual: any;
   expectedDailyBudgetCents: number;
@@ -172,7 +185,7 @@ export function assertMetaAdsetMatches(input: {
       }
     }
   }
-  if (expected.attributionSpec && JSON.stringify(normalizedAttribution(expected.attributionSpec)) !== JSON.stringify(normalizedAttribution(input.actual?.attribution_spec))) {
+  if (expected.attributionSpec && JSON.stringify(normalizedAttribution(expected.attributionSpec)) !== JSON.stringify(normalizedAttributionReadback(input.actual?.attribution_spec, expected.attributionSpec))) {
     throw new Error(`Meta ad set verification failed: attribution_spec expected ${JSON.stringify(normalizedAttribution(expected.attributionSpec))}, got ${JSON.stringify(normalizedAttribution(input.actual?.attribution_spec))}`);
   }
 }
