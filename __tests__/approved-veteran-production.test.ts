@@ -8,12 +8,16 @@ import handler from "@/pages/api/facebook/generate-ad";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
 import { loadGlobalGenerationHints } from "@/lib/facebook/globalIntelligence/anonymizedLearning";
 import {
+  AUG29_APPROVED_VETERAN_EXECUTION_IDS,
   auditApprovedVeteranRuntime,
   buildApprovedVeteranLibrary,
+  hasVeteranCustomerVisibleInternalLabel,
   isOwnerSelectableVeteranExecution,
   OWNER_REJECTED_VETERAN_EXECUTION_IDS,
   selectApprovedVeteranConcepts,
+  VETERAN_PIXEL_QA_REJECTED_EXECUTION_IDS,
 } from "@/lib/facebook/approvedVeteranCreative";
+import { VETERAN_AUG29_GOLDEN_VISUALS } from "@/lib/facebook/veteranGoldenVisualAuthority";
 
 jest.mock("next-auth/next", () => ({ getServerSession: jest.fn() }));
 jest.mock("@/pages/api/auth/[...nextauth]", () => ({ authOptions: {} }));
@@ -46,17 +50,19 @@ describe("approved Veteran production recovery", () => {
       literalReplicaCount: 12,
       imageCount: 40,
       backgroundTreatmentCount: 8,
-      customerEligibleCount: 1005,
-      ownerSelectableCount: 1002,
-      visualConceptCount: 817,
-      eligibleMasterCount: 48,
+      customerEligibleCount: 94,
+      ownerSelectableCount: 94,
+      visualConceptCount: 93,
+      eligibleMasterCount: 40,
       failedEligibleGates: [],
     });
-    expect(audit.customerEligibleImageShare).toBeCloseTo(0.604, 3);
+    expect(audit.customerEligibleImageShare).toBeCloseTo(61 / 94, 3);
     const library = buildApprovedVeteranLibrary();
     expect(library).toHaveLength(1440);
-    expect(library.filter((concept) => concept.customerEligible && concept.backgroundAssetId)).toHaveLength(607);
-    expect(library.filter((concept) => concept.customerEligible && !concept.backgroundAssetId)).toHaveLength(398);
+    expect(library.filter((concept) => concept.customerEligible && concept.backgroundAssetId)).toHaveLength(61);
+    expect(library.filter((concept) => concept.customerEligible && !concept.backgroundAssetId)).toHaveLength(33);
+    expect(library.filter((concept) => concept.customerEligible).every((concept) => AUG29_APPROVED_VETERAN_EXECUTION_IDS.includes(concept.executionId as any))).toBe(true);
+    expect(library.filter((concept) => concept.customerEligible).some(hasVeteranCustomerVisibleInternalLabel)).toBe(false);
   });
 
   test.each([3, 5])("allocates an owner-approved, diverse %i-ad Veteran batch", (count) => {
@@ -69,6 +75,7 @@ describe("approved Veteran production recovery", () => {
     expect(new Set(batch.filter((concept) => concept.backgroundAssetId).map((concept) => concept.imageTreatment)).size).toBe(Math.ceil(count * 0.6));
     expect(batch.every((concept) => (
       isOwnerSelectableVeteranExecution(concept)
+      && concept.heroAmount !== null
       && !OWNER_REJECTED_VETERAN_EXECUTION_IDS.includes(concept.executionId as any)
       && Object.values(concept.visualQuality).every((value) => value !== "FAIL")
     ))).toBe(true);
@@ -76,9 +83,9 @@ describe("approved Veteran production recovery", () => {
 
   test("permanently excludes every owner-rejected execution and preserves history exclusion", () => {
     const library = buildApprovedVeteranLibrary();
-    for (const executionId of OWNER_REJECTED_VETERAN_EXECUTION_IDS) {
+    for (const executionId of [...OWNER_REJECTED_VETERAN_EXECUTION_IDS, ...VETERAN_PIXEL_QA_REJECTED_EXECUTION_IDS]) {
       const rejected = library.find((concept) => concept.executionId === executionId);
-      expect(rejected?.customerEligible).toBe(true);
+      expect(rejected?.customerEligible).toBe(false);
       expect(rejected && isOwnerSelectableVeteranExecution(rejected)).toBe(false);
     }
     const first = selectApprovedVeteranConcepts({ seed: "owner-allocation-one", count: 5 });
@@ -90,23 +97,27 @@ describe("approved Veteran production recovery", () => {
     expect(second.some((concept) => first.some((prior) => prior.visualConceptId === concept.visualConceptId))).toBe(false);
   });
 
-  test("VET_M13 renders every approved amount with the existing high-contrast image treatment", () => {
+  test("VET_M13 preserves the approved amount execution with the high-contrast image treatment", () => {
     const library = buildApprovedVeteranLibrary();
     const css = readFileSync("styles/Veteran24MasterReview.module.css", "utf8");
     expect(css).toContain(".creative.imageMode:not(.paper) .headline,.creative.imageMode:not(.paper) .heroValue{text-shadow:0 2px 8px rgba(0,0,0,.85)}");
     expect(css).toContain(".creative.imageMode:not(.paper) .heroValue{color:var(--accent)}");
     expect(css).not.toContain(".creative.imageMode:not(.paper).layout-13 .heroValue{color:#06192c;text-shadow:none}");
-    for (const amount of [40_000, 50_000, 100_000] as const) {
-      const concept = library.find((candidate) => (
-        candidate.masterId === "VET_M13"
-        && candidate.heroAmount === amount
-        && Boolean(candidate.backgroundAssetId)
-        && isOwnerSelectableVeteranExecution(candidate)
-      ));
-      expect(concept).toBeDefined();
-      const markup = renderToStaticMarkup(createElement(ApprovedVeteranCreative, { draft: { approvedVeteranConcept: concept } }));
-      expect(markup).toContain("data-hero-kind=\"amount\"");
-      expect(markup).toContain(`$${amount.toLocaleString("en-US")}`);
+    const concept = library.find((candidate) => candidate.executionId === "VET_M13_EXEC_002");
+    expect(concept && isOwnerSelectableVeteranExecution(concept)).toBe(true);
+    const markup = renderToStaticMarkup(createElement(ApprovedVeteranCreative, { draft: { approvedVeteranConcept: concept } }));
+    expect(markup).toContain("data-hero-kind=\"amount\"");
+    expect(markup).toContain("$50,000");
+  });
+
+  test("locks twelve golden visual identities to the August 29 pixel authority", () => {
+    const library = buildApprovedVeteranLibrary();
+    expect(VETERAN_AUG29_GOLDEN_VISUALS).toHaveLength(12);
+    for (const golden of VETERAN_AUG29_GOLDEN_VISUALS) {
+      const concept = library.find((candidate) => candidate.executionId === golden.executionId);
+      expect(concept).toMatchObject(golden);
+      expect(concept?.customerEligible).toBe(true);
+      expect(concept && hasVeteranCustomerVisibleInternalLabel(concept)).toBe(false);
     }
   });
 

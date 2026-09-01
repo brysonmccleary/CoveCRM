@@ -972,7 +972,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
               CoveCRM launches multiple ad versions inside one campaign. Facebook may spend more on the ad people respond to best. CoveCRM tracks each version and will notify you when one looks like a winner or loser.
             </p>
 	            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-	              {VARIANT_COUNT_OPTIONS.map((option) => (
+            {[...VARIANT_COUNT_OPTIONS, ...(mainCategory === "veteran" ? [{ value: 5, label: "Full Test" }] : [])].map((option) => (
 	                <button
 	                  key={option.value}
 	                  type="button"

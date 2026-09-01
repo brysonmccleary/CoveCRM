@@ -116,6 +116,69 @@ export const OWNER_REJECTED_VETERAN_EXECUTION_IDS = [
   "VET_M18_EXEC_024",
 ] as const;
 const ownerRejectedVeteranExecutionIds = new Set<string>(OWNER_REJECTED_VETERAN_EXECUTION_IDS);
+export const VETERAN_PIXEL_QA_REJECTED_EXECUTION_IDS = [
+  "VET_M01_EXEC_003",
+  "VET_M01_EXEC_024",
+  "VET_M07_EXEC_014",
+  "VET_M20_EXEC_015",
+  "VET_M21_EXEC_010",
+  "VET_M22_EXEC_007",
+  "VET_M22_EXEC_010",
+  "VET_M22_EXEC_013",
+  "VET_M22_EXEC_024",
+  "VET_M24_EXEC_010",
+  "VET_M24_EXEC_017",
+  "VET_M24_EXEC_026",
+  "VET_REF_08_EXEC_018",
+] as const;
+const veteranPixelQaRejectedExecutionIds = new Set<string>(VETERAN_PIXEL_QA_REJECTED_EXECUTION_IDS);
+
+// Pixel authority: these are the exact customer-safe executions rendered in the
+// final August 29 Veteran review sheets, including the final hero-contrast QA.
+// Review-only permutations must never be made selectable merely because their
+// metadata passes an automated gate.
+export const AUG29_APPROVED_VETERAN_EXECUTION_IDS = [
+  "VET_M01_EXEC_002", "VET_M01_EXEC_003", "VET_M01_EXEC_013", "VET_M01_EXEC_017",
+  "VET_M01_EXEC_018", "VET_M01_EXEC_023", "VET_M01_EXEC_024", "VET_M01_EXEC_026",
+  "VET_M02_EXEC_015", "VET_M02_EXEC_026", "VET_M04_EXEC_019",
+  "VET_M05_EXEC_002", "VET_M05_EXEC_029", "VET_M06_EXEC_003", "VET_M06_EXEC_008",
+  "VET_M07_EXEC_014", "VET_M07_EXEC_017", "VET_M08_EXEC_008", "VET_M08_EXEC_023",
+  "VET_M08_EXEC_026", "VET_M09_EXEC_010", "VET_M10_EXEC_007", "VET_M10_EXEC_014",
+  "VET_M10_EXEC_017", "VET_M10_EXEC_023", "VET_M11_EXEC_013", "VET_M12_EXEC_019",
+  "VET_M13_EXEC_002", "VET_M13_EXEC_025", "VET_M13_EXEC_029", "VET_M14_EXEC_001",
+  "VET_M14_EXEC_010", "VET_M14_EXEC_026", "VET_M15_EXEC_007", "VET_M15_EXEC_025",
+  "VET_M16_EXEC_009", "VET_M16_EXEC_017", "VET_M17_EXEC_019", "VET_M18_EXEC_001",
+  "VET_M18_EXEC_013", "VET_M19_EXEC_007", "VET_M19_EXEC_009", "VET_M19_EXEC_014",
+  "VET_M19_EXEC_017", "VET_M20_EXEC_013", "VET_M20_EXEC_014", "VET_M20_EXEC_015",
+  "VET_M20_EXEC_024", "VET_M21_EXEC_001", "VET_M21_EXEC_010", "VET_M21_EXEC_017",
+  "VET_M21_EXEC_025", "VET_M21_EXEC_026", "VET_M22_EXEC_007", "VET_M22_EXEC_010",
+  "VET_M22_EXEC_013", "VET_M22_EXEC_024", "VET_M23_EXEC_001", "VET_M23_EXEC_002",
+  "VET_M23_EXEC_009", "VET_M23_EXEC_025", "VET_M23_EXEC_026", "VET_M24_EXEC_010",
+  "VET_M24_EXEC_017", "VET_M24_EXEC_026", "VET_REF_01_EXEC_007", "VET_REF_01_EXEC_029",
+  "VET_REF_02_EXEC_019", "VET_REF_03_EXEC_001", "VET_REF_03_EXEC_008", "VET_REF_03_EXEC_025",
+  "VET_REF_04_EXEC_019", "VET_REF_05_EXEC_007", "VET_REF_05_EXEC_009", "VET_REF_05_EXEC_029",
+  "VET_REF_06_EXEC_019", "VET_REF_07_EXEC_015", "VET_REF_08_EXEC_007", "VET_REF_08_EXEC_018",
+  "VET_REF_08_EXEC_025", "VET_REF_09_EXEC_007", "VET_REF_09_EXEC_029", "VET_REF_10_EXEC_009",
+  "VET_REF_10_EXEC_019", "VET_REF_10_EXEC_026", "VET_REF_11_EXEC_001", "VET_REF_11_EXEC_008",
+  "VET_REF_11_EXEC_013", "VET_REF_11_EXEC_015", "VET_REF_11_EXEC_023", "VET_REF_12_EXEC_010",
+  "VET_REF_12_EXEC_019", "VET_REF_12_EXEC_026", "VET_REPLICA_01_EXEC_002",
+  "VET_REPLICA_01_EXEC_023", "VET_REPLICA_01_EXEC_030", "VET_REPLICA_02_EXEC_002",
+  "VET_REPLICA_02_EXEC_008", "VET_REPLICA_03_EXEC_024", "VET_REPLICA_07_EXEC_026",
+  "VET_REPLICA_07_EXEC_029", "VET_REPLICA_09_EXEC_003", "VET_REPLICA_09_EXEC_010",
+  "VET_REPLICA_09_EXEC_018", "VET_REPLICA_10_EXEC_025", "VET_REPLICA_12_EXEC_013",
+  "VET_REPLICA_12_EXEC_017",
+] as const;
+const aug29ApprovedVeteranExecutionIds = new Set<string>(AUG29_APPROVED_VETERAN_EXECUTION_IDS);
+
+const CUSTOMER_VISIBLE_INTERNAL_LABEL = /(?:\bTEST\b|TEST_CAPABILITY|SAFE[_ ]MODE|PENDING[_ ]REVIEW|NOT DEPLOYED|PLACEHOLDER|\bDEBUG\b|\bMOCK\b)/i;
+
+export function veteranCustomerVisibleCopy(execution: Pick<ApprovedVeteranConcept, "headline" | "heroContent" | "benefits" | "cta" | "ageOptions">) {
+  return [...execution.headline, ...execution.heroContent, ...execution.benefits, execution.cta, ...execution.ageOptions].join(" ");
+}
+
+export function hasVeteranCustomerVisibleInternalLabel(execution: Pick<ApprovedVeteranConcept, "headline" | "heroContent" | "benefits" | "cta" | "ageOptions">) {
+  return CUSTOMER_VISIBLE_INTERNAL_LABEL.test(veteranCustomerVisibleCopy(execution));
+}
 
 function fnv(text: string, seed = 2166136261) {
   let hash = seed >>> 0;
@@ -394,7 +457,10 @@ function roundRobinTake(values: ApprovedVeteranConcept[], count: number, seed: s
     groups.set(key, list);
   }
   const keys = [...groups.keys()].sort((left, right) => fnv(`${seed}:${left}`).localeCompare(fnv(`${seed}:${right}`)));
-  for (const [key, list] of groups) list.sort((left, right) => fnv(`${seed}:${key}:${left.executionId}`).localeCompare(fnv(`${seed}:${key}:${right.executionId}`)));
+  for (const [key, list] of groups) list.sort((left, right) => (
+    Number(right.heroAmount !== null) - Number(left.heroAmount !== null)
+    || fnv(`${seed}:${key}:${left.executionId}`).localeCompare(fnv(`${seed}:${key}:${right.executionId}`))
+  ));
   const selected: ApprovedVeteranConcept[] = [];
   let round = 0;
   while (selected.length < count) {
@@ -423,27 +489,17 @@ export function buildApprovedVeteranLibrary() {
       classified.push({ ...execution, ...classify(execution), customerEligible: false });
     }
   }
-  const quality = classified.filter(execution => execution.eligibilityReasons.length === 0);
-  const images = roundRobinTake(
-    quality.filter(execution => execution.selectionStyleCategory === "image_backed_direct_response" && !isApprovedVeteranLightExecution(execution)),
-    607,
-    "VET-ELIGIBLE-IMAGE",
-    execution => `${execution.backgroundAssetId}:${execution.imageTreatment}`,
-  );
-  const lights = roundRobinTake(
-    quality.filter(execution => execution.selectionStyleCategory === "pure_graphic" && isApprovedVeteranLightExecution(execution)),
-    16,
-    "VET-ELIGIBLE-LIGHT",
-  );
-  const dark = roundRobinTake(
-    quality.filter(execution => execution.selectionStyleCategory === "pure_graphic" && !isApprovedVeteranLightExecution(execution)),
-    1005 - images.length - lights.length,
-    "VET-ELIGIBLE-DARK",
-  );
-  const eligibleIds = new Set([...images, ...lights, ...dark].map(execution => execution.executionId));
   for (const execution of classified) {
-    execution.customerEligible = eligibleIds.has(execution.executionId);
-    if (!execution.customerEligible && execution.eligibilityReasons.length === 0) execution.eligibilityReasons.push("DEPRIORITIZED_TO_BALANCE_CUSTOMER_MIX");
+    execution.customerEligible = aug29ApprovedVeteranExecutionIds.has(execution.executionId)
+      && execution.eligibilityReasons.length === 0
+      && !hasVeteranCustomerVisibleInternalLabel(execution)
+      && !ownerRejectedVeteranExecutionIds.has(execution.executionId)
+      && !veteranPixelQaRejectedExecutionIds.has(execution.executionId);
+    if (!execution.customerEligible && execution.eligibilityReasons.length === 0) {
+      execution.eligibilityReasons.push(hasVeteranCustomerVisibleInternalLabel(execution)
+        ? "CUSTOMER_VISIBLE_INTERNAL_LABEL"
+        : "NOT_IN_AUG29_FINAL_PIXEL_AUTHORITY");
+    }
   }
   return classified;
 }
@@ -474,7 +530,8 @@ export function selectApprovedVeteranConcepts({
     isOwnerSelectableVeteranExecution(execution)
     && !usedVisualConceptIds.has(execution.visualConceptId)
   );
-  const imageValues = eligible.filter(execution => execution.selectionStyleCategory === "image_backed_direct_response");
+  const imageValues = eligible.filter(execution => execution.selectionStyleCategory === "image_backed_direct_response" && execution.heroAmount !== null);
+  const pureGraphicValues = eligible.filter(execution => execution.selectionStyleCategory === "pure_graphic" && execution.heroAmount !== null);
   const pools: Record<ApprovedVeteranConcept["selectionStyleCategory"], ApprovedVeteranConcept[]> = {
     image_backed_direct_response: roundRobinTake(
       imageValues,
@@ -483,7 +540,7 @@ export function selectApprovedVeteranConcepts({
       execution => execution.backgroundAssetId || execution.masterId,
     ),
     pure_graphic: shuffled(
-      eligible.filter(execution => execution.selectionStyleCategory === "pure_graphic"),
+      pureGraphicValues,
       `${seed}:veteran:pure_graphic`,
     ),
   };
