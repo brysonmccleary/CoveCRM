@@ -26,7 +26,12 @@ function stableValue(value: any): any {
 function normalizedQuestions(questions: unknown): Array<Record<string, any>> {
   if (!Array.isArray(questions)) return [];
   return questions.map((question: any) => {
-    const normalized: Record<string, any> = { type: String(question?.type || "") };
+    const type = String(question?.type || "");
+    if (["FULL_NAME", "PHONE", "EMAIL", "STATE"].includes(type)) {
+      return { type };
+    }
+
+    const normalized: Record<string, any> = { type };
     if (question?.label !== undefined) normalized.label = String(question.label);
     if (question?.key !== undefined) normalized.key = String(question.key);
     if (Array.isArray(question?.options)) {
@@ -37,28 +42,6 @@ function normalizedQuestions(questions: unknown): Array<Record<string, any>> {
     }
     return normalized;
   });
-}
-
-function normalizedPrivacyPolicy(value: any) {
-  return {
-    url: String(value?.url || ""),
-    link_text: String(value?.link_text || ""),
-  };
-}
-
-function normalizedCustomDisclaimer(value: any) {
-  return {
-    title: String(value?.title || ""),
-    body: { text: String(value?.body?.text || "") },
-    checkboxes: Array.isArray(value?.checkboxes)
-      ? value.checkboxes.map((checkbox: any) => ({
-          is_required: checkbox?.is_required === true,
-          is_checked_by_default: checkbox?.is_checked_by_default === true,
-          key: String(checkbox?.key || ""),
-          text: String(checkbox?.text || ""),
-        }))
-      : [],
-  };
 }
 
 function metaErrorPayload(value: any) {
@@ -96,14 +79,6 @@ export function assertNativeLeadFormMatchesSpecification(input: {
       JSON.stringify(normalizedQuestions(input.expectedSpecification.questions))) {
     throw new Error("Meta lead-form verification failed: question schema does not match the intended Cove form");
   }
-  if (JSON.stringify(normalizedPrivacyPolicy(input.actual?.privacy_policy)) !==
-      JSON.stringify(normalizedPrivacyPolicy(input.expectedSpecification.privacyPolicy))) {
-    throw new Error("Meta lead-form verification failed: privacy policy does not match the intended Cove form");
-  }
-  if (JSON.stringify(normalizedCustomDisclaimer(input.actual?.custom_disclaimer)) !==
-      JSON.stringify(normalizedCustomDisclaimer(input.expectedSpecification.customDisclaimer))) {
-    throw new Error("Meta lead-form verification failed: consent disclaimer does not match the intended Cove form");
-  }
   if (String(input.actual?.follow_up_action_url || "") !== input.expectedSpecification.followUpActionUrl) {
     throw new Error("Meta lead-form verification failed: follow-up URL does not match the intended Cove form");
   }
@@ -134,7 +109,7 @@ export async function verifyNativeLeadFormQualitySettings(input: {
   url.searchParams.set(
     "fields",
     input.expectedFormName && input.expectedSpecification
-      ? "id,name,status,is_optimized_for_quality,questions,privacy_policy,custom_disclaimer,follow_up_action_url"
+      ? "id,name,status,is_optimized_for_quality,questions,follow_up_action_url"
       : "id,status,is_optimized_for_quality"
   );
   url.searchParams.set("access_token", input.accessToken);

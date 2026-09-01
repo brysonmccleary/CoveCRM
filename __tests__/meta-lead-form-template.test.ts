@@ -36,6 +36,53 @@ const specification: NativeLeadFormSpecification = {
   smsVerification: true,
 };
 
+const veteranSpecification: NativeLeadFormSpecification = {
+  ...specification,
+  leadType: "veteran",
+  audienceSegment: "veteran",
+  questions: [
+    { type: "FULL_NAME" },
+    { type: "PHONE" },
+    { type: "EMAIL" },
+    { type: "STATE" },
+    {
+      type: "CUSTOM",
+      key: "age",
+      label: "What is your age range?",
+      options: [
+        { key: "18_39", value: "18-39" },
+        { key: "40_49", value: "40-49" },
+        { key: "50_59", value: "50-59" },
+        { key: "60_69", value: "60-69" },
+        { key: "70_79", value: "70-79" },
+        { key: "80_plus", value: "80+" },
+      ],
+    },
+    {
+      type: "CUSTOM",
+      key: "who_needs_coverage",
+      label: "Who needs coverage?",
+      options: [
+        { key: "veteran", value: "Veteran" },
+        { key: "spouse", value: "Spouse" },
+        { key: "military_family_dependent", value: "Military family / dependent" },
+      ],
+    },
+    {
+      type: "CUSTOM",
+      key: "coverage_amount",
+      label: "How much coverage would you like to review?",
+      options: [
+        { key: "10000_24999", value: "$10,000-$24,999" },
+        { key: "25000_49999", value: "$25,000-$49,999" },
+        { key: "50000_99999", value: "$50,000-$99,999" },
+        { key: "100000_plus", value: "$100,000+" },
+      ],
+    },
+  ],
+  followUpActionUrl: "https://www.covecrm.com/insurance-request-received",
+};
+
 function leanResult(value: any) {
   return { lean: jest.fn().mockResolvedValue(value) };
 }
@@ -52,12 +99,32 @@ describe("Meta native insurance form templates", () => {
       name: "Final Expense Insurance Lead Form",
       status: "ACTIVE",
       is_optimized_for_quality: true,
-      questions: specification.questions,
-      privacy_policy: specification.privacyPolicy,
-      custom_disclaimer: specification.customDisclaimer,
+      questions: [
+        { type: "FULL_NAME", key: "full_name", label: "Full name", id: "generated-full-name-id" },
+        { type: "PHONE", key: "phone_number", label: "Phone number", id: "generated-phone-id" },
+      ],
       follow_up_action_url: specification.followUpActionUrl,
       ...overrides,
     };
+  }
+
+  function veteranFormReadback(overrides: Record<string, any> = {}) {
+    return formReadback({
+      id: "1674879020241223",
+      name: "General Veteran Leads - 49 states Campaign Insurance Lead Form",
+      questions: veteranSpecification.questions.map((question, index) =>
+        question.type === "CUSTOM"
+          ? { ...question, id: `generated-custom-${index}` }
+          : {
+              ...question,
+              key: ["full_name", "phone_number", "email", "state"][index],
+              label: ["Full name", "Phone number", "Email", "State"][index],
+              id: `generated-standard-${index}`,
+            }
+      ),
+      follow_up_action_url: veteranSpecification.followUpActionUrl,
+      ...overrides,
+    });
   }
 
   it("fingerprints the complete deterministic form schema independent of object key order", () => {
@@ -150,6 +217,59 @@ describe("Meta native insurance form templates", () => {
       id: "form-1",
       policyWarnings: expect.arrayContaining([expect.stringMatching(/does not support phone\/SMS verification readback/i)]),
     }));
+    const requiredReadbackUrl = new URL(String(fetchImpl.mock.calls[0][0]));
+    expect(requiredReadbackUrl.searchParams.get("fields")).toBe(
+      "id,name,status,is_optimized_for_quality,questions,follow_up_action_url"
+    );
+    expect(requiredReadbackUrl.searchParams.get("fields")).not.toMatch(/privacy_policy|custom_disclaimer/);
+  });
+
+  it("ignores generated key, label, and ID metadata for standard Meta questions", () => {
+    expect(() => assertNativeLeadFormMatchesSpecification({
+      actual: formReadback(),
+      expectedFormId: "form-1",
+      expectedFormName: "Final Expense Insurance Lead Form",
+      expectedSpecification: specification,
+    })).not.toThrow();
+  });
+
+  it("still rejects a real standard Meta question type mismatch", () => {
+    expect(() => assertNativeLeadFormMatchesSpecification({
+      actual: formReadback({
+        questions: [
+          { type: "FULL_NAME", key: "full_name", label: "Full name" },
+          { type: "EMAIL", key: "phone_number", label: "Phone number" },
+        ],
+      }),
+      expectedFormId: "form-1",
+      expectedFormName: "Final Expense Insurance Lead Form",
+      expectedSpecification: specification,
+    })).toThrow(/question schema/i);
+  });
+
+  it("keeps matching custom question schema strict while ignoring Meta-generated IDs", () => {
+    expect(() => assertNativeLeadFormMatchesSpecification({
+      actual: veteranFormReadback(),
+      expectedFormId: "1674879020241223",
+      expectedFormName: "General Veteran Leads - 49 states Campaign Insurance Lead Form",
+      expectedSpecification: veteranSpecification,
+    })).not.toThrow();
+  });
+
+  it.each([
+    ["key", { key: "different_age" }],
+    ["label", { label: "Different age question" }],
+    ["options", { options: [{ key: "different", value: "Different" }] }],
+  ])("rejects a custom question %s mismatch", (_field, mismatch) => {
+    const questions = veteranFormReadback().questions.map((question: any) =>
+      question.key === "age" ? { ...question, ...mismatch } : question
+    );
+    expect(() => assertNativeLeadFormMatchesSpecification({
+      actual: veteranFormReadback({ questions }),
+      expectedFormId: "1674879020241223",
+      expectedFormName: "General Veteran Leads - 49 states Campaign Insurance Lead Form",
+      expectedSpecification: veteranSpecification,
+    })).toThrow(/question schema/i);
   });
 
   it("still blocks when Meta rejects the form readback request", async () => {
@@ -260,6 +380,82 @@ describe("Meta native insurance form templates", () => {
     })).resolves.toEqual(expect.objectContaining({ formId: "form-1" }));
   });
 
+  it("recovers the current live Veteran form from its captured readable Meta response", async () => {
+    const formName = "General Veteran Leads - 49 states Campaign Insurance Lead Form";
+    const fetchImpl = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ data: [{ id: "1674879020241223", name: formName, status: "ACTIVE" }] }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: jest.fn().mockResolvedValue(veteranFormReadback()) })
+      .mockResolvedValueOnce({
+        ok: false,
+        json: jest.fn().mockResolvedValue({
+          error: { code: 100, message: "(#100) Tried accessing nonexisting field (is_phone_sms_verify_enabled)" },
+        }),
+      });
+
+    await expect(recoverExactNativeLeadForm({
+      pageId: "1230981476765824",
+      formName,
+      expectedFingerprint: buildNativeLeadFormFingerprint(veteranSpecification),
+      specification: veteranSpecification,
+      accessToken: "token",
+      fetchImpl: fetchImpl as any,
+      pageFormsUrl: (pageId) => `https://graph.facebook.com/v21.0/${pageId}/leadgen_forms`,
+      formUrl: (formId) => `https://graph.facebook.com/v21.0/${formId}`,
+    })).resolves.toEqual(expect.objectContaining({ formId: "1674879020241223" }));
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/1230981476765824/leadgen_forms");
+  });
+
+  it("rejects two genuinely matching duplicate candidates as ambiguous", async () => {
+    const formName = "General Veteran Leads - 49 states Campaign Insurance Lead Form";
+    const fetchImpl = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({
+          data: [
+            { id: "1674879020241223", name: formName },
+            { id: "second-form", name: formName },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: jest.fn().mockResolvedValue(veteranFormReadback()) })
+      .mockResolvedValueOnce({ ok: false, json: jest.fn().mockResolvedValue({ error: { code: 100, message: "nonexisting field (is_phone_sms_verify_enabled)" } }) })
+      .mockResolvedValueOnce({ ok: true, json: jest.fn().mockResolvedValue(veteranFormReadback({ id: "second-form" })) })
+      .mockResolvedValueOnce({ ok: false, json: jest.fn().mockResolvedValue({ error: { code: 100, message: "nonexisting field (is_phone_sms_verify_enabled)" } }) });
+
+    await expect(recoverExactNativeLeadForm({
+      pageId: "1230981476765824",
+      formName,
+      expectedFingerprint: buildNativeLeadFormFingerprint(veteranSpecification),
+      specification: veteranSpecification,
+      accessToken: "token",
+      fetchImpl: fetchImpl as any,
+      pageFormsUrl: (pageId) => `https://graph.facebook.com/v21.0/${pageId}/leadgen_forms`,
+      formUrl: (formId) => `https://graph.facebook.com/v21.0/${formId}`,
+    })).rejects.toThrow(/found 2/i);
+  });
+
+  it("does not recover a same-name form returned outside the selected Page lookup", async () => {
+    const fetchImpl = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValue({ data: [] }),
+    });
+
+    await expect(recoverExactNativeLeadForm({
+      pageId: "selected-page",
+      formName: "Final Expense Insurance Lead Form",
+      expectedFingerprint: buildNativeLeadFormFingerprint(specification),
+      specification,
+      accessToken: "token",
+      fetchImpl: fetchImpl as any,
+      pageFormsUrl: (pageId) => `https://graph.facebook.com/v21.0/${pageId}/leadgen_forms`,
+      formUrl: (formId) => `https://graph.facebook.com/v21.0/${formId}`,
+    })).rejects.toThrow(/found 0/i);
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/selected-page/leadgen_forms");
+  });
+
   it("rejects a same-name form whose required schema does not match", async () => {
     const fetchImpl = jest.fn()
       .mockResolvedValueOnce({
@@ -286,13 +482,13 @@ describe("Meta native insurance form templates", () => {
     })).rejects.toThrow(/found 0/i);
   });
 
-  it("rejects a form with the wrong Page-derived schema instead of weakening required validation", () => {
+  it("rejects a form with a wrong follow-up URL instead of weakening required validation", () => {
     expect(() => assertNativeLeadFormMatchesSpecification({
-      actual: formReadback({ privacy_policy: { url: "https://unrelated.example/privacy", link_text: "Privacy Policy" } }),
+      actual: formReadback({ follow_up_action_url: "https://unrelated.example/thank-you" }),
       expectedFormId: "form-1",
       expectedFormName: "Final Expense Insurance Lead Form",
       expectedSpecification: specification,
-    })).toThrow(/privacy policy/i);
+    })).toThrow(/follow-up URL/i);
   });
 
   it("finalizes a newly claimed form only with the matching claim token", async () => {
