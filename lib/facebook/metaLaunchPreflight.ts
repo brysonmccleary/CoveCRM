@@ -1,4 +1,5 @@
 import { metaGraphUrl } from "@/lib/meta/graphApi";
+import { getMetaAttributionSpec } from "@/lib/facebook/metaAttributionSpec";
 
 type FetchLike = typeof fetch;
 
@@ -86,10 +87,7 @@ export async function preflightMetaLaunch(input: {
   adsetParams.set("promoted_object", JSON.stringify(promotedObject));
   adsetParams.set("targeting", JSON.stringify(input.adSet.targeting));
   adsetParams.set("destination_type", input.campaignType === "native_form" ? "ON_AD" : "WEBSITE");
-  adsetParams.set("attribution_spec", JSON.stringify([
-    { event_type: "CLICK_THROUGH", window_days: 7 },
-    { event_type: "VIEW_THROUGH", window_days: 1 },
-  ]));
+  adsetParams.set("attribution_spec", JSON.stringify(getMetaAttributionSpec(input.campaignType)));
   adsetParams.set("execution_options", JSON.stringify(["validate_only"]));
   adsetParams.set("access_token", input.accessToken);
   const adSetResult = await metaJson(await fetchImpl(metaGraphUrl(`act_${adAccountId}/adsets`), {

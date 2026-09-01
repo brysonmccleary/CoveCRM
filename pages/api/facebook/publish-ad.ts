@@ -21,6 +21,7 @@ import { buildLaunchFingerprint, requireDailyBudgetCents } from "@/lib/facebook/
 import { verifyMetaAdset } from "@/lib/facebook/metaAdsetVerification";
 import { resolveCampaignAiScriptKey } from "@/lib/ai/campaignScriptKey";
 import { preflightMetaLaunch } from "@/lib/facebook/metaLaunchPreflight";
+import { getMetaAttributionSpec } from "@/lib/facebook/metaAttributionSpec";
 import { claimLaunchCampaign, releaseLaunchCampaignClaim } from "@/lib/facebook/claimLaunchCampaign";
 import { signHostedAttributionToken } from "@/lib/facebook/hostedAttribution";
 import {
@@ -786,10 +787,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         adsetParams.set("promoted_object", JSON.stringify(promotedObject));
         adsetParams.set("targeting", JSON.stringify(lockedStructure.adSet.targeting));
         adsetParams.set("destination_type", campaignType === "native_form" ? "ON_AD" : "WEBSITE");
-        adsetParams.set("attribution_spec", JSON.stringify([
-          { event_type: "CLICK_THROUGH", window_days: 7 },
-          { event_type: "VIEW_THROUGH", window_days: 1 },
-        ]));
+        adsetParams.set("attribution_spec", JSON.stringify(getMetaAttributionSpec(
+          campaignType === "native_form" || campaignType === "hosted_funnel_otp"
+            ? campaignType
+            : "hosted_funnel"
+        )));
         adsetParams.set("access_token", accessToken);
 
         const metaAdsetResp = await fetch(metaGraphUrl(`act_${adAccountIdFinal}/adsets`), {
@@ -827,10 +829,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 pixel_id: String(launchValidation.datasetId),
                 custom_event_type: "LEAD",
               },
-          attributionSpec: [
-            { event_type: "CLICK_THROUGH", window_days: 7 },
-            { event_type: "VIEW_THROUGH", window_days: 1 },
-          ],
+          attributionSpec: getMetaAttributionSpec(
+            campaignType === "native_form" || campaignType === "hosted_funnel_otp"
+              ? campaignType
+              : "hosted_funnel"
+          ),
         },
       });
 

@@ -105,7 +105,7 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
         {
           title: "Ready to Launch",
           helper: "Generate your ad, review it, and launch when you are ready.",
-          complete: Boolean(String(status.pageId || "").trim()) && Boolean(String(status.adAccountId || "").trim()),
+          complete: Boolean(String(status.pageId || "").trim()) && Boolean(String(status.adAccountId || "").trim()) && health?.ok === true,
         },
       ]
     : [];
@@ -156,6 +156,8 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
       if (leadType) params.set("leadType", leadType);
       if (pageId) params.set("pageId", pageId);
       if (adAccountId) params.set("adAccountId", adAccountId);
+      params.set("campaignType", "native_form");
+      params.set("force", "true");
       const query = params.toString();
       const res = await fetch(`/api/meta/health${query ? `?${query}` : ""}`);
       const data = await res.json().catch(() => ({}));

@@ -30,27 +30,28 @@
 
 /* Off-production background-treatment layer. Reference-locked copy geometry remains unchanged. */
 .creative[data-background-treatment="full_bleed_dark_overlay"] .photo{inset:0;opacity:1;background-size:cover}
-.creative[data-background-treatment="full_bleed_dark_overlay"] .overlay{background:linear-gradient(180deg,rgba(2,13,24,.68),rgba(2,14,25,.9))}
-.creative[data-background-treatment="faint_full_background"] .photo{inset:0;opacity:.24;background-size:cover;filter:saturate(.72) contrast(.9)}
-.creative[data-background-treatment="faint_full_background"] .overlay{background:rgba(4,22,38,.72)}
-.creative.light[data-background-treatment="faint_full_background"] .photo{opacity:.17;filter:grayscale(.25) saturate(.65)}
-.creative.light[data-background-treatment="faint_full_background"] .overlay{background:rgba(248,244,236,.84)}
+.creative[data-background-treatment="full_bleed_dark_overlay"] .overlay{background:linear-gradient(180deg,rgba(2,13,24,.46),rgba(2,14,25,.68))}
+.creative[data-background-treatment="faint_full_background"] .photo{inset:0;opacity:.5;background-size:cover;filter:saturate(.9) contrast(1)}
+.creative[data-background-treatment="faint_full_background"] .overlay{background:rgba(4,22,38,.48)}
+.creative.light[data-background-treatment="faint_full_background"] .photo{opacity:.42;filter:grayscale(.12) saturate(.82)}
+.creative.light[data-background-treatment="faint_full_background"] .overlay{background:rgba(248,244,236,.7)}
 .creative[data-background-treatment="left_image_gradient"] .photo{inset:0 42% 0 0;opacity:1;background-size:cover}
 .creative[data-background-treatment="left_image_gradient"] .overlay{background:linear-gradient(90deg,rgba(3,16,29,.08) 0 31%,rgba(3,16,29,.82) 49%,rgba(3,16,29,.98) 64%)}
 .creative[data-background-treatment="right_image_gradient"] .photo{inset:0 0 0 42%;opacity:1;background-size:cover}
 .creative[data-background-treatment="right_image_gradient"] .overlay{background:linear-gradient(90deg,rgba(3,16,29,.98) 0 36%,rgba(3,16,29,.82) 53%,rgba(3,16,29,.08) 72%)}
 .creative[data-background-treatment="split_background"] .photo{inset:0 0 0 56%;opacity:1;background-size:cover}
 .creative[data-background-treatment="split_background"] .overlay{background:linear-gradient(90deg,#061a2d 0 52%,rgba(6,26,45,.78) 59%,rgba(6,26,45,.13) 76%)}
-.creative[data-background-treatment="hero_protected_background"] .photo{inset:0;opacity:.82;background-size:cover}
-.creative[data-background-treatment="hero_protected_background"] .overlay{background:linear-gradient(180deg,rgba(3,16,28,.55),rgba(3,16,28,.78))}
+.creative[data-background-treatment="hero_protected_background"] .photo{inset:0;opacity:1;background-size:cover}
+.creative[data-background-treatment="hero_protected_background"] .overlay{background:linear-gradient(180deg,rgba(3,16,28,.38),rgba(3,16,28,.58))}
 .creative[data-background-treatment="hero_protected_background"] .hero{background:rgba(2,14,25,.91);border:2px solid var(--gold);box-shadow:0 10px 30px rgba(0,0,0,.35);padding:10px}
-.creative[data-background-treatment="patriotic_texture"] .photo{inset:0;opacity:.19;background-size:cover;filter:grayscale(.35) saturate(.8) contrast(1.05)}
-.creative[data-background-treatment="patriotic_texture"] .overlay{background:linear-gradient(135deg,rgba(4,21,37,.8),rgba(8,42,70,.86))}
-.creative[data-background-treatment="patriotic_texture"] .texture{opacity:.25;background-image:radial-gradient(circle at 10% 12%,#fff 0 1.5px,transparent 2px),linear-gradient(120deg,transparent 0 58%,rgba(174,27,32,.24) 58% 68%,transparent 68%)}
+.creative[data-background-treatment="patriotic_texture"] .photo{inset:0;opacity:.68;background-size:cover;filter:grayscale(.12) saturate(.95) contrast(1.05)}
+.creative[data-background-treatment="patriotic_texture"] .overlay{background:linear-gradient(135deg,rgba(4,21,37,.48),rgba(8,42,70,.58))}
+.creative[data-background-treatment="patriotic_texture"] .texture{opacity:.18;background-image:radial-gradient(circle at 10% 12%,#fff 0 1.5px,transparent 2px),linear-gradient(120deg,transparent 0 58%,rgba(174,27,32,.24) 58% 68%,transparent 68%)}
 .creative[data-background-treatment="top_environment_fade"] .photo{inset:0 0 46% 0;opacity:.84;background-size:cover}
 .creative[data-background-treatment="top_environment_fade"] .overlay{background:linear-gradient(180deg,rgba(3,16,28,.1) 0 24%,rgba(3,16,28,.9) 49%,#061a2d 66%)}
 .creative.light[data-background-treatment="left_image_gradient"] .overlay,.creative.light[data-background-treatment="right_image_gradient"] .overlay,.creative.light[data-background-treatment="split_background"] .overlay,.creative.light[data-background-treatment="top_environment_fade"] .overlay{background:linear-gradient(90deg,rgba(248,244,236,.18),rgba(248,244,236,.88) 52%,rgba(248,244,236,.98) 72%)}
-.creative.light[data-background-treatment="patriotic_texture"] .overlay{background:rgba(248,244,236,.86)}
+.creative.light[data-background-treatment="patriotic_texture"] .overlay{background:rgba(248,244,236,.72)}
 .creative.imageMode:not(.light) .header,.creative.imageMode:not(.light) .hero,.creative.imageMode:not(.light) .benefits,.creative.imageMode:not(.light) .age{color:#fff}
+.creative.imageMode:not(.light):is([data-background-treatment="full_bleed_dark_overlay"],[data-background-treatment="faint_full_background"],[data-background-treatment="hero_protected_background"],[data-background-treatment="patriotic_texture"]) .header,.creative.imageMode:not(.light):is([data-background-treatment="full_bleed_dark_overlay"],[data-background-treatment="faint_full_background"],[data-background-treatment="hero_protected_background"],[data-background-treatment="patriotic_texture"]) .benefits,.creative.imageMode:not(.light):is([data-background-treatment="full_bleed_dark_overlay"],[data-background-treatment="faint_full_background"],[data-background-treatment="hero_protected_background"],[data-background-treatment="patriotic_texture"]) .age{text-shadow:0 2px 5px rgba(0,0,0,.96),0 0 12px rgba(0,0,0,.72)}
 .creative.imageMode:not(.light) .headline,.creative.imageMode:not(.light) .heroValue{text-shadow:0 2px 8px rgba(0,0,0,.85)}
 .creative.imageMode:not(.light) .heroValue{color:var(--gold)}

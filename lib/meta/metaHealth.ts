@@ -2,6 +2,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 import { metaGraphUrl } from "@/lib/meta/graphApi";
+import { checkLeadAdsTermsReadiness, META_LEAD_ADS_TERMS_URL } from "@/lib/meta/leadAdsTermsReadiness";
 
 const HEALTH_CACHE_MS = 6 * 60 * 60 * 1000;
 const HEALTH_COOLDOWN_MS = 6 * 60 * 60 * 1000;
@@ -174,7 +175,7 @@ export function classifyMetaHealthError(error: unknown): {
 function fixUrlForStatus(status: MetaHealthStatus) {
   if (status === "reconnectNeeded") return "/api/meta/connect";
   if (status === "missingPaymentMethod") return "https://business.facebook.com/billing";
-  if (status === "missingLeadAdsEligibility") return "https://www.facebook.com/ads/leadgen/tos";
+  if (status === "missingLeadAdsEligibility") return META_LEAD_ADS_TERMS_URL;
   if (status === "accountDisabled") return "https://business.facebook.com/accountquality";
   if (status === "securityVerificationRequired") return "https://business.facebook.com/accountquality";
   if (status === "missingBusinessInformation") return "https://business.facebook.com/settings/ad-accounts";
@@ -514,23 +515,22 @@ export async function checkMetaWriteReadiness(input: HealthInput): Promise<MetaH
     // Hosted CoveCRM funnels do not use Meta Instant Forms, so Lead Ads Terms
     // must never block them. Keep this check only for an explicit native form.
     if (input.requireLeadAdsEligibility !== false) {
-      let leadAdsTosAccepted = true;
-      try {
-        const tosResp = await graphGet(`${pageId}/leadgen_tos_acceptance`, accessToken);
-        // If the user has not accepted TOS, the response either errors or returns empty data
-        if (tosResp?.data !== undefined && (!Array.isArray(tosResp.data) || tosResp.data.length === 0)) {
-          leadAdsTosAccepted = false;
-        }
-      } catch {
-        // Not all users/pages return TOS acceptance — skip, don't fail health check
-      }
+      const termsAccessToken = String(
+        pageId === String(user?.metaPageId || "").trim()
+          ? user?.metaPageAccessToken || accessToken
+          : accessToken
+      ).trim();
+      const leadAdsTerms = await checkLeadAdsTermsReadiness({
+        pageId,
+        accessToken: termsAccessToken,
+      });
 
-      if (!leadAdsTosAccepted) {
+      if (leadAdsTerms.state !== "READY") {
         const result: MetaHealthResult = {
           ok: false,
           status: "missingLeadAdsEligibility",
           reason: "Accept Meta Lead Ads Terms before launching lead ads.",
-          fixUrl: "https://www.facebook.com/ads/leadgen/tos",
+          fixUrl: META_LEAD_ADS_TERMS_URL,
           checkedAt: now,
           account,
           page,

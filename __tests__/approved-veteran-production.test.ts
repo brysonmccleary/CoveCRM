@@ -110,6 +110,25 @@ describe("approved Veteran production recovery", () => {
     expect(markup).toContain("$50,000");
   });
 
+  test("ships the approved background visibility correction without customer-visible review labels", () => {
+    const existingCss = readFileSync("styles/Veteran24MasterReview.module.css", "utf8");
+    const referenceCss = readFileSync("styles/VeteranReferenceLocked.module.css", "utf8");
+    const masterCard = readFileSync("components/FacebookAds/Veteran24MasterReviewCard.tsx", "utf8");
+    const wizard = readFileSync("components/FacebookAds/AdWizard.tsx", "utf8");
+
+    for (const css of [existingCss, referenceCss]) {
+      expect(css).toContain('[data-background-treatment="full_bleed_dark_overlay"] .overlay{background:linear-gradient(180deg,rgba(2,13,24,.46),rgba(2,14,25,.68))}');
+      expect(css).toContain('[data-background-treatment="faint_full_background"] .photo{inset:0;opacity:.5;background-size:cover;filter:saturate(.9) contrast(1)}');
+      expect(css).toContain('[data-background-treatment="hero_protected_background"] .photo{inset:0;opacity:1;background-size:cover}');
+      expect(css).toContain('[data-background-treatment="patriotic_texture"] .photo{inset:0;opacity:.68;background-size:cover;filter:grayscale(.12) saturate(.95) contrast(1.05)}');
+    }
+    expect(masterCard).not.toContain('replace("VET_", "MASTER ")');
+    expect(wizard).not.toContain("Review the selected test set before launch.");
+    expect(wizard).not.toContain("Family: {currentDraft.winningFamilyId}");
+    expect(wizard).not.toContain("Style: {currentDraft.vendorStyleTag}");
+    expect(wizard).not.toContain("Variant: {currentDraft.uniquenessFingerprint}");
+  });
+
   test("locks twelve golden visual identities to the August 29 pixel authority", () => {
     const library = buildApprovedVeteranLibrary();
     expect(VETERAN_AUG29_GOLDEN_VISUALS).toHaveLength(12);

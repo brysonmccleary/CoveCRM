@@ -52,6 +52,39 @@ describe("Meta non-creating launch preflight", () => {
         { id: "6003293787730", name: "Investment management" },
       ] },
     ]);
+    expect(JSON.parse(String(adSetBody.get("attribution_spec")))).toEqual([
+      { event_type: "CLICK_THROUGH", window_days: 7 },
+      { event_type: "VIEW_THROUGH", window_days: 1 },
+    ]);
+  });
+
+  test("uses Meta's accepted 1-day click and 0-day view attribution for native Instant Forms", async () => {
+    const fetchImpl = jest.fn()
+      .mockResolvedValueOnce(response({ success: true }))
+      .mockResolvedValueOnce(response({ data: [{
+        id: "paused-financial-campaign",
+        objective: "OUTCOME_LEADS",
+        special_ad_categories: ["FINANCIAL_PRODUCTS_SERVICES"],
+      }] }))
+      .mockResolvedValueOnce(response({ success: true }));
+
+    await preflightMetaLaunch({
+      adAccountId: "123",
+      accessToken: "token",
+      campaign: structure.campaign,
+      adSet: { ...structure.adSet, optimization_goal: "LEAD_GENERATION" },
+      pageId: "page-1",
+      campaignType: "native_form",
+      fetchImpl: fetchImpl as any,
+    });
+
+    const adSetBody = new URLSearchParams(fetchImpl.mock.calls[2][1].body);
+    expect(JSON.parse(String(adSetBody.get("attribution_spec")))).toEqual([
+      { event_type: "CLICK_THROUGH", window_days: 1 },
+      { event_type: "VIEW_THROUGH", window_days: 0 },
+    ]);
+    expect(JSON.parse(String(adSetBody.get("promoted_object")))).toEqual({ page_id: "page-1" });
+    expect(adSetBody.get("destination_type")).toBe("ON_AD");
   });
 
   test("fails before campaign creation when Meta rejects the validate_only payload", async () => {

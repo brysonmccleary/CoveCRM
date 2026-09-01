@@ -10,6 +10,11 @@ import {
   mapMetaAdAccounts,
   mapMetaPages,
 } from "@/lib/meta/setupAssets";
+import {
+  checkLeadAdsTermsReadiness,
+  facebookSetupComplete,
+  type LeadAdsTermsReadiness,
+} from "@/lib/meta/leadAdsTermsReadiness";
 
 async function graphGet(path: string, token: string, fields: string) {
   const url = new URL(metaGraphUrl(path));
@@ -162,11 +167,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       leadDeliveryReady = await subscribeToLeads(selectedPage.id, selectedPage.accessToken).catch(() => false);
     }
 
-    const ready = Boolean(selectedPage && selectedAdAccount);
+    let leadAdsTerms: LeadAdsTermsReadiness | null = null;
+    if (selectedPage?.id) {
+      const selectedPageToken = String(
+        selectedPage.accessToken ||
+        (String(user?.metaPageId || "") === selectedPage.id ? user?.metaPageAccessToken : "") ||
+        token
+      ).trim();
+      try {
+        leadAdsTerms = await checkLeadAdsTermsReadiness({
+          pageId: selectedPage.id,
+          accessToken: selectedPageToken,
+        });
+      } catch (error: any) {
+        console.error("[meta/refresh-setup] Lead Ads Terms readiness check failed:", {
+          pageId: selectedPage.id,
+          status: error?.status || 0,
+          meta: error?.meta || null,
+          message: error?.message || "Unknown Meta error",
+        });
+        leadAdsTerms = {
+          state: "TECHNICAL_ERROR",
+          pageId: selectedPage.id,
+          accepted: false,
+          acceptedAt: "",
+          checkedAt: new Date().toISOString(),
+        };
+      }
+    }
+    const ready = facebookSetupComplete({
+      connected: true,
+      pageId: selectedPage?.id,
+      adAccountId: selectedAdAccount?.accountId,
+      adAccountActive: selectedAdAccount?.status === undefined || selectedAdAccount?.status === 1,
+      leadAdsTerms,
+    });
     return res.status(200).json({
       connected: true,
       ready,
       leadDeliveryReady,
+      leadAdsTerms,
       page: selectedPage ? { ...selectedPage, accessToken: undefined } : null,
       adAccount: selectedAdAccount,
       pages: pages.map((page) => ({

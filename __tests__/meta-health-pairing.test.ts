@@ -83,4 +83,41 @@ describe("Meta Page/ad-account readiness", () => {
     expect(result.ok).toBe(true);
     expect(result.status).toBe("healthy");
   });
+
+  test("blocks native Lead Ads when the exact selected Page has not accepted Meta terms", async () => {
+    global.fetch = jest.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("leadgen_tos_accepted")) {
+        return graphResponse({ id: "page-1", leadgen_tos_accepted: false });
+      }
+      if (url.includes("/me/accounts")) return graphResponse({ data: [{ id: "page-1", tasks: ["ADVERTISE"] }] });
+      if (url.includes("/me/adaccounts")) return graphResponse({ data: [{ id: "act_123", account_id: "123", account_status: 1 }] });
+      if (url.includes("/act_123/promote_pages")) return graphResponse({ data: [{ id: "page-1" }] });
+      return graphResponse({ account_status: 1, disable_reason: 0, funding_source: "card" });
+    }) as jest.Mock;
+
+    const result = await checkMetaWriteReadiness({ user, force: true, requireLeadAdsEligibility: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("missingLeadAdsEligibility");
+    expect(result.reason).toBe("Accept Meta Lead Ads Terms before launching lead ads.");
+  });
+
+  test("allows native Lead Ads when the exact selected Page has accepted Meta terms", async () => {
+    global.fetch = jest.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("leadgen_tos_accepted")) {
+        return graphResponse({ id: "page-1", leadgen_tos_accepted: true });
+      }
+      if (url.includes("/me/accounts")) return graphResponse({ data: [{ id: "page-1", tasks: ["ADVERTISE"] }] });
+      if (url.includes("/me/adaccounts")) return graphResponse({ data: [{ id: "act_123", account_id: "123", account_status: 1 }] });
+      if (url.includes("/act_123/promote_pages")) return graphResponse({ data: [{ id: "page-1" }] });
+      return graphResponse({ account_status: 1, disable_reason: 0, funding_source: "card" });
+    }) as jest.Mock;
+
+    const result = await checkMetaWriteReadiness({ user, force: true, requireLeadAdsEligibility: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("healthy");
+  });
 });

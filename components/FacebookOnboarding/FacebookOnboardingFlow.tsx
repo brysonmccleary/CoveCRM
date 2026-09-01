@@ -19,6 +19,16 @@ type ConnectedPage = {
 
 type AdAccount = { accountId: string; name: string; status?: number };
 
+type LeadAdsTermsReadiness = {
+  pageId: string;
+  state: "CHECKING" | "TERMS_REQUIRED" | "READY" | "TECHNICAL_ERROR";
+  accepted?: boolean;
+  acceptedAt?: string;
+  checkedAt?: string;
+};
+
+const META_LEAD_ADS_TERMS_URL = "https://www.facebook.com/ads/leadgen/tos";
+
 export default function FacebookOnboardingFlow({
   selectedLeadType,
   onLeadTypeChange,
@@ -36,6 +46,9 @@ export default function FacebookOnboardingFlow({
   const [selectingPageId, setSelectingPageId] = useState("");
   const [selectingAdAccountId, setSelectingAdAccountId] = useState("");
   const [setupError, setSetupError] = useState("");
+  const [leadAdsTerms, setLeadAdsTerms] = useState<LeadAdsTermsReadiness | null>(null);
+  const [termsRetryMessage, setTermsRetryMessage] = useState("");
+  const [showTermsReadyNotice, setShowTermsReadyNotice] = useState(false);
   const [provisioningStatus, setProvisioningStatus] = useState<"idle" | "provisioning" | "payment_required" | "ready" | "blocked">("idle");
   const [paymentUrl, setPaymentUrl] = useState("");
   const knownPageIds = useRef<string[]>([]);
@@ -49,6 +62,9 @@ export default function FacebookOnboardingFlow({
   }) => {
     setRefreshing(true);
     setSetupError("");
+    if (options?.pageId) {
+      setLeadAdsTerms({ pageId: options.pageId, state: "CHECKING" });
+    }
     try {
       const response = await fetch("/api/meta/refresh-setup", {
         method: "POST",
@@ -69,6 +85,19 @@ export default function FacebookOnboardingFlow({
       setAdAccounts(Array.isArray(data?.adAccounts) ? data.adAccounts : []);
       setSelectedPage(data?.page || null);
       setSelectedAdAccount(data?.adAccount || null);
+      const nextPageId = String(data?.page?.id || "");
+      const nextTerms = data?.leadAdsTerms;
+      setLeadAdsTerms(
+        nextPageId && String(nextTerms?.pageId || "") === nextPageId
+          ? {
+              pageId: nextPageId,
+              state: nextTerms.state,
+              accepted: nextTerms.accepted,
+              acceptedAt: nextTerms.acceptedAt,
+              checkedAt: nextTerms.checkedAt,
+            }
+          : null
+      );
       if (data?.page && options?.preferNewPage && !knownPageIds.current.includes(String(data.page.id))) {
         setAwaitingNewPage(false);
         setShowPageSetup(false);
@@ -105,6 +134,8 @@ export default function FacebookOnboardingFlow({
 
   const selectPage = async (pageId: string) => {
     setSelectingPageId(pageId);
+    setTermsRetryMessage("");
+    setShowTermsReadyNotice(false);
     const data = await refreshSetup({ pageId });
     if (String(data?.page?.id || "") === pageId) {
       provisionedPageId.current = "";
@@ -113,6 +144,28 @@ export default function FacebookOnboardingFlow({
       setShowCreatePageSetup(false);
     }
     setSelectingPageId("");
+  };
+
+  const verifyLeadAdsTerms = async () => {
+    if (!selectedPage?.id) return;
+    setTermsRetryMessage("");
+    const data = await refreshSetup({
+      pageId: selectedPage.id,
+      adAccountId: selectedAdAccount?.accountId,
+    });
+    const state = String(data?.leadAdsTerms?.state || "TECHNICAL_ERROR");
+    if (state === "READY") {
+      setShowTermsReadyNotice(true);
+      window.setTimeout(() => setShowTermsReadyNotice(false), 1800);
+      return;
+    }
+    if (state === "TERMS_REQUIRED") {
+      setTermsRetryMessage(
+        "Facebook hasn't confirmed the acceptance yet. Make sure you accepted the terms for this Page, then try again."
+      );
+      return;
+    }
+    setTermsRetryMessage("Facebook couldn't verify this Page yet. Check your Facebook connection and try again.");
   };
 
   const provisionAdAccount = useCallback(async () => {
@@ -165,9 +218,15 @@ export default function FacebookOnboardingFlow({
     setSelectingAdAccountId("");
   };
 
+  const leadAdsTermsReady = Boolean(
+    selectedPage &&
+    leadAdsTerms?.pageId === selectedPage.id &&
+    leadAdsTerms.state === "READY"
+  );
   const facebookReady = Boolean(
     connected &&
     selectedPage &&
+    leadAdsTermsReady &&
     selectedAdAccount?.status === 1 &&
     provisioningStatus === "ready" &&
     !showPageSetup &&
@@ -271,14 +330,60 @@ export default function FacebookOnboardingFlow({
       )}
 
       {connected && selectedPage && !showPageSetup && !showCreatePageSetup && (
+        !leadAdsTermsReady ? (
+          <section className="rounded-3xl border border-blue-500/25 bg-[#0f172a] p-5 sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">One quick Facebook step</p>
+            <h2 className="mt-1 text-xl font-bold text-white">
+              {leadAdsTerms?.state === "CHECKING" ? "Checking Facebook Lead Ads" : "Accept Facebook Lead Ad Terms"}
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm text-gray-400">
+              {leadAdsTerms?.state === "CHECKING"
+                ? `CoveCRM is checking ${selectedPage.name}.`
+                : "Facebook requires your Page to accept its Lead Ad Terms before it can receive leads from ads."}
+            </p>
+
+            {leadAdsTerms?.state !== "CHECKING" && (
+              <div className="mt-5 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => window.open(META_LEAD_ADS_TERMS_URL, "_blank", "noopener,noreferrer")}
+                  className="min-h-11 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-500"
+                >
+                  Accept Facebook Lead Ad Terms
+                </button>
+                <button
+                  type="button"
+                  onClick={verifyLeadAdsTerms}
+                  disabled={refreshing}
+                  className="min-h-11 rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-gray-200 hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {refreshing ? "Checking..." : leadAdsTerms?.state === "TERMS_REQUIRED" ? "I've Accepted — Continue" : "Check Again"}
+                </button>
+              </div>
+            )}
+
+            {termsRetryMessage && (
+              <p className="mt-4 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3 text-sm text-amber-100">
+                {termsRetryMessage}
+              </p>
+            )}
+          </section>
+        ) : (
         <PageProfilePicturePicker
           pageId={selectedPage.id}
           pageName={selectedPage.name}
           leadType={selectedLeadType}
         />
+        )
       )}
 
-      {connected && selectedPage && selectedAdAccount?.status === 1 && provisioningStatus === "ready" && !showPageSetup && !showCreatePageSetup && !showAdAccountSetup && (
+      {showTermsReadyNotice && leadAdsTermsReady && (
+        <div className="rounded-2xl border border-emerald-500/25 bg-emerald-950/20 p-4 text-sm font-semibold text-emerald-200">
+          ✓ Facebook Lead Ads Ready
+        </div>
+      )}
+
+      {connected && selectedPage && leadAdsTermsReady && selectedAdAccount?.status === 1 && provisioningStatus === "ready" && !showPageSetup && !showCreatePageSetup && !showAdAccountSetup && (
         <section className="rounded-3xl border border-emerald-500/25 bg-emerald-950/20 p-5 sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
@@ -321,7 +426,7 @@ export default function FacebookOnboardingFlow({
         </section>
       )}
 
-      {connected && selectedPage && (provisioningStatus !== "ready" || !selectedAdAccount || selectedAdAccount.status !== 1 || showAdAccountSetup) && (
+      {connected && selectedPage && leadAdsTermsReady && (provisioningStatus !== "ready" || !selectedAdAccount || selectedAdAccount.status !== 1 || showAdAccountSetup) && (
         <section className="rounded-3xl border border-blue-500/25 bg-[#0f172a] p-5 sm:p-6">
           <div className="flex items-start justify-between gap-4">
             <div>

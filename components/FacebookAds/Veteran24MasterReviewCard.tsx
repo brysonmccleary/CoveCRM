@@ -50,8 +50,6 @@ export function Veteran24MasterReviewCard({ preview }: { preview: VeteranMasterP
           {preview.ageOptions.map((option) => <div className={styles.ageOption} data-age-option="true" key={option}>{option}</div>)}
         </div>
       </section>
-
-      <div className={styles.badge}>{preview.masterId.replace("VET_", "MASTER ")}</div>
     </div>
   );
 }

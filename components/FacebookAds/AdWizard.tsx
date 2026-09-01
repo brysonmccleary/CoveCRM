@@ -1037,7 +1037,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 		          <div className="flex items-center justify-between gap-3 flex-wrap">
 	            <div>
               <p className="text-white font-semibold">Generated Ad Versions</p>
-              <p className="text-sm text-gray-400">Review the selected test set before launch.</p>
+              <p className="text-sm text-gray-400">Review the selected ads before launch.</p>
 	            </div>
 	            <button
 	              type="button"
@@ -1068,14 +1068,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
                 <div className="p-4 space-y-3">
 	                  <div className="flex items-center justify-between gap-2">
 	                    <p className="text-sm font-semibold text-white">Ad {index + 1}</p>
-	                    <span className="px-2 py-1 rounded bg-emerald-600/20 text-emerald-200 border border-emerald-500/30 text-[11px] uppercase">
-	                      {currentDraft?.variationType || "variant"}
-	                    </span>
 	                  </div>
 	                  <div className="flex flex-wrap gap-2 text-[11px] text-gray-300">
-	                    <span className="px-2 py-1 rounded bg-white/5 border border-white/10">
-	                      {currentDraft?.creativeArchetype || currentDraft?.vendorStyleTag || "style"}
-	                    </span>
 	                    <span className="px-2 py-1 rounded bg-white/5 border border-white/10">
 	                      {LEAD_TYPE_LABELS[currentDraft?.leadType || leadType] || currentDraft?.leadType || leadType}
 	                    </span>
@@ -1092,11 +1086,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	                    <span className="px-2 py-1 rounded bg-blue-600/20 text-blue-200 border border-blue-500/30">
 	                      {currentDraft?.cta || "LEARN_MORE"}
 	                    </span>
-	                  </div>
-	                  <div className="text-[11px] text-gray-500 space-y-1">
-	                    {currentDraft?.winningFamilyId && <p>Family: {currentDraft.winningFamilyId}</p>}
-	                    {currentDraft?.vendorStyleTag && <p>Style: {currentDraft.vendorStyleTag}</p>}
-	                    {currentDraft?.uniquenessFingerprint && <p className="truncate">Variant: {currentDraft.uniquenessFingerprint}</p>}
 	                  </div>
 	                </div>
 	              </div>
