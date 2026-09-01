@@ -338,7 +338,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         visualTreatment: concept.backgroundAssetId ? "photo" : "graphic",
         candidateBatch: 0,
         vendorStyleTag: `approved_veteran_${concept.imageTreatment}`,
-        displayAmount: "",
+        displayAmount: concept.heroAmount ? `$${concept.heroAmount.toLocaleString("en-US")}` : "",
         generatedBy: "approved_veteran_library",
         copySource: "approved_veteran_library",
         approvedVeteranConcept: concept,

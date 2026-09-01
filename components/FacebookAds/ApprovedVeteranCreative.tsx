@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Veteran24MasterReviewCard } from "@/components/FacebookAds/Veteran24MasterReviewCard";
 import { VeteranReferenceLockedCard } from "@/components/FacebookAds/VeteranReferenceLockedCard";
-import { VeteranReferenceReplicaCard } from "@/components/FacebookAds/VeteranReferenceReplicaCard";
+import { VeteranReferenceReplicaCard, type ReplicaAmount } from "@/components/FacebookAds/VeteranReferenceReplicaCard";
 import { buildVeteran24MasterReview, type VeteranMasterPreview } from "@/lib/facebook/veteran24MasterReview";
 import { buildVeteranReferenceLocked12, type VeteranReferencePreview } from "@/lib/facebook/veteranReferenceLocked12";
 import type { ApprovedVeteranConcept } from "@/lib/facebook/approvedVeteranCreative";
 import styles from "@/components/FacebookAds/ApprovedVeteranCreative.module.css";
 
-const existingMasters = buildVeteran24MasterReview().safePreviews;
-const referenceLockedMasters = buildVeteranReferenceLocked12().safePreviews;
+const existingMasters = buildVeteran24MasterReview().capabilityPreviews;
+const referenceLockedMasters = buildVeteranReferenceLocked12().capabilityPreviews;
 const paletteExisting: Record<string, VeteranMasterPreview["palette"]> = {
   navy_gold: "navy", paper_red: "paper", black_gold: "black", navy_white: "split", patriotic_split: "poster",
 };
@@ -24,6 +24,12 @@ const heroBoxes = [
 
 function sourceIndex(id: string) {
   return Math.max(0, Number(id.match(/(\d+)$/)?.[1] || 1) - 1);
+}
+
+function amountText(concept: ApprovedVeteranConcept): ReplicaAmount {
+  if (concept.heroAmount === 40_000) return "$40,000";
+  if (concept.heroAmount === 100_000) return "$100,000";
+  return "$50,000";
 }
 
 function VeteranCanvas({ concept }: { concept: ApprovedVeteranConcept }) {
@@ -59,11 +65,11 @@ function VeteranCanvas({ concept }: { concept: ApprovedVeteranConcept }) {
       {...qualityData}
     >
       <div className={styles.replicaInner} style={{ width, height, transform: `scale(${scale})`, top: (675 - height * scale) / 2 }}>
-        <VeteranReferenceReplicaCard tile={tile} amount="$50,000" />
-        <div className={styles.safeMask} data-safe-mask="true" style={{ left: box.left, top: box.top, width: box.width, height: box.height }}>
+        <VeteranReferenceReplicaCard tile={tile} amount={amountText(concept)} />
+        {concept.claimMode === "SAFE_MODE" ? <div className={styles.safeMask} data-safe-mask="true" style={{ left: box.left, top: box.top, width: box.width, height: box.height }}>
           <small>PRIVATE REVIEW</small>
           <strong>{concept.heroContent.map(line => <span key={line}>{line}</span>)}</strong>
-        </div>
+        </div> : null}
       </div>
     </div>;
   }
@@ -77,14 +83,14 @@ function VeteranCanvas({ concept }: { concept: ApprovedVeteranConcept }) {
       palette: paletteExisting[concept.palette] || base.palette,
       headline: concept.headline,
       hero: concept.heroContent,
-      heroKind: "safe",
+      heroKind: concept.heroAmount ? "amount" : "safe",
       benefits: concept.benefits,
       cta: concept.cta,
       imageUrl: concept.backgroundUrl || "",
       imageTreatment: concept.imageTreatment,
       imageFocalPosition: concept.imageFocalPosition,
-      mode: concept.backgroundUrl ? "IMAGE_VARIANT" : "SAFE_MODE",
-      capabilityFixtureId: null,
+      mode: concept.backgroundUrl ? "IMAGE_VARIANT" : concept.claimMode,
+      capabilityFixtureId: concept.capabilityFixtureId,
     } as VeteranMasterPreview;
     return <div className={`${styles.canvas} ${styles[concept.borderTreatment]} ${styles[concept.panelTreatment]}`} data-approved-veteran-creative="true" style={commonStyle} {...qualityData}>
       <Veteran24MasterReviewCard preview={preview} />
@@ -99,14 +105,14 @@ function VeteranCanvas({ concept }: { concept: ApprovedVeteranConcept }) {
     palette: paletteLocked[concept.palette] || base.palette,
     headline: concept.headline,
     hero: concept.heroContent,
-    heroKind: "safe",
+    heroKind: concept.heroAmount ? "amount" : "safe",
     benefits: concept.benefits,
     cta: concept.cta,
     imageUrl: concept.backgroundUrl || "",
     imageTreatment: concept.imageTreatment,
     imageFocalPosition: concept.imageFocalPosition,
-    mode: concept.backgroundUrl ? "IMAGE_VARIANT" : "SAFE_MODE",
-    capabilityFixtureId: null,
+    mode: concept.backgroundUrl ? "IMAGE_VARIANT" : concept.claimMode,
+    capabilityFixtureId: concept.capabilityFixtureId,
   } as VeteranReferencePreview;
   return <div className={`${styles.canvas} ${styles[concept.borderTreatment]} ${styles[concept.panelTreatment]}`} data-approved-veteran-creative="true" style={commonStyle} {...qualityData}>
     <VeteranReferenceLockedCard preview={preview} />
@@ -124,7 +130,7 @@ export default function ApprovedVeteranCreative({ draft }: { draft: Record<strin
     if (hostRef.current) observer.observe(hostRef.current);
     return () => observer.disconnect();
   }, []);
-  if (!concept?.visualConceptId || concept.claimMode !== "SAFE_MODE" || !concept.customerEligible) return null;
+  if (!concept?.visualConceptId || !concept.customerEligible) return null;
   return <div ref={hostRef} className={styles.frame} data-approved-veteran-runtime="true">
     <div className={styles.square}>
       <div style={{ width: 540, height: 675, transform: `scale(${scale})`, transformOrigin: "top left" }}>

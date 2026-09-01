@@ -110,6 +110,12 @@ const CLEAN_LIGHT_MASTERS = new Set([
   "VET_REF_02", "VET_REF_04", "VET_REF_06", "VET_REF_10", "VET_REF_12",
   "VET_REPLICA_02", "VET_REPLICA_04", "VET_REPLICA_06", "VET_REPLICA_08", "VET_REPLICA_10", "VET_REPLICA_12",
 ]);
+export const OWNER_REJECTED_VETERAN_EXECUTION_IDS = [
+  "VET_M01_EXEC_029",
+  "VET_M18_EXEC_023",
+  "VET_M18_EXEC_024",
+] as const;
+const ownerRejectedVeteranExecutionIds = new Set<string>(OWNER_REJECTED_VETERAN_EXECUTION_IDS);
 
 function fnv(text: string, seed = 2166136261) {
   let hash = seed >>> 0;
@@ -442,6 +448,18 @@ export function buildApprovedVeteranLibrary() {
   return classified;
 }
 
+export function isOwnerSelectableVeteranExecution(execution: ApprovedVeteranConcept) {
+  return execution.customerEligible && !ownerRejectedVeteranExecutionIds.has(execution.executionId);
+}
+
+function veteranStylePattern(batchSize: number): ApprovedVeteranConcept["selectionStyleCategory"][] {
+  if (batchSize === 3) return ["image_backed_direct_response", "image_backed_direct_response", "pure_graphic"];
+  if (batchSize === 5) return ["image_backed_direct_response", "image_backed_direct_response", "image_backed_direct_response", "pure_graphic", "pure_graphic"];
+  return Array.from({ length: batchSize }, (_, index) => (
+    index < Math.ceil(batchSize * 0.6) ? "image_backed_direct_response" : "pure_graphic"
+  ));
+}
+
 export function selectApprovedVeteranConcepts({
   seed,
   count,
@@ -453,29 +471,65 @@ export function selectApprovedVeteranConcepts({
 }) {
   const requestedCount = Math.max(1, Math.min(5, count));
   const eligible = buildApprovedVeteranLibrary().filter(execution =>
-    execution.customerEligible
-    && execution.claimMode === "SAFE_MODE"
-    && execution.claimAuthority === "SAFE_COPY"
-    && execution.benefitPackageId === "BENEFIT_1"
+    isOwnerSelectableVeteranExecution(execution)
     && !usedVisualConceptIds.has(execution.visualConceptId)
   );
-  const imagePool = shuffled(eligible.filter(execution => execution.selectionStyleCategory === "image_backed_direct_response"), `${seed}:images`);
-  const graphicPool = shuffled(eligible.filter(execution => execution.selectionStyleCategory === "pure_graphic"), `${seed}:graphics`);
-  const imageTarget = Math.ceil(requestedCount * 0.6);
+  const imageValues = eligible.filter(execution => execution.selectionStyleCategory === "image_backed_direct_response");
+  const pools: Record<ApprovedVeteranConcept["selectionStyleCategory"], ApprovedVeteranConcept[]> = {
+    image_backed_direct_response: roundRobinTake(
+      imageValues,
+      imageValues.length,
+      `${seed}:veteran:image_backed_direct_response`,
+      execution => execution.backgroundAssetId || execution.masterId,
+    ),
+    pure_graphic: shuffled(
+      eligible.filter(execution => execution.selectionStyleCategory === "pure_graphic"),
+      `${seed}:veteran:pure_graphic`,
+    ),
+  };
+  const offsets: Record<ApprovedVeteranConcept["selectionStyleCategory"], number> = {
+    image_backed_direct_response: 0,
+    pure_graphic: 0,
+  };
+  const pattern = veteranStylePattern(requestedCount);
   const selected: ApprovedVeteranConcept[] = [];
   const usedMasters = new Set<string>();
   const usedConcepts = new Set<string>();
-  const take = (pool: ApprovedVeteranConcept[], target: number) => {
-    for (const concept of pool) {
-      if (selected.length >= target || usedMasters.has(concept.masterId) || usedConcepts.has(concept.visualConceptId)) continue;
+  const usedRenders = new Set<string>();
+  const usedNear = new Set<string>();
+  const usedImages = new Set<string>();
+  const usedTreatments = new Set<string>();
+  const canUse = (concept: ApprovedVeteranConcept, strictImageDiversity: boolean) => {
+    if (usedMasters.has(concept.masterId) || usedConcepts.has(concept.visualConceptId)) return false;
+    if (usedRenders.has(concept.renderFingerprint) || usedNear.has(concept.nearFingerprint)) return false;
+    if (strictImageDiversity && concept.backgroundAssetId && (
+      usedImages.has(concept.backgroundAssetId) || usedTreatments.has(concept.imageTreatment)
+    )) return false;
+    return true;
+  };
+  const takeNext = (style: ApprovedVeteranConcept["selectionStyleCategory"], strictImageDiversity: boolean) => {
+    const pool = pools[style];
+    for (let scanned = 0; scanned < pool.length; scanned++) {
+      const offset = offsets[style]++;
+      const concept = pool[offset % pool.length];
+      if (!canUse(concept, strictImageDiversity)) continue;
       selected.push(concept);
       usedMasters.add(concept.masterId);
       usedConcepts.add(concept.visualConceptId);
+      usedRenders.add(concept.renderFingerprint);
+      usedNear.add(concept.nearFingerprint);
+      if (concept.backgroundAssetId) usedImages.add(concept.backgroundAssetId);
+      if (concept.backgroundAssetId) usedTreatments.add(concept.imageTreatment);
+      return true;
     }
+    return false;
   };
-  take(imagePool, imageTarget);
-  take(graphicPool, requestedCount);
-  if (selected.length < requestedCount) take(shuffled(eligible, `${seed}:fallback`), requestedCount);
+  for (const style of pattern) {
+    if (takeNext(style, true)) continue;
+    if (takeNext(style, false)) continue;
+    const fallbackStyle = style === "image_backed_direct_response" ? "pure_graphic" : "image_backed_direct_response";
+    if (!takeNext(fallbackStyle, false)) break;
+  }
   if (selected.length !== requestedCount) throw new Error("The approved Veteran creative pool is temporarily exhausted.");
   return selected;
 }
@@ -483,6 +537,7 @@ export function selectApprovedVeteranConcepts({
 export function auditApprovedVeteranRuntime() {
   const library = buildApprovedVeteranLibrary();
   const eligible = library.filter(execution => execution.customerEligible);
+  const ownerSelectable = eligible.filter(isOwnerSelectableVeteranExecution);
   return {
     masterCount: new Set(library.map(execution => execution.masterId)).size,
     existingApprovedCount: new Set(library.filter(execution => execution.masterKind === "existing").map(execution => execution.masterId)).size,
@@ -491,6 +546,8 @@ export function auditApprovedVeteranRuntime() {
     imageCount: new Set(library.map(execution => execution.backgroundAssetId).filter(Boolean)).size,
     backgroundTreatmentCount: VETERAN_BACKGROUND_TREATMENTS.length,
     customerEligibleCount: eligible.length,
+    ownerSelectableCount: ownerSelectable.length,
+    visualConceptCount: new Set(eligible.map(execution => execution.visualConceptId)).size,
     customerEligibleImageShare: eligible.filter(execution => execution.backgroundAssetId).length / eligible.length,
     eligibleMasterCount: new Set(eligible.map(execution => execution.masterId)).size,
     failedEligibleGates: eligible.flatMap(execution => execution.eligibilityReasons),

@@ -125,4 +125,3 @@
 .creative.imageMode:not(.paper) .top,.creative.imageMode:not(.paper) .hero,.creative.imageMode:not(.paper) .benefits,.creative.imageMode:not(.paper) .age{color:#fff}
 .creative.imageMode:not(.paper) .headline,.creative.imageMode:not(.paper) .heroValue{text-shadow:0 2px 8px rgba(0,0,0,.85)}
 .creative.imageMode:not(.paper) .heroValue{color:var(--accent)}
-.creative.imageMode:not(.paper).layout-13 .heroValue{color:#06192c;text-shadow:none}

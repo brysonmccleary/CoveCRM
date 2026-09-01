@@ -1,11 +1,17 @@
 import { createMocks } from "node-mocks-http";
+import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { getServerSession } from "next-auth/next";
+import ApprovedVeteranCreative from "@/components/FacebookAds/ApprovedVeteranCreative";
 import handler from "@/pages/api/facebook/generate-ad";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
 import { loadGlobalGenerationHints } from "@/lib/facebook/globalIntelligence/anonymizedLearning";
 import {
   auditApprovedVeteranRuntime,
   buildApprovedVeteranLibrary,
+  isOwnerSelectableVeteranExecution,
+  OWNER_REJECTED_VETERAN_EXECUTION_IDS,
   selectApprovedVeteranConcepts,
 } from "@/lib/facebook/approvedVeteranCreative";
 
@@ -41,26 +47,67 @@ describe("approved Veteran production recovery", () => {
       imageCount: 40,
       backgroundTreatmentCount: 8,
       customerEligibleCount: 1005,
+      ownerSelectableCount: 1002,
+      visualConceptCount: 817,
       eligibleMasterCount: 48,
       failedEligibleGates: [],
     });
     expect(audit.customerEligibleImageShare).toBeCloseTo(0.604, 3);
-    expect(buildApprovedVeteranLibrary()).toHaveLength(1440);
+    const library = buildApprovedVeteranLibrary();
+    expect(library).toHaveLength(1440);
+    expect(library.filter((concept) => concept.customerEligible && concept.backgroundAssetId)).toHaveLength(607);
+    expect(library.filter((concept) => concept.customerEligible && !concept.backgroundAssetId)).toHaveLength(398);
   });
 
-  test.each([3, 5])("allocates a safe, diverse %i-ad Veteran batch", (count) => {
+  test.each([3, 5])("allocates an owner-approved, diverse %i-ad Veteran batch", (count) => {
     const batch = selectApprovedVeteranConcepts({ seed: `veteran-recovery-${count}`, count });
     expect(batch).toHaveLength(count);
     expect(new Set(batch.map((concept) => concept.visualConceptId)).size).toBe(count);
     expect(new Set(batch.map((concept) => concept.masterId)).size).toBe(count);
     expect(batch.filter((concept) => concept.backgroundAssetId)).toHaveLength(Math.ceil(count * 0.6));
+    expect(new Set(batch.filter((concept) => concept.backgroundAssetId).map((concept) => concept.backgroundAssetId)).size).toBe(Math.ceil(count * 0.6));
+    expect(new Set(batch.filter((concept) => concept.backgroundAssetId).map((concept) => concept.imageTreatment)).size).toBe(Math.ceil(count * 0.6));
     expect(batch.every((concept) => (
-      concept.customerEligible
-      && concept.claimMode === "SAFE_MODE"
-      && concept.claimAuthority === "SAFE_COPY"
-      && concept.benefitPackageId === "BENEFIT_1"
+      isOwnerSelectableVeteranExecution(concept)
+      && !OWNER_REJECTED_VETERAN_EXECUTION_IDS.includes(concept.executionId as any)
       && Object.values(concept.visualQuality).every((value) => value !== "FAIL")
     ))).toBe(true);
+  });
+
+  test("permanently excludes every owner-rejected execution and preserves history exclusion", () => {
+    const library = buildApprovedVeteranLibrary();
+    for (const executionId of OWNER_REJECTED_VETERAN_EXECUTION_IDS) {
+      const rejected = library.find((concept) => concept.executionId === executionId);
+      expect(rejected?.customerEligible).toBe(true);
+      expect(rejected && isOwnerSelectableVeteranExecution(rejected)).toBe(false);
+    }
+    const first = selectApprovedVeteranConcepts({ seed: "owner-allocation-one", count: 5 });
+    const second = selectApprovedVeteranConcepts({
+      seed: "owner-allocation-two",
+      count: 5,
+      usedVisualConceptIds: new Set(first.map((concept) => concept.visualConceptId)),
+    });
+    expect(second.some((concept) => first.some((prior) => prior.visualConceptId === concept.visualConceptId))).toBe(false);
+  });
+
+  test("VET_M13 renders every approved amount with the existing high-contrast image treatment", () => {
+    const library = buildApprovedVeteranLibrary();
+    const css = readFileSync("styles/Veteran24MasterReview.module.css", "utf8");
+    expect(css).toContain(".creative.imageMode:not(.paper) .headline,.creative.imageMode:not(.paper) .heroValue{text-shadow:0 2px 8px rgba(0,0,0,.85)}");
+    expect(css).toContain(".creative.imageMode:not(.paper) .heroValue{color:var(--accent)}");
+    expect(css).not.toContain(".creative.imageMode:not(.paper).layout-13 .heroValue{color:#06192c;text-shadow:none}");
+    for (const amount of [40_000, 50_000, 100_000] as const) {
+      const concept = library.find((candidate) => (
+        candidate.masterId === "VET_M13"
+        && candidate.heroAmount === amount
+        && Boolean(candidate.backgroundAssetId)
+        && isOwnerSelectableVeteranExecution(candidate)
+      ));
+      expect(concept).toBeDefined();
+      const markup = renderToStaticMarkup(createElement(ApprovedVeteranCreative, { draft: { approvedVeteranConcept: concept } }));
+      expect(markup).toContain("data-hero-kind=\"amount\"");
+      expect(markup).toContain(`$${amount.toLocaleString("en-US")}`);
+    }
   });
 
   test.each([3, 5])("production handler routes canonical Veteran input to %i recovered drafts", async (variantCount) => {
@@ -92,9 +139,11 @@ describe("approved Veteran production recovery", () => {
       draft.leadType === "veteran"
       && draft.audienceSegment === "veteran"
       && draft.generatedBy === "approved_veteran_library"
-      && draft.approvedVeteranConcept?.claimMode === "SAFE_MODE"
       && draft.approvedVeteranConcept?.customerEligible === true
-      && draft.displayAmount === ""
+      && !OWNER_REJECTED_VETERAN_EXECUTION_IDS.includes(draft.approvedVeteranConcept?.executionId)
+      && draft.displayAmount === (draft.approvedVeteranConcept?.heroAmount
+        ? `$${Number(draft.approvedVeteranConcept.heroAmount).toLocaleString("en-US")}`
+        : "")
       && draft.variationType === draft.approvedVeteranConcept?.visualConceptId
     ))).toBe(true);
   });
