@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { buildNativeLeadFormQuestions } from "@/lib/facebook/nativeLeadFormQuestions";
 
 describe("veteran Meta Instant Form schema", () => {
@@ -10,6 +12,15 @@ describe("veteran Meta Instant Form schema", () => {
     expect(questions.filter((question) => question.type === "CUSTOM").map((question) => question.key)).toEqual([
       "age", "who_needs_coverage", "coverage_amount",
     ]);
+    expect(questions).toHaveLength(7);
+
+    const publishSource = fs.readFileSync(path.resolve("pages/api/facebook/publish-ad.ts"), "utf8");
+    const consentBlock = publishSource.slice(
+      publishSource.indexOf("const customDisclaimer"),
+      publishSource.indexOf("const formName")
+    );
+    expect(consentBlock).toContain("is_required: true");
+    expect(questions.length + 1).toBe(8);
   });
 
   it("uses age ranges and never asks for removed qualification fields", () => {

@@ -37,6 +37,9 @@ import {
   claimNativeLeadFormTemplate,
   failNativeLeadFormTemplate,
   finalizeNativeLeadFormTemplate,
+  isMetaDuplicateNativeLeadFormNameError,
+  recordCreatedNativeLeadForm,
+  recoverExactNativeLeadForm,
   verifyNativeLeadFormQualitySettings,
   type NativeLeadFormSpecification,
 } from "@/lib/facebook/metaLeadFormTemplate";
@@ -929,14 +932,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           formName,
           specification: nativeFormSpecification,
         });
+        const pageAccessToken = String((user as any)?.metaPageAccessToken || "").trim();
+        const formAccessToken = pageAccessToken || accessToken;
         if (formClaim.reused) {
           metaFormId = formClaim.formId;
-          const pageAccessToken = String((user as any)?.metaPageAccessToken || "").trim();
-          const formReview = await verifyNativeLeadFormQualitySettings({
-            formId: metaFormId,
-            accessToken: pageAccessToken || accessToken,
-            formUrl: (formId) => metaGraphUrl(formId),
-          });
+          let formReview;
+          try {
+            formReview = await verifyNativeLeadFormQualitySettings({
+              formId: metaFormId,
+              accessToken: formAccessToken,
+              formUrl: (formId) => metaGraphUrl(formId),
+              expectedFormName: formName,
+              expectedSpecification: nativeFormSpecification,
+            });
+            if (formClaim.claimToken) {
+              await finalizeNativeLeadFormTemplate({
+                userEmail,
+                pageId: pageIdFinal,
+                fingerprint: formClaim.fingerprint,
+                claimToken: formClaim.claimToken,
+                formId: metaFormId,
+              });
+            }
+          } catch (verificationError) {
+            if (formClaim.claimToken) {
+              await failNativeLeadFormTemplate({
+                userEmail,
+                pageId: pageIdFinal,
+                fingerprint: formClaim.fingerprint,
+                claimToken: formClaim.claimToken,
+                error: verificationError,
+              }).catch(() => {});
+            }
+            throw verificationError;
+          }
           for (const warning of formReview.policyWarnings) {
             recordMetaPolicyWarning(policyWarnings, warning);
           }
@@ -955,8 +984,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         metaFormParams.set("is_optimized_for_quality", "true");
         metaFormParams.set("is_phone_sms_verify_enabled", "true");
         // Prefer page access token for page-scoped leadgen_forms endpoint
-        const pageAccessToken = String((user as any)?.metaPageAccessToken || "").trim();
-        metaFormParams.set("access_token", pageAccessToken || accessToken);
+        metaFormParams.set("access_token", formAccessToken);
 
         const metaFormResp = await fetch(metaGraphUrl(`${pageIdFinal}/leadgen_forms`), {
           method: "POST",
@@ -965,7 +993,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         const metaFormJson = await metaFormResp.json();
 
+        let formReview;
         if (!metaFormResp.ok || !metaFormJson?.id) {
+          if (isMetaDuplicateNativeLeadFormNameError(metaFormJson)) {
+            try {
+              const recovered = await recoverExactNativeLeadForm({
+                pageId: pageIdFinal,
+                formName,
+                expectedFingerprint: formClaim.fingerprint,
+                specification: nativeFormSpecification,
+                accessToken: formAccessToken,
+                pageFormsUrl: (pageId) => metaGraphUrl(`${pageId}/leadgen_forms`),
+                formUrl: (formId) => metaGraphUrl(formId),
+              });
+              metaFormId = recovered.formId;
+              formReview = recovered.review;
+            } catch (recoveryError) {
+              await failNativeLeadFormTemplate({
+                userEmail,
+                pageId: pageIdFinal,
+                fingerprint: formClaim.fingerprint,
+                claimToken: formClaim.claimToken,
+                error: recoveryError,
+              }).catch(() => {});
+              throw recoveryError;
+            }
+          } else {
           const formError = new Error(`Meta lead form create failed: ${JSON.stringify(metaFormJson)}`);
           await failNativeLeadFormTemplate({
             userEmail,
@@ -975,14 +1028,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             error: formError,
           }).catch(() => {});
           throw formError;
+          }
+        } else {
+          metaFormId = String(metaFormJson.id);
         }
-        metaFormId = String(metaFormJson.id);
+
+        await recordCreatedNativeLeadForm({
+          userEmail,
+          pageId: pageIdFinal,
+          fingerprint: formClaim.fingerprint,
+          claimToken: formClaim.claimToken,
+          formId: metaFormId,
+        });
+        await FBLeadCampaign.findOneAndUpdate(
+          { _id: campaign._id, userEmail },
+          { $set: { metaFormId, metaFormFingerprint: formClaim.fingerprint, metaLastPublishAttemptAt: new Date() } }
+        );
+
         try {
-          const formReview = await verifyNativeLeadFormQualitySettings({
-            formId: metaFormId,
-            accessToken: pageAccessToken || accessToken,
-            formUrl: (formId) => metaGraphUrl(formId),
-          });
+          if (!formReview) {
+            formReview = await verifyNativeLeadFormQualitySettings({
+              formId: metaFormId,
+              accessToken: formAccessToken,
+              formUrl: (formId) => metaGraphUrl(formId),
+              expectedFormName: formName,
+              expectedSpecification: nativeFormSpecification,
+            });
+          }
           for (const warning of formReview.policyWarnings) {
             recordMetaPolicyWarning(policyWarnings, warning);
           }
@@ -1003,10 +1075,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           claimToken: formClaim.claimToken,
           formId: metaFormId,
         });
-        await FBLeadCampaign.findOneAndUpdate(
-          { _id: campaign._id, userEmail },
-          { $set: { metaFormId, metaFormFingerprint: formClaim.fingerprint, metaLastPublishAttemptAt: new Date() } }
-        );
         }
       }
       } // end native_form-only block
