@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getServerSession } from "next-auth/next";
 import ApprovedVeteranCreative from "@/components/FacebookAds/ApprovedVeteranCreative";
+import { isDecodedCreativePhoto, measurePhotoContribution } from "@/components/FacebookAds/AdWizard";
 import handler from "@/pages/api/facebook/generate-ad";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
 import { loadGlobalGenerationHints } from "@/lib/facebook/globalIntelligence/anonymizedLearning";
@@ -31,6 +32,30 @@ jest.mock("@/models/MetaCreativeUsage", () => ({
   __esModule: true,
   default: { find: jest.fn() },
 }));
+
+function makeCapturePair(alpha: number, paintedCells = 16) {
+  const width = 32;
+  const height = 32;
+  const normal = new Uint8ClampedArray(width * height * 4);
+  const hidden = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      const base = 28 + ((x * 3 + y * 5) % 24);
+      const cell = Math.floor(y / 8) * 4 + Math.floor(x / 8);
+      const photo = [60 + ((x * 11) % 150), 45 + ((y * 13) % 155), 35 + (((x + y) * 7) % 165)];
+      for (let channel = 0; channel < 3; channel += 1) {
+        hidden[offset + channel] = base;
+        normal[offset + channel] = cell < paintedCells
+          ? Math.round(base * (1 - alpha) + photo[channel] * alpha)
+          : base;
+      }
+      hidden[offset + 3] = 255;
+      normal[offset + 3] = 255;
+    }
+  }
+  return { normal, hidden, width, height };
+}
 
 describe("approved Veteran production recovery", () => {
   beforeEach(() => {
@@ -64,6 +89,93 @@ describe("approved Veteran production recovery", () => {
     expect(library.filter((concept) => concept.customerEligible && !concept.backgroundAssetId)).toHaveLength(30);
     expect(library.filter((concept) => concept.customerEligible).every((concept) => AUG29_APPROVED_VETERAN_EXECUTION_IDS.includes(concept.executionId as any))).toBe(true);
     expect(library.filter((concept) => concept.customerEligible).some(hasVeteranCustomerVisibleInternalLabel)).toBe(false);
+  });
+
+  test("restores one marked real photo node for every image-backed production execution", () => {
+    const imageBacked = buildApprovedVeteranLibrary().filter((concept) => concept.customerEligible && concept.backgroundAssetId);
+    expect(imageBacked).toHaveLength(45);
+
+    for (const concept of imageBacked) {
+      const markup = renderToStaticMarkup(createElement(ApprovedVeteranCreative, {
+        draft: { approvedVeteranConcept: concept },
+      }));
+      const markedPhotos = markup.match(/<img\b[^>]*data-creative-photo="true"[^>]*>/g) || [];
+
+      expect(markedPhotos).toHaveLength(1);
+      expect(markedPhotos[0]).toContain(`data-creative-photo-src="${concept.backgroundUrl}"`);
+      expect(markedPhotos[0]).toContain(`src="${concept.backgroundUrl}"`);
+      expect(markup).toMatch(/data-veteran-master-preview="true"|data-reference-locked-preview="true"|data-reference-replica="07"/);
+      expect(markup).not.toContain(`background-image:url(&quot;${concept.backgroundUrl}&quot;)`);
+    }
+  });
+
+  test("uses causal paired captures and restores the marked photo state", () => {
+    const wizard = readFileSync("components/FacebookAds/AdWizard.tsx", "utf8");
+    expect(wizard).toContain("img[data-creative-photo=\"true\"]");
+    expect(wizard).toContain("await inlineCreativeImages(node)");
+    expect(wizard).toContain("const photoExpectation = getPhotoExpectation(node)");
+    expect(wizard).toContain("captureWithMarkedPhotoHidden");
+    expect(wizard).toContain('photo.style.setProperty("visibility", "hidden", "important")');
+    expect(wizard).toContain('photo.setAttribute("style", originalStyle)');
+    expect(wizard).toContain("finally {");
+    expect(wizard).not.toContain("photoCorrelation >= 0.72 && photoMeanError <= 60");
+    expect(wizard).toContain("for (let attempt = 0; attempt < 3; attempt += 1)");
+  });
+
+  test.each([
+    ["faint background", 0.12, 16],
+    ["full dark overlay", 0.24, 16],
+    ["hero-protected background", 0.2, 8],
+    ["patriotic texture", 0.16, 16],
+    ["split background", 0.3, 8],
+    ["top environment fade", 0.14, 12],
+    ["left image gradient", 0.18, 8],
+    ["right image gradient", 0.18, 8],
+  ])("detects material photo contribution under %s", (_label, alpha, paintedCells) => {
+    const pair = makeCapturePair(alpha as number, paintedCells as number);
+    const result = measurePhotoContribution(
+      pair.normal,
+      pair.hidden,
+      pair.width,
+      pair.height,
+      { left: 0, top: 0, width: 1, height: 1 },
+    );
+    expect(result.detected).toBe(true);
+    expect(result.changedPixelRatio).toBeGreaterThan(0);
+    expect(result.changedCellRatio).toBeGreaterThan(0);
+  });
+
+  test("rejects CSS-only, missing/non-painted, and invalid-bounds paired captures", () => {
+    const pair = makeCapturePair(0.2);
+    const identical = measurePhotoContribution(
+      pair.hidden,
+      pair.hidden,
+      pair.width,
+      pair.height,
+      { left: 0, top: 0, width: 1, height: 1 },
+    );
+    expect(identical).toMatchObject({
+      detected: false,
+      meanColorDelta: 0,
+      changedPixelRatio: 0,
+      changedCellRatio: 0,
+    });
+    expect(measurePhotoContribution(
+      pair.normal,
+      pair.hidden,
+      pair.width,
+      pair.height,
+      { left: 0, top: 0, width: 0, height: 1 },
+    ).detected).toBe(false);
+  });
+
+  test("rejects broken or unloaded marked photos before capture", () => {
+    const rect = { left: 0, top: 0, width: 1, height: 1 };
+    expect(isDecodedCreativePhoto(rect, "data:image/png;base64,valid", true, 100, 100)).toBe(true);
+    expect(isDecodedCreativePhoto(rect, "data:image/png;base64,broken", false, 0, 0)).toBe(false);
+    expect(isDecodedCreativePhoto(rect, "https://example.com/not-inlined.png", true, 100, 100)).toBe(false);
+    expect(isDecodedCreativePhoto({ ...rect, width: 0 }, "data:image/png;base64,valid", true, 100, 100)).toBe(false);
+    expect(isDecodedCreativePhoto(null, "data:image/png;base64,valid", true, 100, 100)).toBe(false);
   });
 
   test.each([3, 5])("allocates an owner-approved, diverse %i-ad Veteran batch", (count) => {

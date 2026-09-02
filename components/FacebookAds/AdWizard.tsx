@@ -66,8 +66,9 @@ type CaptureValidation = {
   width: number;
   height: number;
   photoDetected?: boolean;
-  photoMeanError?: number;
-  photoCorrelation?: number;
+  photoMeanDelta?: number;
+  photoChangedPixelRatio?: number;
+  photoChangedCellRatio?: number;
 };
 
 type NormalizedRect = { left: number; top: number; width: number; height: number };
@@ -78,6 +79,14 @@ type PhotoExpectation = {
   sourceHeight: number;
   objectPositionX: number;
   objectPositionY: number;
+};
+
+export type PhotoContributionMetrics = {
+  detected: boolean;
+  meanColorDelta: number;
+  meanLuminanceDelta: number;
+  changedPixelRatio: number;
+  changedCellRatio: number;
 };
 
 const CAPTURE_ERROR = "Ad image capture failed. Please try again.";
@@ -209,17 +218,35 @@ function parseObjectPosition(value: string, axis: "x" | "y") {
   return 0.5;
 }
 
+export function isDecodedCreativePhoto(
+  rect: NormalizedRect | null,
+  sourceDataUrl: string,
+  complete: boolean,
+  naturalWidth: number,
+  naturalHeight: number,
+) {
+  return Boolean(
+    rect
+    && rect.width > 0
+    && rect.height > 0
+    && sourceDataUrl.startsWith("data:image/")
+    && complete
+    && naturalWidth > 0
+    && naturalHeight > 0,
+  );
+}
+
 function getPhotoExpectation(node: HTMLElement): PhotoExpectation | null {
   const photo = node.querySelector<HTMLImageElement>('img[data-creative-photo="true"]');
   if (!photo) return null;
   const rect = getNormalizedPhotoRect(node, photo);
   const sourceDataUrl = String(photo.currentSrc || photo.src || "").trim();
-  if (!rect || !sourceDataUrl.startsWith("data:image/") || !photo.complete || photo.naturalWidth <= 0 || photo.naturalHeight <= 0) {
+  if (!isDecodedCreativePhoto(rect, sourceDataUrl, photo.complete, photo.naturalWidth, photo.naturalHeight)) {
     throw new Error(CAPTURE_ERROR);
   }
   const style = window.getComputedStyle(photo);
   return {
-    rect,
+    rect: rect!,
     sourceDataUrl,
     sourceWidth: photo.naturalWidth,
     sourceHeight: photo.naturalHeight,
@@ -287,7 +314,93 @@ function decodeImage(dataUrl: string) {
   });
 }
 
-async function validateCapturedImage(dataUrl: string, photoExpectation: PhotoExpectation | null = null): Promise<CaptureValidation> {
+export function measurePhotoContribution(
+  normalPixels: Uint8ClampedArray,
+  hiddenPixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+  rect: NormalizedRect,
+): PhotoContributionMetrics {
+  const empty = {
+    detected: false,
+    meanColorDelta: 0,
+    meanLuminanceDelta: 0,
+    changedPixelRatio: 0,
+    changedCellRatio: 0,
+  };
+  if (width <= 0 || height <= 0 || normalPixels.length !== hiddenPixels.length || normalPixels.length < width * height * 4) {
+    return empty;
+  }
+
+  const left = Math.max(0, Math.min(width - 1, Math.floor(rect.left * width)));
+  const top = Math.max(0, Math.min(height - 1, Math.floor(rect.top * height)));
+  const right = Math.max(left + 1, Math.min(width, Math.ceil((rect.left + rect.width) * width)));
+  const bottom = Math.max(top + 1, Math.min(height, Math.ceil((rect.top + rect.height) * height)));
+  if (rect.width <= 0 || rect.height <= 0 || right <= left || bottom <= top) return empty;
+
+  const regionWidth = right - left;
+  const regionHeight = bottom - top;
+  const gridSize = 4;
+  const cells = Array.from({ length: gridSize * gridSize }, () => ({ samples: 0, changed: 0, delta: 0 }));
+  const step = Math.max(1, Math.floor(Math.min(regionWidth, regionHeight) / 160));
+  let samples = 0;
+  let changed = 0;
+  let colorDeltaSum = 0;
+  let luminanceDeltaSum = 0;
+
+  for (let y = top; y < bottom; y += step) {
+    for (let x = left; x < right; x += step) {
+      const offset = (y * width + x) * 4;
+      const redDelta = Math.abs(normalPixels[offset] - hiddenPixels[offset]);
+      const greenDelta = Math.abs(normalPixels[offset + 1] - hiddenPixels[offset + 1]);
+      const blueDelta = Math.abs(normalPixels[offset + 2] - hiddenPixels[offset + 2]);
+      const colorDelta = (redDelta + greenDelta + blueDelta) / 3;
+      const luminanceDelta = Math.abs(
+        0.2126 * (normalPixels[offset] - hiddenPixels[offset])
+        + 0.7152 * (normalPixels[offset + 1] - hiddenPixels[offset + 1])
+        + 0.0722 * (normalPixels[offset + 2] - hiddenPixels[offset + 2]),
+      );
+      const changedPixel = colorDelta >= 2 || luminanceDelta >= 1.5;
+      const cellX = Math.min(gridSize - 1, Math.floor(((x - left) / regionWidth) * gridSize));
+      const cellY = Math.min(gridSize - 1, Math.floor(((y - top) / regionHeight) * gridSize));
+      const cell = cells[cellY * gridSize + cellX];
+      cell.samples += 1;
+      cell.delta += colorDelta;
+      if (changedPixel) {
+        changed += 1;
+        cell.changed += 1;
+      }
+      samples += 1;
+      colorDeltaSum += colorDelta;
+      luminanceDeltaSum += luminanceDelta;
+    }
+  }
+
+  if (!samples) return empty;
+  const meanColorDelta = colorDeltaSum / samples;
+  const meanLuminanceDelta = luminanceDeltaSum / samples;
+  const changedPixelRatio = changed / samples;
+  const changedCells = cells.filter((cell) => (
+    cell.samples > 0
+    && cell.changed / cell.samples >= 0.015
+    && cell.delta / cell.samples >= 0.5
+  )).length;
+  const changedCellRatio = changedCells / cells.length;
+
+  return {
+    detected: meanColorDelta >= 0.75 && changedPixelRatio >= 0.015 && changedCellRatio >= 0.125,
+    meanColorDelta,
+    meanLuminanceDelta,
+    changedPixelRatio,
+    changedCellRatio,
+  };
+}
+
+async function validateCapturedImage(
+  dataUrl: string,
+  photoExpectation: PhotoExpectation | null = null,
+  photoHiddenDataUrl: string | null = null,
+): Promise<CaptureValidation> {
   if (!dataUrl.startsWith("data:image/")) {
     return { ok: false, width: 0, height: 0 };
   }
@@ -350,76 +463,36 @@ async function validateCapturedImage(dataUrl: string, photoExpectation: PhotoExp
   const blankGray = grayishRatio > 0.92 && channelRange < 22 && luminanceStdDev < 10;
 
   let photoDetected = !photoExpectation;
-  let photoMeanError: number | undefined;
-  let photoCorrelation: number | undefined;
+  let photoMeanDelta: number | undefined;
+  let photoChangedPixelRatio: number | undefined;
+  let photoChangedCellRatio: number | undefined;
   if (photoExpectation) {
-    const source = await decodeImage(photoExpectation.sourceDataUrl);
-    const { rect } = photoExpectation;
-    const regionWidth = Math.max(1, rect.width * width);
-    const regionHeight = Math.max(1, rect.height * height);
-    const coverScale = Math.max(
-      regionWidth / photoExpectation.sourceWidth,
-      regionHeight / photoExpectation.sourceHeight,
+    if (!photoHiddenDataUrl) {
+      return { ok: false, width, height, photoDetected: false };
+    }
+    const hiddenImage = await decodeImage(photoHiddenDataUrl);
+    const hiddenWidth = hiddenImage.naturalWidth || hiddenImage.width;
+    const hiddenHeight = hiddenImage.naturalHeight || hiddenImage.height;
+    if (hiddenWidth !== width || hiddenHeight !== height) {
+      return { ok: false, width, height, photoDetected: false };
+    }
+    const hiddenCanvas = document.createElement("canvas");
+    hiddenCanvas.width = width;
+    hiddenCanvas.height = height;
+    const hiddenContext = hiddenCanvas.getContext("2d", { willReadFrequently: true });
+    if (!hiddenContext) return { ok: false, width, height, photoDetected: false };
+    hiddenContext.drawImage(hiddenImage, 0, 0);
+    const contribution = measurePhotoContribution(
+      context.getImageData(0, 0, width, height).data,
+      hiddenContext.getImageData(0, 0, width, height).data,
+      width,
+      height,
+      photoExpectation.rect,
     );
-    const renderedWidth = photoExpectation.sourceWidth * coverScale;
-    const renderedHeight = photoExpectation.sourceHeight * coverScale;
-    const overflowX = Math.max(0, renderedWidth - regionWidth);
-    const overflowY = Math.max(0, renderedHeight - regionHeight);
-    const capturedLuma: number[] = [];
-    const sourceLuma: number[] = [];
-    let absoluteError = 0;
-    let sampleCount = 0;
-
-    const sourceCanvas = document.createElement("canvas");
-    sourceCanvas.width = photoExpectation.sourceWidth;
-    sourceCanvas.height = photoExpectation.sourceHeight;
-    const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
-    if (!sourceContext) return { ok: false, width, height, photoDetected: false };
-    sourceContext.drawImage(source, 0, 0);
-
-    // Sample away from the lower offer badge and the container's inset shadow.
-    // This compares the real paid source photo with the exact pixels that will
-    // be uploaded to Meta instead of guessing based on color/contrast.
-    for (let row = 0; row < 6; row += 1) {
-      const v = 0.1 + row * 0.09;
-      for (let column = 0; column < 9; column += 1) {
-        const u = 0.1 + column * 0.1;
-        const capturedX = Math.max(0, Math.min(width - 1, Math.round((rect.left + rect.width * u) * width)));
-        const capturedY = Math.max(0, Math.min(height - 1, Math.round((rect.top + rect.height * v) * height)));
-        const sourceX = Math.max(0, Math.min(
-          photoExpectation.sourceWidth - 1,
-          Math.round((u * regionWidth + overflowX * photoExpectation.objectPositionX) / coverScale),
-        ));
-        const sourceY = Math.max(0, Math.min(
-          photoExpectation.sourceHeight - 1,
-          Math.round((v * regionHeight + overflowY * photoExpectation.objectPositionY) / coverScale),
-        ));
-        const capturedPixel = context.getImageData(capturedX, capturedY, 1, 1).data;
-        const sourcePixel = sourceContext.getImageData(sourceX, sourceY, 1, 1).data;
-        absoluteError += Math.abs(capturedPixel[0] - sourcePixel[0])
-          + Math.abs(capturedPixel[1] - sourcePixel[1])
-          + Math.abs(capturedPixel[2] - sourcePixel[2]);
-        capturedLuma.push(0.2126 * capturedPixel[0] + 0.7152 * capturedPixel[1] + 0.0722 * capturedPixel[2]);
-        sourceLuma.push(0.2126 * sourcePixel[0] + 0.7152 * sourcePixel[1] + 0.0722 * sourcePixel[2]);
-        sampleCount += 1;
-      }
-    }
-
-    photoMeanError = sampleCount ? absoluteError / (sampleCount * 3) : Number.POSITIVE_INFINITY;
-    const capturedMean = capturedLuma.reduce((sum, value) => sum + value, 0) / Math.max(1, capturedLuma.length);
-    const sourceMean = sourceLuma.reduce((sum, value) => sum + value, 0) / Math.max(1, sourceLuma.length);
-    let covariance = 0;
-    let capturedSquares = 0;
-    let sourceSquares = 0;
-    for (let index = 0; index < capturedLuma.length; index += 1) {
-      const capturedDelta = capturedLuma[index] - capturedMean;
-      const sourceDelta = sourceLuma[index] - sourceMean;
-      covariance += capturedDelta * sourceDelta;
-      capturedSquares += capturedDelta * capturedDelta;
-      sourceSquares += sourceDelta * sourceDelta;
-    }
-    photoCorrelation = covariance / Math.max(1, Math.sqrt(capturedSquares * sourceSquares));
-    photoDetected = (photoCorrelation >= 0.72 && photoMeanError <= 60) || photoMeanError <= 24;
+    photoDetected = contribution.detected;
+    photoMeanDelta = contribution.meanColorDelta;
+    photoChangedPixelRatio = contribution.changedPixelRatio;
+    photoChangedCellRatio = contribution.changedCellRatio;
   }
 
   return {
@@ -427,9 +500,27 @@ async function validateCapturedImage(dataUrl: string, photoExpectation: PhotoExp
     width,
     height,
     photoDetected,
-    photoMeanError,
-    photoCorrelation,
+    photoMeanDelta,
+    photoChangedPixelRatio,
+    photoChangedCellRatio,
   };
+}
+
+async function captureWithMarkedPhotoHidden(
+  node: HTMLElement,
+  options: Parameters<typeof toPng>[1],
+) {
+  const photo = node.querySelector<HTMLImageElement>('img[data-creative-photo="true"]');
+  if (!photo) return null;
+  const originalStyle = photo.getAttribute("style");
+  try {
+    photo.style.setProperty("visibility", "hidden", "important");
+    await waitForAnimationFrame();
+    return await toPng(node, options);
+  } finally {
+    if (originalStyle === null) photo.removeAttribute("style");
+    else photo.setAttribute("style", originalStyle);
+  }
 }
 
 function logCaptureValidation(index: number, validation: CaptureValidation) {
@@ -440,8 +531,9 @@ function logCaptureValidation(index: number, validation: CaptureValidation) {
     height: validation.height,
     validationPassed: validation.ok,
     photoDetected: validation.photoDetected,
-    photoMeanError: validation.photoMeanError,
-    photoCorrelation: validation.photoCorrelation,
+    photoMeanDelta: validation.photoMeanDelta,
+    photoChangedPixelRatio: validation.photoChangedPixelRatio,
+    photoChangedCellRatio: validation.photoChangedCellRatio,
   });
 }
 
@@ -463,12 +555,16 @@ export async function captureProductionCreative(node: HTMLElement, index = 0) {
       await wait(180 * attempt);
       await waitForAnimationFrame();
     }
-    const renderedCreativeDataUrl = await toPng(node, {
+    const captureOptions = {
       quality: 0.92,
       pixelRatio: 2,
       cacheBust: attempt > 0,
-    });
-    const validation = await validateCapturedImage(renderedCreativeDataUrl, photoExpectation);
+    };
+    const renderedCreativeDataUrl = await toPng(node, captureOptions);
+    const photoHiddenDataUrl = photoExpectation
+      ? await captureWithMarkedPhotoHidden(node, captureOptions)
+      : null;
+    const validation = await validateCapturedImage(renderedCreativeDataUrl, photoExpectation, photoHiddenDataUrl);
     finalValidation = validation;
     logCaptureValidation(index, validation);
     if (validation.ok) {

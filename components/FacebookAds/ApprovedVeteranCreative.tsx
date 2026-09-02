@@ -34,7 +34,7 @@ function amountText(concept: ApprovedVeteranConcept): ReplicaAmount {
 
 function VeteranCanvas({ concept }: { concept: ApprovedVeteranConcept }) {
   const commonStyle = {
-    "--veteran-image": concept.backgroundUrl ? `url("${concept.backgroundUrl}")` : "none",
+    "--veteran-image": "none",
     "--veteran-image-position": concept.imageFocalPosition,
   } as CSSProperties;
   const qualityData = {
@@ -65,7 +65,12 @@ function VeteranCanvas({ concept }: { concept: ApprovedVeteranConcept }) {
       {...qualityData}
     >
       <div className={styles.replicaInner} style={{ width, height, transform: `scale(${scale})`, top: (675 - height * scale) / 2 }}>
-        <VeteranReferenceReplicaCard tile={tile} amount={amountText(concept)} />
+        <VeteranReferenceReplicaCard
+          tile={tile}
+          amount={amountText(concept)}
+          imageUrl={concept.backgroundUrl || undefined}
+          imageFocalPosition={concept.imageFocalPosition}
+        />
         {concept.claimMode === "SAFE_MODE" ? <div className={styles.safeMask} data-safe-mask="true" style={{ left: box.left, top: box.top, width: box.width, height: box.height }}>
           <small>PRIVATE REVIEW</small>
           <strong>{concept.heroContent.map(line => <span key={line}>{line}</span>)}</strong>

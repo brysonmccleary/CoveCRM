@@ -15,7 +15,16 @@ export function Veteran24MasterReviewCard({ preview }: { preview: VeteranMasterP
       data-image-compatible={String(preview.imageCompatible)}
       data-background-treatment={isImage ? preview.imageTreatment : "none"}
     >
-      <div className={styles.photo} style={isImage ? { backgroundImage: `url("${preview.imageUrl}")`, backgroundPosition: preview.imageFocalPosition || "center" } : undefined} />
+      <div className={styles.photo}>
+        {isImage ? <img
+          alt=""
+          aria-hidden="true"
+          data-creative-photo="true"
+          data-creative-photo-src={preview.imageUrl}
+          src={preview.imageUrl}
+          style={{ display: "block", height: "100%", objectFit: "cover", objectPosition: preview.imageFocalPosition || "center", width: "100%" }}
+        /> : null}
+      </div>
       <div className={styles.overlay} />
       <div className={styles.texture} />
       <div className={styles.frame} />
