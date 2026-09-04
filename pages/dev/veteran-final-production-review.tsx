@@ -8,7 +8,7 @@ import {
 } from "@/lib/facebook/approvedVeteranCreative";
 import { VETERAN_AUG29_GOLDEN_VISUALS } from "@/lib/facebook/veteranGoldenVisualAuthority";
 
-type ReviewMode = "full" | "random" | "images" | "golden" | "authenticated";
+type ReviewMode = "full" | "market" | "random" | "images" | "golden" | "authenticated";
 
 function deterministicOrder(values: ApprovedVeteranConcept[], seed: string) {
   const score = (value: string) => {
@@ -29,7 +29,7 @@ export default function VeteranFinalProductionReview({ mode, concepts }: { mode:
     </header>
     <section className="grid">
       {concepts.map((concept) => <article data-review-card="true" data-execution-id={concept.executionId} key={concept.executionId}>
-        <div className="creative" style={{ height: concept.masterKind === "market_direct" ? 270 : 337.5 }}><ApprovedVeteranCreative draft={{ approvedVeteranConcept: concept }} /></div>
+        <div className="creative"><ApprovedVeteranCreative draft={{ approvedVeteranConcept: concept }} /></div>
         <div className="meta"><b>{concept.executionId}</b><span>{concept.renderFingerprint}</span><span>{concept.backgroundAssetId || "PURE GRAPHIC"} · {concept.imageTreatment}</span></div>
       </article>)}
     </section>
@@ -48,10 +48,18 @@ export default function VeteranFinalProductionReview({ mode, concepts }: { mode:
 
 export const getServerSideProps: GetServerSideProps = async ({ query }) => {
   if (process.env.NODE_ENV !== "development") return { notFound: true };
-  const mode = (["full", "random", "images", "golden", "authenticated"].includes(String(query.mode)) ? String(query.mode) : "full") as ReviewMode;
+  const mode = (["full", "market", "random", "images", "golden", "authenticated"].includes(String(query.mode)) ? String(query.mode) : "full") as ReviewMode;
   const eligible = buildApprovedVeteranLibrary().filter(isOwnerSelectableVeteranExecution);
   let concepts: ApprovedVeteranConcept[];
-  if (mode === "golden") {
+  if (mode === "market") {
+    concepts = eligible
+      .filter((concept) => concept.masterKind === "market_direct")
+      .sort((left, right) => {
+        const leftExecution = Number(left.executionId.match(/EXEC_(\d+)$/)?.[1] || 0);
+        const rightExecution = Number(right.executionId.match(/EXEC_(\d+)$/)?.[1] || 0);
+        return leftExecution - rightExecution || (left.referenceTile || 0) - (right.referenceTile || 0);
+      });
+  } else if (mode === "golden") {
     const ids = new Set(VETERAN_AUG29_GOLDEN_VISUALS.map((golden) => golden.executionId));
     concepts = eligible.filter((concept) => ids.has(concept.executionId));
   } else if (mode === "images") {

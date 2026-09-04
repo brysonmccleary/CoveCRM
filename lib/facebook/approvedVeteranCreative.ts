@@ -272,24 +272,31 @@ function veteranSeeds(): VeteranSeed[] {
         baseHeadline: VET_HOOKS[0],
       };
     }),
-    {
-      masterId: "VET_MARKET_01",
-      sourceMasterId: "VET_MARKET_01",
-      kind: "market_direct" as const,
-      tile: 1,
-      backgroundTreatments: [],
-      approvedGeometryId: "VET_MARKET_OFFER_FIRST",
-      baseHeadline: ["VETERANS", "WHOLE LIFE COVERAGE"],
-    },
-    {
-      masterId: "VET_MARKET_02",
-      sourceMasterId: "VET_MARKET_02",
-      kind: "market_direct" as const,
-      tile: 2,
-      backgroundTreatments: [],
-      approvedGeometryId: "VET_MARKET_FAMILY_BURDEN",
-      baseHeadline: ["VETERANS", "DON'T LEAVE THE BURDEN TO YOUR FAMILY"],
-    },
+    ...[
+      ["VETERANS", "WHOLE LIFE INSURANCE"],
+      ["MILITARY", "WHOLE LIFE"],
+      ["VETERANS", "DON’T LEAVE YOUR FAMILY WITH THE BILL"],
+      ["VETERANS", "PRIVATE COVERAGE THAT PROTECTS"],
+      ["VETERANS", "SECURE TODAY PROTECT TOMORROW"],
+      ["VETERANS", "WE THANK YOU"],
+      ["YOU SERVED", "NOW PROTECT WHAT MATTERS"],
+      ["MILITARY FAMILIES", "DESERVE FINANCIAL PROTECTION"],
+      ["VETERANS", "LIFE INSURANCE"],
+      ["VETERANS", "BUILT FOR YOU. BACKED BY US."],
+      ["SERVE WITH HONOR", "PROTECT WITH PURPOSE"],
+      ["MILITARY STRONG", "FUTURE SECURE"],
+    ].map((baseHeadline, index) => {
+      const masterId = `VET_MARKET_${pad(index + 1)}`;
+      return {
+        masterId,
+        sourceMasterId: masterId,
+        kind: "market_direct" as const,
+        tile: index + 1,
+        backgroundTreatments: [],
+        approvedGeometryId: `VET_MARKET_REFERENCE_${pad(index + 1)}`,
+        baseHeadline,
+      };
+    }),
   ];
 }
 
@@ -301,10 +308,7 @@ function buildExecution(seed: VeteranSeed, index: number, imageCounter: { value:
   if (seed.kind === "market_direct") {
     const palette = MARKET_DIRECT_PALETTES[index % MARKET_DIRECT_PALETTES.length];
     const surface = Math.floor(index / MARKET_DIRECT_PALETTES.length) % 10;
-    const offerFirst = seed.masterId === "VET_MARKET_01";
-    const benefits = offerFirst
-      ? ["NO MEDICAL EXAM", "INSTANT APPROVALS", "PROTECT YOUR FAMILY"]
-      : ["COVERS FINAL COSTS", "PROTECTS YOUR FAMILY", "COVERAGE FOR LIFE"];
+    const benefits = ["NO MEDICAL EXAM", "NO 2-YEAR WAIT", "PROTECT YOUR FAMILY"];
     const renderFields = {
       lane: "veteran",
       language: "en",
@@ -333,15 +337,15 @@ function buildExecution(seed: VeteranSeed, index: number, imageCounter: { value:
       imageFocalPosition: "center",
       compositionMode: "graphic",
       palette,
-      headlineHookId: offerFirst ? "MARKET_OFFER_FIRST" : "MARKET_FAMILY_BURDEN",
+      headlineHookId: `MARKET_REFERENCE_${pad(seed.tile || 1)}`,
       headline: seed.baseHeadline,
-      heroTreatment: offerFirst ? "amount_panel" : "benefit_amount_panel",
+      heroTreatment: "reference_layout",
       heroAmount: 100000,
       heroContent: ["$100,000"],
       claimMode: "PRODUCTION_APPROVED",
       claimAuthority: "OWNER_CONFIRMED",
       capabilityFixtureId: "OWNER_CONFIRMED_VETERAN_2026_09",
-      benefitPackageId: offerFirst ? "MARKET_BENEFITS_OFFER" : "MARKET_BENEFITS_FAMILY",
+      benefitPackageId: `MARKET_REFERENCE_BENEFITS_${pad(seed.tile || 1)}`,
       benefits,
       ageTreatmentId: "MARKET_VETERAN_50_85",
       ageOptions: renderFields.ageOptions,
@@ -588,7 +592,7 @@ export function buildApprovedVeteranLibrary() {
   const imageCounter = { value: 0 };
   const classified: ApprovedVeteranConcept[] = [];
   for (const seed of veteranSeeds()) {
-    const executionCount = seed.kind === "market_direct" ? 120 : 30;
+    const executionCount = seed.kind === "market_direct" ? 20 : 30;
     for (let index = 0; index < executionCount; index++) {
       const execution = buildExecution(seed, index, imageCounter);
       classified.push({ ...execution, ...classify(execution), customerEligible: false });

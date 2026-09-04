@@ -70,7 +70,7 @@ describe("approved Veteran production recovery", () => {
   test("recovers the exact approved inventory and customer-quality direction", () => {
     const audit = auditApprovedVeteranRuntime();
     expect(audit).toMatchObject({
-      masterCount: 50,
+      masterCount: 60,
       existingApprovedCount: 24,
       referenceLockedCount: 12,
       literalReplicaCount: 12,
@@ -79,7 +79,7 @@ describe("approved Veteran production recovery", () => {
       customerEligibleCount: 315,
       ownerSelectableCount: 315,
       visualConceptCount: 314,
-      eligibleMasterCount: 39,
+      eligibleMasterCount: 49,
       failedEligibleGates: [],
     });
     expect(audit.customerEligibleImageShare).toBeCloseTo(45 / 315, 3);
@@ -187,7 +187,7 @@ describe("approved Veteran production recovery", () => {
     const batch = selectApprovedVeteranConcepts({ seed: `veteran-recovery-${count}`, count });
     expect(batch).toHaveLength(count);
     expect(new Set(batch.map((concept) => concept.visualConceptId)).size).toBe(count);
-    expect(new Set(batch.map((concept) => concept.masterId))).toEqual(new Set(["VET_MARKET_01", "VET_MARKET_02"]));
+    expect(new Set(batch.map((concept) => concept.masterId)).size).toBe(count);
     expect(batch.every((concept) => concept.backgroundAssetId === null)).toBe(true);
     expect(batch.every((concept) => (
       isOwnerSelectableVeteranExecution(concept)
@@ -199,33 +199,34 @@ describe("approved Veteran production recovery", () => {
     ))).toBe(true);
   });
 
-  test("renders both fixed market layouts with no generated-image dependency", () => {
+  test("renders all twelve fixed reference layouts with no generated-image dependency", () => {
     const market = buildApprovedVeteranLibrary().filter((concept) => concept.masterKind === "market_direct");
-    for (const masterId of ["VET_MARKET_01", "VET_MARKET_02"]) {
+    for (const masterId of Array.from({ length: 12 }, (_, index) => `VET_MARKET_${String(index + 1).padStart(2, "0")}`)) {
       const concept = market.find((candidate) => candidate.masterId === masterId && candidate.customerEligible);
       expect(concept).toBeDefined();
       const markup = renderToStaticMarkup(createElement(ApprovedVeteranCreative, {
         draft: { approvedVeteranConcept: concept },
       }));
-      expect(markup).toContain(`data-market-direct-layout="${masterId === "VET_MARKET_01" ? "offer-first" : "family-burden"}"`);
-      expect(markup).toContain('data-creative-aspect="1:1"');
-      expect(markup).toContain("$100,000");
-      expect(markup).toContain("SEE MY OPTIONS");
+      const tile = Number(masterId.slice(-2));
+      expect(markup).toContain(`data-market-direct-layout="reference-${String(tile).padStart(2, "0")}"`);
+      expect(markup).toContain(`data-reference-replica="${String(tile).padStart(2, "0")}"`);
+      expect(markup).toContain('data-creative-aspect="4:5"');
+      if (tile !== 3) expect(markup).toContain("$100,000");
       expect(markup).not.toContain("<img");
       expect(concept?.backgroundUrl).toBeNull();
     }
   });
 
-  test("keeps each reference geometry fixed while exposing 120 distinct CSS color treatments", () => {
+  test("keeps each reference geometry fixed while exposing 20 distinct CSS color treatments", () => {
     const market = buildApprovedVeteranLibrary().filter((concept) => concept.masterKind === "market_direct");
-    for (const masterId of ["VET_MARKET_01", "VET_MARKET_02"]) {
+    for (const masterId of Array.from({ length: 12 }, (_, index) => `VET_MARKET_${String(index + 1).padStart(2, "0")}`)) {
       const treatments = market
         .filter((concept) => concept.masterId === masterId)
         .map((concept) => renderToStaticMarkup(createElement(ApprovedVeteranCreative, {
           draft: { approvedVeteranConcept: concept },
         })))
-        .map((markup) => markup.match(/style="[^"]*--market-bg:[^"]*"/)?.[0]);
-      expect(new Set(treatments).size).toBe(120);
+        .map((markup) => markup.match(/filter:hue-rotate\([^"]+/)?.[0]);
+      expect(new Set(treatments).size).toBe(20);
     }
   });
 
@@ -357,10 +358,9 @@ describe("approved Veteran production recovery", () => {
     const body = JSON.parse(res._getData());
     expect(body.drafts).toHaveLength(variantCount);
     expect(new Set(body.drafts.map((draft: any) => draft.variationType)).size).toBe(variantCount);
-    expect(new Set(body.drafts.map((draft: any) => draft.winningFamilyId))).toEqual(new Set([
-      "vet_approved_vet_market_01",
-      "vet_approved_vet_market_02",
-    ]));
+    const winningFamilies = new Set<string>(body.drafts.map((draft: any) => draft.winningFamilyId));
+    expect(winningFamilies.size).toBe(variantCount);
+    expect([...winningFamilies].every((id) => /^vet_approved_vet_market_\d{2}$/.test(id))).toBe(true);
     expect(body.drafts.filter((draft: any) => draft.approvedVeteranConcept.backgroundAssetId)).toHaveLength(0);
     expect(body.drafts.every((draft: any) => (
       draft.leadType === "veteran"

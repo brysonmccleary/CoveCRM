@@ -131,7 +131,6 @@ function VeteranCanvas({ concept }: { concept: ApprovedVeteranConcept }) {
 
 export default function ApprovedVeteranCreative({ draft }: { draft: Record<string, any> }) {
   const concept = draft?.approvedVeteranConcept as ApprovedVeteranConcept | undefined;
-  const marketDirect = concept?.masterKind === "market_direct";
   const hostRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   useEffect(() => {
@@ -142,9 +141,9 @@ export default function ApprovedVeteranCreative({ draft }: { draft: Record<strin
     return () => observer.disconnect();
   }, []);
   if (!concept?.visualConceptId || !concept.customerEligible) return null;
-  return <div ref={hostRef} className={styles.frame} style={marketDirect ? { background: "#061a32" } : undefined} data-approved-veteran-runtime="true" data-creative-aspect={marketDirect ? "1:1" : "4:5"}>
-    <div className={styles.square} style={marketDirect ? { aspectRatio: "1 / 1" } : undefined}>
-      <div style={{ width: 540, height: marketDirect ? 540 : 675, transform: `scale(${scale})`, transformOrigin: "top left" }}>
+  return <div ref={hostRef} className={styles.frame} data-approved-veteran-runtime="true" data-creative-aspect="4:5">
+    <div className={styles.square}>
+      <div style={{ width: 540, height: 675, transform: `scale(${scale})`, transformOrigin: "top left" }}>
         <VeteranCanvas concept={concept} />
       </div>
     </div>
