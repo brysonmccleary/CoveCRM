@@ -233,6 +233,29 @@ describe("Meta native insurance form templates", () => {
     })).not.toThrow();
   });
 
+  it("ignores Meta-generated key, label, and ID metadata for native DOB questions", () => {
+    const expectedSpecification: NativeLeadFormSpecification = {
+      ...specification,
+      questions: [{ type: "DOB" }],
+    };
+
+    expect(() => assertNativeLeadFormMatchesSpecification({
+      actual: formReadback({
+        questions: [
+          {
+            type: "DOB",
+            key: "date_of_birth",
+            label: "Date of birth",
+            id: "generated-dob-id",
+          },
+        ],
+      }),
+      expectedFormId: "form-1",
+      expectedFormName: "Final Expense Insurance Lead Form",
+      expectedSpecification,
+    })).not.toThrow();
+  });
+
   it("still rejects a real standard Meta question type mismatch", () => {
     expect(() => assertNativeLeadFormMatchesSpecification({
       actual: formReadback({

@@ -27,7 +27,7 @@ function normalizedQuestions(questions: unknown): Array<Record<string, any>> {
   if (!Array.isArray(questions)) return [];
   return questions.map((question: any) => {
     const type = String(question?.type || "");
-    if (["FULL_NAME", "PHONE", "EMAIL", "STATE"].includes(type)) {
+    if (["FULL_NAME", "PHONE", "EMAIL", "STATE", "DOB"].includes(type)) {
       return { type };
     }
 
