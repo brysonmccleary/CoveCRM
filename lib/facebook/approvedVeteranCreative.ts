@@ -9,7 +9,7 @@ import {
   type VeteranBackgroundTreatment,
 } from "@/lib/facebook/veteranBackgroundTreatments";
 
-export type ApprovedVeteranMasterKind = "existing" | "reference_locked" | "literal_replica";
+export type ApprovedVeteranMasterKind = "existing" | "reference_locked" | "literal_replica" | "market_direct";
 export type ApprovedVeteranCompositionMode = "graphic" | "image_backed" | "hybrid" | "typographic";
 export type ApprovedVeteranQualityGateResult = "PASS" | "FAIL";
 
@@ -57,8 +57,8 @@ export type ApprovedVeteranConcept = {
   heroTreatment: string;
   heroAmount: 40000 | 50000 | 100000 | null;
   heroContent: string[];
-  claimMode: "TEST_CAPABILITY" | "SAFE_MODE";
-  claimAuthority: "TEST_FIXTURE_ONLY" | "SAFE_COPY";
+  claimMode: "TEST_CAPABILITY" | "SAFE_MODE" | "PRODUCTION_APPROVED";
+  claimAuthority: "TEST_FIXTURE_ONLY" | "SAFE_COPY" | "OWNER_CONFIRMED";
   capabilityFixtureId: string | null;
   benefitPackageId: string;
   benefits: string[];
@@ -98,6 +98,10 @@ const VET_BENEFITS = [
   ["PRIVATE REVIEW", "FAMILY PROTECTION", "OPTIONS BY AGE"],
   ["LIFETIME PROTECTION", "LEGACY PLANNING", "PRIVATE OPTIONS"],
   ["TEST: NO MEDICAL EXAM", "TEST: CASH VALUE", "TEST: NO 2-YEAR WAIT"],
+];
+const MARKET_DIRECT_PALETTES = [
+  "midnight_gold", "navy_gold", "royal_gold", "slate_gold", "black_gold", "ink_amber",
+  "navy_red", "royal_red", "cream_navy", "cream_red", "white_navy", "silver_navy",
 ];
 const COMPLEX_GEOMETRY_SUFFIXES = new Set(["14", "16", "18", "19", "21", "22"]);
 const EXISTING_PAPER_WEAK = new Set([2, 5, 9, 11, 16, 19, 20, 21]);
@@ -268,6 +272,24 @@ function veteranSeeds(): VeteranSeed[] {
         baseHeadline: VET_HOOKS[0],
       };
     }),
+    {
+      masterId: "VET_MARKET_01",
+      sourceMasterId: "VET_MARKET_01",
+      kind: "market_direct" as const,
+      tile: 1,
+      backgroundTreatments: [],
+      approvedGeometryId: "VET_MARKET_OFFER_FIRST",
+      baseHeadline: ["VETERANS", "WHOLE LIFE COVERAGE"],
+    },
+    {
+      masterId: "VET_MARKET_02",
+      sourceMasterId: "VET_MARKET_02",
+      kind: "market_direct" as const,
+      tile: 2,
+      backgroundTreatments: [],
+      approvedGeometryId: "VET_MARKET_FAMILY_BURDEN",
+      baseHeadline: ["VETERANS", "DON'T LEAVE THE BURDEN TO YOUR FAMILY"],
+    },
   ];
 }
 
@@ -276,6 +298,62 @@ type BaseExecution = Omit<ApprovedVeteranConcept,
 >;
 
 function buildExecution(seed: VeteranSeed, index: number, imageCounter: { value: number }): BaseExecution {
+  if (seed.kind === "market_direct") {
+    const palette = MARKET_DIRECT_PALETTES[index % MARKET_DIRECT_PALETTES.length];
+    const surface = Math.floor(index / MARKET_DIRECT_PALETTES.length) % 10;
+    const offerFirst = seed.masterId === "VET_MARKET_01";
+    const benefits = offerFirst
+      ? ["NO MEDICAL EXAM", "INSTANT APPROVALS", "PROTECT YOUR FAMILY"]
+      : ["COVERS FINAL COSTS", "PROTECTS YOUR FAMILY", "COVERAGE FOR LIFE"];
+    const renderFields = {
+      lane: "veteran",
+      language: "en",
+      geometry: seed.approvedGeometryId,
+      compositionMode: "pure_css",
+      palette,
+      surface,
+      headline: seed.baseHeadline,
+      heroContent: ["$100,000"],
+      benefits,
+      ageOptions: ["50–54", "55–59", "60–64", "65–69", "70–74", "75–85"],
+      cta: "SEE MY OPTIONS",
+    };
+    return {
+      lane: "veteran",
+      language: "en",
+      masterId: seed.masterId,
+      sourceMasterId: seed.sourceMasterId,
+      masterKind: seed.kind,
+      referenceTile: seed.tile,
+      executionId: `${seed.masterId}_EXEC_${String(index + 1).padStart(3, "0")}`,
+      variantId: `market_${palette}_surface_${String(surface + 1).padStart(2, "0")}`,
+      backgroundAssetId: null,
+      backgroundUrl: null,
+      imageTreatment: `css_surface_${String(surface + 1).padStart(2, "0")}`,
+      imageFocalPosition: "center",
+      compositionMode: "graphic",
+      palette,
+      headlineHookId: offerFirst ? "MARKET_OFFER_FIRST" : "MARKET_FAMILY_BURDEN",
+      headline: seed.baseHeadline,
+      heroTreatment: offerFirst ? "amount_panel" : "benefit_amount_panel",
+      heroAmount: 100000,
+      heroContent: ["$100,000"],
+      claimMode: "PRODUCTION_APPROVED",
+      claimAuthority: "OWNER_CONFIRMED",
+      capabilityFixtureId: "OWNER_CONFIRMED_VETERAN_2026_09",
+      benefitPackageId: offerFirst ? "MARKET_BENEFITS_OFFER" : "MARKET_BENEFITS_FAMILY",
+      benefits,
+      ageTreatmentId: "MARKET_VETERAN_50_85",
+      ageOptions: renderFields.ageOptions,
+      ctaId: "MARKET_SEE_MY_OPTIONS",
+      cta: renderFields.cta,
+      borderTreatment: `market_border_${(surface % 4) + 1}`,
+      panelTreatment: `market_surface_${surface + 1}`,
+      renderFingerprint: fingerprint(renderFields),
+      nearFingerprint: fingerprint({ ...renderFields, palette: "MARKET_PALETTE" }),
+      approvedGeometryId: seed.approvedGeometryId,
+    };
+  }
   const palette = VET_PALETTES[Math.floor(index / 3) % 5];
   const sourceNumber = Number(seed.sourceMasterId.match(/(\d+)$/)?.[1] || 0);
   const safeDarkGraphicMaster = seed.kind === "existing"
@@ -396,6 +474,7 @@ function isCleanLight(execution: BaseExecution) {
 }
 
 function knownContrastWeak(execution: BaseExecution) {
+  if (execution.masterKind === "market_direct") return false;
   if (execution.backgroundAssetId || execution.masterKind === "literal_replica") return false;
   const number = Number(execution.sourceMasterId.match(/(\d+)$/)?.[1] || 0);
   if (execution.masterKind === "existing") {
@@ -509,13 +588,14 @@ export function buildApprovedVeteranLibrary() {
   const imageCounter = { value: 0 };
   const classified: ApprovedVeteranConcept[] = [];
   for (const seed of veteranSeeds()) {
-    for (let index = 0; index < 30; index++) {
+    const executionCount = seed.kind === "market_direct" ? 120 : 30;
+    for (let index = 0; index < executionCount; index++) {
       const execution = buildExecution(seed, index, imageCounter);
       classified.push({ ...execution, ...classify(execution), customerEligible: false });
     }
   }
   for (const execution of classified) {
-    execution.customerEligible = aug29ApprovedVeteranExecutionIds.has(execution.executionId)
+    execution.customerEligible = (execution.masterKind === "market_direct" || aug29ApprovedVeteranExecutionIds.has(execution.executionId))
       && execution.eligibilityReasons.length === 0
       && !hasVeteranCustomerVisibleInternalLabel(execution)
       && !ownerRejectedVeteranExecutionIds.has(execution.executionId)
@@ -555,6 +635,19 @@ export function selectApprovedVeteranConcepts({
     isOwnerSelectableVeteranExecution(execution)
     && !usedVisualConceptIds.has(execution.visualConceptId)
   );
+  const marketDirect = eligible.filter(execution => (
+    execution.masterKind === "market_direct"
+    && execution.heroAmount === 100000
+    && execution.claimAuthority === "OWNER_CONFIRMED"
+  ));
+  if (marketDirect.length >= requestedCount) {
+    return roundRobinTake(
+      marketDirect,
+      requestedCount,
+      `${seed}:veteran:market_direct`,
+      execution => execution.masterId,
+    );
+  }
   const imageValues = eligible.filter(execution => execution.selectionStyleCategory === "image_backed_direct_response" && execution.heroAmount !== null);
   const pureGraphicValues = eligible.filter(execution => execution.selectionStyleCategory === "pure_graphic" && execution.heroAmount !== null);
   const pools: Record<ApprovedVeteranConcept["selectionStyleCategory"], ApprovedVeteranConcept[]> = {

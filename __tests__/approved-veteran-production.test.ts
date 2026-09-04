@@ -70,24 +70,29 @@ describe("approved Veteran production recovery", () => {
   test("recovers the exact approved inventory and customer-quality direction", () => {
     const audit = auditApprovedVeteranRuntime();
     expect(audit).toMatchObject({
-      masterCount: 48,
+      masterCount: 50,
       existingApprovedCount: 24,
       referenceLockedCount: 12,
       literalReplicaCount: 12,
       imageCount: 40,
       backgroundTreatmentCount: 8,
-      customerEligibleCount: 75,
-      ownerSelectableCount: 75,
-      visualConceptCount: 74,
-      eligibleMasterCount: 37,
+      customerEligibleCount: 315,
+      ownerSelectableCount: 315,
+      visualConceptCount: 314,
+      eligibleMasterCount: 39,
       failedEligibleGates: [],
     });
-    expect(audit.customerEligibleImageShare).toBeCloseTo(45 / 75, 3);
+    expect(audit.customerEligibleImageShare).toBeCloseTo(45 / 315, 3);
     const library = buildApprovedVeteranLibrary();
-    expect(library).toHaveLength(1440);
+    expect(library).toHaveLength(1680);
     expect(library.filter((concept) => concept.customerEligible && concept.backgroundAssetId)).toHaveLength(45);
-    expect(library.filter((concept) => concept.customerEligible && !concept.backgroundAssetId)).toHaveLength(30);
-    expect(library.filter((concept) => concept.customerEligible).every((concept) => AUG29_APPROVED_VETERAN_EXECUTION_IDS.includes(concept.executionId as any))).toBe(true);
+    expect(library.filter((concept) => concept.customerEligible && !concept.backgroundAssetId)).toHaveLength(270);
+    expect(library.filter((concept) => concept.masterKind === "market_direct")).toHaveLength(240);
+    expect(library.filter((concept) => concept.masterKind === "market_direct" && concept.customerEligible)).toHaveLength(240);
+    expect(library.filter((concept) => concept.customerEligible).every((concept) => (
+      concept.masterKind === "market_direct"
+      || AUG29_APPROVED_VETERAN_EXECUTION_IDS.includes(concept.executionId as any)
+    ))).toBe(true);
     expect(library.filter((concept) => concept.customerEligible).some(hasVeteranCustomerVisibleInternalLabel)).toBe(false);
   });
 
@@ -178,20 +183,36 @@ describe("approved Veteran production recovery", () => {
     expect(isDecodedCreativePhoto(null, "data:image/png;base64,valid", true, 100, 100)).toBe(false);
   });
 
-  test.each([3, 5])("allocates an owner-approved, diverse %i-ad Veteran batch", (count) => {
+  test.each([3, 5])("allocates an owner-approved, market-direct %i-ad Veteran batch", (count) => {
     const batch = selectApprovedVeteranConcepts({ seed: `veteran-recovery-${count}`, count });
     expect(batch).toHaveLength(count);
     expect(new Set(batch.map((concept) => concept.visualConceptId)).size).toBe(count);
-    expect(new Set(batch.map((concept) => concept.masterId)).size).toBe(count);
-    expect(batch.filter((concept) => concept.backgroundAssetId)).toHaveLength(Math.ceil(count * 0.6));
-    expect(new Set(batch.filter((concept) => concept.backgroundAssetId).map((concept) => concept.backgroundAssetId)).size).toBe(Math.ceil(count * 0.6));
-    expect(new Set(batch.filter((concept) => concept.backgroundAssetId).map((concept) => concept.imageTreatment)).size).toBe(Math.ceil(count * 0.6));
+    expect(new Set(batch.map((concept) => concept.masterId))).toEqual(new Set(["VET_MARKET_01", "VET_MARKET_02"]));
+    expect(batch.every((concept) => concept.backgroundAssetId === null)).toBe(true);
     expect(batch.every((concept) => (
       isOwnerSelectableVeteranExecution(concept)
-      && concept.heroAmount !== null
+      && concept.masterKind === "market_direct"
+      && concept.heroAmount === 100000
+      && concept.claimAuthority === "OWNER_CONFIRMED"
       && !OWNER_REJECTED_VETERAN_EXECUTION_IDS.includes(concept.executionId as any)
       && Object.values(concept.visualQuality).every((value) => value !== "FAIL")
     ))).toBe(true);
+  });
+
+  test("renders both fixed market layouts with no generated-image dependency", () => {
+    const market = buildApprovedVeteranLibrary().filter((concept) => concept.masterKind === "market_direct");
+    for (const masterId of ["VET_MARKET_01", "VET_MARKET_02"]) {
+      const concept = market.find((candidate) => candidate.masterId === masterId && candidate.customerEligible);
+      expect(concept).toBeDefined();
+      const markup = renderToStaticMarkup(createElement(ApprovedVeteranCreative, {
+        draft: { approvedVeteranConcept: concept },
+      }));
+      expect(markup).toContain(`data-market-direct-layout="${masterId === "VET_MARKET_01" ? "offer-first" : "family-burden"}"`);
+      expect(markup).toContain("$100,000");
+      expect(markup).toContain("SEE MY OPTIONS");
+      expect(markup).not.toContain("<img");
+      expect(concept?.backgroundUrl).toBeNull();
+    }
   });
 
   test("permanently excludes every owner-rejected execution and preserves history exclusion", () => {
@@ -322,12 +343,19 @@ describe("approved Veteran production recovery", () => {
     const body = JSON.parse(res._getData());
     expect(body.drafts).toHaveLength(variantCount);
     expect(new Set(body.drafts.map((draft: any) => draft.variationType)).size).toBe(variantCount);
-    expect(new Set(body.drafts.map((draft: any) => draft.winningFamilyId)).size).toBe(variantCount);
-    expect(body.drafts.filter((draft: any) => draft.approvedVeteranConcept.backgroundAssetId)).toHaveLength(Math.ceil(variantCount * 0.6));
+    expect(new Set(body.drafts.map((draft: any) => draft.winningFamilyId))).toEqual(new Set([
+      "vet_approved_vet_market_01",
+      "vet_approved_vet_market_02",
+    ]));
+    expect(body.drafts.filter((draft: any) => draft.approvedVeteranConcept.backgroundAssetId)).toHaveLength(0);
     expect(body.drafts.every((draft: any) => (
       draft.leadType === "veteran"
       && draft.audienceSegment === "veteran"
       && draft.generatedBy === "approved_veteran_library"
+      && draft.approvedVeteranConcept?.masterKind === "market_direct"
+      && draft.approvedVeteranConcept?.claimAuthority === "OWNER_CONFIRMED"
+      && draft.cta === "GET_QUOTE"
+      && draft.primaryText.includes("$100,000")
       && draft.approvedVeteranConcept?.customerEligible === true
       && !OWNER_REJECTED_VETERAN_EXECUTION_IDS.includes(draft.approvedVeteranConcept?.executionId)
       && draft.displayAmount === (draft.approvedVeteranConcept?.heroAmount

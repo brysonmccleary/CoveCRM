@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Veteran24MasterReviewCard } from "@/components/FacebookAds/Veteran24MasterReviewCard";
 import { VeteranReferenceLockedCard } from "@/components/FacebookAds/VeteranReferenceLockedCard";
 import { VeteranReferenceReplicaCard, type ReplicaAmount } from "@/components/FacebookAds/VeteranReferenceReplicaCard";
+import { VeteranMarketDirectCard } from "@/components/FacebookAds/VeteranMarketDirectCard";
 import { buildVeteran24MasterReview, type VeteranMasterPreview } from "@/lib/facebook/veteran24MasterReview";
 import { buildVeteranReferenceLocked12, type VeteranReferencePreview } from "@/lib/facebook/veteranReferenceLocked12";
 import type { ApprovedVeteranConcept } from "@/lib/facebook/approvedVeteranCreative";
@@ -49,6 +50,10 @@ function VeteranCanvas({ concept }: { concept: ApprovedVeteranConcept }) {
     "data-overflow": concept.visualQuality.overflow,
     "data-clipping": concept.visualQuality.clipping,
   };
+
+  if (concept.masterKind === "market_direct") {
+    return <VeteranMarketDirectCard concept={concept} />;
+  }
 
   if (concept.masterKind === "literal_replica") {
     const tile = concept.referenceTile || 1;
