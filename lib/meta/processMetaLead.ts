@@ -31,6 +31,13 @@ const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
 // Retry backoff: 1 min, 5 min, 30 min, 2 hr, 6 hr
 const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000, 21_600_000];
 
+export class MissingMetaLeadWebhookEventError extends Error {
+  constructor(leadgenId: string) {
+    super(`Meta lead ${leadgenId} has no durably persisted webhook event`);
+    this.name = "MissingMetaLeadWebhookEventError";
+  }
+}
+
 async function updateEventStatus(
   leadgenId: string,
   update: Record<string, any>
@@ -80,12 +87,18 @@ export async function processMetaLead(
       "[processMetaLead] Failed to atomically claim event, aborting to avoid a possible duplicate:",
       err?.message
     );
-    return;
+    throw err;
   }
 
   if (!claimed) {
+    const existingEvent = await MetaLeadWebhookEvent.findOne({ leadgenId })
+      .select("processingStatus")
+      .lean();
+    if (!existingEvent) {
+      throw new MissingMetaLeadWebhookEventError(leadgenId);
+    }
     console.info(
-      `[processMetaLead] Meta lead ${leadgenId} already processing/processed — skipping concurrent or duplicate delivery`
+      `[processMetaLead] Meta lead ${leadgenId} is already ${String((existingEvent as any).processingStatus || "claimed")} — skipping concurrent or duplicate delivery`
     );
     return;
   }

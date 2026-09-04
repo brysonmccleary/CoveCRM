@@ -135,7 +135,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   receivedAt: now,
                   processingStatus: "received",
                   attemptCount: 0,
-                  deliveryCount: 0,
                 },
                 $set: {
                   pageId: event.pageId,
@@ -157,8 +156,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
       }
     } catch (err: any) {
-      // Log but always ACK 200 — returning 500 causes Meta retry storms
-      console.error("[meta-webhook] DB persist failed (acking 200 to suppress Meta retry):", err?.message);
+      console.error("[meta-webhook] DB persist failed; requesting Meta retry:", err?.message);
+      return res.status(503).json({ ok: false, error: "event_persistence_failed" });
     }
 
     // Return 200 immediately — process async

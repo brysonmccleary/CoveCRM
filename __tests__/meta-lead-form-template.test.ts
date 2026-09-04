@@ -24,7 +24,7 @@ jest.mock("@/models/MetaLeadFormTemplate", () => ({
 }));
 
 const specification: NativeLeadFormSpecification = {
-  schemaVersion: "insurance-native-v1",
+  schemaVersion: "insurance-native-v2-dob",
   leadType: "final_expense",
   audienceSegment: "standard",
   questions: [{ type: "FULL_NAME" }, { type: "PHONE" }],

@@ -10,7 +10,7 @@ import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
-import { sendRepeatOptInNotificationEmail } from "@/lib/email";
+import { sendNewLeadNotificationEmail, sendRepeatOptInNotificationEmail } from "@/lib/email";
 
 jest.mock("@/lib/mongooseConnect", () => jest.fn());
 
@@ -62,6 +62,7 @@ const mockedFolder = Folder as unknown as { findOne: jest.Mock; create: jest.Moc
 const mockedRetrieve = retrieveMetaLead as jest.Mock;
 const mockedTriggerAIFirstCall = triggerAIFirstCall as jest.Mock;
 const mockedCheckDuplicate = checkDuplicate as jest.Mock;
+const mockedNewLeadEmail = sendNewLeadNotificationEmail as jest.Mock;
 const mockedRepeatOptInEmail = sendRepeatOptInNotificationEmail as jest.Mock;
 
 function lean(value: unknown) {
@@ -82,6 +83,11 @@ function statefulEventStore(initialStatus = "received") {
   mockedEvent.updateOne.mockImplementation(async (_filter: any, update: any) => {
     if (update.$set?.processingStatus) doc.processingStatus = update.$set.processingStatus;
     return { acknowledged: true };
+  });
+  mockedEvent.findOne.mockReturnValue({
+    select: jest.fn().mockReturnValue({
+      lean: jest.fn().mockImplementation(async () => ({ ...doc })),
+    }),
   });
 
   return doc;
@@ -124,6 +130,8 @@ describe("Meta webhook lead-creation idempotency", () => {
     ]);
 
     expect(mockedLead.create).toHaveBeenCalledTimes(1);
+    expect(mockedRetrieve).toHaveBeenCalledTimes(1);
+    expect(mockedNewLeadEmail).toHaveBeenCalledTimes(1);
     expect(mockedTriggerAIFirstCall).toHaveBeenCalledTimes(1);
   });
 
@@ -163,7 +171,7 @@ describe("Meta webhook lead-creation idempotency", () => {
     }));
   });
 
-  test("maps the veteran Instant Form fields without requiring removed qualification fields", async () => {
+  test("maps the veteran native DOB field without requiring the removed age-range or qualification fields", async () => {
     statefulEventStore("received");
     mockedCampaign.findOne.mockReturnValue(lean({
       _id: "camp1", userEmail: "agent@example.com", leadType: "veteran",
@@ -173,7 +181,7 @@ describe("Meta webhook lead-creation idempotency", () => {
       firstName: "Jane", lastName: "Doe", phone: "+18085551212", email: "jane@example.com",
       state: "AZ", formId: "form1", createdTime: "2026-08-30T12:00:00Z",
       rawFieldData: [
-        { name: "age", values: ["60-69"] },
+        { name: "date_of_birth", values: ["1965-06-15"] },
         { name: "who_needs_coverage", values: ["Veteran"] },
         { name: "coverage_amount", values: ["$25,000-$49,999"] },
       ],
@@ -184,7 +192,7 @@ describe("Meta webhook lead-creation idempotency", () => {
     await processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now());
 
     expect(mockedLead.create).toHaveBeenCalledWith(expect.objectContaining({
-      Age: "60-69",
+      DOB: "1965-06-15",
       "Who Needs Coverage": "Veteran",
       "Requested Coverage": "$25,000-$49,999",
       "Coverage Amount": "$25,000-$49,999",
@@ -194,7 +202,7 @@ describe("Meta webhook lead-creation idempotency", () => {
       }),
     }));
     const created = mockedLead.create.mock.calls[0][0];
-    expect(created).not.toHaveProperty("DOB");
+    expect(created.Age).toBeUndefined();
     expect(created).not.toHaveProperty("Military Branch");
     expect(created).not.toHaveProperty("Marital Status");
     expect(created).not.toHaveProperty("Best Time To Call");
@@ -228,12 +236,30 @@ describe("Meta webhook lead-creation idempotency", () => {
     );
   });
 
-  test("if the atomic claim write itself throws, processing aborts rather than proceeding unguarded", async () => {
+  test("a missing persisted event is reported as a prerequisite failure, not as already processed", async () => {
+    mockedEvent.findOneAndUpdate.mockResolvedValue(null);
+    mockedEvent.findOne.mockReturnValue({
+      select: jest.fn().mockReturnValue(lean(null)),
+    });
+
+    await expect(
+      processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now())
+    ).rejects.toThrow(/no durably persisted webhook event/i);
+
+    expect(mockedRetrieve).not.toHaveBeenCalled();
+    expect(mockedLead.create).not.toHaveBeenCalled();
+    expect(mockedNewLeadEmail).not.toHaveBeenCalled();
+  });
+
+  test("if the atomic claim write itself throws, processing fails rather than proceeding unguarded", async () => {
     mockedEvent.findOneAndUpdate.mockRejectedValue(new Error("mongo down"));
 
-    await processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now());
+    await expect(
+      processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now())
+    ).rejects.toThrow("mongo down");
 
     expect(mockedLead.create).not.toHaveBeenCalled();
+    expect(mockedNewLeadEmail).not.toHaveBeenCalled();
     expect(mockedTriggerAIFirstCall).not.toHaveBeenCalled();
   });
 });

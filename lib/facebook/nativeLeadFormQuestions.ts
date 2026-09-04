@@ -5,15 +5,6 @@ export type NativeLeadFormQuestion = {
   options?: Array<{ key: string; value: string }>;
 };
 
-const AGE_RANGE_OPTIONS = [
-  { key: "18_39", value: "18-39" },
-  { key: "40_49", value: "40-49" },
-  { key: "50_59", value: "50-59" },
-  { key: "60_69", value: "60-69" },
-  { key: "70_79", value: "70-79" },
-  { key: "80_plus", value: "80+" },
-];
-
 const COVERAGE_RANGE_OPTIONS = [
   { key: "10000_24999", value: "$10,000-$24,999" },
   { key: "25000_49999", value: "$25,000-$49,999" },
@@ -36,8 +27,8 @@ function standardContactQuestions(): NativeLeadFormQuestion[] {
   ];
 }
 
-function ageRangeQuestion(label = "What is your age range?"): NativeLeadFormQuestion {
-  return { type: "CUSTOM", label, key: "age", options: AGE_RANGE_OPTIONS };
+function dateOfBirthQuestion(): NativeLeadFormQuestion {
+  return { type: "DOB" };
 }
 
 export function buildNativeLeadFormQuestions(input: {
@@ -50,7 +41,7 @@ export function buildNativeLeadFormQuestions(input: {
   if (input.leadType === "veteran") {
     return [
       ...standardContactQuestions(),
-      ageRangeQuestion(spanish ? "¿Cuál es su rango de edad?" : "What is your age range?"),
+      dateOfBirthQuestion(),
       {
         type: "CUSTOM",
         label: spanish ? "¿Quién necesita la cobertura?" : "Who needs coverage?",
@@ -82,7 +73,7 @@ export function buildNativeLeadFormQuestions(input: {
 
   return [
     ...standardContactQuestions(),
-    ageRangeQuestion(spanish ? "¿Cuál es su rango de edad?" : "What is your age range?"),
+    dateOfBirthQuestion(),
     leadSpecific[input.leadType] || {
       type: "CUSTOM",
       label: spanish ? "¿Qué le interesa más?" : "What are you most interested in?",
@@ -90,4 +81,3 @@ export function buildNativeLeadFormQuestions(input: {
     },
   ];
 }
-

@@ -7,10 +7,10 @@ describe("veteran Meta Instant Form schema", () => {
     const questions = buildNativeLeadFormQuestions({ leadType: "veteran", audienceSegment: "veteran" });
 
     expect(questions.map((question) => question.type)).toEqual([
-      "FULL_NAME", "PHONE", "EMAIL", "STATE", "CUSTOM", "CUSTOM", "CUSTOM",
+      "FULL_NAME", "PHONE", "EMAIL", "STATE", "DOB", "CUSTOM", "CUSTOM",
     ]);
     expect(questions.filter((question) => question.type === "CUSTOM").map((question) => question.key)).toEqual([
-      "age", "who_needs_coverage", "coverage_amount",
+      "who_needs_coverage", "coverage_amount",
     ]);
     expect(questions).toHaveLength(7);
 
@@ -23,19 +23,13 @@ describe("veteran Meta Instant Form schema", () => {
     expect(questions.length + 1).toBe(8);
   });
 
-  it("uses age ranges and never asks for removed qualification fields", () => {
+  it("uses native DOB and never asks for an age range or removed qualification fields", () => {
     const questions = buildNativeLeadFormQuestions({ leadType: "veteran", audienceSegment: "veteran" });
     const serialized = JSON.stringify(questions).toLowerCase();
 
-    expect(questions.find((question) => question.key === "age")?.options).toEqual([
-      { key: "18_39", value: "18-39" },
-      { key: "40_49", value: "40-49" },
-      { key: "50_59", value: "50-59" },
-      { key: "60_69", value: "60-69" },
-      { key: "70_79", value: "70-79" },
-      { key: "80_plus", value: "80+" },
-    ]);
-    expect(serialized).not.toMatch(/date.of.birth|\bdob\b|military_branch|marital|health|best_call_time/);
+    expect(questions.filter((question) => question.type === "DOB")).toEqual([{ type: "DOB" }]);
+    expect(questions.find((question) => question.key === "age")).toBeUndefined();
+    expect(serialized).not.toMatch(/age.range|18_39|military_branch|marital|health|best_call_time/);
   });
 
   it("uses the requested coverage-subject and coverage-range choices", () => {

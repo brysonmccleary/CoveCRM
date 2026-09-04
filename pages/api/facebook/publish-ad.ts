@@ -434,7 +434,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       dailyBudgetCents: budgetCents,
       funnelType,
       performanceGoal,
-      nativeFormSchemaVersion: campaignType === "native_form" ? "insurance-native-v1" : "",
+      nativeFormSchemaVersion: campaignType === "native_form" ? "insurance-native-v2-dob" : "",
       creatives: normalizedDrafts,
     });
 
@@ -576,7 +576,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             : "hosted_funnel",
           performanceGoal: performanceGoal === "QUALITY_LEAD" ? "QUALITY_LEAD" : "LEAD_GENERATION",
           nativeFormConfiguration: campaignType === "native_form" ? {
-            schemaVersion: "insurance-native-v1",
+            schemaVersion: "insurance-native-v2-dob",
             formMode: "HIGHER_INTENT",
             flexibleDelivery: false,
             smsVerification: true,
@@ -915,7 +915,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const formName = `${safeName} Insurance Lead Form`;
         const followUpActionUrl = `${appUrl}/insurance-request-received`;
         const nativeFormSpecification: NativeLeadFormSpecification = {
-          schemaVersion: "insurance-native-v1",
+          schemaVersion: "insurance-native-v2-dob",
           leadType: String(leadType),
           audienceSegment,
           questions,

@@ -2,7 +2,7 @@ import crypto from "crypto";
 import MetaLeadFormTemplate from "@/models/MetaLeadFormTemplate";
 
 export type NativeLeadFormSpecification = {
-  schemaVersion: "insurance-native-v1";
+  schemaVersion: "insurance-native-v2-dob";
   leadType: string;
   audienceSegment: string;
   questions: Array<Record<string, any>>;
