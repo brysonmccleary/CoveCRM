@@ -1687,8 +1687,9 @@ export function ProductionFeedCreative({
 }) {
   const overlay = getOverlay(draft);
   const leadType = cleanText(draft?.leadType || "final_expense");
+  const marketDirectSquare = draft?.approvedVeteranConcept?.masterKind === "market_direct";
   const designWidth = 375;
-  const designHeight = 468.75;
+  const designHeight = marketDirectSquare ? 375 : 468.75;
   const productionScale = 540 / designWidth;
 
   return (
@@ -1697,7 +1698,7 @@ export function ProductionFeedCreative({
       data-creative-root="true"
       style={{
         width: 540,
-        height: 675,
+        height: marketDirectSquare ? 540 : 675,
         position: "relative",
         overflow: "hidden",
         background: "#0f172a",
@@ -2414,6 +2415,7 @@ export default function AdPreviewCard({
   const accent = PAGE_ACCENTS[leadType] || "#1d4ed8";
   const adHeadline = cleanText(draft?.headline || overlay.headline);
   const fullText = cleanText(draft?.primaryText);
+  const marketDirectSquare = draft?.approvedVeteranConcept?.masterKind === "market_direct";
   const truncated = fullText.length > 120;
   const primaryText = truncated ? fullText.slice(0, 120) : fullText;
 
@@ -2512,13 +2514,13 @@ export default function AdPreviewCard({
         style={{
           position: "relative",
           width: 375,
-          height: 468.75,
+          height: marketDirectSquare ? 375 : 468.75,
           overflow: "hidden",
           background: "#0f172a",
           flexShrink: 0,
         }}
       >
-        <div style={{ width: 540, height: 675, transform: `scale(${375 / 540})`, transformOrigin: "top left" }}>
+        <div style={{ width: 540, height: marketDirectSquare ? 540 : 675, transform: `scale(${375 / 540})`, transformOrigin: "top left" }}>
           <ProductionFeedCreative draft={draft} creativeRef={creativeRef} />
         </div>
       </div>

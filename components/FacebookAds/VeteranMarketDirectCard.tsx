@@ -17,6 +17,19 @@ const PALETTES: Record<string, Record<string, string>> = {
   silver_navy: { bg: "#e8edf2", bg2: "#ffffff", ink: "#071d37", accent: "#173f68", action: "#092f59", actionInk: "#ffffff", panel: "#f6f8fa", line: "#72869a" },
 };
 
+const SURFACE_TINTS = [
+  "#081b35", "#12345d", "#26374d", "#382b24", "#1b3d61",
+  "#2c2348", "#16433f", "#4b2028", "#39444f", "#102e3d",
+];
+
+function mixHex(base: string, tint: string, weight: number) {
+  const channel = (value: string, offset: number) => Number.parseInt(value.slice(offset, offset + 2), 16);
+  const mixed = [1, 3, 5].map((offset) => Math.round(
+    channel(base, offset) * (1 - weight) + channel(tint, offset) * weight,
+  ));
+  return `#${mixed.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function CheckIcon() {
   return <span className={styles.check} aria-hidden="true">✓</span>;
 }
@@ -28,15 +41,17 @@ function AgeGrid({ ages }: { ages: string[] }) {
 function paletteStyle(concept: ApprovedVeteranConcept): CSSProperties {
   const palette = PALETTES[concept.palette] || PALETTES.midnight_gold;
   const surface = Math.max(1, Number(concept.panelTreatment.match(/(\d+)$/)?.[1] || 1));
+  const tint = SURFACE_TINTS[(surface - 1) % SURFACE_TINTS.length];
+  const tintWeight = 0.06 + surface * 0.012;
   return {
-    "--market-bg": palette.bg,
-    "--market-bg-2": palette.bg2,
+    "--market-bg": mixHex(palette.bg, tint, tintWeight),
+    "--market-bg-2": mixHex(palette.bg2, tint, tintWeight * 0.72),
     "--market-ink": palette.ink,
-    "--market-accent": palette.accent,
-    "--market-action": palette.action,
+    "--market-accent": mixHex(palette.accent, tint, tintWeight * 0.22),
+    "--market-action": mixHex(palette.action, tint, tintWeight * 0.16),
     "--market-action-ink": palette.actionInk,
-    "--market-panel": palette.panel,
-    "--market-line": palette.line,
+    "--market-panel": mixHex(palette.panel, tint, tintWeight * 0.8),
+    "--market-line": mixHex(palette.line, tint, tintWeight * 0.35),
     "--market-angle": `${118 + surface * 3}deg`,
     "--market-stripe": `${18 + surface * 2}px`,
   } as CSSProperties;
@@ -44,22 +59,21 @@ function paletteStyle(concept: ApprovedVeteranConcept): CSSProperties {
 
 function OfferFirst({ concept }: { concept: ApprovedVeteranConcept }) {
   return <div className={`${styles.card} ${styles.offerFirst}`} style={paletteStyle(concept)} data-market-direct-layout="offer-first">
-    <div className={styles.texture} />
+    <div className={styles.flag}><span>★</span><span>★</span><span>★</span><span>★</span><span>★</span><span>★</span></div>
     <div className={styles.badge}>★ FOR U.S. VETERANS</div>
     <h1>VETERANS</h1>
     <h2>WHOLE LIFE COVERAGE</h2>
     <div className={styles.waitBar}>NO 2-YEAR WAIT</div>
     <section className={styles.amountPanel}><small>COVERAGE OPTIONS UP TO</small><strong>$100,000</strong></section>
     <div className={styles.benefitRow}>{concept.benefits.map((benefit) => <div key={benefit}><CheckIcon /><b>{benefit}</b></div>)}</div>
-    <div className={styles.ageBlock}><b>SELECT YOUR AGE TO SEE OPTIONS:</b><AgeGrid ages={concept.ageOptions} /></div>
+    <div className={styles.ageBlock}><b>SELECT YOUR AGE TO SEE OPTIONS:</b><AgeGrid ages={["50–54", "55–59", "60–64", "65–69", "70–74", "75–80"]} /></div>
     <div className={styles.cta}>{concept.cta}<span>›</span></div>
-    <small className={styles.disclaimer}>Private coverage. Not affiliated with the VA.</small>
   </div>;
 }
 
 function FamilyBurden({ concept }: { concept: ApprovedVeteranConcept }) {
   return <div className={`${styles.card} ${styles.familyBurden}`} style={paletteStyle(concept)} data-market-direct-layout="family-burden">
-    <div className={styles.texture} />
+    <div className={styles.paperTexture} />
     <div className={styles.badge}>FOR U.S. VETERANS</div>
     <h1>DON’T LEAVE THE<br />BURDEN TO YOUR FAMILY</h1>
     <p>Help cover final costs and give your loved ones peace of mind.</p>
@@ -67,7 +81,6 @@ function FamilyBurden({ concept }: { concept: ApprovedVeteranConcept }) {
     <section className={styles.amountPanel}><small>COVERAGE OPTIONS UP TO</small><strong>$100,000</strong></section>
     <div className={styles.ageBlock}><b>SELECT YOUR AGE:</b><AgeGrid ages={concept.ageOptions} /></div>
     <div className={styles.cta}>{concept.cta}<span>›</span></div>
-    <small className={styles.disclaimer}>No obligation. Private coverage.</small>
   </div>;
 }
 

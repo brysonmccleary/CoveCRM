@@ -29,7 +29,7 @@ export default function VeteranFinalProductionReview({ mode, concepts }: { mode:
     </header>
     <section className="grid">
       {concepts.map((concept) => <article data-review-card="true" data-execution-id={concept.executionId} key={concept.executionId}>
-        <div className="creative"><ApprovedVeteranCreative draft={{ approvedVeteranConcept: concept }} /></div>
+        <div className="creative" style={{ height: concept.masterKind === "market_direct" ? 270 : 337.5 }}><ApprovedVeteranCreative draft={{ approvedVeteranConcept: concept }} /></div>
         <div className="meta"><b>{concept.executionId}</b><span>{concept.renderFingerprint}</span><span>{concept.backgroundAssetId || "PURE GRAPHIC"} · {concept.imageTreatment}</span></div>
       </article>)}
     </section>

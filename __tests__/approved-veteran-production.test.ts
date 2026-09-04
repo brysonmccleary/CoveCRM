@@ -208,10 +208,24 @@ describe("approved Veteran production recovery", () => {
         draft: { approvedVeteranConcept: concept },
       }));
       expect(markup).toContain(`data-market-direct-layout="${masterId === "VET_MARKET_01" ? "offer-first" : "family-burden"}"`);
+      expect(markup).toContain('data-creative-aspect="1:1"');
       expect(markup).toContain("$100,000");
       expect(markup).toContain("SEE MY OPTIONS");
       expect(markup).not.toContain("<img");
       expect(concept?.backgroundUrl).toBeNull();
+    }
+  });
+
+  test("keeps each reference geometry fixed while exposing 120 distinct CSS color treatments", () => {
+    const market = buildApprovedVeteranLibrary().filter((concept) => concept.masterKind === "market_direct");
+    for (const masterId of ["VET_MARKET_01", "VET_MARKET_02"]) {
+      const treatments = market
+        .filter((concept) => concept.masterId === masterId)
+        .map((concept) => renderToStaticMarkup(createElement(ApprovedVeteranCreative, {
+          draft: { approvedVeteranConcept: concept },
+        })))
+        .map((markup) => markup.match(/style="[^"]*--market-bg:[^"]*"/)?.[0]);
+      expect(new Set(treatments).size).toBe(120);
     }
   });
 
