@@ -32,6 +32,17 @@ export interface SyncResult {
   error?: string;
 }
 
+export function buildInclusiveMetaTimeRange(days: number, now = new Date()) {
+  const safeDays = Math.max(1, Math.floor(days));
+  const until = new Date(now);
+  const since = new Date(now);
+  since.setUTCDate(since.getUTCDate() - (safeDays - 1));
+  return {
+    since: since.toISOString().slice(0, 10),
+    until: until.toISOString().slice(0, 10),
+  };
+}
+
 export async function syncAdInsights(
   userId: string | Types.ObjectId,
   userEmail: string,
@@ -54,9 +65,13 @@ export async function syncAdInsights(
     "fields",
     "campaign_id,campaign_name,adset_id,ad_id,ad_name,spend,impressions,clicks,cpc,cpm,ctr,date_start,date_stop"
   );
-  url.searchParams.set("date_preset", days <= 7 ? "last_7d" : days <= 14 ? "last_14d" : days <= 30 ? "last_30d" : "last_90d");
+  // Meta's last_Nd presets exclude the ad account's current day. That leaves
+  // Cove materially stale during an active launch, so request an inclusive
+  // date range ending today instead.
+  url.searchParams.set("time_range", JSON.stringify(buildInclusiveMetaTimeRange(days)));
   url.searchParams.set("level", "ad");
   url.searchParams.set("time_increment", "1");
+  url.searchParams.set("limit", "500");
 
   const resp = await fetch(url.toString());
   if (!resp.ok) {
