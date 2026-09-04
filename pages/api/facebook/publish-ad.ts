@@ -815,38 +815,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
       }
 
-      try {
-        await verifyMetaAdset({
-          metaAdsetId,
-          metaCampaignId,
-          accessToken,
-          expectedDailyBudgetCents: lockedStructure.adSet.daily_budget,
-          expectedTargeting: lockedStructure.adSet.targeting,
-          expectedSpecialAdCategories: lockedStructure.campaign.special_ad_categories,
-          expected: {
-            optimizationGoal: lockedStructure.adSet.optimization_goal,
-            billingEvent: lockedStructure.adSet.billing_event,
-            destinationType: campaignType === "native_form" ? "ON_AD" : "WEBSITE",
-            promotedObject: campaignType === "native_form"
-              ? { page_id: pageIdFinal }
-              : {
-                  page_id: pageIdFinal,
-                  pixel_id: String(launchValidation.datasetId),
-                  custom_event_type: "LEAD",
-                },
-            attributionSpec: getMetaAttributionSpec(
-              campaignType === "native_form" || campaignType === "hosted_funnel_otp"
-                ? campaignType
-                : "hosted_funnel"
-            ),
-          },
-        });
-      } catch (verificationError: any) {
-        recordMetaPolicyWarning(
-          policyWarnings,
-          `Meta ad-set readback warning: ${String(verificationError?.message || verificationError)}`
-        );
-      }
+      await verifyMetaAdset({
+        metaAdsetId,
+        metaCampaignId,
+        accessToken,
+        expectedDailyBudgetCents: lockedStructure.adSet.daily_budget,
+        expectedTargeting: lockedStructure.adSet.targeting,
+        expectedSpecialAdCategories: lockedStructure.campaign.special_ad_categories,
+        expected: {
+          optimizationGoal: lockedStructure.adSet.optimization_goal,
+          billingEvent: lockedStructure.adSet.billing_event,
+          destinationType: campaignType === "native_form" ? "ON_AD" : "WEBSITE",
+          promotedObject: campaignType === "native_form"
+            ? { page_id: pageIdFinal }
+            : {
+                page_id: pageIdFinal,
+                pixel_id: String(launchValidation.datasetId),
+                custom_event_type: "LEAD",
+              },
+          attributionSpec: getMetaAttributionSpec(
+            campaignType === "native_form" || campaignType === "hosted_funnel_otp"
+              ? campaignType
+              : "hosted_funnel"
+          ),
+        },
+      });
 
       if (isAlreadyPublished) {
         await releaseLaunchCampaignClaim({
@@ -876,11 +869,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       if (campaignType !== "hosted_funnel" && campaignType !== "hosted_funnel_otp") {
-      // Resolve the exact current form specification on every incomplete retry.
-      // A previously created form may have been accepted by Meta at creation time
-      // but rejected when attached to an ad under a newer policy rule.
-      metaFormId = "";
-      if (!metaFormId) {
+        // Resolve the exact current form specification on every incomplete retry.
+        // A previously created form may have been accepted by Meta at creation time
+        // but rejected when attached to an ad under a newer policy rule.
+        metaFormId = "";
+        if (!metaFormId) {
         const questions: Array<Record<string, any>> = buildNativeLeadFormQuestions({
           leadType,
           audienceSegment,
@@ -967,10 +960,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               });
             }
           } catch (verificationError) {
-            recordMetaPolicyWarning(
-              policyWarnings,
-              `Meta form readback warning: ${String(verificationError instanceof Error ? verificationError.message : verificationError)}`
-            );
+            if (formClaim.claimToken) {
+              await failNativeLeadFormTemplate({
+                userEmail,
+                pageId: pageIdFinal,
+                fingerprint: formClaim.fingerprint,
+                claimToken: formClaim.claimToken,
+                error: verificationError,
+              }).catch(() => {});
+            }
+            throw verificationError;
           }
           for (const warning of formReview.policyWarnings) {
             recordMetaPolicyWarning(policyWarnings, warning);
@@ -1065,10 +1064,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             recordMetaPolicyWarning(policyWarnings, warning);
           }
         } catch (verificationError) {
-          recordMetaPolicyWarning(
-            policyWarnings,
-            `Meta form readback warning: ${String(verificationError instanceof Error ? verificationError.message : verificationError)}`
-          );
+          await failNativeLeadFormTemplate({
+            userEmail,
+            pageId: pageIdFinal,
+            fingerprint: formClaim.fingerprint,
+            claimToken: formClaim.claimToken,
+            error: verificationError,
+          }).catch(() => {});
+          throw verificationError;
         }
         await finalizeNativeLeadFormTemplate({
           userEmail,

@@ -12,6 +12,15 @@ const COVERAGE_RANGE_OPTIONS = [
   { key: "100000_plus", value: "$100,000+" },
 ];
 
+const AGE_RANGE_OPTIONS = [
+  { key: "18_39", value: "18-39" },
+  { key: "40_49", value: "40-49" },
+  { key: "50_59", value: "50-59" },
+  { key: "60_69", value: "60-69" },
+  { key: "70_79", value: "70-79" },
+  { key: "80_plus", value: "80+" },
+];
+
 function standardContactQuestions(): NativeLeadFormQuestion[] {
   return [
     { type: "FULL_NAME" },
@@ -19,6 +28,10 @@ function standardContactQuestions(): NativeLeadFormQuestion[] {
     { type: "EMAIL" },
     { type: "STATE" },
   ];
+}
+
+function dateOfBirthQuestion(): NativeLeadFormQuestion {
+  return { type: "DOB" };
 }
 
 export function buildNativeLeadFormQuestions(input: {
@@ -31,6 +44,12 @@ export function buildNativeLeadFormQuestions(input: {
   if (input.leadType === "veteran") {
     return [
       ...standardContactQuestions(),
+      {
+        type: "CUSTOM",
+        label: spanish ? "¿Cuál es su rango de edad?" : "What is your age range?",
+        key: "age",
+        options: AGE_RANGE_OPTIONS,
+      },
       {
         type: "CUSTOM",
         label: spanish ? "¿Cuánta cobertura desea revisar?" : "How much coverage would you like to review?",
@@ -56,6 +75,7 @@ export function buildNativeLeadFormQuestions(input: {
 
   return [
     ...standardContactQuestions(),
+    dateOfBirthQuestion(),
     leadSpecific[input.leadType] || {
       type: "CUSTOM",
       label: spanish ? "¿Qué le interesa más?" : "What are you most interested in?",
