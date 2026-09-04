@@ -34,6 +34,7 @@ import {
 import { writeImmutableMetaLaunchArchive } from "@/lib/facebook/archiveMetaLaunch";
 import { metaGraphUrl } from "@/lib/meta/graphApi";
 import {
+  buildNativeLeadFormFingerprint,
   claimNativeLeadFormTemplate,
   failNativeLeadFormTemplate,
   finalizeNativeLeadFormTemplate,
@@ -814,31 +815,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
       }
 
-      await verifyMetaAdset({
-        metaAdsetId,
-        metaCampaignId,
-        accessToken,
-        expectedDailyBudgetCents: lockedStructure.adSet.daily_budget,
-        expectedTargeting: lockedStructure.adSet.targeting,
-        expectedSpecialAdCategories: lockedStructure.campaign.special_ad_categories,
-        expected: {
-          optimizationGoal: lockedStructure.adSet.optimization_goal,
-          billingEvent: lockedStructure.adSet.billing_event,
-          destinationType: campaignType === "native_form" ? "ON_AD" : "WEBSITE",
-          promotedObject: campaignType === "native_form"
-            ? { page_id: pageIdFinal }
-            : {
-                page_id: pageIdFinal,
-                pixel_id: String(launchValidation.datasetId),
-                custom_event_type: "LEAD",
-              },
-          attributionSpec: getMetaAttributionSpec(
-            campaignType === "native_form" || campaignType === "hosted_funnel_otp"
-              ? campaignType
-              : "hosted_funnel"
-          ),
-        },
-      });
+      try {
+        await verifyMetaAdset({
+          metaAdsetId,
+          metaCampaignId,
+          accessToken,
+          expectedDailyBudgetCents: lockedStructure.adSet.daily_budget,
+          expectedTargeting: lockedStructure.adSet.targeting,
+          expectedSpecialAdCategories: lockedStructure.campaign.special_ad_categories,
+          expected: {
+            optimizationGoal: lockedStructure.adSet.optimization_goal,
+            billingEvent: lockedStructure.adSet.billing_event,
+            destinationType: campaignType === "native_form" ? "ON_AD" : "WEBSITE",
+            promotedObject: campaignType === "native_form"
+              ? { page_id: pageIdFinal }
+              : {
+                  page_id: pageIdFinal,
+                  pixel_id: String(launchValidation.datasetId),
+                  custom_event_type: "LEAD",
+                },
+            attributionSpec: getMetaAttributionSpec(
+              campaignType === "native_form" || campaignType === "hosted_funnel_otp"
+                ? campaignType
+                : "hosted_funnel"
+            ),
+          },
+        });
+      } catch (verificationError: any) {
+        recordMetaPolicyWarning(
+          policyWarnings,
+          `Meta ad-set readback warning: ${String(verificationError?.message || verificationError)}`
+        );
+      }
 
       if (isAlreadyPublished) {
         await releaseLaunchCampaignClaim({
@@ -868,6 +876,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       if (campaignType !== "hosted_funnel" && campaignType !== "hosted_funnel_otp") {
+      // Resolve the exact current form specification on every incomplete retry.
+      // A previously created form may have been accepted by Meta at creation time
+      // but rejected when attached to an ad under a newer policy rule.
+      metaFormId = "";
       if (!metaFormId) {
         const questions: Array<Record<string, any>> = buildNativeLeadFormQuestions({
           leadType,
@@ -912,7 +924,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ],
         };
 
-        const formName = `${safeName} Insurance Lead Form`;
         const followUpActionUrl = `${appUrl}/insurance-request-received`;
         const nativeFormSpecification: NativeLeadFormSpecification = {
           schemaVersion: "insurance-native-v2-dob",
@@ -926,6 +937,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           flexibleDelivery: false,
           smsVerification: true,
         };
+        const formName = `${safeName} Insurance Lead Form ${buildNativeLeadFormFingerprint(nativeFormSpecification).slice(0, 8)}`;
         const formClaim = await claimNativeLeadFormTemplate({
           userEmail,
           pageId: pageIdFinal,
@@ -955,16 +967,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               });
             }
           } catch (verificationError) {
-            if (formClaim.claimToken) {
-              await failNativeLeadFormTemplate({
-                userEmail,
-                pageId: pageIdFinal,
-                fingerprint: formClaim.fingerprint,
-                claimToken: formClaim.claimToken,
-                error: verificationError,
-              }).catch(() => {});
-            }
-            throw verificationError;
+            recordMetaPolicyWarning(
+              policyWarnings,
+              `Meta form readback warning: ${String(verificationError instanceof Error ? verificationError.message : verificationError)}`
+            );
           }
           for (const warning of formReview.policyWarnings) {
             recordMetaPolicyWarning(policyWarnings, warning);
@@ -1059,14 +1065,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             recordMetaPolicyWarning(policyWarnings, warning);
           }
         } catch (verificationError) {
-          await failNativeLeadFormTemplate({
-            userEmail,
-            pageId: pageIdFinal,
-            fingerprint: formClaim.fingerprint,
-            claimToken: formClaim.claimToken,
-            error: verificationError,
-          }).catch(() => {});
-          throw verificationError;
+          recordMetaPolicyWarning(
+            policyWarnings,
+            `Meta form readback warning: ${String(verificationError instanceof Error ? verificationError.message : verificationError)}`
+          );
         }
         await finalizeNativeLeadFormTemplate({
           userEmail,

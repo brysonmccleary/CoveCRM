@@ -12,12 +12,6 @@ const COVERAGE_RANGE_OPTIONS = [
   { key: "100000_plus", value: "$100,000+" },
 ];
 
-const VETERAN_COVERAGE_SUBJECT_OPTIONS = [
-  { key: "veteran", value: "Veteran" },
-  { key: "spouse", value: "Spouse" },
-  { key: "military_family_dependent", value: "Military family / dependent" },
-];
-
 function standardContactQuestions(): NativeLeadFormQuestion[] {
   return [
     { type: "FULL_NAME" },
@@ -25,10 +19,6 @@ function standardContactQuestions(): NativeLeadFormQuestion[] {
     { type: "EMAIL" },
     { type: "STATE" },
   ];
-}
-
-function dateOfBirthQuestion(): NativeLeadFormQuestion {
-  return { type: "DOB" };
 }
 
 export function buildNativeLeadFormQuestions(input: {
@@ -41,13 +31,6 @@ export function buildNativeLeadFormQuestions(input: {
   if (input.leadType === "veteran") {
     return [
       ...standardContactQuestions(),
-      dateOfBirthQuestion(),
-      {
-        type: "CUSTOM",
-        label: spanish ? "¿Quién necesita la cobertura?" : "Who needs coverage?",
-        key: "who_needs_coverage",
-        options: VETERAN_COVERAGE_SUBJECT_OPTIONS,
-      },
       {
         type: "CUSTOM",
         label: spanish ? "¿Cuánta cobertura desea revisar?" : "How much coverage would you like to review?",
@@ -73,7 +56,6 @@ export function buildNativeLeadFormQuestions(input: {
 
   return [
     ...standardContactQuestions(),
-    dateOfBirthQuestion(),
     leadSpecific[input.leadType] || {
       type: "CUSTOM",
       label: spanish ? "¿Qué le interesa más?" : "What are you most interested in?",

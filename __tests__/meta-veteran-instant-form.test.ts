@@ -7,12 +7,12 @@ describe("veteran Meta Instant Form schema", () => {
     const questions = buildNativeLeadFormQuestions({ leadType: "veteran", audienceSegment: "veteran" });
 
     expect(questions.map((question) => question.type)).toEqual([
-      "FULL_NAME", "PHONE", "EMAIL", "STATE", "DOB", "CUSTOM", "CUSTOM",
+      "FULL_NAME", "PHONE", "EMAIL", "STATE", "CUSTOM",
     ]);
     expect(questions.filter((question) => question.type === "CUSTOM").map((question) => question.key)).toEqual([
-      "who_needs_coverage", "coverage_amount",
+      "coverage_amount",
     ]);
-    expect(questions).toHaveLength(7);
+    expect(questions).toHaveLength(5);
 
     const publishSource = fs.readFileSync(path.resolve("pages/api/facebook/publish-ad.ts"), "utf8");
     const consentBlock = publishSource.slice(
@@ -20,24 +20,22 @@ describe("veteran Meta Instant Form schema", () => {
       publishSource.indexOf("const formName")
     );
     expect(consentBlock).toContain("is_required: true");
-    expect(questions.length + 1).toBe(8);
+    expect(questions.length + 1).toBe(6);
   });
 
-  it("uses native DOB and never asks for an age range or removed qualification fields", () => {
+  it("does not ask Meta-prohibited DOB, age-range, or military-status questions", () => {
     const questions = buildNativeLeadFormQuestions({ leadType: "veteran", audienceSegment: "veteran" });
     const serialized = JSON.stringify(questions).toLowerCase();
 
-    expect(questions.filter((question) => question.type === "DOB")).toEqual([{ type: "DOB" }]);
+    expect(questions.find((question) => question.type === "DOB")).toBeUndefined();
     expect(questions.find((question) => question.key === "age")).toBeUndefined();
-    expect(serialized).not.toMatch(/age.range|18_39|military_branch|marital|health|best_call_time/);
+    expect(questions.find((question) => question.key === "who_needs_coverage")).toBeUndefined();
+    expect(serialized).not.toMatch(/date.of.birth|age.range|18_39|military.status|military_branch|marital|health|best_call_time/);
   });
 
-  it("uses the requested coverage-subject and coverage-range choices", () => {
+  it("keeps the requested coverage-range choices", () => {
     const questions = buildNativeLeadFormQuestions({ leadType: "veteran", audienceSegment: "veteran" });
 
-    expect(questions.find((question) => question.key === "who_needs_coverage")?.options?.map((option) => option.value)).toEqual([
-      "Veteran", "Spouse", "Military family / dependent",
-    ]);
     expect(questions.find((question) => question.key === "coverage_amount")?.options?.map((option) => option.value)).toEqual([
       "$10,000-$24,999", "$25,000-$49,999", "$50,000-$99,999", "$100,000+",
     ]);
