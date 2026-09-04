@@ -12,13 +12,10 @@ const COVERAGE_RANGE_OPTIONS = [
   { key: "100000_plus", value: "$100,000+" },
 ];
 
-const AGE_RANGE_OPTIONS = [
-  { key: "18_39", value: "18-39" },
-  { key: "40_49", value: "40-49" },
-  { key: "50_59", value: "50-59" },
-  { key: "60_69", value: "60-69" },
-  { key: "70_79", value: "70-79" },
-  { key: "80_plus", value: "80+" },
+const VETERAN_STATUS_OPTIONS = [
+  { key: "veteran", value: "Veteran" },
+  { key: "spouse", value: "Spouse" },
+  { key: "active_duty", value: "Active Duty" },
 ];
 
 function standardContactQuestions(): NativeLeadFormQuestion[] {
@@ -46,9 +43,14 @@ export function buildNativeLeadFormQuestions(input: {
       ...standardContactQuestions(),
       {
         type: "CUSTOM",
-        label: spanish ? "¿Cuál es su rango de edad?" : "What is your age range?",
+        label: spanish ? "¿Cuál es su edad?" : "What is your age?",
         key: "age",
-        options: AGE_RANGE_OPTIONS,
+      },
+      {
+        type: "CUSTOM",
+        label: spanish ? "¿Cuál es su situación militar?" : "Which best describes you?",
+        key: "who_needs_coverage",
+        options: VETERAN_STATUS_OPTIONS,
       },
       {
         type: "CUSTOM",

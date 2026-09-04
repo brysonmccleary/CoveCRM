@@ -7,12 +7,12 @@ describe("veteran Meta Instant Form schema", () => {
     const questions = buildNativeLeadFormQuestions({ leadType: "veteran", audienceSegment: "veteran" });
 
     expect(questions.map((question) => question.type)).toEqual([
-      "FULL_NAME", "PHONE", "EMAIL", "STATE", "CUSTOM", "CUSTOM",
+      "FULL_NAME", "PHONE", "EMAIL", "STATE", "CUSTOM", "CUSTOM", "CUSTOM",
     ]);
     expect(questions.filter((question) => question.type === "CUSTOM").map((question) => question.key)).toEqual([
-      "age", "coverage_amount",
+      "age", "who_needs_coverage", "coverage_amount",
     ]);
-    expect(questions).toHaveLength(6);
+    expect(questions).toHaveLength(7);
 
     const publishSource = fs.readFileSync(path.resolve("pages/api/facebook/publish-ad.ts"), "utf8");
     const consentBlock = publishSource.slice(
@@ -20,19 +20,23 @@ describe("veteran Meta Instant Form schema", () => {
       publishSource.indexOf("const formName")
     );
     expect(consentBlock).toContain("is_required: true");
-    expect(questions.length + 1).toBe(7);
+    expect(questions.length + 1).toBe(8);
   });
 
-  it("uses the previously accepted age-range format without DOB or military-status questions", () => {
+  it("replaces DOB with typed age and branch with the approved status choices", () => {
     const questions = buildNativeLeadFormQuestions({ leadType: "veteran", audienceSegment: "veteran" });
     const serialized = JSON.stringify(questions).toLowerCase();
 
     expect(questions.find((question) => question.type === "DOB")).toBeUndefined();
-    expect(questions.find((question) => question.key === "age")?.options?.map((option) => option.value)).toEqual([
-      "18-39", "40-49", "50-59", "60-69", "70-79", "80+",
+    expect(questions.find((question) => question.key === "age")).toEqual({
+      type: "CUSTOM",
+      label: "What is your age?",
+      key: "age",
+    });
+    expect(questions.find((question) => question.key === "who_needs_coverage")?.options?.map((option) => option.value)).toEqual([
+      "Veteran", "Spouse", "Active Duty",
     ]);
-    expect(questions.find((question) => question.key === "who_needs_coverage")).toBeUndefined();
-    expect(serialized).not.toMatch(/date.of.birth|military.status|military_branch|marital|health|best_call_time/);
+    expect(serialized).not.toMatch(/date.of.birth|military_branch|marital|health|best_call_time/);
   });
 
   it("keeps the requested coverage-range choices", () => {
