@@ -225,8 +225,9 @@ describe("approved Veteran production recovery", () => {
         .map((concept) => renderToStaticMarkup(createElement(ApprovedVeteranCreative, {
           draft: { approvedVeteranConcept: concept },
         })))
-        .map((markup) => markup.match(/filter:hue-rotate\([^"]+/)?.[0]);
+        .map((markup) => markup.match(/filter:([^;"]+)/)?.[1]);
       expect(new Set(treatments).size).toBe(20);
+      expect(treatments.every((treatment) => !String(treatment).includes("hue-rotate"))).toBe(true);
     }
   });
 
