@@ -104,7 +104,13 @@ describe("Meta webhook lead-creation idempotency", () => {
       folderId: "folder1",
       licensedStates: ["AZ"],
     }));
-    mockedUser.findOne.mockReturnValue(lean({ _id: "user1", email: "agent@example.com" }));
+    mockedUser.findOne.mockReturnValue(lean({
+      _id: "user1",
+      email: "agent@example.com",
+      metaPageAccessToken: "page-token",
+      metaSystemUserToken: "system-token",
+      metaAccessToken: "person-token",
+    }));
     mockedRetrieve.mockResolvedValue({
       firstName: "Jane",
       lastName: "Doe",
@@ -159,6 +165,14 @@ describe("Meta webhook lead-creation idempotency", () => {
     await processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now());
 
     expect(mockedLead.create).toHaveBeenCalledTimes(1);
+  });
+
+  test("retrieves a native lead with the Page token first", async () => {
+    statefulEventStore("received");
+
+    await processMetaLead("LG1", "page1", "form1", "ad1", "adset1", "camp1", Date.now());
+
+    expect(mockedRetrieve).toHaveBeenCalledWith("LG1", "page-token");
   });
 
   test("a native Meta lead outside licensed geography is still created and flagged", async () => {

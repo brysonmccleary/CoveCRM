@@ -54,7 +54,7 @@ export async function retrieveMetaLead(
   url.searchParams.set("access_token", token);
   url.searchParams.set(
     "fields",
-    "id,created_time,field_data,custom_disclaimer_responses,form_id,ad_id,adset_id,campaign_id,page_id"
+    "id,created_time,field_data,custom_disclaimer_responses,form_id,ad_id,adset_id,campaign_id"
   );
 
   const resp = await fetch(url.toString(), { method: "GET" });
@@ -101,7 +101,9 @@ export async function retrieveMetaLead(
     adId: String(payload.ad_id || ""),
     adsetId: String(payload.adset_id || ""),
     campaignId: String(payload.campaign_id || ""),
-    pageId: String(payload.page_id || ""),
+    // The Leadgen object does not expose page_id as a readable field. The
+    // webhook supplies the authoritative Page ID to processMetaLead instead.
+    pageId: "",
     createdTime: String(payload.created_time || ""),
     firstName,
     lastName,

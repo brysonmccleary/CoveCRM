@@ -5,6 +5,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import FBLeadSubscription from "@/models/FBLeadSubscription";
+import FBLeadCampaign from "@/models/FBLeadCampaign";
 import { syncAdInsights } from "@/lib/meta/syncAdInsights";
 import { classifyMetaHealthError, markMetaHealthFailure } from "@/lib/meta/metaHealth";
 
@@ -20,6 +21,16 @@ function isAuthorized(req: NextApiRequest): boolean {
   return keys.includes(token) || keys.includes(query);
 }
 
+export function getMetaInsightEligibleEmails(
+  activeSubscriptions: Array<{ userEmail?: string }>,
+  campaignEmails: string[]
+): Set<string> {
+  return new Set([
+    ...activeSubscriptions.map((subscription) => String(subscription.userEmail || "").toLowerCase()),
+    ...campaignEmails.map((email) => String(email || "").toLowerCase()),
+  ].filter(Boolean));
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!isAuthorized(req)) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -27,9 +38,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
 
-  // Find all users with Meta ad account connected and active FB subscription
+  // Keep paid subscribers eligible, and also sync any account with a real Meta
+  // campaign. Campaign publishing is possible without a separate subscription
+  // row, and silently omitting those campaigns leaves spend/leads stale in Cove.
   const activeSubs = await FBLeadSubscription.find({ status: "active" }).lean() as any[];
-  const activeEmails = new Set(activeSubs.map((s: any) => (s.userEmail || "").toLowerCase()));
+  const campaignEmails = await FBLeadCampaign.distinct("userEmail", {
+    metaCampaignId: { $exists: true, $ne: "" },
+    status: { $in: ["setup", "active", "paused"] },
+  }) as string[];
+  const eligibleEmails = getMetaInsightEligibleEmails(activeSubs, campaignEmails);
 
   const users = await User.find({
     metaAdAccountId: { $exists: true, $ne: "" },
@@ -50,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   for (const user of users) {
     const userEmail = (user.email || "").toLowerCase();
-    if (!activeEmails.has(userEmail)) continue;
+    if (!eligibleEmails.has(userEmail)) continue;
 
     const cooldownUntil = user.metaHealthCooldownUntil ? new Date(user.metaHealthCooldownUntil) : null;
     if (user.metaReconnectNeeded || (cooldownUntil && cooldownUntil > now)) {

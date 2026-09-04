@@ -48,5 +48,7 @@ describe("retrieveMetaLead", () => {
     }));
     const requestedUrl = new URL((global.fetch as jest.Mock).mock.calls[0][0]);
     expect(requestedUrl.searchParams.get("fields")).toContain("custom_disclaimer_responses");
+    expect(requestedUrl.searchParams.get("fields")).not.toContain("page_id");
+    expect(lead.pageId).toBe("");
   });
 });

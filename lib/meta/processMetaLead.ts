@@ -172,8 +172,15 @@ export async function processMetaLead(
 
   let leadData: any;
   try {
-    const userAccessToken = String((user as any).metaAccessToken || "").trim();
-    leadData = await retrieveMetaLead(leadgenId, userAccessToken || undefined);
+    // Lead retrieval is Page-scoped. Prefer the saved Page token, while
+    // retaining the existing system/person token fallbacks for older accounts.
+    const leadAccessToken = String(
+      (user as any).metaPageAccessToken ||
+      (user as any).metaSystemUserToken ||
+      (user as any).metaAccessToken ||
+      ""
+    ).trim();
+    leadData = await retrieveMetaLead(leadgenId, leadAccessToken || undefined);
   } catch (err: any) {
     const retryIndex = Math.min(attemptCount - 1, RETRY_DELAYS_MS.length - 1);
     const nextRetryAt = attemptCount <= RETRY_DELAYS_MS.length

@@ -14,13 +14,20 @@ const MAX_RETRIES_PER_RUN = 20;
 const STALE_RECEIVED_MS = 3 * 60 * 1000;   // 3 minutes
 const STALE_PROCESSING_MS = 10 * 60 * 1000; // 10 minutes — crash recovery window
 
+export function isRetryMetaLeadsAuthorized(req: NextApiRequest, cronSecret: string): boolean {
+  if (!cronSecret) return true;
+  const queryToken = String(req.query.token || "");
+  const cronHeader = String(req.headers["x-cron-token"] || "");
+  const bearerToken = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  return [queryToken, cronHeader, bearerToken].includes(cronSecret);
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const token = String(req.query.token || req.headers["x-cron-token"] || "");
-  if (CRON_SECRET && token !== CRON_SECRET) {
+  if (!isRetryMetaLeadsAuthorized(req, CRON_SECRET)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
