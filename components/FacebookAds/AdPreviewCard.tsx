@@ -1690,6 +1690,7 @@ export function ProductionFeedCreative({
   const designWidth = 375;
   const designHeight = 468.75;
   const productionScale = 540 / designWidth;
+  const approvedVeteran = Boolean(draft?.approvedVeteranConcept);
 
   return (
     <div
@@ -1705,20 +1706,22 @@ export function ProductionFeedCreative({
           "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
       }}
     >
-      <div
-        data-creative-design-canvas="true"
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: designWidth,
-          height: designHeight,
-          transform: `scale(${productionScale})`,
-          transformOrigin: "top left",
-        }}
-      >
-          <FinishedCreativeRenderer draft={draft} leadType={leadType} overlay={overlay} />
-      </div>
+      {approvedVeteran
+        ? <ApprovedVeteranCreative draft={draft} />
+        : <div
+            data-creative-design-canvas="true"
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: designWidth,
+              height: designHeight,
+              transform: `scale(${productionScale})`,
+              transformOrigin: "top left",
+            }}
+          >
+            <FinishedCreativeRenderer draft={draft} leadType={leadType} overlay={overlay} />
+          </div>}
     </div>
   );
 }

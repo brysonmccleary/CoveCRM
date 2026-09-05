@@ -307,6 +307,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const selectedDrafts = approvedConcepts.map((concept) => {
       const marketDirect = concept.masterKind === "market_direct";
       const offerFirst = concept.masterId === "VET_MARKET_01";
+      const coverageAmount = concept.heroAmount
+        ? `$${concept.heroAmount.toLocaleString("en-US")}`
+        : "";
       const draft = {
         leadType,
         audienceSegment,
@@ -314,11 +317,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         dailyBudgetCents,
         primaryText: marketDirect
           ? (offerFirst
-            ? "Veterans and military families: explore whole life coverage options up to $100,000. No medical exam, no 2-year wait, and instant approval options are available. Select your age to see your options."
-            : "Veterans: help protect your family from final expenses with private whole life coverage options up to $100,000. Review available options with a licensed insurance professional.")
+            ? `Veterans and military families: explore whole life coverage options up to ${coverageAmount}. No medical exam, no 2-year wait, and instant approval options are available. Select your age to see your options.`
+            : `Veterans: help protect your family from final expenses with private whole life coverage options up to ${coverageAmount}. Review available options with a licensed insurance professional.`)
           : "Private whole life coverage options for veterans and military families. A licensed professional can review available choices.",
         headline: marketDirect
-          ? (offerFirst ? "Veterans: See Whole Life Options Up to $100,000" : "Veterans: Help Protect Your Family")
+          ? (offerFirst ? `Veterans: See Whole Life Options Up to ${coverageAmount}` : "Veterans: Help Protect Your Family")
           : concept.headline.join(" "),
         description: marketDirect ? "Private coverage. No obligation." : "Private coverage review by age.",
         cta: marketDirect ? "GET_QUOTE" : concept.cta,

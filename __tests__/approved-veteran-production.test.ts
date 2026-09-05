@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getServerSession } from "next-auth/next";
 import ApprovedVeteranCreative from "@/components/FacebookAds/ApprovedVeteranCreative";
+import { ProductionFeedCreative } from "@/components/FacebookAds/AdPreviewCard";
 import { isDecodedCreativePhoto, measurePhotoContribution } from "@/components/FacebookAds/AdWizard";
 import handler from "@/pages/api/facebook/generate-ad";
 import MetaCreativeUsage from "@/models/MetaCreativeUsage";
@@ -192,11 +193,21 @@ describe("approved Veteran production recovery", () => {
     expect(batch.every((concept) => (
       isOwnerSelectableVeteranExecution(concept)
       && concept.masterKind === "market_direct"
-      && concept.heroAmount === 100000
+      && [40000, 50000, 100000].includes(Number(concept.heroAmount))
       && concept.claimAuthority === "OWNER_CONFIRMED"
       && !OWNER_REJECTED_VETERAN_EXECUTION_IDS.includes(concept.executionId as any)
       && Object.values(concept.visualQuality).every((value) => value !== "FAIL")
     ))).toBe(true);
+    expect(new Set(batch.map((concept) => concept.heroAmount))).toEqual(new Set([40000, 50000, 100000]));
+  });
+
+  test("distributes $40k, $50k, and $100k across every market-direct layout", () => {
+    const market = buildApprovedVeteranLibrary().filter((concept) => concept.masterKind === "market_direct");
+    expect(new Set(market.map((concept) => concept.heroAmount))).toEqual(new Set([40000, 50000, 100000]));
+    for (const masterId of Array.from({ length: 12 }, (_, index) => `VET_MARKET_${String(index + 1).padStart(2, "0")}`)) {
+      const amounts = new Set(market.filter((concept) => concept.masterId === masterId).map((concept) => concept.heroAmount));
+      expect(amounts).toEqual(new Set([40000, 50000, 100000]));
+    }
   });
 
   test("renders all twelve fixed reference layouts with no generated-image dependency", () => {
@@ -211,10 +222,25 @@ describe("approved Veteran production recovery", () => {
       expect(markup).toContain(`data-market-direct-layout="reference-${String(tile).padStart(2, "0")}"`);
       expect(markup).toContain(`data-reference-replica="${String(tile).padStart(2, "0")}"`);
       expect(markup).toContain('data-creative-aspect="4:5"');
-      if (tile !== 3) expect(markup).toContain("$100,000");
+      if (tile !== 3) expect(markup).toContain(concept?.heroContent[0]);
+      else expect(markup).toContain("$8,000");
       expect(markup).not.toContain("<img");
       expect(concept?.backgroundUrl).toBeNull();
     }
+  });
+
+  test("renders approved Veteran production captures at native size without the legacy scale wrapper", () => {
+    const concept = selectApprovedVeteranConcepts({ seed: "native-production-capture", count: 1 })[0];
+    const markup = renderToStaticMarkup(createElement(ProductionFeedCreative, {
+      draft: { leadType: "veteran", approvedVeteranConcept: concept },
+    }));
+    expect(markup).toContain('data-creative-root="true"');
+    expect(markup).toContain('data-approved-veteran-runtime="true"');
+    expect(markup).not.toContain('data-creative-design-canvas="true"');
+
+    const wizardSource = readFileSync("components/FacebookAds/AdWizard.tsx", "utf8");
+    expect(wizardSource).toContain("left: -10000");
+    expect(wizardSource).toContain("zIndex: 0");
   });
 
   test("keeps each reference geometry fixed while exposing 20 distinct CSS color treatments", () => {
@@ -370,7 +396,7 @@ describe("approved Veteran production recovery", () => {
       && draft.approvedVeteranConcept?.masterKind === "market_direct"
       && draft.approvedVeteranConcept?.claimAuthority === "OWNER_CONFIRMED"
       && draft.cta === "GET_QUOTE"
-      && draft.primaryText.includes("$100,000")
+      && draft.primaryText.includes(draft.displayAmount)
       && draft.approvedVeteranConcept?.customerEligible === true
       && !OWNER_REJECTED_VETERAN_EXECUTION_IDS.includes(draft.approvedVeteranConcept?.executionId)
       && draft.displayAmount === (draft.approvedVeteranConcept?.heroAmount
@@ -378,5 +404,6 @@ describe("approved Veteran production recovery", () => {
         : "")
       && draft.variationType === draft.approvedVeteranConcept?.visualConceptId
     ))).toBe(true);
+    expect(new Set(body.drafts.map((draft: any) => draft.displayAmount))).toEqual(new Set(["$40,000", "$50,000", "$100,000"]));
   });
 });

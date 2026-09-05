@@ -1110,12 +1110,12 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	            className="space-y-3"
 	            style={step === 5 ? {
                 position: "fixed",
-                left: 0,
+                left: -10000,
                 top: 0,
                 width: Math.max(540, drafts.length * 700),
                 height: 675,
                 pointerEvents: "none",
-                zIndex: -1,
+                zIndex: 0,
                 overflow: "visible",
               } : undefined}
 	          >

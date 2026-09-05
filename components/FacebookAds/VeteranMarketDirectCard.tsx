@@ -43,6 +43,11 @@ export function VeteranMarketDirectCard({ concept }: { concept: ApprovedVeteranC
   const [width, height] = REPLICA_SIZES[tile - 1];
   const scale = 540 / width;
   const filter = COLOR_TREATMENTS[(executionNumber(concept.executionId) - 1) % COLOR_TREATMENTS.length];
+  const amount = concept.heroAmount === 40_000
+    ? "$40,000"
+    : concept.heroAmount === 50_000
+      ? "$50,000"
+      : "$100,000";
 
   return <div
     data-market-direct-layout={`reference-${String(tile).padStart(2, "0")}`}
@@ -59,7 +64,7 @@ export function VeteranMarketDirectCard({ concept }: { concept: ApprovedVeteranC
       transformOrigin: "top left",
       filter,
     } as CSSProperties}>
-      <VeteranReferenceReplicaCard tile={tile} amount="$100,000" />
+      <VeteranReferenceReplicaCard tile={tile} amount={amount} />
     </div>
   </div>;
 }

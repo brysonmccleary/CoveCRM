@@ -232,6 +232,12 @@ function amountFor(index: number): 40000 | 50000 | 100000 | null {
   return values[index % values.length];
 }
 
+const MARKET_DIRECT_AMOUNTS = [40000, 50000, 100000] as const;
+
+function marketDirectAmountFor(index: number): 40000 | 50000 | 100000 {
+  return MARKET_DIRECT_AMOUNTS[index % MARKET_DIRECT_AMOUNTS.length];
+}
+
 function veteranSeeds(): VeteranSeed[] {
   const existing = buildVeteran24MasterReview().capabilityPreviews;
   const locked = buildVeteranReferenceLocked12().capabilityPreviews;
@@ -309,6 +315,8 @@ function buildExecution(seed: VeteranSeed, index: number, imageCounter: { value:
     const palette = MARKET_DIRECT_PALETTES[index % MARKET_DIRECT_PALETTES.length];
     const surface = Math.floor(index / MARKET_DIRECT_PALETTES.length) % 10;
     const benefits = ["NO MEDICAL EXAM", "NO 2-YEAR WAIT", "PROTECT YOUR FAMILY"];
+    const heroAmount = marketDirectAmountFor(index);
+    const heroAmountText = `$${heroAmount.toLocaleString("en-US")}`;
     const renderFields = {
       lane: "veteran",
       language: "en",
@@ -317,7 +325,7 @@ function buildExecution(seed: VeteranSeed, index: number, imageCounter: { value:
       palette,
       surface,
       headline: seed.baseHeadline,
-      heroContent: ["$100,000"],
+      heroContent: [heroAmountText],
       benefits,
       ageOptions: ["50–54", "55–59", "60–64", "65–69", "70–74", "75–85"],
       cta: "SEE MY OPTIONS",
@@ -340,8 +348,8 @@ function buildExecution(seed: VeteranSeed, index: number, imageCounter: { value:
       headlineHookId: `MARKET_REFERENCE_${pad(seed.tile || 1)}`,
       headline: seed.baseHeadline,
       heroTreatment: "reference_layout",
-      heroAmount: 100000,
-      heroContent: ["$100,000"],
+      heroAmount,
+      heroContent: [heroAmountText],
       claimMode: "PRODUCTION_APPROVED",
       claimAuthority: "OWNER_CONFIRMED",
       capabilityFixtureId: "OWNER_CONFIRMED_VETERAN_2026_09",
@@ -641,16 +649,24 @@ export function selectApprovedVeteranConcepts({
   );
   const marketDirect = eligible.filter(execution => (
     execution.masterKind === "market_direct"
-    && execution.heroAmount === 100000
+    && MARKET_DIRECT_AMOUNTS.includes(execution.heroAmount as 40000 | 50000 | 100000)
     && execution.claimAuthority === "OWNER_CONFIRMED"
   ));
   if (marketDirect.length >= requestedCount) {
-    return roundRobinTake(
+    const selectedMasters = roundRobinTake(
       marketDirect,
       requestedCount,
       `${seed}:veteran:market_direct`,
       execution => execution.masterId,
     );
+    const amountOffset = parseInt(fnv(`${seed}:veteran:market_direct:amount`), 16) % MARKET_DIRECT_AMOUNTS.length;
+    return selectedMasters.map((selected, index) => {
+      const desiredAmount = MARKET_DIRECT_AMOUNTS[(amountOffset + index) % MARKET_DIRECT_AMOUNTS.length];
+      return marketDirect
+        .filter(execution => execution.masterId === selected.masterId && execution.heroAmount === desiredAmount)
+        .sort((left, right) => fnv(`${seed}:${left.executionId}`).localeCompare(fnv(`${seed}:${right.executionId}`)))[0]
+        || selected;
+    });
   }
   const imageValues = eligible.filter(execution => execution.selectionStyleCategory === "image_backed_direct_response" && execution.heroAmount !== null);
   const pureGraphicValues = eligible.filter(execution => execution.selectionStyleCategory === "pure_graphic" && execution.heroAmount !== null);
