@@ -44,6 +44,10 @@ import http, { IncomingMessage, ServerResponse } from "http";
 import WebSocket, { WebSocketServer } from "ws";
 import fetch from "node-fetch";
 import { Buffer } from "buffer";
+import {
+  buildNaturalTurn, NATURAL_PERSONALITY, resolveVoiceExperiment, realtimeSelection,
+  naturalRoutingText, isThinkingOnly, isAmbiguousAnswer,
+} from "./lib/voiceExperiment";
 import { computeAiVoiceUsageMinutes } from "./lib/aiVoiceUsage";
 import { getKaylaSignupScript } from "./scripts/kaylaSignupScript";
 import {
@@ -487,6 +491,7 @@ function recordResponseCreateTelemetry(state: CallState, reason: string): void {
 function resolveVoiceFeatureFlags(userEmailRaw?: string): VoiceFeatureFlags {
   const userEmail = String(userEmailRaw || "").trim().toLowerCase();
   return {
+    ...resolveVoiceExperiment(process.env, userEmail),
     contextPrefetchV1: scopedFeatureEnabled({
       globalEnabled: VOICE_PREFETCH_CONTEXT_V1,
       internalTestEnabled: VOICE_PREFETCH_CONTEXT_TEST_V1,
@@ -513,6 +518,17 @@ function phase1FeatureEnabled(
   feature: keyof VoiceFeatureFlags
 ): boolean {
   return !!state.phase1Flags?.[feature];
+}
+
+function naturalConversationEnabled(state: CallState): boolean {
+  return phase1FeatureEnabled(state, "naturalConversationTest") &&
+    normalizeScriptKey(state.context?.scriptKey) !== "kayla_signup";
+}
+
+function routingTextForCall(state: CallState, text: string): string {
+  return naturalConversationEnabled(state)
+    ? naturalRoutingText(text)
+    : authoritativeRoutingText(text, phase1FeatureEnabled(state, "naturalScriptV1"));
 }
 
 /**
@@ -1481,11 +1497,9 @@ async function replayPendingCommittedTurn(
       return;
     }
     const finalizedTranscriptText = turnFinalization.transcript;
-    lastUserText = authoritativeRoutingText(
-      finalizedTranscriptText,
-      phase1FeatureEnabled(state, "naturalScriptV1")
-    );
+    lastUserText = routingTextForCall(state, finalizedTranscriptText);
     if (finalizedTranscriptText) state.lastUserTranscript = finalizedTranscriptText;
+    if (naturalConversationEnabled(state) && isThinkingOnly(lastUserText)) return;
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
     const questionKind = !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
     const objectionOrQuestionKind = objectionKind || questionKind;
@@ -1548,6 +1562,7 @@ async function replayPendingCommittedTurn(
               stepType,
               recentExchanges: state.recentExchanges,
               ctx: state.context,
+              natural: naturalConversationEnabled(state),
             })
           : buildFreeResponseInstruction(
               state.context || ({} as any),
@@ -1598,6 +1613,7 @@ async function replayPendingCommittedTurn(
               stepType,
               recentExchanges: state.recentExchanges,
               ctx: state.context,
+              natural: naturalConversationEnabled(state),
             })
           : buildFreeResponseInstruction(
               state.context || ({} as any),
@@ -1685,6 +1701,7 @@ async function replayPendingCommittedTurn(
         userText: lastUserText || "",
         recentExchanges: state.recentExchanges,
         naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+        naturalConversationEnabled: naturalConversationEnabled(state),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -8686,6 +8703,30 @@ function buildResponseFromPolicy(
   state: CallState,
   stepCtx?: { idx: number; steps: string[]; stepType: StepType; expectedAnswerIdx?: number }
 ): string {
+  // Preserve the existing anchor counters and all policy/state machinery.
+  const legacy = buildResponseFromPolicyLegacy(decision, state, stepCtx);
+  if (!naturalConversationEnabled(state)) return legacy;
+  // ARC already permits natural delivery; retain its approved objection substance.
+  if (decision.responseMode === "objection_arc") return `${legacy}\n\n${NATURAL_PERSONALITY}`;
+  const answerThenClose = decision.responseMode === "soft_script" || decision.responseMode === "guided_gpt";
+  const line = decision.responseMode === "free_response" || answerThenClose
+    ? decision.requiredClosingPivot || decision.lineToSay || getStateAwareClosingPivot(state)
+    : decision.lineToSay || decision.requiredClosingPivot || getStateAwareClosingPivot(state);
+  return buildNaturalTurn({
+    line,
+    purpose: `${decision.routeKind}: ${decision.objective}`,
+    userText: decision.userText || state.lastUserTranscript,
+    history: state.recentExchanges,
+    forbiddenTopics: decision.forbiddenTopics,
+    approvedAnswer: decision.baseAnswer || (answerThenClose ? decision.lineToSay : undefined),
+  });
+}
+
+function buildResponseFromPolicyLegacy(
+  decision: PolicyDecision,
+  state: CallState,
+  stepCtx?: { idx: number; steps: string[]; stepType: StepType; expectedAnswerIdx?: number }
+): string {
   if (decision.responseMode === "objection_arc" && state.context) {
     return buildObjectionARCInstruction(state.context, {
       userText: decision.userText || "",
@@ -8696,6 +8737,7 @@ function buildResponseFromPolicy(
         ] || "",
       recentExchanges: state.recentExchanges,
       softerTakeaway: !!decision.repeatMode,
+      natural: naturalConversationEnabled(state),
     });
   }
   if (decision.responseMode === "script_step" && decision.lineToSay && state.context) {
@@ -8705,6 +8747,7 @@ function buildResponseFromPolicy(
         userText: decision.userText || "",
         recentExchanges: state.recentExchanges,
         naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+        naturalConversationEnabled: naturalConversationEnabled(state),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -8720,6 +8763,7 @@ function buildResponseFromPolicy(
       userText: decision.userText || "",
       recentExchanges: state.recentExchanges,
       naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+      naturalConversationEnabled: naturalConversationEnabled(state),
       scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
       agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
       leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -8798,9 +8842,11 @@ function buildResponseFromPolicy(
   }
   if (decision.lineToSay) return buildExactScriptLineInstruction(decision.lineToSay, {
     naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+    naturalConversationEnabled: naturalConversationEnabled(state),
   });
   return buildExactScriptLineInstruction(getStateAwareClosingPivot(state), {
     naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+    naturalConversationEnabled: naturalConversationEnabled(state),
   });
 }
 
@@ -8971,16 +9017,28 @@ async function handleConversationTurn(
   humanPause: () => Promise<void>
 ): Promise<boolean> {
   const transcriptText = normalizeRawTranscript(String(lastUserText || "").trim());
-  const text = authoritativeRoutingText(
-    transcriptText,
-    phase1FeatureEnabled(state, "naturalScriptV1")
-  );
+  const text = routingTextForCall(state, transcriptText);
   if (!text) return false;
+
+  if (naturalConversationEnabled(state) && isThinkingOnly(text)) {
+    // A pause/filler is not an answer. Retain the pending objective, make no paid response.
+    markCommittedTurnHandled(state, turnKey, `${source} thinking pause`);
+    return true;
+  }
 
   state.coverageSubjectSetThisTurn = false;
 
   const intent = classifyTurnIntent(text, state, stepCtx);
-  const decision = buildConversationPolicyDecision(intent, state, stepCtx);
+  // Do not invoke the policy's answer side effects for a hesitant yes/maybe.
+  const decision: PolicyDecision = naturalConversationEnabled(state) && isAmbiguousAnswer(text)
+    ? {
+      handled: true, routeKind: "natural_clarify_uncertainty", responseMode: "free_response",
+      objective: "clarify_current_question_without_assuming_consent", userText: text,
+      lineToSay: stepCtx.steps[stepCtx.expectedAnswerIdx] || getStateAwareClosingPivot(state),
+      requiredClosingPivot: stepCtx.steps[stepCtx.expectedAnswerIdx] || getStateAwareClosingPivot(state),
+      stateWrites: {}, forbiddenTopics: [], shouldAdvanceStep: false,
+    }
+    : buildConversationPolicyDecision(intent, state, stepCtx);
   // CURRENT STEP INVARIANT:
   // If Step 1 is unanswered, only blind script-advance is blocked.
   // Objections and questions bypass this guard and are handled by the normal policy router.
@@ -9203,6 +9261,7 @@ async function handleConversationTurn(
         userText: text,
         recentExchanges: state.recentExchanges,
         naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+        naturalConversationEnabled: naturalConversationEnabled(state),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -9286,8 +9345,12 @@ function buildControlledGptInstruction(opts: {
   stepType?: string;
   recentExchanges?: Array<{ role: "ai" | "user"; text: string }>;
   ctx: AICallContext;
+  natural?: boolean;
 }): string {
   const { userText, intent, requiredObjectiveLine, stepType, recentExchanges, ctx } = opts;
+  if (opts.natural) return buildNaturalTurn({
+    line: requiredObjectiveLine, purpose: intent, userText, history: recentExchanges,
+  });
   const agent = (ctx.agentName || "the agent").split(" ")[0];
   const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
   const leadName = (ctx.clientFirstName || "there").trim();
@@ -9569,6 +9632,7 @@ function buildObjectionARCInstruction(
     pendingStepLine: string;
     recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
     softerTakeaway?: boolean;
+    natural?: boolean;
   }
 ): string {
   const leadName = (ctx.clientFirstName || "").trim() || "there";
@@ -9634,7 +9698,7 @@ RESPOND — 1-2 sentences that dissolve their specific objection using the knowl
 RECLOSE — immediately ask the CURRENT pending script step question, phrased naturally. Do not require verbatim wording. Never ask permission like "is that okay?" or "do you have a minute?"
 
 KNOWLEDGE FOR RESPOND:
-- Most people fill these requests out online through a quick form, so they often forget.
+${opts.natural ? "- If they do not remember requesting information, acknowledge the uncertainty. Do not assert a source, website, form, date or referral that is not verified in CRM context." : "- Most people fill these requests out online through a quick form, so they often forget."}
 - ${productKnowledgeLine}
 - ${agent} is the licensed agent and covers pricing, options, and qualification.
 - There is no cost or obligation to get the information.
@@ -9643,7 +9707,7 @@ KNOWLEDGE FOR RESPOND:
 - For busy or no-time objections, preserve all three beats: acknowledge they are busy; say that is exactly why ${agent} keeps it to a few minutes; reclose with the current day/time choice.
 
 EXAMPLE SHAPE ONLY — adapt to the actual objection:
-"Yeah, I completely understand — most people fill these out online on a quick form, so they tend to forget. It's about the ${scope} request you submitted, just so you can get the information with no cost or obligation. Would this be just for yourself, or a spouse as well?"
+${opts.natural ? `"I hear you. This is about the ${scope} information, with no cost or obligation to get the information." Then reclose only with the CURRENT pending ask below.` : `"Yeah, I completely understand — most people fill these out online on a quick form, so they tend to forget. It's about the ${scope} request you submitted, just so you can get the information with no cost or obligation. Would this be just for yourself, or a spouse as well?"`}
 
 ${historyBlock}${takeaway}
 WHAT THE LEAD JUST SAID:
@@ -10796,7 +10860,7 @@ HOW TO HANDLE ANY QUESTION
 `.trim();
 }
 
-function getScriptBlock(ctx: AICallContext): string {
+function getScriptBlock(ctx: AICallContext, natural = false): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
   const clientRaw = (ctx.clientFirstName || "").trim();
   const client = clientRaw ? clientRaw : "there";
@@ -10880,7 +10944,7 @@ TURN DISCIPLINE (NON-NEGOTIABLE)
     HARD_LOCKS,
     "",
     "====================",
-    "BOOKING SCRIPT (FOLLOW EXACTLY)",
+    natural ? "BOOKING OBJECTIVES (FOLLOW IN ORDER; SEMANTIC FIDELITY)" : "BOOKING SCRIPT (FOLLOW EXACTLY)",
     "====================",
     selectedScript,
     "",
@@ -10894,7 +10958,7 @@ TURN DISCIPLINE (NON-NEGOTIABLE)
 /**
  * ✅ Strict system greeting: MUST stop and wait.
  */
-function buildGreetingInstructions(ctx: AICallContext): string {
+function buildGreetingInstructions(ctx: AICallContext, natural = false): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
   const clientNameRaw = (ctx.clientFirstName || "").trim();
   const clientName = (!clientNameRaw || isTestOrPlaceholderName(clientNameRaw)) ? "there" : clientNameRaw;
@@ -10910,6 +10974,10 @@ Stop immediately after. Do not add anything. Wait for response.
 `.trim();
   }
 
+  if (natural) return buildNaturalTurn({
+    line: `Hey ${clientName}! This is ${aiName} — how are you doing today?`,
+    purpose: "greeting only; introduce yourself, ask how they are, then wait", level: 3,
+  });
   return `
 Say this greeting EXACTLY:
 "Hey ${clientName}! This is ${aiName} — how are you doing today?"
@@ -10927,6 +10995,7 @@ function buildExactScriptLineInstruction(lineRaw: string, opts?: {
   leadName?: string;
   wordingLevel?: ScriptWordingLevel;
   naturalScriptEnabled?: boolean;
+  naturalConversationEnabled?: boolean;
 }): string {
   const line = String(lineRaw || "").trim();
   const userText = String(opts?.userText || "").trim();
@@ -10934,6 +11003,9 @@ function buildExactScriptLineInstruction(lineRaw: string, opts?: {
   const agent = String(opts?.agent || "the agent").trim();
   const leadName = String(opts?.leadName || "there").trim();
   const exchanges = opts?.recentExchanges || [];
+  if (opts?.naturalConversationEnabled && scope !== "CoveCRM demo") {
+    return buildNaturalTurn({ line, userText, history: exchanges, level: opts.wordingLevel });
+  }
   const wordingLevel = (opts?.naturalScriptEnabled ?? VOICE_NATURAL_SCRIPT_V1)
     ? scriptWordingLevel(line, opts?.wordingLevel)
     : 1;
@@ -11047,7 +11119,7 @@ VARIETY RULE: Do not open with "I understand" or "Got it" every single turn. Mix
 /**
  * System prompt – HARD locks + BOOKING script + rebuttals.
  */
-function buildSystemPrompt(ctx: AICallContext): string {
+function buildSystemPrompt(ctx: AICallContext, natural = false): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
@@ -11200,7 +11272,7 @@ TONE & DELIVERY (READ THIS FIRST)
 - Never open with "What's up?", "What can I do for you?", or similar counter-questions.
 - Mirror the lead’s energy. If they’re friendly, be friendly. If they’re brief, be brief. If they’re hesitant, slow down and stay warm.
 - Never sound scripted. Deliver each line as if you’re speaking it for the first time.
-- When the lead gives ANY response, acknowledge it genuinely before moving on. One natural word or phrase is enough.
+${natural ? "- Acknowledgments are optional: use one only when it fits, never mechanically." : "- When the lead gives ANY response, acknowledge it genuinely before moving on. One natural word or phrase is enough."}
 - If a lead sounds confused: "No worries, let me explain quickly..." — then one clear sentence.
 - If a lead sounds annoyed or rushed: "I totally get that — this’ll be really quick."
 - If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
@@ -11263,13 +11335,13 @@ LEAD INFO (USE ONLY WHAT IS PROVIDED)
 - Script key: ${scriptKey}
 
 MOST IMPORTANT:
-- FOLLOW THE SCRIPT BELOW EXACTLY IN ORDER.
+${natural ? "- FOLLOW THE SCRIPT OBJECTIVES IN ORDER. Ordinary wording is flexible; only protected compliance and confirmation lines are exact." : "- FOLLOW THE SCRIPT BELOW EXACTLY IN ORDER."}
 - Use REBUTTALS only when the lead objects, then return to booking.
 `.trim();
 
-  const script = getScriptBlock(ctx);
+  const script = getScriptBlock(ctx, natural);
 
-  return `${base}\n\n====================\nREAL CALL SCRIPT\n====================\n${script}`;
+  return `${base}\n\n====================\nREAL CALL SCRIPT\n====================\n${script}${natural ? `\n\n${NATURAL_PERSONALITY}` : ""}`;
 }
 
 /**
@@ -12035,6 +12107,7 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
       const instr = buildExactScriptLineInstruction(lineToSay, {
         recentExchanges: state.recentExchanges,
         naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+        naturalConversationEnabled: naturalConversationEnabled(state),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",
@@ -12793,11 +12866,10 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       if (total - lastLogAt >= 30000) {
         (state as any)._audioMeterLogAt = total;
         const inputMinutes = total / 60000;
-        const estimatedInputCost = inputMinutes * 0.10;
         console.log("[AI-VOICE][COST-METER] Audio streamed to OpenAI:", {
           callSid: state.callSid,
           inputMinutes: inputMinutes.toFixed(2),
-          estimatedInputCostUsd: estimatedInputCost.toFixed(4),
+          costBasis: "duration counter only; use response token usage in voiceMetrics for cost",
           phase: state.phase,
           awaitingUserAnswer: !!state.awaitingUserAnswer,
         });
@@ -12878,8 +12950,16 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     return;
   }
 
+  const selection = realtimeSelection(OPENAI_REALTIME_MODEL, phase1FeatureEnabled(state, "realtime21MiniTest"));
+  if (state.telemetry) {
+    state.telemetry.requestedRealtimeModel = selection.model;
+    state.telemetry.resolvedRealtimeModel = selection.model;
+    state.telemetry.requestedVoice = state.context.voiceProfile.openAiVoiceId || "alloy";
+    state.telemetry.controllerMode = naturalConversationEnabled(state) ? "natural_objectives_test" : "legacy";
+    state.telemetry.reasoningEffort = selection.reasoning?.effort;
+  }
   const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(
-    OPENAI_REALTIME_MODEL
+    selection.model
   )}`;
 
   console.log("[AI-VOICE] Connecting to OpenAI Realtime:", url);
@@ -12898,7 +12978,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     state.openAiReady = false;
     state.openAiConfigured = false;
 
-    const systemPrompt = buildSystemPrompt(state.context!);
+    const systemPrompt = buildSystemPrompt(state.context!, naturalConversationEnabled(state));
 
     try {
       const selectedScript = getSelectedScriptText(state.context!);
@@ -12968,7 +13048,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       type: "session.update",
       session: {
         type: "realtime",
-        model: OPENAI_REALTIME_MODEL,
+        ...selection,
         instructions: systemPrompt,
         output_modalities: ["audio"],
         audio: {
@@ -13003,7 +13083,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     try {
       console.log("[AI-VOICE] Sending session.update with voice:", {
         openAiVoiceId: state.context!.voiceProfile.openAiVoiceId,
-        model: OPENAI_REALTIME_MODEL,
+        model: selection.model,
         apiShape: "ga",
         inputAudioFormat: OPENAI_REALTIME_AUDIO_FORMAT,
         outputAudioFormat: OPENAI_REALTIME_AUDIO_FORMAT,
@@ -13023,6 +13103,14 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       const event = JSON.parse(text);
 
       if (event?.type === "error") {
+        if (state.telemetry && !state.openAiConfigured) {
+          state.telemetry.sessionConfigurationError = String(event?.error?.code || "provider_setup_error");
+        }
+        if (!state.openAiConfigured && phase1FeatureEnabled(state, "realtime21MiniTest")) {
+          safelyCloseOpenAi(state, "internal test provider setup error");
+          ws.close();
+          return;
+        }
         console.error("[AI-VOICE] OpenAI session setup/stream ERROR event:", {
           callSid: state.callSid,
           streamSid: state.streamSid,
@@ -13406,6 +13494,20 @@ async function handleOpenAiEvent(
   }
 
   if (t === "session.updated" && !state.openAiConfigured) {
+    if (state.telemetry) {
+      state.telemetry.providerRealtimeModel = event?.session?.model;
+      state.telemetry.providerVoice = event?.session?.audio?.output?.voice;
+    }
+    const expected = realtimeSelection(OPENAI_REALTIME_MODEL, phase1FeatureEnabled(state, "realtime21MiniTest"));
+    if (phase1FeatureEnabled(state, "realtime21MiniTest") &&
+      (event?.session?.model !== expected.model || event?.session?.reasoning?.effort !== "low" ||
+        event?.session?.audio?.output?.voice !== (state.context?.voiceProfile?.openAiVoiceId || "alloy"))) {
+      if (state.telemetry) state.telemetry.sessionConfigurationError = "test_session_configuration_mismatch";
+      // Never silently run a different experiment or substitute a different voice/model.
+      safelyCloseOpenAi(state, "test session configuration mismatch");
+      twilioWs.close();
+      return;
+    }
     state.openAiConfigured = true;
     state.openAiReady = true;
 
@@ -13558,7 +13660,7 @@ async function handleOpenAiEvent(
         } else {
           greetingInstr = shouldUseInboundFlow(liveState.context)
             ? buildInboundGreetingInstructions(liveState.context!)
-            : buildGreetingInstructions(liveState.context!);
+            : buildGreetingInstructions(liveState.context!, naturalConversationEnabled(liveState));
         }
 
         try {
@@ -14010,11 +14112,9 @@ async function handleOpenAiEvent(
       return;
     }
     const finalizedTranscriptText = turnFinalization.transcript;
-    lastUserText = authoritativeRoutingText(
-      finalizedTranscriptText,
-      phase1FeatureEnabled(state, "naturalScriptV1")
-    );
+    lastUserText = routingTextForCall(state, finalizedTranscriptText);
     if (finalizedTranscriptText) state.lastUserTranscript = finalizedTranscriptText;
+    if (naturalConversationEnabled(state) && isThinkingOnly(lastUserText)) return;
     const objectionKind = !isGreetingReply && lastUserText ? detectObjection(lastUserText) : null;
 
     const questionKind = !isGreetingReply && !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
@@ -14068,6 +14168,7 @@ async function handleOpenAiEvent(
               stepType,
               recentExchanges: state.recentExchanges,
               ctx: state.context,
+              natural: naturalConversationEnabled(state),
             })
           : buildFreeResponseInstruction(
               state.context || ({} as any),
@@ -14118,6 +14219,7 @@ async function handleOpenAiEvent(
               stepType,
               recentExchanges: state.recentExchanges,
               ctx: state.context,
+              natural: naturalConversationEnabled(state),
             })
           : buildFreeResponseInstruction(
               state.context || ({} as any),
@@ -14205,6 +14307,7 @@ async function handleOpenAiEvent(
         userText: lastUserText || "",
         recentExchanges: state.recentExchanges,
         naturalScriptEnabled: phase1FeatureEnabled(state, "naturalScriptV1"),
+        naturalConversationEnabled: naturalConversationEnabled(state),
         scope: state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "life insurance",
         agent: state.context ? (state.context.agentName || "the agent").split(" ")[0] : "the agent",
         leadName: state.context ? (state.context.clientFirstName || "there") : "there",

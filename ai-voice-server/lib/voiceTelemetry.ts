@@ -1,7 +1,11 @@
+import { realtimeUsageCost } from "./realtimeUsage";
+
 export type VoiceFeatureFlags = {
   contextPrefetchV1: boolean;
   adaptivePacingV1: boolean;
   naturalScriptV1: boolean;
+  realtime21MiniTest?: boolean;
+  naturalConversationTest?: boolean;
 };
 
 export type VoiceResponseMetric = {
@@ -22,6 +26,13 @@ export type VoiceTelemetryState = {
   version: 1;
   callStartedAtMs: number;
   resolvedRealtimeModel: string;
+  requestedRealtimeModel?: string;
+  providerRealtimeModel?: string;
+  requestedVoice?: string;
+  providerVoice?: string;
+  reasoningEffort?: string;
+  controllerMode?: "legacy" | "natural_objectives_test";
+  sessionConfigurationError?: string;
   featureFlags: VoiceFeatureFlags;
   contextSource?: "prefetch" | "on_answer";
   prefetchFallbackReason?: string;
@@ -109,6 +120,11 @@ export function buildVoiceMetricsSnapshot(
     ? vendorCostPerMinuteUsd
     : 0;
   const estimatedProviderCostUsd = vendorRate > 0 ? connectedMinutes * vendorRate : null;
+  const usageModel = telemetry.providerRealtimeModel || telemetry.resolvedRealtimeModel;
+  const usageCosts = telemetry.responses.map(response => realtimeUsageCost(usageModel, response.usage));
+  const completeUsage = usageCosts.length > 0 && usageCosts.every(cost => cost.complete);
+  const estimatedRealtimeTokenCostUsd = completeUsage
+    ? usageCosts.reduce((sum, cost) => sum + (cost.estimatedCostUsd || 0), 0) : null;
 
   const responses = telemetry.responses.map((response) => ({
     ...response,
@@ -135,7 +151,21 @@ export function buildVoiceMetricsSnapshot(
     callerSpeechDurationMs,
     aiSpeechDurationMs: telemetry.aiSpeechDurationMs,
     resolvedRealtimeModel: telemetry.resolvedRealtimeModel,
+    requestedRealtimeModel: telemetry.requestedRealtimeModel || telemetry.resolvedRealtimeModel,
+    providerRealtimeModel: telemetry.providerRealtimeModel || null,
+    requestedVoice: telemetry.requestedVoice || null,
+    providerVoice: telemetry.providerVoice || null,
+    reasoningEffort: telemetry.reasoningEffort || null,
+    controllerMode: telemetry.controllerMode || "legacy",
+    sessionConfigurationError: telemetry.sessionConfigurationError || null,
+    estimatedRealtimeTokenCostUsd,
+    estimatedRealtimeTokenCostPerConnectedMinuteUsd: estimatedRealtimeTokenCostUsd !== null && connectedMinutes > 0
+      ? estimatedRealtimeTokenCostUsd / connectedMinutes : null,
+    realtimeCostBasis: "reported_token_usage; published rates 2026-09-16; excludes input transcription and Twilio",
+    realtimeCostModelConfirmed: !!telemetry.providerRealtimeModel,
+    realtimeUsageCosts: usageCosts,
     estimatedProviderCostUsd,
+    providerCostBasis: "configured_per_minute_estimate_not_measured_usage",
     estimatedCostPerConnectedMinuteUsd: vendorRate > 0 ? vendorRate : null,
     interruptionAttempts: telemetry.interruptionAttempts,
     featureFlags: telemetry.featureFlags,

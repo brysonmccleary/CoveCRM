@@ -11,6 +11,7 @@ import Call from "@/models/Call";
 import Lead from "@/models/Lead";
 import { Types } from "mongoose";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { validateSubaccountWebhook } from "@/lib/twilio/validateSubaccountWebhook";
 import { trackAiDialerSessionUsage } from "@/lib/billing/trackAiDialerSessionUsage";
 import {
   maybeMarkAICallSessionCompleted,
@@ -26,7 +27,6 @@ const AI_DIALER_DISABLED =
 // ✅ used to securely kick /api/ai-calls/worker
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
-const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
 const RAW_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 
 // ✅ launch-safe voicemail fast-skip guard window (seconds)
@@ -69,6 +69,60 @@ function validatesTwilioSignature(args: {
     }
   }
   return false;
+}
+
+async function authenticateCallStatusCallback(
+  req: NextApiRequest,
+  params: Record<string, string>,
+  signature: string
+): Promise<boolean> {
+  const accountSid = String(params.AccountSid || "");
+  const callSid = String(params.CallSid || "");
+  if (!signature || !/^AC[a-zA-Z0-9]{32}$/.test(accountSid) || !/^CA[a-zA-Z0-9]{32}$/.test(callSid)) {
+    return false;
+  }
+
+  // Read-only ownership checks must finish before any callback upsert or side effect.
+  await mongooseConnect();
+  const recording: any = await AICallRecording.findOne({ callSid })
+    .select("userEmail aiCallSessionId leadId").lean();
+  const sessionId = String(req.query.sessionId || recording?.aiCallSessionId || "");
+  const leadId = String(req.query.leadId || recording?.leadId || "");
+  if (!Types.ObjectId.isValid(sessionId) || !Types.ObjectId.isValid(leadId)) return false;
+  const session: any = await AICallSession.findById(sessionId)
+    .select("userEmail leadIds").lean();
+  const email = String(session?.userEmail || "").toLowerCase();
+  if (!email || (req.query.userEmail && String(req.query.userEmail).toLowerCase() !== email)) return false;
+  if (recording && (
+    String(recording.userEmail || "").toLowerCase() !== email ||
+    String(recording.aiCallSessionId || "") !== sessionId ||
+    String(recording.leadId || "") !== leadId
+  )) return false;
+  // Initiated callbacks can arrive before the worker inserts its recording.
+  if (!recording && !session.leadIds?.some((id: any) => String(id) === leadId)) return false;
+  const existingCall: any = await Call.findOne({ callSid }).select("userEmail leadId").lean();
+  if (existingCall && (
+    String(existingCall.userEmail || "").toLowerCase() !== email ||
+    (existingCall.leadId && String(existingCall.leadId) !== leadId)
+  )) return false;
+
+  const user: any = await User.findOne({ email }).select("twilio.accountSid twilio.authToken").lean();
+  if (!user) return false;
+  const platformSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
+  const expectedAccountSid = process.env.TWILIO_FORCE_PLATFORM === "1"
+    ? platformSid
+    : String(user.twilio?.accountSid || platformSid).trim();
+  if (accountSid !== expectedAccountSid) return false;
+
+  const urls = candidateCallbackUrls(req);
+  try {
+    if (await validateSubaccountWebhook({ accountSid, signature, urls, params })) return true;
+  } catch {
+    // A personal account need not be a platform child. Retain the existing
+    // stored-token path only for the exact account bound to this session owner.
+  }
+  return accountSid === user.twilio?.accountSid &&
+    validatesTwilioSignature({ signature, params, urls, tokens: [user.twilio?.authToken] });
 }
 
 function parseIntSafe(n?: string | null): number | undefined {
@@ -348,21 +402,17 @@ export default async function handler(
   const params = new URLSearchParams(bodyStr);
   const paramObject: Record<string, string> = Object.fromEntries(params.entries());
   const signature = String(req.headers["x-twilio-signature"] || "");
-  const qs = req.query as { userEmail?: string };
-  const userEmailForToken = String(qs.userEmail || "").trim().toLowerCase();
-  const callbackUser = userEmailForToken
-    ? await User.findOne({ email: userEmailForToken }).select("twilio.authToken").lean()
-    : null;
-  const validSignature = validatesTwilioSignature({
-    signature,
-    params: paramObject,
-    urls: candidateCallbackUrls(req),
-    tokens: [PLATFORM_AUTH_TOKEN, (callbackUser as any)?.twilio?.authToken],
-  });
+  let validSignature = false;
+  try {
+    validSignature = await authenticateCallStatusCallback(req, paramObject, signature);
+  } catch (err: any) {
+    console.error("[AI Dialer] callback authentication unavailable", err?.message || err);
+    return res.status(503).end("Callback authentication unavailable");
+  }
 
   if (!validSignature) {
-    console.warn("[AI Dialer] rejected call-status callback with invalid or missing Twilio signature");
-    return res.status(403).end("Invalid signature");
+    console.warn("[AI Dialer] rejected call-status callback: invalid signature or ownership");
+    return res.status(403).end("Invalid signature or ownership");
   }
 
   await mongooseConnect();
@@ -925,16 +975,23 @@ export default async function handler(
             if ((sessionForClear as any)?.activeCallSid === CallSid) {
               sessionCallbackUpdate.activeCallSid = null;
               sessionCallbackUpdate.activeCallSidAt = null;
-              clearedActiveCallForTerminal = true;
             }
             if ((sessionForClear as any)?.currentCall?.callSid === CallSid) {
               sessionCallbackUpdate.currentCall = null;
             }
           }
-          await AICallSession.updateOne(
-            { _id: aiCallSessionId },
+          // Recheck at write time: a duplicate callback may have already started
+          // the next call since sessionForClear was read above.
+          const callbackUpdate = await AICallSession.updateOne(
+            {
+              _id: aiCallSessionId,
+              ...(sessionCallbackUpdate.activeCallSid === null ? { activeCallSid: CallSid } : {}),
+              ...(sessionCallbackUpdate.currentCall === null ? { "currentCall.callSid": CallSid } : {}),
+            },
             { $set: sessionCallbackUpdate }
           ).exec();
+          clearedActiveCallForTerminal = sessionCallbackUpdate.activeCallSid === null &&
+            ((callbackUpdate as any)?.modifiedCount ?? 0) > 0;
         } catch (e) {
           // non-blocking
         }
