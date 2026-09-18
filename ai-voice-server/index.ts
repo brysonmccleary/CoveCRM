@@ -46,7 +46,7 @@ import fetch from "node-fetch";
 import { Buffer } from "buffer";
 import {
   ConversationMemory, ConversationPlan, conversationalSignals, coverageFact,
-  nextConversationMemory, conversationContext, buildContextualTurn, pendingObjective,
+  nextConversationMemory, conversationContext, buildContextualTurn, pendingObjective, rememberSpokenTopics,
 } from "./lib/conversationRepair";
 import {
   buildNaturalTurn, NATURAL_PERSONALITY, resolveVoiceExperiment, realtimeSelection,
@@ -9056,6 +9056,17 @@ function conversationRepairDecision(
   } else if (signals.repetition) {
     plan = { concern: "repetition", strategy: "repair_repetition", questionPolicy: "none",
       instruction: "The caller is complaining about repeated content, not requesting repetition. Briefly own the repetition and yield the floor. Do not repeat the sales frame or ask the same semantic question in new words. Address any additional concern they expressed." };
+  } else if (signals.bookingInterest && !signals.timeConcern && !signals.frustration && !concreteScheduling && state.coverageSubject && !(state as any).confirmedAppointment && !state.pendingHangupAfterGoodbye) {
+    plan = { concern: "receptive_question", strategy: "answer_and_continue", questionPolicy: "next_step",
+      instruction: "The caller expressed willingness to proceed, possibly with a question. Answer the question first, then continue toward the next missing scheduling choice. Willingness is not a confirmed time or authorization to transfer.",
+      nextQuestion: state.selectedDay || state.selectedTimeText ? getStateAwareClosingPivot(state) : getScriptCloseQuestion(state.context!),
+      ...(/\bhow (?:long|much time)\b/i.test(text) ? { approvedAnswer: "The call usually takes 5 to 10 minutes; the licensed agent covers the request and answers questions." } : {}) };
+  } else if (intent.kind === "confusion" && intent.subKind === "confused_identity") {
+    plan = { concern: signals.identityQuestion ? "identity_question" : signals.purposeQuestion ? "purpose_question" : "clarify_confusion",
+      strategy: signals.identityQuestion || signals.purposeQuestion ? "answer_question" : "clarify", questionPolicy: signals.identityQuestion || signals.purposeQuestion ? "none" : "clarify_concern",
+      instruction: signals.identityQuestion ? "Answer only the requested identity detail from the session context. Be truthful about being a virtual assistant. Do not restart the introduction or append the reason for calling unless also asked."
+        : signals.purposeQuestion ? "Briefly clarify the reason for calling from approved context, because the caller asked. Do not reintroduce yourself or replay the full script."
+        : "Clarify the specific source of confusion using recent dialogue. General confusion is not a request to repeat your name, affiliation or reason for calling. Ask one targeted clarification if the thought is incomplete; do not restart the introduction." };
   } else if (signals.timeConcern && !concreteScheduling) {
     const repeated = !!state.conversationMemory?.timeConcerns || !!state.conversationMemory?.bookingSuppressed;
     plan = { concern: "time_availability", strategy: repeated ? "yield_floor" : "address_concern", questionPolicy: "none",
@@ -9120,7 +9131,8 @@ function reconcileConversationDecision(state: CallState, decision: PolicyDecisio
   }
   const memory = nextConversationMemory({ ...state, ...writes },
     decision.conversationPlan?.strategy || (projected.pendingHangupAfterGoodbye ? "close" : "ask_objective"), decision.conversationPlan?.concern);
-  if (decision.conversationPlan && decision.conversationPlan.concern !== "hearing") memory.bookingSuppressed = true;
+  if (decision.conversationPlan?.strategy === "answer_and_continue") memory.bookingSuppressed = false;
+  else if (decision.conversationPlan && decision.conversationPlan.concern !== "hearing") memory.bookingSuppressed = true;
   else if (!decision.conversationPlan) memory.bookingSuppressed = false;
   writes.conversationMemory = memory;
 }
@@ -13604,6 +13616,7 @@ async function handleOpenAiEvent(
     if (naturalConversationEnabled(state) && transcript) {
       const memory = state.conversationMemory || nextConversationMemory(state, "spoken");
       memory.lastSpokenText = transcript;
+      rememberSpokenTopics(memory, transcript, state.context?.voiceProfile?.aiName || "", state.context ? getScopeLabelForScriptKey(state.context.scriptKey) : "");
       state.conversationMemory = memory;
       // Keep actual generated speech, not an unsaid script/reference line, in short-term history.
       const history = state.recentExchanges || [];
