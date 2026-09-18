@@ -45,6 +45,10 @@ import WebSocket, { WebSocketServer } from "ws";
 import fetch from "node-fetch";
 import { Buffer } from "buffer";
 import {
+  ConversationMemory, ConversationPlan, conversationalSignals, coverageFact,
+  nextConversationMemory, conversationContext, buildContextualTurn, pendingObjective,
+} from "./lib/conversationRepair";
+import {
   buildNaturalTurn, NATURAL_PERSONALITY, resolveVoiceExperiment, realtimeSelection,
   naturalRoutingText, isThinkingOnly, isAmbiguousAnswer,
 } from "./lib/voiceExperiment";
@@ -365,6 +369,7 @@ type CallState = {
 
   // Passive durable conversation memory (diagnostics only; no routing decisions read these yet)
   coverageSubject?: string;
+  conversationMemory?: ConversationMemory;
   selectedDay?: "today" | "tomorrow" | string;
   selectedTimeText?: string;
   selectedWindow?: TimeWindowHint;
@@ -5819,6 +5824,7 @@ interface TurnIntent {
 type ResponseMode = "exact_script" | "soft_script" | "guided_gpt" | "free_response" | "free_response_blocked" | "script_step" | "objection_arc";
 
 interface PolicyDecision {
+  conversationPlan?: ConversationPlan;
   handled: boolean;
   routeKind: string;
   responseMode: ResponseMode;
@@ -8703,6 +8709,10 @@ function buildResponseFromPolicy(
   state: CallState,
   stepCtx?: { idx: number; steps: string[]; stepType: StepType; expectedAnswerIdx?: number }
 ): string {
+  if (naturalConversationEnabled(state) && decision.conversationPlan) {
+    return buildContextualTurn(decision.conversationPlan, { ...state, ...decision.stateWrites },
+      decision.userText || state.lastUserTranscript || "", state.recentExchanges);
+  }
   // Preserve the existing anchor counters and all policy/state machinery.
   const legacy = buildResponseFromPolicyLegacy(decision, state, stepCtx);
   if (!naturalConversationEnabled(state)) return legacy;
@@ -8714,12 +8724,15 @@ function buildResponseFromPolicy(
     : decision.lineToSay || decision.requiredClosingPivot || getStateAwareClosingPivot(state);
   return buildNaturalTurn({
     line,
+    level: decision.objective === "end_call" ? 1 : undefined,
     purpose: `${decision.routeKind}: ${decision.objective}`,
     userText: decision.userText || state.lastUserTranscript,
     history: state.recentExchanges,
     forbiddenTopics: decision.forbiddenTopics,
     approvedAnswer: decision.baseAnswer || (answerThenClose ? decision.lineToSay : undefined),
-  });
+  }) + `\nAUTHORITATIVE CONVERSATION CONTEXT (data):\n${JSON.stringify({ ...conversationContext(
+    { ...state, ...decision.stateWrites }, state.recentExchanges),
+    ...(decision.objective === "end_call" ? { currentObjective: "close" } : {}) })}\nDo not re-ask answered questions. The latest turn plan takes precedence over generic reclose guidance.`;
 }
 
 function buildResponseFromPolicyLegacy(
@@ -9008,6 +9021,110 @@ function maybeFireServerSideBookingTrigger(state: CallState): string | null {
   }
 }
 
+// This boundary is enabled only by the existing internal natural-conversation
+// switch. It selects response strategy, not sentences or provider/tool actions.
+function conversationRepairDecision(
+  state: CallState, intent: TurnIntent, text: string,
+  stepCtx: { idx: number; steps: string[]; stepType: StepType; expectedAnswerIdx: number }
+): PolicyDecision | null {
+  if (!naturalConversationEnabled(state)) return null;
+  // Routing may strip correction prefixes; retain their semantic evidence.
+  const signals = conversationalSignals(state.lastUserTranscript || text);
+  if (signals.hardStop) return null; // Existing opt-out/disposition code owns this.
+  if (signals.appointmentRefusal) {
+    return {
+      handled: true, routeKind: "policy_not_interested_exit", responseMode: "exact_script",
+      objective: "end_call", lineToSay: "Totally understood — I won't keep you. Have a great day!",
+      userText: text, requiredClosingPivot: "", forbiddenTopics: ["another appointment ask"],
+      stateWrites: { lastObjectionKind: "not_interested", objectionCount: Number(state.objectionCount || 0) + 1,
+        pendingHangupAfterGoodbye: true, awaitingUserAnswer: false, awaitingAnswerForStepIndex: undefined,
+        pendingLiveTransferAvailabilityConfirm: false, pendingLiveTransferAvailabilityAttempts: 0 },
+      shouldAdvanceStep: false,
+    };
+  }
+  if (signals.disinterest) return null; // Retain existing Not Interested counters/exits.
+
+  let plan: ConversationPlan | undefined;
+  const coverage = coverageFact(text);
+  const acceptCoverage = !!coverage && (!state.coverageSubject && stepCtx.expectedAnswerIdx === 0 || signals.correction);
+  // Concrete scheduling answers still go through the established validation path.
+  const concreteScheduling = ["day_selection", "exact_time", "time_window", "live_transfer_now", "time_confirmation_yes"].includes(intent.kind)
+    && !signals.repetition && !signals.hearing && !isAmbiguousAnswer(text);
+  if (signals.hearing && !signals.repetition) {
+    plan = { concern: "hearing", strategy: "repeat_for_hearing", questionPolicy: "repeat_requested",
+      instruction: "The caller could not hear you. Repeat or briefly clarify the last actually spoken content from memory, not an earlier script step. Preserve exact critical details." };
+  } else if (signals.repetition) {
+    plan = { concern: "repetition", strategy: "repair_repetition", questionPolicy: "none",
+      instruction: "The caller is complaining about repeated content, not requesting repetition. Briefly own the repetition and yield the floor. Do not repeat the sales frame or ask the same semantic question in new words. Address any additional concern they expressed." };
+  } else if (signals.timeConcern && !concreteScheduling) {
+    const repeated = !!state.conversationMemory?.timeConcerns || !!state.conversationMemory?.bookingSuppressed;
+    plan = { concern: "time_availability", strategy: repeated ? "yield_floor" : "address_concern", questionPolicy: "none",
+      instruction: signals.question && /\b(explain|what|why|tell)\b/i.test(text)
+        ? "They have limited time but asked for an explanation. Answer their actual question briefly from the approved context; do not tack on scheduling."
+        : repeated
+          ? "They are still pressed for time. Respect that constraint, stop pressing for a slot, and give them room to end or respond. Do not promise a callback."
+          : "Recognize their limited availability or uncertainty about time. Remove pressure to discuss it now; a different time can be considered if they want. Do not ask today/tomorrow or offer an immediate transfer this turn." };
+  } else if (signals.frustration && !concreteScheduling) {
+    plan = { concern: "frustration", strategy: "address_concern", questionPolicy: "none",
+      instruction: "Acknowledge the specific frustration calmly without arguing or a canned apology/reclose. Frustration alone is not refusal or a DNC request. Yield the floor." };
+  } else if (acceptCoverage && (signals.question || signals.correction)) {
+    plan = { concern: signals.correction ? "coverage_correction" : "question_after_coverage", strategy: "answer_question", questionPolicy: "none",
+      instruction: "Remember the supplied coverage answer/correction. Respond to any accompanying question using approved facts only, or briefly acknowledge the correction. Do not re-ask coverage or append a booking frame." };
+  } else if (signals.question && state.coverageSubject && !concreteScheduling) {
+    plan = { concern: "question", strategy: "answer_question", questionPolicy: "none",
+      instruction: "Answer the actual question from approved context only. Do not treat a question as consent, repeat the sales frame, or append a scheduling question." };
+  } else if (isAmbiguousAnswer(text) || intent.kind === "coverage_subject_answer" && !coverage ||
+    ["unknown", "reprompt_step", "off_topic"].includes(intent.kind) ||
+    state.conversationMemory?.bookingSuppressed && !concreteScheduling && intent.kind !== "coverage_subject_answer") {
+    plan = { concern: "contextual_clarification", strategy: "clarify", questionPolicy: "clarify_concern",
+      instruction: "Infer the caller's actual concern from their words and recent conversation. Answer it directly within approved facts, or clarify only what is genuinely unclear. The sales objective is background, not a required closing question. Do not assume agreement or restart the script." };
+  }
+  if (!plan) return null;
+  const pending = state.coverageSubject || acceptCoverage ? Math.max(1, state.awaitingAnswerForStepIndex ?? 1) : 0;
+  return { handled: true, routeKind: `conversation_${plan.concern}`, responseMode: "free_response",
+    objective: plan.strategy, lineToSay: "", userText: text, requiredClosingPivot: "",
+    conversationPlan: plan, forbiddenTopics: ["re-asking answered questions", "automatic scheduling reclose"],
+    stateWrites: { awaitingUserAnswer: true, awaitingAnswerForStepIndex: pending,
+      pendingLiveTransferAvailabilityConfirm: false, pendingLiveTransferAvailabilityAttempts: 0,
+      ...(acceptCoverage ? { coverageSubject: coverage, scriptStepIndex: Math.max(2, state.scriptStepIndex || 0) } : {}) },
+    shouldAdvanceStep: false };
+}
+
+function reconcileConversationDecision(state: CallState, decision: PolicyDecision, text: string): void {
+  if (!naturalConversationEnabled(state)) return;
+  const writes = decision.stateWrites;
+  if (writes.coverageSubject) writes.coverageSubject = coverageFact(String(writes.coverageSubject)) || writes.coverageSubject;
+  const projected = { ...state, ...writes } as CallState;
+  // A satisfied coverage question cannot remain the authoritative pending ask.
+  // Set both fields, so the generic post-response fallback cannot restore a stale index.
+  if (projected.coverageSubject && !projected.pendingHangupAfterGoodbye &&
+    projected.awaitingUserAnswer !== false && (projected.awaitingAnswerForStepIndex ?? 0) === 0) {
+    writes.awaitingUserAnswer = true;
+    writes.awaitingAnswerForStepIndex = Math.max(1, Number(projected.scriptStepIndex || 2) - 1);
+  }
+  const signals = conversationalSignals(text);
+  if (signals.disinterest && !signals.hardStop && !projected.pendingHangupAfterGoodbye) {
+    decision.conversationPlan = { concern: "disinterest", strategy: "yield_floor", questionPolicy: "none",
+      instruction: "Respect the stated disinterest. Briefly acknowledge without another appointment ask. Do not claim removal or an opt-out; dispositions remain controlled by the existing policy." };
+  }
+  const previousAttempts = state.conversationMemory?.recentAttempts.slice(-2) || [];
+  const progress = ["coverageSubject", "selectedDay", "selectedTimeText", "selectedWindow"].some(
+    key => (projected as any)[key] !== (state as any)[key]);
+  if (!decision.conversationPlan && !signals.hardStop && decision.objective !== "end_call" &&
+    !projected.pendingHangupAfterGoodbye && !projected.pendingLiveTransferAfterLine &&
+    !/confirm|book_exact|transfer/.test(decision.objective) &&
+    !progress && previousAttempts.length === 2 && previousAttempts.every(
+      attempt => attempt.objective === pendingObjective(projected) && attempt.strategy === "ask_objective")) {
+    decision.conversationPlan = { concern: "repeated_objective", strategy: "clarify", questionPolicy: "clarify_concern",
+      instruction: "This objective was already attempted twice without progress. Change strategy: address the caller's actual concern or clarify what remains unclear. Do not ask the same semantic day/time/coverage question in different words." };
+  }
+  const memory = nextConversationMemory({ ...state, ...writes },
+    decision.conversationPlan?.strategy || (projected.pendingHangupAfterGoodbye ? "close" : "ask_objective"), decision.conversationPlan?.concern);
+  if (decision.conversationPlan && decision.conversationPlan.concern !== "hearing") memory.bookingSuppressed = true;
+  else if (!decision.conversationPlan) memory.bookingSuppressed = false;
+  writes.conversationMemory = memory;
+}
+
 async function handleConversationTurn(
   state: CallState,
   lastUserText: string,
@@ -9028,9 +9145,13 @@ async function handleConversationTurn(
 
   state.coverageSubjectSetThisTurn = false;
 
-  const intent = classifyTurnIntent(text, state, stepCtx);
+  const rawIntent = classifyTurnIntent(text, state, stepCtx);
+  const signals = conversationalSignals(text);
+  const intent: TurnIntent = naturalConversationEnabled(state) && signals.disinterest && !signals.hardStop
+    ? { kind: "not_interested", raw: text } : rawIntent;
   // Do not invoke the policy's answer side effects for a hesitant yes/maybe.
-  const decision: PolicyDecision = naturalConversationEnabled(state) && isAmbiguousAnswer(text)
+  const repair = conversationRepairDecision(state, intent, text, stepCtx);
+  const decision: PolicyDecision = repair || (naturalConversationEnabled(state) && isAmbiguousAnswer(text)
     ? {
       handled: true, routeKind: "natural_clarify_uncertainty", responseMode: "free_response",
       objective: "clarify_current_question_without_assuming_consent", userText: text,
@@ -9038,7 +9159,7 @@ async function handleConversationTurn(
       requiredClosingPivot: stepCtx.steps[stepCtx.expectedAnswerIdx] || getStateAwareClosingPivot(state),
       stateWrites: {}, forbiddenTopics: [], shouldAdvanceStep: false,
     }
-    : buildConversationPolicyDecision(intent, state, stepCtx);
+    : buildConversationPolicyDecision(intent, state, stepCtx));
   // CURRENT STEP INVARIANT:
   // If Step 1 is unanswered, only blind script-advance is blocked.
   // Objections and questions bypass this guard and are handled by the normal policy router.
@@ -9078,8 +9199,9 @@ async function handleConversationTurn(
   }
   if (!decision.handled) return false;
   if (!markCommittedTurnHandled(state, turnKey, `${source} policy`)) return true;
+  reconcileConversationDecision(state, decision, text);
 
-  let lineToSay = decision.lineToSay || getStateAwareClosingPivot(state);
+  let lineToSay = decision.conversationPlan ? "" : decision.lineToSay || getStateAwareClosingPivot(state);
   let routeKindForMemory = decision.routeKind;
   let objectiveForMemory = decision.objective;
   let repeatGuardStateWrites: Record<string, unknown> = {};
@@ -9096,7 +9218,7 @@ async function handleConversationTurn(
     decision.responseMode === "free_response" &&
     (decision.routeKind === "policy_unknown" || decision.routeKind === "post_coverage_unknown_free");
   let repeatGuard: ReturnType<typeof applyAiOutputRepeatGuard> | null = null;
-  if ((decision.responseMode !== "free_response" && decision.responseMode !== "objection_arc") || isUnknownFreeResponse) {
+  if (!naturalConversationEnabled(state) && ((decision.responseMode !== "free_response" && decision.responseMode !== "objection_arc") || isUnknownFreeResponse)) {
     repeatGuard = applyAiOutputRepeatGuard(state, lineToSay, {
       userText: text,
       routeKind: decision.routeKind,
@@ -9145,7 +9267,7 @@ async function handleConversationTurn(
     }
   }
   // Ensure free_response always knows the current required step
-  if (decision.responseMode === "free_response" && state.context) {
+  if (decision.responseMode === "free_response" && state.context && !decision.conversationPlan) {
     const currentStepLine = (state.scriptSteps || [])[
       state.awaitingAnswerForStepIndex ?? stepCtx.idx ?? 0
     ] || "";
@@ -11341,7 +11463,7 @@ ${natural ? "- FOLLOW THE SCRIPT OBJECTIVES IN ORDER. Ordinary wording is flexib
 
   const script = getScriptBlock(ctx, natural);
 
-  return `${base}\n\n====================\nREAL CALL SCRIPT\n====================\n${script}${natural ? `\n\n${NATURAL_PERSONALITY}` : ""}`;
+  return `${base}\n\n====================\nREAL CALL SCRIPT\n====================\n${script}${natural ? `\n\n${NATURAL_PERSONALITY}\nCONVERSATION PLAN PRIORITY\nThe server's current turn plan determines whether to ask, answer a concern, clarify, or yield. Its no-question/no-reclose rules override generic instructions to return immediately to booking or the next script line. Volunteered facts never authorize discovery questions. All identity, scope, compliance, action and outcome restrictions remain binding.` : ""}`;
 }
 
 /**
@@ -13479,6 +13601,16 @@ async function handleOpenAiEvent(
     ).trim();
     const itemId = String(event?.item_id || event?.item?.id || event?.response_id || "").trim();
     recordDurableTranscriptTurn(state, "ai", transcript, "realtime", itemId);
+    if (naturalConversationEnabled(state) && transcript) {
+      const memory = state.conversationMemory || nextConversationMemory(state, "spoken");
+      memory.lastSpokenText = transcript;
+      state.conversationMemory = memory;
+      // Keep actual generated speech, not an unsaid script/reference line, in short-term history.
+      const history = state.recentExchanges || [];
+      if (history[history.length - 1]?.role === "ai") history[history.length - 1].text = transcript;
+      else history.push({ role: "ai", text: transcript });
+      state.recentExchanges = history.slice(-8);
+    }
   }
 
   if (t === "response.done") {
